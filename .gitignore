@@ -1,0 +1,11 @@
+.env
+.env.local
+*.local
+bin/
+tmp/
+.idea/
+.vscode/
+.DS_Store
+coverage.out
+conversation-*.txt
+.claude/settings.local.json
