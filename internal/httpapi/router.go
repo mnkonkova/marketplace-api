@@ -13,6 +13,7 @@ import (
 	"marketpclce/internal/auth"
 	"marketpclce/internal/catalog"
 	"marketpclce/internal/clarify"
+	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi/handlers"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/profilecheck"
@@ -31,6 +32,7 @@ type Deps struct {
 	Profiles     *profiles.Handler
 	ProfileCheck *profilecheck.Handler
 	Search       *search.Handler
+	Feed         *feed.Handler
 	Summarize   *summarize.Handler
 	Clarify     *clarify.Handler
 	Leads       *leads.Handler
@@ -69,6 +71,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/specialists/{id}", d.Profiles.Public)
 			r.Get("/search", d.Search.Search)
 			r.Get("/categories/stats", d.Search.CategoryStats)
+			if d.Feed != nil {
+				r.Get("/feed", d.Feed.Feed)
+			}
 		})
 
 		r.Post("/search/summarize", d.Summarize.Summarize)

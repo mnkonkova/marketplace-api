@@ -17,6 +17,7 @@ import (
 	"marketpclce/internal/catalog"
 	"marketpclce/internal/clarify"
 	"marketpclce/internal/config"
+	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/llm"
@@ -86,6 +87,10 @@ func main() {
 	searchSvc := search.NewService(esClient, cfg.OpenSearchIndexProfile)
 	searchHandler := search.NewHandler(searchSvc)
 
+	feedRepo := feed.NewRepo(pool)
+	feedSvc := feed.NewService(searchSvc, feedRepo)
+	feedHandler := feed.NewHandler(feedSvc)
+
 	llmClient, err := llm.NewProvider(llm.ProviderConfig{
 		Name:    cfg.LLMProvider,
 		BaseURL: cfg.LLMBaseURL,
@@ -136,6 +141,7 @@ func main() {
 		Profiles:     profilesHandler,
 		ProfileCheck: profileCheckHandler,
 		Search:       searchHandler,
+		Feed:         feedHandler,
 		Summarize:    summarizeHandler,
 		Clarify:      clarifyHandler,
 		Leads:        leadsHandler,

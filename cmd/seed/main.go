@@ -442,6 +442,10 @@ func main() {
 			slog.Error("seed reviews", "email", s.Email, "err", err)
 			continue
 		}
+		if err := seedPortfolio(ctx, pool, uid, i); err != nil {
+			slog.Error("seed portfolio", "email", s.Email, "err", err)
+			continue
+		}
 		doc, err := searchRepo.LoadDoc(ctx, uid)
 		if err != nil {
 			slog.Error("load doc", "email", s.Email, "err", err)
@@ -573,6 +577,88 @@ func replaceCategories(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, c
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// sampleVideo — публичный тестовый mp4 + thumb. Это заглушки на время MVP,
+// чтобы видеть ленту. После запуска R2-аплоада эти URL заменятся на реальные
+// 9:16-ролики специалистов — пока что фронт обрезает по object-fit:cover.
+type sampleVideo struct {
+	URL         string
+	Thumb       string
+	Title       string
+	Description string
+	Aspect      string
+	DurationSec int
+}
+
+// Маленькие mp4 от w3schools/learningcontainer — стабильные, лёгкие, без CORS-сюрпризов.
+// Не вертикальные (9:16), но для демо ленты ок: фронт ставит object-fit: cover.
+var sampleVideos = []sampleVideo{
+	{
+		URL:         "https://www.w3schools.com/html/mov_bbb.mp4",
+		Thumb:       "https://placehold.co/360x640/0c0d11/4ad6c1?text=Demo+1",
+		Title:       "Демо-ролик 1",
+		Description: "Sample mp4 — заменить на реальный вертикальный ролик после R2.",
+		Aspect:      "16:9", DurationSec: 10,
+	},
+	{
+		URL:         "https://www.w3schools.com/html/movie.mp4",
+		Thumb:       "https://placehold.co/360x640/121317/4ad6c1?text=Demo+2",
+		Title:       "Демо-ролик 2",
+		Description: "Sample mp4 — заменить на реальный вертикальный ролик после R2.",
+		Aspect:      "16:9", DurationSec: 6,
+	},
+	{
+		URL:         "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+		Thumb:       "https://placehold.co/360x640/22252b/4ad6c1?text=Demo+3",
+		Title:       "Демо-ролик 3",
+		Description: "Sample mp4 — заменить на реальный вертикальный ролик после R2.",
+		Aspect:      "16:9", DurationSec: 15,
+	},
+	{
+		URL:         "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+		Thumb:       "https://placehold.co/360x640/121317/9fe9dd?text=Demo+4",
+		Title:       "Демо-ролик 4",
+		Description: "Sample mp4 — заменить на реальный вертикальный ролик после R2.",
+		Aspect:      "16:9", DurationSec: 15,
+	},
+	{
+		URL:         "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
+		Thumb:       "https://placehold.co/360x640/0c0d11/9fe9dd?text=Demo+5",
+		Title:       "Демо-ролик 5",
+		Description: "Sample mp4 — заменить на реальный вертикальный ролик после R2.",
+		Aspect:      "16:9", DurationSec: 15,
+	},
+}
+
+// seedPortfolio добавляет специалисту 2–3 видео из пула, детерминированно по индексу.
+// Идемпотентно: чистит kind='video' и переcоздаёт. external/image не трогает.
+func seedPortfolio(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, idx int) error {
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM portfolio_items WHERE user_id = $1 AND kind = 'video'`, uid); err != nil {
+		return fmt.Errorf("clear portfolio: %w", err)
+	}
+
+	// 2 + (idx % 2) → 2 или 3 видео на спеца, чтобы round-robin было что разворачивать.
+	count := 2 + (idx % 2)
+	for k := 0; k < count; k++ {
+		v := sampleVideos[(idx*3+k)%len(sampleVideos)]
+		const q = `
+INSERT INTO portfolio_items (
+    user_id, title, description,
+    video_url, thumbnail_url,
+    category_codes, sort_order,
+    kind, duration_sec, aspect
+) VALUES ($1, $2, $3, $4, $5, ARRAY[]::text[], $6, 'video', $7, $8)`
+		if _, err := pool.Exec(ctx, q,
+			uid, v.Title, v.Description,
+			v.URL, v.Thumb,
+			k, v.DurationSec, v.Aspect,
+		); err != nil {
+			return fmt.Errorf("insert portfolio: %w", err)
+		}
+	}
+	return nil
 }
 
 func replaceSkills(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, slugs []string, byslug map[string]uuid.UUID) error {
