@@ -13,30 +13,44 @@ import (
 )
 
 var (
-	ErrInvalidInput = errors.New("invalid input")
-	ErrBioRejected  = errors.New("bio rejected")
+	ErrInvalidInput     = errors.New("invalid input")
+	ErrProfileRejected  = errors.New("profile rejected")
+	ErrPublishIncomplete = errors.New("publish incomplete")
 )
 
-type BioChecker interface {
+type ProfileChecker interface {
 	Available() bool
-	Check(ctx context.Context, bio, primaryCategoryCode, primaryCategoryTitle string) (BioCheckResult, error)
+	Check(ctx context.Context, in CheckInput) (CheckResult, error)
 }
 
-type BioCheckResult struct {
+type CheckInput struct {
+	Bio                  string
+	DisplayName          string
+	PrimaryCategory      string
+	PrimaryCategoryTitle string
+}
+
+type PartResult struct {
 	OK         bool     `json:"ok"`
 	Score      int      `json:"score"`
 	Reasons    []string `json:"reasons"`
 	Suggestion string   `json:"suggestion"`
 }
 
+type CheckResult struct {
+	OK   bool       `json:"ok"`
+	Bio  PartResult `json:"bio"`
+	Name PartResult `json:"name"`
+}
+
 type Service struct {
 	repo    *Repo
-	checker BioChecker
+	checker ProfileChecker
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
 
-func (s *Service) WithBioChecker(c BioChecker) *Service {
+func (s *Service) WithProfileChecker(c ProfileChecker) *Service {
 	s.checker = c
 	return s
 }
@@ -167,16 +181,25 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 			return Profile{}, err
 		}
 		bio := strings.TrimSpace(p.Bio)
+		name := strings.TrimSpace(p.DisplayName)
 		if bio == "" {
-			return Profile{}, fmt.Errorf("%w: bio is empty", ErrBioRejected)
+			return Profile{}, fmt.Errorf("%w: bio is empty", ErrPublishIncomplete)
+		}
+		if name == "" {
+			return Profile{}, fmt.Errorf("%w: display_name is empty", ErrPublishIncomplete)
 		}
 		title, _ := s.repo.CategoryTitle(ctx, p.PrimaryCategory)
-		res, err := s.checker.Check(ctx, bio, p.PrimaryCategory, title)
+		res, err := s.checker.Check(ctx, CheckInput{
+			Bio:                  bio,
+			DisplayName:          name,
+			PrimaryCategory:      p.PrimaryCategory,
+			PrimaryCategoryTitle: title,
+		})
 		if err != nil {
-			return Profile{}, fmt.Errorf("bio check: %w", err)
+			return Profile{}, fmt.Errorf("profile check: %w", err)
 		}
 		if !res.OK {
-			return Profile{}, &BioRejectedError{Result: res}
+			return Profile{}, &ProfileRejectedError{Result: res}
 		}
 	}
 	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
@@ -192,13 +215,13 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 	return s.repo.Get(ctx, userID)
 }
 
-type BioRejectedError struct {
-	Result BioCheckResult
+type ProfileRejectedError struct {
+	Result CheckResult
 }
 
-func (e *BioRejectedError) Error() string { return "bio rejected by llm check" }
-func (e *BioRejectedError) Is(target error) bool {
-	return target == ErrBioRejected
+func (e *ProfileRejectedError) Error() string { return "profile rejected by llm check" }
+func (e *ProfileRejectedError) Is(target error) bool {
+	return target == ErrProfileRejected
 }
 
 func dedupStrings(in []string) []string {

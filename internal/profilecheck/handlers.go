@@ -27,7 +27,8 @@ func NewHandler(svc *Service, lookup ProfileLookup) *Handler {
 }
 
 type checkReq struct {
-	Bio string `json:"bio"`
+	Bio         string `json:"bio"`
+	DisplayName string `json:"display_name"`
 }
 
 func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
@@ -52,12 +53,13 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.svc.Check(r.Context(), Input{
 		Bio:                  in.Bio,
+		DisplayName:          in.DisplayName,
 		PrimaryCategory:      code,
 		PrimaryCategoryTitle: title,
 	})
 	switch {
-	case errors.Is(err, ErrEmptyBio):
-		writeErr(w, http.StatusBadRequest, "empty_bio")
+	case errors.Is(err, ErrEmptyInput):
+		writeErr(w, http.StatusBadRequest, "empty_input")
 		return
 	case errors.Is(err, ErrLLMDisabled):
 		writeErr(w, http.StatusServiceUnavailable, "llm_disabled")

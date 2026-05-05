@@ -9,3 +9,4 @@ tmp/
 coverage.out
 conversation-*.txt
 .claude/settings.local.json
+node_modules/

@@ -105,7 +105,7 @@ func main() {
 
 	profileCheckSvc := profilecheck.NewService(llmClient, 1024, cfg.LLMEffort)
 	profileCheckHandler := profilecheck.NewHandler(profileCheckSvc, primaryCategoryLookup{repo: profilesRepo})
-	profilesSvc.WithBioChecker(bioCheckerAdapter{svc: profileCheckSvc})
+	profilesSvc.WithProfileChecker(profileCheckerAdapter{svc: profileCheckSvc})
 
 	leadsRepo := leads.NewRepo(pool)
 	leadsSvc := leads.NewService(leadsRepo)
@@ -178,24 +178,24 @@ func main() {
 	slog.Info("bye")
 }
 
-type bioCheckerAdapter struct{ svc *profilecheck.Service }
+type profileCheckerAdapter struct{ svc *profilecheck.Service }
 
-func (a bioCheckerAdapter) Available() bool { return a.svc.Available() }
+func (a profileCheckerAdapter) Available() bool { return a.svc.Available() }
 
-func (a bioCheckerAdapter) Check(ctx context.Context, bio, code, title string) (profiles.BioCheckResult, error) {
+func (a profileCheckerAdapter) Check(ctx context.Context, in profiles.CheckInput) (profiles.CheckResult, error) {
 	res, err := a.svc.Check(ctx, profilecheck.Input{
-		Bio:                  bio,
-		PrimaryCategory:      code,
-		PrimaryCategoryTitle: title,
+		Bio:                  in.Bio,
+		DisplayName:          in.DisplayName,
+		PrimaryCategory:      in.PrimaryCategory,
+		PrimaryCategoryTitle: in.PrimaryCategoryTitle,
 	})
 	if err != nil {
-		return profiles.BioCheckResult{}, err
+		return profiles.CheckResult{}, err
 	}
-	return profiles.BioCheckResult{
-		OK:         res.OK,
-		Score:      res.Score,
-		Reasons:    res.Reasons,
-		Suggestion: res.Suggestion,
+	return profiles.CheckResult{
+		OK:   res.OK,
+		Bio:  profiles.PartResult(res.Bio),
+		Name: profiles.PartResult(res.Name),
 	}, nil
 }
 

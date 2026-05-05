@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"marketpclce/internal/llm"
@@ -13,7 +14,7 @@ import (
 
 var (
 	ErrLLMDisabled = errors.New("llm_disabled")
-	ErrEmptyBio    = errors.New("empty_bio")
+	ErrEmptyInput  = errors.New("empty_input")
 )
 
 const PublishMinScore = 60
@@ -33,15 +34,22 @@ func NewService(client llm.Provider, maxTokens int, effort string) *Service {
 
 type Input struct {
 	Bio                  string
+	DisplayName          string
 	PrimaryCategory      string
 	PrimaryCategoryTitle string
 }
 
-type Result struct {
+type PartResult struct {
 	OK         bool     `json:"ok"`
 	Score      int      `json:"score"`
 	Reasons    []string `json:"reasons"`
 	Suggestion string   `json:"suggestion"`
+}
+
+type Result struct {
+	OK   bool       `json:"ok"`
+	Bio  PartResult `json:"bio"`
+	Name PartResult `json:"name"`
 }
 
 func (s *Service) Available() bool {
@@ -50,17 +58,63 @@ func (s *Service) Available() bool {
 
 func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 	bio := strings.TrimSpace(in.Bio)
-	if bio == "" {
-		return Result{}, ErrEmptyBio
+	name := strings.TrimSpace(in.DisplayName)
+	if bio == "" && name == "" {
+		return Result{}, ErrEmptyInput
 	}
 	if !s.Available() {
 		return Result{}, ErrLLMDisabled
 	}
 
-	system := buildSystemPrompt(in.PrimaryCategory, in.PrimaryCategoryTitle)
+	out := Result{
+		Bio:  skippedPart(),
+		Name: skippedPart(),
+	}
 
-	userMsg := fmt.Sprintf("BIO:\n%s\n\nДлина: %d символов.", bio, utf8.RuneCountInString(bio))
+	var (
+		wg              sync.WaitGroup
+		bioErr, nameErr error
+	)
+	if bio != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := s.checkPart(ctx, buildBioPrompt(in.PrimaryCategory, in.PrimaryCategoryTitle),
+				fmt.Sprintf("BIO:\n%s\n\nДлина: %d символов.", bio, utf8.RuneCountInString(bio)))
+			if err != nil {
+				bioErr = fmt.Errorf("bio: %w", err)
+				return
+			}
+			out.Bio = res
+		}()
+	}
+	if name != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := s.checkPart(ctx, buildNamePrompt(),
+				fmt.Sprintf("DISPLAY_NAME:\n%s\n\nДлина: %d символов.", name, utf8.RuneCountInString(name)))
+			if err != nil {
+				nameErr = fmt.Errorf("name: %w", err)
+				return
+			}
+			out.Name = res
+		}()
+	}
+	wg.Wait()
 
+	if bioErr != nil {
+		return Result{}, bioErr
+	}
+	if nameErr != nil {
+		return Result{}, nameErr
+	}
+
+	out.OK = out.Bio.OK && out.Name.OK
+	return out, nil
+}
+
+func (s *Service) checkPart(ctx context.Context, system, userMsg string) (PartResult, error) {
 	resp, err := s.client.Messages(ctx, llm.MessagesRequest{
 		MaxTokens: s.maxTokens,
 		System: []llm.SystemBlock{{
@@ -71,31 +125,38 @@ func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 		Messages: []llm.Message{{Role: "user", Content: userMsg}},
 		Thinking: &llm.Thinking{Type: "adaptive"},
 		OutputConfig: &llm.OutputConfig{
-			Format: llm.OutputFormat{Type: "json_schema", Schema: responseSchema()},
+			Format: llm.OutputFormat{Type: "json_schema", Schema: partResponseSchema()},
 			Effort: s.effort,
 		},
 	})
 	if err != nil {
-		return Result{}, fmt.Errorf("llm: %w", err)
+		return PartResult{}, fmt.Errorf("llm: %w", err)
 	}
 	raw := resp.FirstText()
 	if raw == "" {
-		return Result{}, fmt.Errorf("empty response")
+		return PartResult{}, fmt.Errorf("empty response")
 	}
-
-	var parsed Result
+	var parsed PartResult
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return Result{}, fmt.Errorf("parse: %w", err)
+		return PartResult{}, fmt.Errorf("parse: %w", err)
 	}
-	if parsed.Score < 0 {
-		parsed.Score = 0
+	return normalizePart(parsed), nil
+}
+
+func skippedPart() PartResult {
+	return PartResult{OK: true, Score: 100, Reasons: []string{}, Suggestion: ""}
+}
+
+func normalizePart(p PartResult) PartResult {
+	if p.Score < 0 {
+		p.Score = 0
 	}
-	if parsed.Score > 100 {
-		parsed.Score = 100
+	if p.Score > 100 {
+		p.Score = 100
 	}
-	if parsed.Reasons == nil {
-		parsed.Reasons = []string{}
+	if p.Reasons == nil {
+		p.Reasons = []string{}
 	}
-	parsed.Suggestion = strings.TrimSpace(parsed.Suggestion)
-	return parsed, nil
+	p.Suggestion = strings.TrimSpace(p.Suggestion)
+	return p
 }

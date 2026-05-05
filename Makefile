@@ -1,4 +1,4 @@
-.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt
+.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt build-css watch-css
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -53,3 +53,9 @@ fmt:
 
 lint:
 	go vet ./...
+
+build-css:
+	npm run build:css
+
+watch-css:
+	npm run watch:css

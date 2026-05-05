@@ -129,15 +129,15 @@ func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 		return
 	}
 	p, err := h.svc.SetPublished(r.Context(), uid, v)
-	var rejected *BioRejectedError
+	var rejected *ProfileRejectedError
 	switch {
 	case errors.As(err, &rejected):
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error":      "bio_rejected",
-			"check":      rejected.Result,
+			"error": "profile_rejected",
+			"check": rejected.Result,
 		})
-	case errors.Is(err, ErrBioRejected):
-		writeErr(w, http.StatusUnprocessableEntity, "bio_empty")
+	case errors.Is(err, ErrPublishIncomplete):
+		writeErr(w, http.StatusUnprocessableEntity, "publish_incomplete")
 	case errors.Is(err, ErrNotFound):
 		writeErr(w, http.StatusNotFound, "no_profile")
 	case err != nil:

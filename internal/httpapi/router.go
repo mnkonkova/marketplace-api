@@ -3,6 +3,8 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -113,4 +115,19 @@ func mountStatic(r chi.Router, dir string) {
 	r.Handle("/styles.css", fs)
 	r.Handle("/app.js", fs)
 	r.Handle("/favicon.ico", fs)
+	r.Handle("/favicon.svg", fs)
+	// chi с wildcard передаёт FileServer-у обрезанный путь, поэтому модули
+	// фронта мы поднимаем отдельными FileServer'ами с явным StripPrefix.
+	r.Handle("/shared/*", http.StripPrefix("/shared/", http.FileServer(http.Dir(filepath.Join(dir, "shared")))))
+	r.Handle("/pages/*", http.StripPrefix("/pages/", http.FileServer(http.Dir(filepath.Join(dir, "pages")))))
+
+	// SPA fallback: GET вне /api/* отдаёт index.html, чтобы прямой переход
+	// на /search или /specialist/abc работал, а не падал в 404.
+	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || strings.HasPrefix(req.URL.Path, "/api/") {
+			http.NotFound(w, req)
+			return
+		}
+		http.ServeFile(w, req, dir+"/index.html")
+	})
 }
