@@ -100,6 +100,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/me/profile/check", d.ProfileCheck.Check)
 			}
 
+			r.Get("/me/portfolio", d.Profiles.PortfolioList)
+			r.Post("/me/portfolio", d.Profiles.PortfolioCreate)
+			r.Delete("/me/portfolio/{id}", d.Profiles.PortfolioDelete)
+
 			r.Get("/me/leads/incoming", d.Leads.ListIncoming)
 			r.Patch("/me/leads/{id}/recipient", d.Leads.UpdateRecipient)
 		})

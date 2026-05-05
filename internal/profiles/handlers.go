@@ -147,6 +147,67 @@ func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 	}
 }
 
+/* ───── portfolio (video) ──────────────────────────────────────── */
+
+func (h *Handler) PortfolioList(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	items, err := h.svc.ListPortfolio(r.Context(), uid)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	var in PortfolioCreateInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	item, err := h.svc.AddPortfolioVideo(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	default:
+		writeJSON(w, http.StatusCreated, item)
+	}
+}
+
+func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id")
+		return
+	}
+	if err := h.svc.DeletePortfolioItem(r.Context(), uid, itemID); err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			writeErr(w, http.StatusNotFound, "not_found")
+		default:
+			writeErr(w, http.StatusInternalServerError, "internal")
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

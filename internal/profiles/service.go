@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -213,6 +214,88 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 		return Profile{}, err
 	}
 	return s.repo.Get(ctx, userID)
+}
+
+/* ───── portfolio (video) CRUD ───────────────────────────────────
+   Сейчас — только URL-форма: специалист хостит видео сам и вставляет
+   ссылку. file-upload через S3 (Yandex Object Storage) — следующий шаг,
+   ждёт ключей. Когда будет — добавится отдельный handler, который
+   аплоадит в бакет и зовёт ту же CreatePortfolioVideo. */
+
+const (
+	portfolioMaxVideosPerUser   = 20
+	portfolioMaxTitleLen        = 200
+	portfolioMaxDescriptionLen  = 1000
+)
+
+func (s *Service) ListPortfolio(ctx context.Context, userID uuid.UUID) ([]PortfolioItem, error) {
+	return s.repo.ListPortfolio(ctx, userID)
+}
+
+func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in PortfolioCreateInput) (PortfolioItem, error) {
+	in.VideoURL = strings.TrimSpace(in.VideoURL)
+	in.ThumbnailURL = strings.TrimSpace(in.ThumbnailURL)
+	in.Title = strings.TrimSpace(in.Title)
+	in.Description = strings.TrimSpace(in.Description)
+
+	if in.VideoURL == "" {
+		return PortfolioItem{}, fmt.Errorf("%w: video_url is required", ErrInvalidInput)
+	}
+	if !isHTTPURL(in.VideoURL) {
+		return PortfolioItem{}, fmt.Errorf("%w: video_url must be http(s)", ErrInvalidInput)
+	}
+	if in.ThumbnailURL != "" && !isHTTPURL(in.ThumbnailURL) {
+		return PortfolioItem{}, fmt.Errorf("%w: thumbnail_url must be http(s)", ErrInvalidInput)
+	}
+	if in.Title == "" {
+		return PortfolioItem{}, fmt.Errorf("%w: title is required", ErrInvalidInput)
+	}
+	if len(in.Title) > portfolioMaxTitleLen {
+		return PortfolioItem{}, fmt.Errorf("%w: title too long", ErrInvalidInput)
+	}
+	if len(in.Description) > portfolioMaxDescriptionLen {
+		return PortfolioItem{}, fmt.Errorf("%w: description too long", ErrInvalidInput)
+	}
+	in.CategoryCodes = dedupStrings(in.CategoryCodes)
+	if len(in.CategoryCodes) > 0 {
+		valid, err := s.repo.ValidCategoryCodes(ctx, in.CategoryCodes)
+		if err != nil {
+			return PortfolioItem{}, err
+		}
+		if len(valid) != len(in.CategoryCodes) {
+			return PortfolioItem{}, fmt.Errorf("%w: unknown category code", ErrInvalidInput)
+		}
+	}
+
+	// hard-лимит: 20 видео на спеца. ОК для MVP, но превышается явной ошибкой,
+	// чтобы не молча дропать.
+	existing, err := s.repo.ListPortfolio(ctx, userID)
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	videos := 0
+	for _, it := range existing {
+		if it.VideoURL != "" {
+			videos++
+		}
+	}
+	if videos >= portfolioMaxVideosPerUser {
+		return PortfolioItem{}, fmt.Errorf("%w: max %d videos", ErrInvalidInput, portfolioMaxVideosPerUser)
+	}
+
+	return s.repo.CreatePortfolioVideo(ctx, userID, in)
+}
+
+func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.UUID) error {
+	return s.repo.DeletePortfolioItem(ctx, userID, itemID)
+}
+
+func isHTTPURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 type ProfileRejectedError struct {

@@ -336,6 +336,79 @@ ORDER BY sort_order, created_at DESC`, userID)
 	return out, rows.Err()
 }
 
+// ListPortfolio — экспортируемая обёртка для /me/portfolio (handler).
+// listPortfolio (lower-case) дёргается из GetPublic, держим обе.
+func (r *Repo) ListPortfolio(ctx context.Context, userID uuid.UUID) ([]PortfolioItem, error) {
+	return r.listPortfolio(ctx, userID)
+}
+
+// CreatePortfolioVideo — добавляет видео-айтем. sort_order выставляем на
+// MAX+1, чтобы новое видео было в конце списка (юзер потом перемешает).
+func (r *Repo) CreatePortfolioVideo(ctx context.Context, userID uuid.UUID, in PortfolioCreateInput) (PortfolioItem, error) {
+	const q = `
+INSERT INTO portfolio_items (
+    user_id, title, description,
+    video_url, thumbnail_url,
+    category_codes,
+    kind, duration_sec, aspect,
+    sort_order
+)
+VALUES (
+    $1, $2, $3,
+    $4, NULLIF($5, ''),
+    $6,
+    'video', $7, $8,
+    COALESCE((SELECT MAX(sort_order)+1 FROM portfolio_items WHERE user_id = $1), 0)
+)
+RETURNING id, title, description,
+          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
+          category_codes, sort_order, created_at`
+	var p PortfolioItem
+	cats := in.CategoryCodes
+	if cats == nil {
+		cats = []string{}
+	}
+	var dur *int
+	if in.DurationSec > 0 {
+		d := in.DurationSec
+		dur = &d
+	}
+	aspect := in.Aspect
+	if aspect == "" {
+		aspect = "9:16"
+	}
+	err := r.db.QueryRow(ctx, q,
+		userID, in.Title, in.Description,
+		in.VideoURL, in.ThumbnailURL,
+		cats,
+		dur, aspect,
+	).Scan(
+		&p.ID, &p.Title, &p.Description,
+		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
+		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt,
+	)
+	if err != nil {
+		return PortfolioItem{}, fmt.Errorf("insert portfolio: %w", err)
+	}
+	return p, nil
+}
+
+// DeletePortfolioItem — удаляет видео если оно принадлежит userID.
+// Возвращает ErrNotFound если запись не найдена/чужая (без утечки factов
+// о существовании чужих ID).
+func (r *Repo) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.UUID) error {
+	tag, err := r.db.Exec(ctx,
+		`DELETE FROM portfolio_items WHERE id = $1 AND user_id = $2`,
+		itemID, userID)
+	if err != nil {
+		return fmt.Errorf("delete portfolio: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repo) listReviews(ctx context.Context, userID uuid.UUID) ([]Review, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT id, COALESCE(NULLIF(author_name, ''), 'Клиент'), rating, text, created_at

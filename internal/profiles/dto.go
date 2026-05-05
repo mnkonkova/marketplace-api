@@ -91,3 +91,16 @@ type SetCategoriesInput struct {
 type SetSkillsInput struct {
 	SkillIDs []string `json:"skill_ids"`
 }
+
+// PortfolioCreateInput — добавление видео в портфолио. Сейчас принимаем только
+// URL-форму (юзер сам хостит mp4); прямой file-upload через S3 — этап #4b,
+// когда будут ключи Yandex Object Storage.
+type PortfolioCreateInput struct {
+	VideoURL      string   `json:"video_url"`
+	ThumbnailURL  string   `json:"thumbnail_url,omitempty"`
+	Title         string   `json:"title"`
+	Description   string   `json:"description,omitempty"`
+	CategoryCodes []string `json:"category_codes,omitempty"`
+	DurationSec   int      `json:"duration_sec,omitempty"`
+	Aspect        string   `json:"aspect,omitempty"`
+}
