@@ -4,7 +4,7 @@
 # alpine-runtime. styles.css ожидается уже собранным в репо (см. Makefile
 # build-css).
 
-FROM golang:1.22-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates tzdata
 
