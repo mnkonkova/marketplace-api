@@ -23,7 +23,8 @@ func (r *Repo) Get(ctx context.Context, userID uuid.UUID) (Profile, error) {
 SELECT p.user_id, p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
-       p.is_published, p.rating_avg, p.reviews_count
+       p.is_published, p.rating_avg, p.reviews_count,
+       COALESCE(p.contact_email, ''), COALESCE(p.contact_phone, '')
 FROM specialist_profiles p
 WHERE p.user_id = $1`
 	var p Profile
@@ -32,6 +33,7 @@ WHERE p.user_id = $1`
 		&p.AvatarURL, &p.City,
 		&p.RateMin, &p.RateMax, &p.Currency,
 		&p.IsPublished, &p.RatingAvg, &p.ReviewsCount,
+		&p.ContactEmail, &p.ContactPhone,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{}, ErrNotFound
@@ -113,14 +115,16 @@ func (r *Repo) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 func (r *Repo) PatchInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, in PatchInput) error {
 	const q = `
 UPDATE specialist_profiles SET
-  display_name = COALESCE($2, display_name),
-  bio          = COALESCE($3, bio),
-  avatar_url   = COALESCE($4, avatar_url),
-  city         = COALESCE($5, city),
-  rate_min     = CASE WHEN $6::boolean THEN $7 ELSE rate_min END,
-  rate_max     = CASE WHEN $8::boolean THEN $9 ELSE rate_max END,
-  currency     = COALESCE($10, currency),
-  updated_at   = now()
+  display_name  = COALESCE($2, display_name),
+  bio           = COALESCE($3, bio),
+  avatar_url    = COALESCE($4, avatar_url),
+  city          = COALESCE($5, city),
+  rate_min      = CASE WHEN $6::boolean THEN $7 ELSE rate_min END,
+  rate_max      = CASE WHEN $8::boolean THEN $9 ELSE rate_max END,
+  currency      = COALESCE($10, currency),
+  contact_email = COALESCE($11, contact_email),
+  contact_phone = COALESCE($12, contact_phone),
+  updated_at    = now()
 WHERE user_id = $1`
 	tag, err := tx.Exec(ctx, q,
 		userID,
@@ -131,6 +135,8 @@ WHERE user_id = $1`
 		in.RateMin != nil, in.RateMin,
 		in.RateMax != nil, in.RateMax,
 		in.Currency,
+		in.ContactEmail,
+		in.ContactPhone,
 	)
 	if err != nil {
 		return fmt.Errorf("update profile: %w", err)

@@ -94,9 +94,21 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 		}
 		userID = id
 		if needsProfile {
+			// Контакты для заявок предзаполняем тем, что юзер дал при
+			// регистрации (email/phone). Auth-поля users.email/users.phone
+			// нужны для логина, contact_* — для отображения в брифах;
+			// специалист сможет подменить их в /me не ломая логин.
+			var profileEmail, profilePhone string
+			if user.Email != nil {
+				profileEmail = *user.Email
+			}
+			if user.Phone != nil {
+				profilePhone = *user.Phone
+			}
 			if _, err := tx.Exec(ctx,
-				`INSERT INTO specialist_profiles (user_id, display_name) VALUES ($1, $2)`,
-				id, in.DisplayName); err != nil {
+				`INSERT INTO specialist_profiles (user_id, display_name, contact_email, contact_phone)
+				 VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''))`,
+				id, in.DisplayName, profileEmail, profilePhone); err != nil {
 				return fmt.Errorf("insert profile: %w", err)
 			}
 		}

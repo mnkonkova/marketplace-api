@@ -39,6 +39,23 @@ type CreateInput struct {
 	SpecialistIDs      []uuid.UUID
 }
 
+// SpecialistContact — контакты выбранных специалистов, возвращаемые в
+// ответе POST /leads. По продуктовому требованию контакты НЕ показываются
+// в feed/search/публичном профиле — только менеджеру (тому, кто создал
+// заявку) уже после её отправки.
+type SpecialistContact struct {
+	UserID       uuid.UUID `json:"user_id"`
+	DisplayName  string    `json:"display_name"`
+	ContactEmail string    `json:"contact_email,omitempty"`
+	ContactPhone string    `json:"contact_phone,omitempty"`
+}
+
+// CreateResult — id созданной заявки + контакты выбранных спецов.
+type CreateResult struct {
+	ID          uuid.UUID           `json:"id"`
+	Specialists []SpecialistContact `json:"specialists"`
+}
+
 const (
 	LeadStatusOpen       = "open"
 	LeadStatusInProgress = "in_progress"

@@ -71,16 +71,24 @@ type Profile struct {
 	Categories    []string  `json:"categories"`
 	PrimaryCategory string  `json:"primary_category,omitempty"`
 	SkillIDs      []string  `json:"skill_ids"`
+	// Контакты для прямой связи. Возвращаются только владельцу профиля
+	// (через /me/profile) и менеджеру после создания заявки (см. /leads).
+	// В публичные DTO (PublicProfile, search.IndexDoc, feed.Specialist) НЕ
+	// попадают — это видимость не для feed'а.
+	ContactEmail string `json:"contact_email,omitempty"`
+	ContactPhone string `json:"contact_phone,omitempty"`
 }
 
 type PatchInput struct {
-	DisplayName *string `json:"display_name"`
-	Bio         *string `json:"bio"`
-	AvatarURL   *string `json:"avatar_url"`
-	City        *string `json:"city"`
-	RateMin     *int    `json:"rate_min"`
-	RateMax     *int    `json:"rate_max"`
-	Currency    *string `json:"currency"`
+	DisplayName  *string `json:"display_name"`
+	Bio          *string `json:"bio"`
+	AvatarURL    *string `json:"avatar_url"`
+	City         *string `json:"city"`
+	RateMin      *int    `json:"rate_min"`
+	RateMax      *int    `json:"rate_max"`
+	Currency     *string `json:"currency"`
+	ContactEmail *string `json:"contact_email"`
+	ContactPhone *string `json:"contact_phone"`
 }
 
 type SetCategoriesInput struct {

@@ -75,6 +75,33 @@ func (r *Repo) ValidPublishedSpecialists(ctx context.Context, ids []uuid.UUID) (
 	return out, rows.Err()
 }
 
+// LoadSpecialistContacts — батчевый load имён + контактов для выбранных
+// спецов. Используется только в ответе POST /leads (менеджер видит контакты
+// уже после отправки брифа). Пустые поля = специалист их не заполнил в /me.
+func (r *Repo) LoadSpecialistContacts(ctx context.Context, ids []uuid.UUID) ([]SpecialistContact, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT user_id, display_name,
+       COALESCE(contact_email, ''), COALESCE(contact_phone, '')
+FROM specialist_profiles
+WHERE user_id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load specialist contacts: %w", err)
+	}
+	defer rows.Close()
+	out := make([]SpecialistContact, 0, len(ids))
+	for rows.Next() {
+		var c SpecialistContact
+		if err := rows.Scan(&c.UserID, &c.DisplayName, &c.ContactEmail, &c.ContactPhone); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repo) ListIncoming(ctx context.Context, specialistID uuid.UUID, status string, limit, offset int) ([]IncomingLead, error) {
 	q := `
 SELECT l.id, l.client_user_id, l.client_name, l.client_contact, l.brief,

@@ -20,49 +20,60 @@ type Service struct{ repo *Repo }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
 
-func (s *Service) Create(ctx context.Context, in CreateInput) (uuid.UUID, error) {
+func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
 	in.ClientName = strings.TrimSpace(in.ClientName)
 	in.ClientContact = strings.TrimSpace(in.ClientContact)
 	in.Brief = strings.TrimSpace(in.Brief)
 	in.TargetCategoryCode = strings.TrimSpace(in.TargetCategoryCode)
 
 	if in.ClientName == "" {
-		return uuid.Nil, fmt.Errorf("%w: client_name is required", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: client_name is required", ErrInvalidInput)
 	}
 	if in.ClientContact == "" {
-		return uuid.Nil, fmt.Errorf("%w: client_contact is required", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: client_contact is required", ErrInvalidInput)
 	}
 	if utf8.RuneCountInString(in.Brief) < 10 {
-		return uuid.Nil, fmt.Errorf("%w: brief must be at least 10 characters", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: brief must be at least 10 characters", ErrInvalidInput)
 	}
 	if in.BudgetMin != nil && *in.BudgetMin < 0 {
-		return uuid.Nil, fmt.Errorf("%w: budget_min must be >= 0", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: budget_min must be >= 0", ErrInvalidInput)
 	}
 	if in.BudgetMax != nil && *in.BudgetMax < 0 {
-		return uuid.Nil, fmt.Errorf("%w: budget_max must be >= 0", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: budget_max must be >= 0", ErrInvalidInput)
 	}
 	if in.BudgetMin != nil && in.BudgetMax != nil && *in.BudgetMin > *in.BudgetMax {
-		return uuid.Nil, fmt.Errorf("%w: budget_min must be <= budget_max", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: budget_min must be <= budget_max", ErrInvalidInput)
 	}
 	if in.Deadline != nil && in.Deadline.Before(time.Now().AddDate(0, 0, -1)) {
-		return uuid.Nil, fmt.Errorf("%w: deadline cannot be in the past", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: deadline cannot be in the past", ErrInvalidInput)
 	}
 	if len(in.SpecialistIDs) == 0 {
-		return uuid.Nil, fmt.Errorf("%w: at least one specialist is required", ErrInvalidInput)
+		return CreateResult{}, fmt.Errorf("%w: at least one specialist is required", ErrInvalidInput)
 	}
 
 	in.SpecialistIDs = dedupUUIDs(in.SpecialistIDs)
 
 	valid, err := s.repo.ValidPublishedSpecialists(ctx, in.SpecialistIDs)
 	if err != nil {
-		return uuid.Nil, err
+		return CreateResult{}, err
 	}
 	if len(valid) == 0 {
-		return uuid.Nil, ErrNoSpecialists
+		return CreateResult{}, ErrNoSpecialists
 	}
 	in.SpecialistIDs = valid
 
-	return s.repo.Create(ctx, in)
+	id, err := s.repo.Create(ctx, in)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	// Контакты подгружаем уже после создания — они уезжают в ответ ровно
+	// в этот момент (видимы только менеджеру/клиенту, после отправки брифа).
+	contacts, err := s.repo.LoadSpecialistContacts(ctx, valid)
+	if err != nil {
+		// Лид уже создан; контакты — best-effort. Не валим запрос.
+		return CreateResult{ID: id, Specialists: nil}, nil
+	}
+	return CreateResult{ID: id, Specialists: contacts}, nil
 }
 
 func (s *Service) ListIncoming(ctx context.Context, specialistID uuid.UUID, status string, limit, offset int) ([]IncomingLead, error) {

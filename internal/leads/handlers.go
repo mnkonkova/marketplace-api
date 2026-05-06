@@ -61,7 +61,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		clientUserID = &uid
 	}
 
-	id, err := h.svc.Create(r.Context(), CreateInput{
+	res, err := h.svc.Create(r.Context(), CreateInput{
 		ClientUserID:       clientUserID,
 		ClientName:         in.ClientName,
 		ClientContact:      in.ClientContact,
@@ -80,7 +80,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, "internal")
 	default:
-		writeJSON(w, http.StatusCreated, map[string]string{"id": id.String()})
+		// Ответ включает контакты выбранных спецов — эту ветку видит ТОЛЬКО
+		// менеджер/клиент, который только что создал заявку. В feed/search/
+		// публичный профиль контакты не уезжают (см. profiles.PublicProfile).
+		writeJSON(w, http.StatusCreated, res)
 	}
 }
 

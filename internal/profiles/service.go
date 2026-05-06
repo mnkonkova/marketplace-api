@@ -106,6 +106,23 @@ func (s *Service) Patch(ctx context.Context, userID uuid.UUID, in PatchInput) (P
 	if in.RateMin != nil && in.RateMax != nil && *in.RateMin > *in.RateMax {
 		return Profile{}, fmt.Errorf("%w: rate_min must be <= rate_max", ErrInvalidInput)
 	}
+	// Контакты — лёгкий тримминг и cap по длине. Формат не валидируем
+	// строго (телефоны бывают всякие, e-mail с unicode-доменами и т.п.) —
+	// специалист сам понимает что вписывает; оно нигде не парсится автоматически.
+	if in.ContactEmail != nil {
+		v := strings.TrimSpace(*in.ContactEmail)
+		if len(v) > 254 {
+			return Profile{}, fmt.Errorf("%w: contact_email too long", ErrInvalidInput)
+		}
+		in.ContactEmail = &v
+	}
+	if in.ContactPhone != nil {
+		v := strings.TrimSpace(*in.ContactPhone)
+		if len(v) > 64 {
+			return Profile{}, fmt.Errorf("%w: contact_phone too long", ErrInvalidInput)
+		}
+		in.ContactPhone = &v
+	}
 
 	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := s.repo.PatchInTx(ctx, tx, userID, in); err != nil {
