@@ -284,13 +284,25 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		return PortfolioItem{}, fmt.Errorf("%w: description too long", ErrInvalidInput)
 	}
 	in.CategoryCodes = dedupStrings(in.CategoryCodes)
-	if len(in.CategoryCodes) > 0 {
-		valid, err := s.repo.ValidCategoryCodes(ctx, in.CategoryCodes)
-		if err != nil {
-			return PortfolioItem{}, err
+	// Категории видео должны быть подмножеством категорий профиля. Если юзер
+	// не выбрал — по дефолту ставим primary (видео должно где-то «жить»).
+	profile, err := s.repo.Get(ctx, userID)
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	if len(in.CategoryCodes) == 0 {
+		if profile.PrimaryCategory != "" {
+			in.CategoryCodes = []string{profile.PrimaryCategory}
 		}
-		if len(valid) != len(in.CategoryCodes) {
-			return PortfolioItem{}, fmt.Errorf("%w: unknown category code", ErrInvalidInput)
+	} else {
+		profileSet := make(map[string]struct{}, len(profile.Categories))
+		for _, c := range profile.Categories {
+			profileSet[c] = struct{}{}
+		}
+		for _, c := range in.CategoryCodes {
+			if _, ok := profileSet[c]; !ok {
+				return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
+			}
 		}
 	}
 
@@ -315,6 +327,27 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 
 func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.UUID) error {
 	return s.repo.DeletePortfolioItem(ctx, userID, itemID)
+}
+
+// SetPortfolioCategories — обновляет category_codes у видео-айтема.
+// Категории должны быть подмножеством категорий профиля специалиста; пустой
+// список разрешён (видео не попадёт ни под один категорийный фильтр).
+func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string) (PortfolioItem, error) {
+	codes = dedupStrings(codes)
+	profile, err := s.repo.Get(ctx, userID)
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	profileSet := make(map[string]struct{}, len(profile.Categories))
+	for _, c := range profile.Categories {
+		profileSet[c] = struct{}{}
+	}
+	for _, c := range codes {
+		if _, ok := profileSet[c]; !ok {
+			return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
+		}
+	}
+	return s.repo.UpdatePortfolioCategories(ctx, userID, itemID, codes)
 }
 
 // CreatePortfolioUploadURL — выдаёт presigned PUT URL для прямого аплоада в S3.

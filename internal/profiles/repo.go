@@ -393,6 +393,36 @@ RETURNING id, title, description,
 	return p, nil
 }
 
+// UpdatePortfolioCategories — переписывает category_codes у видео-айтема,
+// принадлежащего userID. Возвращает обновлённую запись (как POST), чтобы
+// фронт мог переиспользовать рендер. ErrNotFound — если запись чужая/не
+// существует.
+func (r *Repo) UpdatePortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string) (PortfolioItem, error) {
+	if codes == nil {
+		codes = []string{}
+	}
+	const q = `
+UPDATE portfolio_items
+   SET category_codes = $3
+ WHERE id = $1 AND user_id = $2
+RETURNING id, title, description,
+          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
+          category_codes, sort_order, created_at`
+	var p PortfolioItem
+	err := r.db.QueryRow(ctx, q, itemID, userID, codes).Scan(
+		&p.ID, &p.Title, &p.Description,
+		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
+		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PortfolioItem{}, ErrNotFound
+	}
+	if err != nil {
+		return PortfolioItem{}, fmt.Errorf("update portfolio categories: %w", err)
+	}
+	return p, nil
+}
+
 // DeletePortfolioItem — удаляет видео если оно принадлежит userID.
 // Возвращает ErrNotFound если запись не найдена/чужая (без утечки factов
 // о существовании чужих ID).

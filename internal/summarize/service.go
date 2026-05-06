@@ -64,6 +64,23 @@ func (s *Service) Run(ctx context.Context, q search.Query) (Result, error) {
 		q.Limit = 20
 	}
 
+	// Skills, извлечённые clarify-ем из свободного текста, мы НЕ применяем как
+	// hard-фильтр: специалисты, у которых навыки не проставлены явно, всё равно
+	// должны попадать в подбор, если их bio тематически отвечает запросу.
+	// Вместо этого подмешиваем slug'и в текстовую часть запроса — они срабатывают
+	// через skill_titles/bio. UI-чипы skill (явный клик) ходят через /search и
+	// /specialists напрямую — там фильтр остаётся жёстким, потому что юзер
+	// явно сказал «только эти инструменты».
+	if len(q.SkillSlugs) > 0 {
+		extra := strings.Join(q.SkillSlugs, " ")
+		if q.Q == "" {
+			q.Q = extra
+		} else {
+			q.Q = q.Q + " " + extra
+		}
+		q.SkillSlugs = nil
+	}
+
 	res, err := s.search.Search(ctx, q)
 	if err != nil {
 		return Result{}, fmt.Errorf("search: %w", err)

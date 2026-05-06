@@ -105,6 +105,12 @@ type PortfolioCreateInput struct {
 	Aspect        string   `json:"aspect,omitempty"`
 }
 
+// PortfolioSetCategoriesInput — обновление списка категорий у видео.
+// Пустой массив = «убрать все». Категории должны быть ⊆ категорий профиля.
+type PortfolioSetCategoriesInput struct {
+	Codes []string `json:"codes"`
+}
+
 // PortfolioUploadURLInput — запрос на presigned PUT для прямого аплоада в S3.
 type PortfolioUploadURLInput struct {
 	Filename    string `json:"filename"`

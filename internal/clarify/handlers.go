@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"marketpclce/internal/llm"
 )
@@ -41,10 +42,39 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.Error("clarify", "err", err)
 		}
+		// Graceful fallback: LLM споткнулся (битый JSON, таймаут, парс-ошибка).
+		// Вместо 502 отдаём autopilot — done=true с последним сообщением юзера
+		// в q, плюс хинт на категорию если она уже выбрана. Для пользователя
+		// это «AI решил без уточнения» — лучше чем красная плашка в чате.
+		last := lastUserText(in.History)
+		if last != "" {
+			fallback := Result{
+				Message: "Принял задачу. Запускаю поиск.",
+				Done:    true,
+				Search:  &SearchParams{Q: last},
+			}
+			if in.Category != "" {
+				fallback.Search.Categories = []string{in.Category}
+			}
+			writeJSON(w, http.StatusOK, fallback)
+			return
+		}
 		writeErr(w, http.StatusBadGateway, "clarify_failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+func lastUserText(history []Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "user" {
+			t := strings.TrimSpace(history[i].Content)
+			if t != "" {
+				return t
+			}
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

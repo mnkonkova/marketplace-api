@@ -211,6 +211,35 @@ func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_id")
+		return
+	}
+	var in PortfolioSetCategoriesInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	item, err := h.svc.SetPortfolioCategories(r.Context(), uid, itemID, in.Codes)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrNotFound):
+		writeErr(w, http.StatusNotFound, "not_found")
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	default:
+		writeJSON(w, http.StatusOK, item)
+	}
+}
+
 func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {

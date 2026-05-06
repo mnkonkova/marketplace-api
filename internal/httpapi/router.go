@@ -103,6 +103,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/me/portfolio", d.Profiles.PortfolioList)
 			r.Post("/me/portfolio", d.Profiles.PortfolioCreate)
 			r.Post("/me/portfolio/upload-url", d.Profiles.PortfolioUploadURL)
+			r.Put("/me/portfolio/{id}/categories", d.Profiles.PortfolioSetCategories)
 			r.Delete("/me/portfolio/{id}", d.Profiles.PortfolioDelete)
 
 			r.Get("/me/leads/incoming", d.Leads.ListIncoming)
@@ -117,9 +118,21 @@ func NewRouter(d Deps) http.Handler {
 	return r
 }
 
+// noCache отключает кеш браузера для статики во время dev'а: ES-модули
+// браузеры держат агрессивно, и без явного no-store изменения в /pages/*.js
+// приходилось ловить через DevTools → disable cache. Для prod при желании
+// поставим обратно sane defaults через build-stage версионирование.
+func noCache(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		h.ServeHTTP(w, req)
+	})
+}
+
 func mountStatic(r chi.Router, dir string) {
-	fs := http.FileServer(http.Dir(dir))
+	fs := noCache(http.FileServer(http.Dir(dir)))
 	r.Get("/", func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
 		http.ServeFile(w, req, dir+"/index.html")
 	})
 	r.Handle("/styles.css", fs)
@@ -128,8 +141,8 @@ func mountStatic(r chi.Router, dir string) {
 	r.Handle("/favicon.svg", fs)
 	// chi с wildcard передаёт FileServer-у обрезанный путь, поэтому модули
 	// фронта мы поднимаем отдельными FileServer'ами с явным StripPrefix.
-	r.Handle("/shared/*", http.StripPrefix("/shared/", http.FileServer(http.Dir(filepath.Join(dir, "shared")))))
-	r.Handle("/pages/*", http.StripPrefix("/pages/", http.FileServer(http.Dir(filepath.Join(dir, "pages")))))
+	r.Handle("/shared/*", http.StripPrefix("/shared/", noCache(http.FileServer(http.Dir(filepath.Join(dir, "shared"))))))
+	r.Handle("/pages/*", http.StripPrefix("/pages/", noCache(http.FileServer(http.Dir(filepath.Join(dir, "pages"))))))
 
 	// SPA fallback: GET вне /api/* отдаёт index.html, чтобы прямой переход
 	// на /search или /specialist/abc работал, а не падал в 404.
