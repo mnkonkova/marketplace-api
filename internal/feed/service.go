@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -61,6 +62,22 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 		offset = c.Offset
 	}
 
+	// Skills из AI-флоу clarify: они извлечены LLM из свободного текста и
+	// часть спецов их явно не проставила. Чтобы фид симметрично с
+	// /search/summarize находил тех же спецов (иначе при тогле «В ленту» из
+	// AI-подбора пропадает запиканный кандидат), подмешиваем slug'и в Q и
+	// убираем как hard-фильтр. Жёсткие skill-фильтры из UI-чипов прилетают
+	// в /specialists и /search напрямую — они тут не задействованы.
+	searchQ := q.Q
+	if len(q.SkillSlugs) > 0 {
+		extra := strings.Join(q.SkillSlugs, " ")
+		if searchQ == "" {
+			searchQ = extra
+		} else {
+			searchQ = searchQ + " " + extra
+		}
+	}
+
 	// 1) тянем пул спецов под фильтром страницами по searchPageSize, до poolSize.
 	//    Локально пере-ранжируем: с видео — выше, потом по рейтингу. Альтернатива —
 	//    хранить videos_count в индексе и сортировать в ES, но это требует
@@ -69,9 +86,8 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 	totalMatched := 0
 	for off := 0; off < poolSize; off += searchPageSize {
 		page, err := s.search.Search(ctx, search.Query{
-			Q:          q.Q,
+			Q:          searchQ,
 			Categories: q.Categories,
-			SkillSlugs: q.SkillSlugs,
 			City:       q.City,
 			Limit:      searchPageSize,
 			Offset:     off,
