@@ -102,6 +102,7 @@ func NewRouter(d Deps) http.Handler {
 
 			r.Get("/me/portfolio", d.Profiles.PortfolioList)
 			r.Post("/me/portfolio", d.Profiles.PortfolioCreate)
+			r.Post("/me/portfolio/upload-url", d.Profiles.PortfolioUploadURL)
 			r.Delete("/me/portfolio/{id}", d.Profiles.PortfolioDelete)
 
 			r.Get("/me/leads/incoming", d.Leads.ListIncoming)

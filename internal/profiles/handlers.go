@@ -185,6 +185,32 @@ func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	if !h.svc.MediaAvailable() {
+		writeErr(w, http.StatusServiceUnavailable, "storage_disabled")
+		return
+	}
+	var in PortfolioUploadURLInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	out, err := h.svc.CreatePortfolioUploadURL(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	default:
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
 func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {

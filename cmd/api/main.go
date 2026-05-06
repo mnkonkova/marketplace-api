@@ -24,6 +24,7 @@ import (
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
 	"marketpclce/internal/platform/redisx"
+	"marketpclce/internal/platform/s3"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
@@ -83,6 +84,28 @@ func main() {
 	profilesRepo := profiles.NewRepo(pool)
 	profilesSvc := profiles.NewService(profilesRepo)
 	profilesHandler := profiles.NewHandler(profilesSvc)
+
+	// S3 — опционально: без ключей API стартует без upload-функционала.
+	// Ручка POST /me/portfolio/upload-url вернёт 503 storage_disabled.
+	if cfg.S3AccessKey != "" && cfg.S3SecretKey != "" {
+		s3Client, err := s3.New(s3.Config{
+			Endpoint:  cfg.S3Endpoint,
+			AccessKey: cfg.S3AccessKey,
+			SecretKey: cfg.S3SecretKey,
+			Bucket:    cfg.S3Bucket,
+			Region:    cfg.S3Region,
+			UseSSL:    cfg.S3UseSSL,
+			PublicURL: cfg.S3PublicURL,
+		})
+		if err != nil {
+			slog.Warn("s3 disabled", "err", err)
+		} else {
+			profilesSvc.WithMediaStorage(s3Client)
+			slog.Info("s3 ready", "bucket", s3Client.Bucket(), "endpoint", cfg.S3Endpoint)
+		}
+	} else {
+		slog.Info("s3 disabled (no credentials)")
+	}
 
 	searchSvc := search.NewService(esClient, cfg.OpenSearchIndexProfile)
 	searchHandler := search.NewHandler(searchSvc)

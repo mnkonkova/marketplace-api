@@ -29,6 +29,11 @@ type Config struct {
 	S3SecretKey string `env:"S3_SECRET_KEY"`
 	S3Bucket    string `env:"S3_BUCKET" envDefault:"marketpclce"`
 	S3Region    string `env:"S3_REGION" envDefault:"us-east-1"`
+	S3UseSSL    bool   `env:"S3_USE_SSL" envDefault:"false"`
+	// Опциональный публичный домен для отдачи объектов: если задан, public_url
+	// собирается как `${S3_PUBLIC_URL}/${key}` (CNAME, CDN). Иначе —
+	// `${S3_ENDPOINT}/${S3_BUCKET}/${key}` (path-style на YC по умолчанию).
+	S3PublicURL string `env:"S3_PUBLIC_URL"`
 
 	LLMProvider  string        `env:"LLM_PROVIDER" envDefault:"anthropic"`
 	LLMAPIKey    string        `env:"LLM_API_KEY"`

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -44,9 +46,18 @@ type CheckResult struct {
 	Name PartResult `json:"name"`
 }
 
+// MediaStorage — абстракция над S3-совместимым хранилищем. Сервис не знает
+// про minio/aws — только про presigned PUT и сборку public URL. main.go
+// внедряет реализацию через WithMediaStorage; nil = аплоад выключен.
+type MediaStorage interface {
+	PresignPut(ctx context.Context, key, contentType string, expiry time.Duration) (string, error)
+	PublicURL(key string) string
+}
+
 type Service struct {
 	repo    *Repo
 	checker ProfileChecker
+	media   MediaStorage
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -55,6 +66,13 @@ func (s *Service) WithProfileChecker(c ProfileChecker) *Service {
 	s.checker = c
 	return s
 }
+
+func (s *Service) WithMediaStorage(m MediaStorage) *Service {
+	s.media = m
+	return s
+}
+
+func (s *Service) MediaAvailable() bool { return s.media != nil }
 
 func (s *Service) Get(ctx context.Context, userID uuid.UUID) (Profile, error) {
 	return s.repo.Get(ctx, userID)
@@ -226,7 +244,16 @@ const (
 	portfolioMaxVideosPerUser   = 20
 	portfolioMaxTitleLen        = 200
 	portfolioMaxDescriptionLen  = 1000
+
+	// 50 МБ — синхронизировано с фронтом. Увеличим, когда будет HLS-транскод.
+	portfolioMaxUploadBytes = 50 * 1024 * 1024
+	portfolioUploadExpiry   = 15 * time.Minute
 )
+
+var allowedUploadTypes = map[string]string{
+	"video/mp4":       ".mp4",
+	"video/quicktime": ".mov",
+}
 
 func (s *Service) ListPortfolio(ctx context.Context, userID uuid.UUID) ([]PortfolioItem, error) {
 	return s.repo.ListPortfolio(ctx, userID)
@@ -288,6 +315,65 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 
 func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.UUID) error {
 	return s.repo.DeletePortfolioItem(ctx, userID, itemID)
+}
+
+// CreatePortfolioUploadURL — выдаёт presigned PUT URL для прямого аплоада в S3.
+// Сам файл клиент кладёт в YC через возвращённый upload_url; затем
+// шлёт POST /me/portfolio с public_url, чтобы создать запись в БД.
+// Это разделение даёт две полезные вещи:
+//  - наш сервер не проксирует mp4 (нет нагрузки)
+//  - запись в БД создаётся только если аплоад реально прошёл
+func (s *Service) CreatePortfolioUploadURL(
+	ctx context.Context,
+	userID uuid.UUID,
+	in PortfolioUploadURLInput,
+) (PortfolioUploadURL, error) {
+	if s.media == nil {
+		return PortfolioUploadURL{}, errors.New("media storage not configured")
+	}
+
+	ext, ok := allowedUploadTypes[in.ContentType]
+	if !ok {
+		return PortfolioUploadURL{}, fmt.Errorf("%w: content_type must be video/mp4 or video/quicktime", ErrInvalidInput)
+	}
+	if in.SizeBytes <= 0 {
+		return PortfolioUploadURL{}, fmt.Errorf("%w: size_bytes is required", ErrInvalidInput)
+	}
+	if in.SizeBytes > portfolioMaxUploadBytes {
+		return PortfolioUploadURL{}, fmt.Errorf("%w: file too large (max %d MB)", ErrInvalidInput, portfolioMaxUploadBytes/(1024*1024))
+	}
+
+	// Hard-cap 20 видео — проверяем здесь, чтобы не выдавать URL впустую.
+	existing, err := s.repo.ListPortfolio(ctx, userID)
+	if err != nil {
+		return PortfolioUploadURL{}, err
+	}
+	videos := 0
+	for _, it := range existing {
+		if it.VideoURL != "" {
+			videos++
+		}
+	}
+	if videos >= portfolioMaxVideosPerUser {
+		return PortfolioUploadURL{}, fmt.Errorf("%w: max %d videos", ErrInvalidInput, portfolioMaxVideosPerUser)
+	}
+
+	// Ключ: portfolio/{user_id}/{uuid}{.mp4|.mov}. Префикс по user_id даёт
+	// удобный ACL/listing для конкретного спеца, а UUID — уникальность даже
+	// если юзер переименует исходник.
+	key := path.Join("portfolio", userID.String(), uuid.NewString()+ext)
+
+	uploadURL, err := s.media.PresignPut(ctx, key, in.ContentType, portfolioUploadExpiry)
+	if err != nil {
+		return PortfolioUploadURL{}, fmt.Errorf("presign: %w", err)
+	}
+
+	return PortfolioUploadURL{
+		UploadURL: uploadURL,
+		PublicURL: s.media.PublicURL(key),
+		Key:       key,
+		ExpiresIn: int(portfolioUploadExpiry.Seconds()),
+	}, nil
 }
 
 func isHTTPURL(s string) bool {

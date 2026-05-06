@@ -92,9 +92,9 @@ type SetSkillsInput struct {
 	SkillIDs []string `json:"skill_ids"`
 }
 
-// PortfolioCreateInput — добавление видео в портфолио. Сейчас принимаем только
-// URL-форму (юзер сам хостит mp4); прямой file-upload через S3 — этап #4b,
-// когда будут ключи Yandex Object Storage.
+// PortfolioCreateInput — добавление видео в портфолио. URL-форма (юзер сам
+// хостит mp4) и file-upload (presigned PUT в YC) идут одной ручкой —
+// клиент после аплоада в YC шлёт сюда полученный public_url.
 type PortfolioCreateInput struct {
 	VideoURL      string   `json:"video_url"`
 	ThumbnailURL  string   `json:"thumbnail_url,omitempty"`
@@ -103,4 +103,21 @@ type PortfolioCreateInput struct {
 	CategoryCodes []string `json:"category_codes,omitempty"`
 	DurationSec   int      `json:"duration_sec,omitempty"`
 	Aspect        string   `json:"aspect,omitempty"`
+}
+
+// PortfolioUploadURLInput — запрос на presigned PUT для прямого аплоада в S3.
+type PortfolioUploadURLInput struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+}
+
+// PortfolioUploadURL — ответ с URL для PUT и финальным URL для сохранения
+// в portfolio_items.video_url (после успешного аплоада клиент зовёт
+// POST /me/portfolio с этим public_url).
+type PortfolioUploadURL struct {
+	UploadURL string `json:"upload_url"`
+	PublicURL string `json:"public_url"`
+	Key       string `json:"key"`
+	ExpiresIn int    `json:"expires_in"` // секунды
 }
