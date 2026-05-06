@@ -4,7 +4,7 @@ Discovery-маркетплейс специалистов (монтаж/СММ/U
 
 ## Стек
 
-Go 1.22 (chi, pgx, goose) · PostgreSQL 16 · OpenSearch 2 · Redis · MinIO (S3) · LLM (anthropic/deepseek). Фронт — статика в `web/` (index.html, app.js, styles.css).
+Go 1.22 (chi, pgx, goose) · PostgreSQL 16 · OpenSearch 2 · Redis · Yandex Object Storage (S3) · LLM (anthropic/deepseek). Фронт — статика в `web/` (index.html, app.js, styles.css).
 
 ## Команды
 

@@ -3,8 +3,7 @@
 #   make prod-up       # просто поднять
 #   make prod-logs     # логи всех сервисов
 # Все служебные сервисы только во внутренней сети compose; наружу торчит
-# лишь caddy (80/443). minio из dev-compose не включён — медиа уезжает в
-# Yandex Object Storage по S3_*.
+# лишь caddy (80/443). Медиа в Yandex Object Storage по S3_*.
 services:
   postgres:
     image: postgres:16-alpine

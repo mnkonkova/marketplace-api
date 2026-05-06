@@ -1,7 +1,7 @@
-// Package s3 — тонкая обёртка над minio-go для S3-совместимых сервисов
-// (Yandex Object Storage в prod, MinIO локально). Не сама бизнес-логика
-// портфолио живёт здесь — только: подключиться, выдать presigned PUT URL,
-// собрать публичный GET URL.
+// Package s3 — тонкая обёртка над minio-go (это просто S3-SDK, не сам
+// MinIO) под Yandex Object Storage. Не сама бизнес-логика портфолио
+// живёт здесь — только: подключиться, выдать presigned PUT URL, собрать
+// публичный GET URL.
 package s3
 
 import (
@@ -21,7 +21,7 @@ type Config struct {
 	AccessKey   string
 	SecretKey   string
 	Bucket      string
-	Region      string // YC: ru-central1; MinIO/AWS — свой
+	Region      string // YC: ru-central1; AWS — свой
 	UseSSL      bool
 	PublicURL   string // опциональный CNAME, иначе берём ${endpoint}/${bucket}
 }

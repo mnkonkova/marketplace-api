@@ -8,7 +8,7 @@ MVP: каталог + поиск (OpenSearch) + LLM-подытоживание +
 - Go 1.22, chi, pgx, goose
 - PostgreSQL 16
 - OpenSearch 2 (поиск)
-- MinIO (S3-совместимое хранилище медиа)
+- Yandex Object Storage (S3) — медиа портфолио
 - Redis (кеш, rate-limit)
 
 ## Локальный запуск
@@ -17,12 +17,16 @@ MVP: каталог + поиск (OpenSearch) + LLM-подытоживание +
 
 ```bash
 cp .env.example .env
-make up            # postgres, opensearch, redis, minio
+make up            # postgres, opensearch, redis
 make tidy          # go mod tidy
 make migrate-up    # накатить миграции
 make run           # запустить API на :8080
 make run-worker    # в другом терминале — outbox-индексер
 ```
+
+S3 (Yandex Object Storage) подключается опционально: если в `.env`
+не заданы `S3_ACCESS_KEY`/`S3_SECRET_KEY` — API стартует, но
+загрузка видео в портфолио (`/me/portfolio/upload-url`) вернёт 503.
 
 Проверка: `curl localhost:8080/healthz`.
 
