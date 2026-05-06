@@ -265,11 +265,22 @@ const (
 	// 50 МБ — синхронизировано с фронтом. Увеличим, когда будет HLS-транскод.
 	portfolioMaxUploadBytes = 50 * 1024 * 1024
 	portfolioUploadExpiry   = 15 * time.Minute
+
+	// Картинки (аватар + превью к видео): 5 МБ хватает с запасом, типы —
+	// jpeg/png/webp. Срок presigned URL короче — меньше окно для misuse.
+	imageMaxUploadBytes = 5 * 1024 * 1024
+	imageUploadExpiry   = 5 * time.Minute
 )
 
 var allowedUploadTypes = map[string]string{
 	"video/mp4":       ".mp4",
 	"video/quicktime": ".mov",
+}
+
+var allowedImageTypes = map[string]string{
+	"image/jpeg": ".jpg",
+	"image/png":  ".png",
+	"image/webp": ".webp",
 }
 
 func (s *Service) ListPortfolio(ctx context.Context, userID uuid.UUID) ([]PortfolioItem, error) {
@@ -423,6 +434,44 @@ func (s *Service) CreatePortfolioUploadURL(
 		PublicURL: s.media.PublicURL(key),
 		Key:       key,
 		ExpiresIn: int(portfolioUploadExpiry.Seconds()),
+	}, nil
+}
+
+// CreateImageUploadURL — presigned PUT для аватара или превью видео.
+// Тот же паттерн, что у видео: фронт сам кладёт картинку в S3, потом
+// сохраняет public_url туда, куда нужно (avatar_url у профиля или
+// thumbnail_url у видео — через PATCH /me/profile или POST /me/portfolio).
+func (s *Service) CreateImageUploadURL(
+	ctx context.Context,
+	userID uuid.UUID,
+	in ImageUploadURLInput,
+) (PortfolioUploadURL, error) {
+	if s.media == nil {
+		return PortfolioUploadURL{}, errors.New("media storage not configured")
+	}
+	ext, ok := allowedImageTypes[in.ContentType]
+	if !ok {
+		return PortfolioUploadURL{}, fmt.Errorf("%w: content_type must be image/jpeg, image/png or image/webp", ErrInvalidInput)
+	}
+	if in.SizeBytes <= 0 {
+		return PortfolioUploadURL{}, fmt.Errorf("%w: size_bytes is required", ErrInvalidInput)
+	}
+	if in.SizeBytes > imageMaxUploadBytes {
+		return PortfolioUploadURL{}, fmt.Errorf("%w: file too large (max %d MB)", ErrInvalidInput, imageMaxUploadBytes/(1024*1024))
+	}
+
+	// Один общий префикс: семантика (аватар vs превью) живёт на клиенте.
+	key := path.Join("images", userID.String(), uuid.NewString()+ext)
+
+	uploadURL, err := s.media.PresignPut(ctx, key, in.ContentType, imageUploadExpiry)
+	if err != nil {
+		return PortfolioUploadURL{}, fmt.Errorf("presign: %w", err)
+	}
+	return PortfolioUploadURL{
+		UploadURL: uploadURL,
+		PublicURL: s.media.PublicURL(key),
+		Key:       key,
+		ExpiresIn: int(imageUploadExpiry.Seconds()),
 	}, nil
 }
 

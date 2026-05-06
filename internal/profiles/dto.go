@@ -126,6 +126,16 @@ type PortfolioUploadURLInput struct {
 	SizeBytes   int64  `json:"size_bytes"`
 }
 
+// ImageUploadURLInput — запрос на presigned PUT для аплоада картинки
+// (аватар или превью к видео). Один эндпоинт обслуживает оба кейса —
+// семантика «куда положили» живёт на клиенте: фронт сохраняет полученный
+// public_url в profile.avatar_url или portfolio_items.thumbnail_url.
+type ImageUploadURLInput struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+}
+
 // PortfolioUploadURL — ответ с URL для PUT и финальным URL для сохранения
 // в portfolio_items.video_url (после успешного аплоада клиент зовёт
 // POST /me/portfolio с этим public_url).

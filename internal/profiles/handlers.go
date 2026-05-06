@@ -211,6 +211,36 @@ func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ImageUploadURL — presigned PUT для аватара или превью видео. Используется
+// одной ручкой; куда положить полученный public_url — решает фронт (PATCH
+// /me/profile.avatar_url для аватара или POST /me/portfolio.thumbnail_url
+// для превью к ролику).
+func (h *Handler) ImageUploadURL(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	if !h.svc.MediaAvailable() {
+		writeErr(w, http.StatusServiceUnavailable, "storage_disabled")
+		return
+	}
+	var in ImageUploadURLInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	out, err := h.svc.CreateImageUploadURL(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, "internal")
+	default:
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
 func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {

@@ -106,6 +106,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Put("/me/portfolio/{id}/categories", d.Profiles.PortfolioSetCategories)
 			r.Delete("/me/portfolio/{id}", d.Profiles.PortfolioDelete)
 
+			// Аплоад картинки (аватар / превью к видео) — общий presigned PUT.
+			r.Post("/me/uploads/image", d.Profiles.ImageUploadURL)
+
 			r.Get("/me/leads/incoming", d.Leads.ListIncoming)
 			r.Patch("/me/leads/{id}/recipient", d.Leads.UpdateRecipient)
 		})
