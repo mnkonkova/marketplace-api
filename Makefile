@@ -1,7 +1,10 @@
-.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt build-css watch-css
+.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt build-css watch-css \
+        deploy prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
+PROD_DSN ?= $$(grep -E '^DATABASE_URL=' .env.prod 2>/dev/null | cut -d= -f2- | tr -d '"')
+PROD_DC ?= docker compose -f docker-compose.prod.yml --env-file .env.prod
 
 up:
 	$(DC) up -d
@@ -59,3 +62,28 @@ build-css:
 
 watch-css:
 	npm run watch:css
+
+# ── Prod-стек на VDS (см. docs/DEPLOY.md) ───────────────────────────
+deploy:
+	./scripts/deploy.sh
+
+prod-up:
+	$(PROD_DC) up -d
+
+prod-down:
+	$(PROD_DC) down
+
+prod-logs:
+	$(PROD_DC) logs -f --tail=200
+
+prod-ps:
+	$(PROD_DC) ps
+
+prod-build:
+	$(PROD_DC) build api
+
+prod-migrate:
+	$(PROD_DC) run --rm api goose -dir /app/migrations postgres "$(PROD_DSN)" up
+
+prod-seed:
+	$(PROD_DC) run --rm api seed

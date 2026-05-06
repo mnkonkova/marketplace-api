@@ -1,0 +1,30 @@
+.git
+.git/
+.github
+.gitignore
+.dockerignore
+.env
+.env.*
+!.env.prod.example
+!.env.example
+
+bin/
+*.log
+*.swp
+
+# Frontend deps — стили уже собраны и закоммичены (web/styles.css).
+node_modules/
+package-lock.json
+package.json
+tailwind.config.js
+web/src/
+
+# Тесты/coverage
+*.test
+*.out
+coverage.out
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store

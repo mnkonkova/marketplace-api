@@ -1,0 +1,115 @@
+# Prod-стек на одной VDS (Timeweb). Запуск из корня репо:
+#   make deploy        # первый раз и после git pull
+#   make prod-up       # просто поднять
+#   make prod-logs     # логи всех сервисов
+# Все служебные сервисы только во внутренней сети compose; наружу торчит
+# лишь caddy (80/443). minio из dev-compose не включён — медиа уезжает в
+# Yandex Object Storage по S3_*.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-marketpclce}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?postgres password is required}
+      POSTGRES_DB: ${POSTGRES_DB:-marketpclce}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    mem_limit: 512m
+
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:?opensearch admin password is required}
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health | grep -Eq 'green|yellow' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    mem_limit: 1g
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 128m
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: marketpclce/app:latest
+    restart: unless-stopped
+    env_file: .env.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    mem_limit: 256m
+
+  # worker делит образ с api (см. CMD в Dockerfile = api), переопределяем
+  # на ./worker. Один и тот же конфиг через .env.prod.
+  worker:
+    image: marketpclce/app:latest
+    restart: unless-stopped
+    env_file: .env.prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    command: ["worker"]
+    mem_limit: 128m
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required, e.g. app.example.com}
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  osdata:
+  caddydata:
+  caddyconfig:
