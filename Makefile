@@ -1,4 +1,4 @@
-.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt build-css watch-css \
+.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt build-css watch-css swag \
         deploy prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed
 
 DC ?= docker compose
@@ -62,6 +62,12 @@ build-css:
 
 watch-css:
 	npm run watch:css
+
+# Перегенерировать docs/swagger из аннотаций над хендлерами. После любых
+# правок в публичном API (новые ручки, изменения DTO) — `make swag` и
+# закоммитить полученные docs/swagger/* в git.
+swag:
+	go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/api/main.go -o docs/swagger --parseDependency --parseInternal
 
 # ── Prod-стек на VDS (см. docs/DEPLOY.md) ───────────────────────────
 deploy:

@@ -1,0 +1,1845 @@
+basePath: /api/v1
+definitions:
+  internal_auth.TokenPair:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+    type: object
+  internal_auth.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_auth.loginReq:
+    properties:
+      login:
+        type: string
+      password:
+        type: string
+    type: object
+  internal_auth.meResp:
+    properties:
+      email:
+        type: string
+      kind:
+        type: string
+      phone:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_auth.refreshReq:
+    properties:
+      refresh_token:
+        type: string
+    type: object
+  internal_auth.registerReq:
+    properties:
+      display_name:
+        type: string
+      email:
+        type: string
+      kind:
+        type: string
+      password:
+        type: string
+      phone:
+        type: string
+    type: object
+  internal_auth.registerResp:
+    properties:
+      tokens:
+        $ref: '#/definitions/internal_auth.TokenPair'
+      user_id:
+        type: string
+    type: object
+  internal_catalog.CategoriesResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_catalog.Category'
+        type: array
+    type: object
+  internal_catalog.Category:
+    properties:
+      code:
+        type: string
+      description:
+        type: string
+      icon:
+        type: string
+      sort_order:
+        type: integer
+      title:
+        type: string
+    type: object
+  internal_catalog.Skill:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      slug:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_catalog.SkillsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_catalog.Skill'
+        type: array
+    type: object
+  internal_catalog.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_clarify.Message:
+    properties:
+      content:
+        type: string
+      role:
+        type: string
+    type: object
+  internal_clarify.Result:
+    properties:
+      done:
+        type: boolean
+      message:
+        type: string
+      search:
+        $ref: '#/definitions/internal_clarify.SearchParams'
+    type: object
+  internal_clarify.SearchParams:
+    properties:
+      categories:
+        items:
+          type: string
+        type: array
+      city:
+        type: string
+      q:
+        type: string
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+      skills:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_clarify.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_clarify.request:
+    properties:
+      category:
+        type: string
+      history:
+        items:
+          $ref: '#/definitions/internal_clarify.Message'
+        type: array
+    type: object
+  internal_feed.Item:
+    properties:
+      specialist:
+        $ref: '#/definitions/internal_feed.Specialist'
+      video:
+        $ref: '#/definitions/internal_feed.Video'
+      video_idx:
+        type: integer
+      video_total:
+        type: integer
+    type: object
+  internal_feed.Result:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_feed.Item'
+        type: array
+      next_cursor:
+        type: string
+      total:
+        description: сколько спецов под фильтрами всего (ES total)
+        type: integer
+    type: object
+  internal_feed.Specialist:
+    properties:
+      avatar_url:
+        type: string
+      bio:
+        type: string
+      categories:
+        items:
+          type: string
+        type: array
+      city:
+        type: string
+      currency:
+        type: string
+      display_name:
+        type: string
+      primary_category:
+        type: string
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+      rating_avg:
+        type: number
+      reviews_count:
+        type: integer
+      user_id:
+        type: string
+    type: object
+  internal_feed.Video:
+    properties:
+      aspect:
+        type: string
+      created_at:
+        type: string
+      description:
+        type: string
+      duration_sec:
+        type: integer
+      id:
+        type: string
+      thumb:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_feed.feedError:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_leads.CreateResult:
+    properties:
+      id:
+        type: string
+      specialists:
+        items:
+          $ref: '#/definitions/internal_leads.SpecialistContact'
+        type: array
+    type: object
+  internal_leads.IncomingLead:
+    properties:
+      brief:
+        type: string
+      budget_max:
+        type: integer
+      budget_min:
+        type: integer
+      client_contact:
+        type: string
+      client_name:
+        type: string
+      client_user_id:
+        type: string
+      created_at:
+        type: string
+      deadline:
+        type: string
+      id:
+        type: string
+      recipient_count:
+        type: integer
+      recipient_responded_at:
+        type: string
+      recipient_status:
+        type: string
+      status:
+        type: string
+      target_category_code:
+        type: string
+    type: object
+  internal_leads.SpecialistContact:
+    properties:
+      contact_email:
+        type: string
+      contact_phone:
+        type: string
+      display_name:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_leads.createReq:
+    properties:
+      brief:
+        type: string
+      budget_max:
+        type: integer
+      budget_min:
+        type: integer
+      client_contact:
+        type: string
+      client_name:
+        type: string
+      deadline:
+        type: string
+      specialist_ids:
+        items:
+          type: string
+        type: array
+      target_category:
+        type: string
+    type: object
+  internal_leads.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_leads.incomingListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_leads.IncomingLead'
+        type: array
+    type: object
+  internal_leads.recipientReq:
+    properties:
+      status:
+        type: string
+    type: object
+  internal_leads.recipientStatusResp:
+    properties:
+      status:
+        type: string
+    type: object
+  internal_profilecheck.PartResult:
+    properties:
+      ok:
+        type: boolean
+      reasons:
+        items:
+          type: string
+        type: array
+      score:
+        type: integer
+      suggestion:
+        type: string
+    type: object
+  internal_profilecheck.Result:
+    properties:
+      bio:
+        $ref: '#/definitions/internal_profilecheck.PartResult'
+      name:
+        $ref: '#/definitions/internal_profilecheck.PartResult'
+      ok:
+        type: boolean
+    type: object
+  internal_profilecheck.checkReq:
+    properties:
+      bio:
+        type: string
+      display_name:
+        type: string
+    type: object
+  internal_profilecheck.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_profiles.CategoryRef:
+    properties:
+      code:
+        type: string
+      is_primary:
+        type: boolean
+      title:
+        type: string
+    type: object
+  internal_profiles.ImageUploadURLInput:
+    properties:
+      content_type:
+        type: string
+      filename:
+        type: string
+      size_bytes:
+        type: integer
+    type: object
+  internal_profiles.PatchInput:
+    properties:
+      avatar_url:
+        type: string
+      bio:
+        type: string
+      city:
+        type: string
+      contact_email:
+        type: string
+      contact_phone:
+        type: string
+      currency:
+        type: string
+      display_name:
+        type: string
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+    type: object
+  internal_profiles.PortfolioCreateInput:
+    properties:
+      aspect:
+        type: string
+      category_codes:
+        items:
+          type: string
+        type: array
+      description:
+        type: string
+      duration_sec:
+        type: integer
+      thumbnail_url:
+        type: string
+      title:
+        type: string
+      video_url:
+        type: string
+    type: object
+  internal_profiles.PortfolioItem:
+    properties:
+      category_codes:
+        items:
+          type: string
+        type: array
+      created_at:
+        type: string
+      description:
+        type: string
+      external_url:
+        type: string
+      id:
+        type: string
+      sort_order:
+        type: integer
+      thumbnail_url:
+        type: string
+      title:
+        type: string
+      video_url:
+        type: string
+    type: object
+  internal_profiles.PortfolioSetCategoriesInput:
+    properties:
+      codes:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_profiles.PortfolioUploadURL:
+    properties:
+      expires_in:
+        description: секунды
+        type: integer
+      key:
+        type: string
+      public_url:
+        type: string
+      upload_url:
+        type: string
+    type: object
+  internal_profiles.PortfolioUploadURLInput:
+    properties:
+      content_type:
+        type: string
+      filename:
+        type: string
+      size_bytes:
+        type: integer
+    type: object
+  internal_profiles.Profile:
+    properties:
+      avatar_url:
+        type: string
+      bio:
+        type: string
+      categories:
+        items:
+          type: string
+        type: array
+      city:
+        type: string
+      contact_email:
+        description: |-
+          Контакты для прямой связи. Возвращаются только владельцу профиля
+          (через /me/profile) и менеджеру после создания заявки (см. /leads).
+          В публичные DTO (PublicProfile, search.IndexDoc, feed.Specialist) НЕ
+          попадают — это видимость не для feed'а.
+        type: string
+      contact_phone:
+        type: string
+      currency:
+        type: string
+      display_name:
+        type: string
+      is_published:
+        type: boolean
+      primary_category:
+        type: string
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+      rating_avg:
+        type: number
+      reviews_count:
+        type: integer
+      skill_ids:
+        items:
+          type: string
+        type: array
+      user_id:
+        type: string
+    type: object
+  internal_profiles.PublicProfile:
+    properties:
+      avatar_url:
+        type: string
+      bio:
+        type: string
+      categories:
+        items:
+          $ref: '#/definitions/internal_profiles.CategoryRef'
+        type: array
+      city:
+        type: string
+      currency:
+        type: string
+      display_name:
+        type: string
+      portfolio:
+        items:
+          $ref: '#/definitions/internal_profiles.PortfolioItem'
+        type: array
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+      rating_avg:
+        type: number
+      reviews:
+        items:
+          $ref: '#/definitions/internal_profiles.Review'
+        type: array
+      reviews_count:
+        type: integer
+      skills:
+        items:
+          $ref: '#/definitions/internal_profiles.SkillRef'
+        type: array
+      user_id:
+        type: string
+    type: object
+  internal_profiles.Review:
+    properties:
+      author_name:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      rating:
+        type: integer
+      text:
+        type: string
+    type: object
+  internal_profiles.SetCategoriesInput:
+    properties:
+      codes:
+        items:
+          type: string
+        type: array
+      primary:
+        type: string
+    type: object
+  internal_profiles.SetSkillsInput:
+    properties:
+      skill_ids:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_profiles.SkillRef:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      slug:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_profiles.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_profiles.portfolioListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_profiles.PortfolioItem'
+        type: array
+    type: object
+  internal_reviews.Review:
+    properties:
+      author_name:
+        type: string
+      author_user_id:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      lead_id:
+        type: string
+      rating:
+        type: integer
+      target_user_id:
+        type: string
+      text:
+        type: string
+    type: object
+  internal_reviews.UpdateInput:
+    properties:
+      rating:
+        type: integer
+      text:
+        type: string
+    type: object
+  internal_reviews.createReq:
+    properties:
+      author_name:
+        type: string
+      lead_id:
+        type: string
+      rating:
+        type: integer
+      target_user_id:
+        type: string
+      text:
+        type: string
+    type: object
+  internal_reviews.errResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_reviews.listResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_reviews.Review'
+        type: array
+    type: object
+  internal_search.CategoryCount:
+    properties:
+      code:
+        type: string
+      count:
+        type: integer
+    type: object
+  internal_search.Facets:
+    properties:
+      categories:
+        items:
+          $ref: '#/definitions/internal_search.CategoryCount'
+        type: array
+    type: object
+  internal_search.IndexDoc:
+    properties:
+      avatar_url:
+        type: string
+      bio:
+        type: string
+      categories:
+        items:
+          type: string
+        type: array
+      city:
+        type: string
+      currency:
+        type: string
+      display_name:
+        type: string
+      is_published:
+        type: boolean
+      primary_category:
+        type: string
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+      rating_avg:
+        type: number
+      reviews_count:
+        type: integer
+      skill_slugs:
+        items:
+          type: string
+        type: array
+      skill_titles:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_search.Result:
+    properties:
+      broadened:
+        type: boolean
+      facets:
+        $ref: '#/definitions/internal_search.Facets'
+      items:
+        items:
+          $ref: '#/definitions/internal_search.IndexDoc'
+        type: array
+      relaxed:
+        items:
+          type: string
+        type: array
+      similar:
+        items:
+          $ref: '#/definitions/internal_search.IndexDoc'
+        type: array
+      total:
+        type: integer
+    type: object
+  internal_search.categoryStatsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_search.CategoryCount'
+        type: array
+    type: object
+  internal_search.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_summarize.Pick:
+    properties:
+      profile:
+        $ref: '#/definitions/marketpclce_internal_search.IndexDoc'
+      rank:
+        type: integer
+      reason:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_summarize.Result:
+    properties:
+      broadened:
+        type: boolean
+      cached:
+        type: boolean
+      picks:
+        items:
+          $ref: '#/definitions/internal_summarize.Pick'
+        type: array
+      summary:
+        type: string
+      target_category:
+        type: string
+      total_in_category:
+        type: integer
+      usage:
+        $ref: '#/definitions/internal_summarize.Usage'
+    type: object
+  internal_summarize.Usage:
+    properties:
+      cache_creation_input_tokens:
+        type: integer
+      cache_read_input_tokens:
+        type: integer
+      input_tokens:
+        type: integer
+      output_tokens:
+        type: integer
+    type: object
+  internal_summarize.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_summarize.request:
+    properties:
+      categories:
+        items:
+          type: string
+        type: array
+      city:
+        type: string
+      limit:
+        type: integer
+      q:
+        type: string
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+      skills:
+        items:
+          type: string
+        type: array
+      target_category:
+        type: string
+    type: object
+  marketpclce_internal_search.IndexDoc:
+    properties:
+      avatar_url:
+        type: string
+      bio:
+        type: string
+      categories:
+        items:
+          type: string
+        type: array
+      city:
+        type: string
+      currency:
+        type: string
+      display_name:
+        type: string
+      is_published:
+        type: boolean
+      primary_category:
+        type: string
+      rate_max:
+        type: integer
+      rate_min:
+        type: integer
+      rating_avg:
+        type: number
+      reviews_count:
+        type: integer
+      skill_slugs:
+        items:
+          type: string
+        type: array
+      skill_titles:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: 'Discovery-маркетплейс специалистов: каталог, поиск, лиды, отзывы.'
+  title: marketpclce API
+  version: "1.0"
+paths:
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.loginReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_auth.TokenPair'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Логин по email/телефону и паролю
+      tags:
+      - auth
+  /auth/refresh:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: refresh token
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.refreshReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_auth.TokenPair'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Обмен refresh-токена на новую пару
+      tags:
+      - auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: регистрационные данные
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.registerReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_auth.registerResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Регистрация пользователя
+      tags:
+      - auth
+  /categories:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_catalog.CategoriesResponse'
+      summary: Список категорий специалистов
+      tags:
+      - catalog
+  /categories/stats:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_search.categoryStatsResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/internal_search.errorResponse'
+      summary: Кол-во специалистов в каждой категории
+      tags:
+      - search
+  /clarify:
+    post:
+      consumes:
+      - application/json
+      description: LLM возвращает следующий вопрос или конечный поисковый запрос (done=true).
+      parameters:
+      - description: история диалога
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_clarify.request'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_clarify.Result'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_clarify.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/internal_clarify.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_clarify.errorResponse'
+      summary: Уточняющий диалог по брифу
+      tags:
+      - llm
+  /feed:
+    get:
+      description: Возвращает специалистов и связанные видео из портфолио. Поддерживает
+        фильтры и cursor-пагинацию.
+      parameters:
+      - description: search text
+        in: query
+        name: q
+        type: string
+      - collectionFormat: csv
+        description: category codes (multi)
+        in: query
+        items:
+          type: string
+        name: category
+        type: array
+      - collectionFormat: csv
+        description: skill slugs (multi)
+        in: query
+        items:
+          type: string
+        name: skill
+        type: array
+      - description: city
+        in: query
+        name: city
+        type: string
+      - description: видео на специалиста
+        in: query
+        name: per_specialist
+        type: integer
+      - description: cursor токен
+        in: query
+        name: cursor
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_feed.Result'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/internal_feed.feedError'
+      summary: Лента «портфолио по категориям»
+      tags:
+      - feed
+  /leads:
+    post:
+      consumes:
+      - application/json
+      description: Менеджер/клиент создаёт лид и выбирает специалистов-получателей.
+        В ответе — id и контакты выбранных спецов (видны только создателю).
+      parameters:
+      - description: lead payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_leads.createReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_leads.CreateResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать заявку (lead)
+      tags:
+      - leads
+  /me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_auth.meResp'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Текущий пользователь
+      tags:
+      - auth
+  /me/leads/{id}/recipient:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: lead id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: статус
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_leads.recipientReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_leads.recipientStatusResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Обновить статус получателя по лиду
+      tags:
+      - leads
+  /me/leads/incoming:
+    get:
+      parameters:
+      - description: sent|viewed|accepted|declined
+        in: query
+        name: status
+        type: string
+      - description: default 20
+        in: query
+        name: limit
+        type: integer
+      - description: default 0
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_leads.incomingListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Входящие заявки специалиста
+      tags:
+      - leads
+  /me/portfolio:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.portfolioListResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Свои элементы портфолио
+      tags:
+      - portfolio
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: video payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.PortfolioCreateInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_profiles.PortfolioItem'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Добавить элемент портфолио (видео по URL)
+      tags:
+      - portfolio
+  /me/portfolio/{id}:
+    delete:
+      parameters:
+      - description: portfolio item id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: no content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Удалить элемент портфолио
+      tags:
+      - portfolio
+  /me/portfolio/{id}/categories:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: portfolio item id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: category codes
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.PortfolioSetCategoriesInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.PortfolioItem'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заменить категории у элемента портфолио
+      tags:
+      - portfolio
+  /me/portfolio/upload-url:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: filename/size
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.PortfolioUploadURLInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.PortfolioUploadURL'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Presigned PUT URL для аплоада видео в S3
+      tags:
+      - portfolio
+  /me/profile:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.Profile'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Свой профиль (вместе с контактами)
+      tags:
+      - profile
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: поля для апдейта
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.PatchInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.Profile'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Частично обновить свой профиль
+      tags:
+      - profile
+  /me/profile/categories:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: categories
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.SetCategoriesInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.Profile'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заменить список категорий специалиста
+      tags:
+      - profile
+  /me/profile/check:
+    post:
+      consumes:
+      - application/json
+      description: LLM возвращает вердикты и подсказки по тексту bio и display_name.
+        Доступен, только если включён LLM провайдер.
+      parameters:
+      - description: профильные поля
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profilecheck.checkReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profilecheck.Result'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profilecheck.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profilecheck.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/internal_profilecheck.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_profilecheck.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Проверить bio/имя профиля через LLM
+      tags:
+      - profile
+  /me/profile/publish:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.Profile'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Опубликовать профиль
+      tags:
+      - profile
+  /me/profile/skills:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: skills
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.SetSkillsInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.Profile'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заменить список навыков
+      tags:
+      - profile
+  /me/profile/unpublish:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.Profile'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Снять профиль с публикации
+      tags:
+      - profile
+  /me/uploads/image:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: filename/size
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.ImageUploadURLInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.PortfolioUploadURL'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Presigned PUT URL для аплоада картинки (аватар / превью)
+      tags:
+      - portfolio
+  /reviews:
+    post:
+      consumes:
+      - application/json
+      description: Оставляет отзыв на специалиста. Если указан lead_id, то клиент
+        должен быть автором лида, а target — принятым получателем.
+      parameters:
+      - description: review payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_reviews.createReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_reviews.Review'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать отзыв
+      tags:
+      - reviews
+  /reviews/{id}:
+    delete:
+      description: Удаляет отзыв. Только автор отзыва.
+      parameters:
+      - description: review id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: no content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+      security:
+      - BearerAuth: []
+      summary: Удалить отзыв
+      tags:
+      - reviews
+    patch:
+      consumes:
+      - application/json
+      description: Изменяет рейтинг и/или текст отзыва. Только автор отзыва.
+      parameters:
+      - description: review id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: patch payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_reviews.UpdateInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_reviews.Review'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+      security:
+      - BearerAuth: []
+      summary: Изменить отзыв
+      tags:
+      - reviews
+  /search:
+    get:
+      description: Возвращает hits + relaxed/similar если soft-фильтры не сошлись.
+      parameters:
+      - description: search text
+        in: query
+        name: q
+        type: string
+      - collectionFormat: csv
+        description: category codes (multi)
+        in: query
+        items:
+          type: string
+        name: category
+        type: array
+      - collectionFormat: csv
+        description: skill slugs (multi)
+        in: query
+        items:
+          type: string
+        name: skill
+        type: array
+      - description: city
+        in: query
+        name: city
+        type: string
+      - description: rate min
+        in: query
+        name: rate_min
+        type: integer
+      - description: rate max
+        in: query
+        name: rate_max
+        type: integer
+      - description: limit
+        in: query
+        name: limit
+        type: integer
+      - description: offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_search.Result'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/internal_search.errorResponse'
+      summary: Поиск специалистов
+      tags:
+      - search
+  /search/summarize:
+    post:
+      consumes:
+      - application/json
+      description: По текстовому запросу/фильтрам поиска возвращает подобранную LLM-выдачу.
+      parameters:
+      - description: поисковые параметры
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_summarize.request'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_summarize.Result'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_summarize.errorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/internal_summarize.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/internal_summarize.errorResponse'
+      summary: LLM-подбор «топ-N специалистов»
+      tags:
+      - llm
+  /skills:
+    get:
+      parameters:
+      - description: tool|platform|genre
+        in: query
+        name: kind
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_catalog.SkillsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_catalog.errorResponse'
+      summary: Список навыков
+      tags:
+      - catalog
+  /specialists/{id}:
+    get:
+      parameters:
+      - description: user id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.PublicProfile'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      summary: Публичный профиль специалиста
+      tags:
+      - profile
+  /specialists/{id}/reviews:
+    get:
+      description: Листит отзывы, отсортированные по дате убывания.
+      parameters:
+      - description: specialist user id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: default 20, max 100
+        in: query
+        name: limit
+        type: integer
+      - description: default 0
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_reviews.listResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+      summary: Отзывы на специалиста (пагинация)
+      tags:
+      - reviews
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

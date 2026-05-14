@@ -29,6 +29,17 @@ type createReq struct {
 	SpecialistIDs  []string `json:"specialist_ids"`
 }
 
+// Create godoc
+// @Summary      Создать заявку (lead)
+// @Description  Менеджер/клиент создаёт лид и выбирает специалистов-получателей. В ответе — id и контакты выбранных спецов (видны только создателю).
+// @Tags         leads
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      createReq  true  "lead payload"
+// @Success      201   {object}  CreateResult
+// @Failure      400   {object}  errorResponse
+// @Router       /leads [post]
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var in createReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -87,6 +98,18 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ListIncoming godoc
+// @Summary      Входящие заявки специалиста
+// @Tags         leads
+// @Produce      json
+// @Security     BearerAuth
+// @Param        status  query     string  false  "sent|viewed|accepted|declined"
+// @Param        limit   query     int     false  "default 20"
+// @Param        offset  query     int     false  "default 0"
+// @Success      200     {object}  incomingListResponse
+// @Failure      400     {object}  errorResponse
+// @Failure      401     {object}  errorResponse
+// @Router       /me/leads/incoming [get]
 func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -114,6 +137,19 @@ type recipientReq struct {
 	Status string `json:"status"`
 }
 
+// UpdateRecipient godoc
+// @Summary      Обновить статус получателя по лиду
+// @Tags         leads
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string        true  "lead id"
+// @Param        body  body      recipientReq  true  "статус"
+// @Success      200   {object}  recipientStatusResp
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      404   {object}  errorResponse
+// @Router       /me/leads/{id}/recipient [patch]
 func (h *Handler) UpdateRecipient(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -161,5 +197,18 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+// типы для swaggo
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+type incomingListResponse struct {
+	Items []IncomingLead `json:"items"`
+}
+
+type recipientStatusResp struct {
+	Status string `json:"status"`
 }

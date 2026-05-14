@@ -15,6 +15,15 @@ type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
+// Public godoc
+// @Summary      Публичный профиль специалиста
+// @Tags         profile
+// @Produce      json
+// @Param        id   path      string  true  "user id"
+// @Success      200  {object}  PublicProfile
+// @Failure      400  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Router       /specialists/{id} [get]
 func (h *Handler) Public(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -32,6 +41,15 @@ func (h *Handler) Public(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Get godoc
+// @Summary      Свой профиль (вместе с контактами)
+// @Tags         profile
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  Profile
+// @Failure      401  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Router       /me/profile [get]
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -50,6 +68,18 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+// Patch godoc
+// @Summary      Частично обновить свой профиль
+// @Tags         profile
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PatchInput  true  "поля для апдейта"
+// @Success      200   {object}  Profile
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      404   {object}  errorResponse
+// @Router       /me/profile [patch]
 func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -74,6 +104,17 @@ func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SetCategories godoc
+// @Summary      Заменить список категорий специалиста
+// @Tags         profile
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      SetCategoriesInput  true  "categories"
+// @Success      200   {object}  Profile
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Router       /me/profile/categories [put]
 func (h *Handler) SetCategories(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -96,6 +137,17 @@ func (h *Handler) SetCategories(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// SetSkills godoc
+// @Summary      Заменить список навыков
+// @Tags         profile
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      SetSkillsInput  true  "skills"
+// @Success      200   {object}  Profile
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Router       /me/profile/skills [put]
 func (h *Handler) SetSkills(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -118,8 +170,27 @@ func (h *Handler) SetSkills(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Publish godoc
+// @Summary      Опубликовать профиль
+// @Tags         profile
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  Profile
+// @Failure      401  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Failure      422  {object}  errorResponse
+// @Router       /me/profile/publish [post]
 func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) { h.setPublished(w, r, true) }
 
+// Unpublish godoc
+// @Summary      Снять профиль с публикации
+// @Tags         profile
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  Profile
+// @Failure      401  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Router       /me/profile/unpublish [post]
 func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) { h.setPublished(w, r, false) }
 
 func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
@@ -149,6 +220,14 @@ func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 
 /* ───── portfolio (video) ──────────────────────────────────────── */
 
+// PortfolioList godoc
+// @Summary      Свои элементы портфолио
+// @Tags         portfolio
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  portfolioListResponse
+// @Failure      401  {object}  errorResponse
+// @Router       /me/portfolio [get]
 func (h *Handler) PortfolioList(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -163,6 +242,17 @@ func (h *Handler) PortfolioList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// PortfolioCreate godoc
+// @Summary      Добавить элемент портфолио (видео по URL)
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioCreateInput  true  "video payload"
+// @Success      201   {object}  PortfolioItem
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Router       /me/portfolio [post]
 func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -185,6 +275,18 @@ func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// PortfolioUploadURL godoc
+// @Summary      Presigned PUT URL для аплоада видео в S3
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioUploadURLInput  true  "filename/size"
+// @Success      200   {object}  PortfolioUploadURL
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/portfolio/upload-url [post]
 func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -211,6 +313,19 @@ func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ImageUploadURL godoc
+// @Summary      Presigned PUT URL для аплоада картинки (аватар / превью)
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      ImageUploadURLInput  true  "filename/size"
+// @Success      200   {object}  PortfolioUploadURL
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/uploads/image [post]
+//
 // ImageUploadURL — presigned PUT для аватара или превью видео. Используется
 // одной ручкой; куда положить полученный public_url — решает фронт (PATCH
 // /me/profile.avatar_url для аватара или POST /me/portfolio.thumbnail_url
@@ -241,6 +356,19 @@ func (h *Handler) ImageUploadURL(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// PortfolioSetCategories godoc
+// @Summary      Заменить категории у элемента портфолио
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                       true  "portfolio item id"
+// @Param        body  body      PortfolioSetCategoriesInput  true  "category codes"
+// @Success      200   {object}  PortfolioItem
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      404   {object}  errorResponse
+// @Router       /me/portfolio/{id}/categories [put]
 func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -270,6 +398,16 @@ func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// PortfolioDelete godoc
+// @Summary      Удалить элемент портфолио
+// @Tags         portfolio
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path      string  true  "portfolio item id"
+// @Success      204  "no content"
+// @Failure      401  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Router       /me/portfolio/{id} [delete]
 func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -300,5 +438,14 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+// типы для swaggo
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+type portfolioListResponse struct {
+	Items []PortfolioItem `json:"items"`
 }

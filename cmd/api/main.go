@@ -28,9 +28,22 @@ import (
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
+	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
+
+	// Сгенерённый swaggo-пакет (`make swag`) — регистрирует OpenAPI spec в init(),
+	// чтобы http-swagger мог отдать /swagger/doc.json.
+	_ "marketpclce/docs/swagger"
 )
+
+// @title           marketpclce API
+// @version         1.0
+// @description     Discovery-маркетплейс специалистов: каталог, поиск, лиды, отзывы.
+// @BasePath        /api/v1
+// @securityDefinitions.apikey BearerAuth
+// @in                         header
+// @name                       Authorization
 
 func main() {
 	_ = godotenv.Load()
@@ -139,6 +152,10 @@ func main() {
 	leadsSvc := leads.NewService(leadsRepo)
 	leadsHandler := leads.NewHandler(leadsSvc)
 
+	reviewsRepo := reviews.NewRepo(pool)
+	reviewsSvc := reviews.NewService(reviewsRepo)
+	reviewsHandler := reviews.NewHandler(reviewsSvc)
+
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter
 	if rdb != nil {
@@ -168,6 +185,7 @@ func main() {
 		Summarize:    summarizeHandler,
 		Clarify:      clarifyHandler,
 		Leads:        leadsHandler,
+		Reviews:      reviewsHandler,
 		WebDir:       cfg.WebDir,
 		Limiter:     limiter,
 		ReadWindows: []ratelimit.Window{

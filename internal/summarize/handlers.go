@@ -50,6 +50,18 @@ type request struct {
 	TargetCategory string   `json:"target_category"`
 }
 
+// Summarize godoc
+// @Summary      LLM-подбор «топ-N специалистов»
+// @Description  По текстовому запросу/фильтрам поиска возвращает подобранную LLM-выдачу.
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        body  body      request  true  "поисковые параметры"
+// @Success      200   {object}  Result
+// @Failure      400   {object}  errorResponse
+// @Failure      429   {object}  errorResponse
+// @Failure      502   {object}  errorResponse
+// @Router       /search/summarize [post]
 func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -130,5 +142,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
 }

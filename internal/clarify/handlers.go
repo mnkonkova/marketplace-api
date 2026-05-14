@@ -19,6 +19,18 @@ type request struct {
 	History  []Message `json:"history"`
 }
 
+// Clarify godoc
+// @Summary      Уточняющий диалог по брифу
+// @Description  LLM возвращает следующий вопрос или конечный поисковый запрос (done=true).
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Param        body  body      request  true  "история диалога"
+// @Success      200   {object}  Result
+// @Failure      400   {object}  errorResponse
+// @Failure      502   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /clarify [post]
 func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -84,5 +96,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
 }

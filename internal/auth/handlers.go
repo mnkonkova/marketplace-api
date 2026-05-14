@@ -23,6 +23,16 @@ type registerResp struct {
 	Tokens TokenPair `json:"tokens"`
 }
 
+// Register godoc
+// @Summary      Регистрация пользователя
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      registerReq  true  "регистрационные данные"
+// @Success      201   {object}  registerResp
+// @Failure      400   {object}  errorResponse
+// @Failure      409   {object}  errorResponse
+// @Router       /auth/register [post]
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var in registerReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -55,6 +65,16 @@ type loginReq struct {
 	Password string `json:"password"`
 }
 
+// Login godoc
+// @Summary      Логин по email/телефону и паролю
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      loginReq  true  "credentials"
+// @Success      200   {object}  TokenPair
+// @Failure      401   {object}  errorResponse
+// @Failure      403   {object}  errorResponse
+// @Router       /auth/login [post]
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var in loginReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -80,6 +100,15 @@ type refreshReq struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// Refresh godoc
+// @Summary      Обмен refresh-токена на новую пару
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      refreshReq  true  "refresh token"
+// @Success      200   {object}  TokenPair
+// @Failure      401   {object}  errorResponse
+// @Router       /auth/refresh [post]
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var in refreshReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -101,6 +130,15 @@ type meResp struct {
 	Kind   string  `json:"kind"`
 }
 
+// Me godoc
+// @Summary      Текущий пользователь
+// @Tags         auth
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  meResp
+// @Failure      401  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Router       /me [get]
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFrom(r.Context())
 	if !ok {
@@ -122,5 +160,11 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+// errorResponse — стандартная форма ошибки `{ "error": "..." }`. Объявлено
+// тут, чтобы swaggo подхватил тип в @Failure.
+type errorResponse struct {
+	Error string `json:"error"`
 }

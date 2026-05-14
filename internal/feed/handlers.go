@@ -11,6 +11,20 @@ type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
+// Feed godoc
+// @Summary      Лента «портфолио по категориям»
+// @Description  Возвращает специалистов и связанные видео из портфолио. Поддерживает фильтры и cursor-пагинацию.
+// @Tags         feed
+// @Produce      json
+// @Param        q              query  string  false  "search text"
+// @Param        category       query  []string  false  "category codes (multi)"  collectionFormat(csv)
+// @Param        skill          query  []string  false  "skill slugs (multi)"  collectionFormat(csv)
+// @Param        city           query  string  false  "city"
+// @Param        per_specialist query  int     false  "видео на специалиста"
+// @Param        cursor         query  string  false  "cursor токен"
+// @Success      200            {object}  Result
+// @Failure      502            {object}  feedError
+// @Router       /feed [get]
 func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
 	q := parseQuery(r)
 	res, err := h.svc.Feed(r.Context(), q)
@@ -55,4 +69,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// feedError — форма ошибки для swaggo. Сам handler пишет такую же структуру вручную.
+type feedError struct {
+	Error string `json:"error"`
 }

@@ -9,6 +9,12 @@ type Handler struct{ repo *Repo }
 
 func NewHandler(repo *Repo) *Handler { return &Handler{repo: repo} }
 
+// Categories godoc
+// @Summary      Список категорий специалистов
+// @Tags         catalog
+// @Produce      json
+// @Success      200  {object}  CategoriesResponse
+// @Router       /categories [get]
 func (h *Handler) Categories(w http.ResponseWriter, r *http.Request) {
 	cats, err := h.repo.ListCategories(r.Context())
 	if err != nil {
@@ -18,6 +24,14 @@ func (h *Handler) Categories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": cats})
 }
 
+// Skills godoc
+// @Summary      Список навыков
+// @Tags         catalog
+// @Produce      json
+// @Param        kind  query     string  false  "tool|platform|genre"
+// @Success      200   {object}  SkillsResponse
+// @Failure      400   {object}  errorResponse
+// @Router       /skills [get]
 func (h *Handler) Skills(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get("kind")
 	switch kind {
@@ -41,5 +55,18 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+// CategoriesResponse / SkillsResponse / errorResponse — нужны swaggo для типизации @Success/@Failure.
+type CategoriesResponse struct {
+	Items []Category `json:"items"`
+}
+
+type SkillsResponse struct {
+	Items []Skill `json:"items"`
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
 }

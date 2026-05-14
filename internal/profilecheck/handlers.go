@@ -31,6 +31,20 @@ type checkReq struct {
 	DisplayName string `json:"display_name"`
 }
 
+// Check godoc
+// @Summary      Проверить bio/имя профиля через LLM
+// @Description  LLM возвращает вердикты и подсказки по тексту bio и display_name. Доступен, только если включён LLM провайдер.
+// @Tags         profile
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      checkReq  true  "профильные поля"
+// @Success      200   {object}  Result
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      502   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/profile/check [post]
 func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -84,5 +98,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
 }

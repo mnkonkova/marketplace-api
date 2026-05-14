@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 
 	"marketpclce/internal/auth"
 	"marketpclce/internal/catalog"
@@ -19,6 +20,7 @@ import (
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
+	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
 )
@@ -36,6 +38,7 @@ type Deps struct {
 	Summarize   *summarize.Handler
 	Clarify     *clarify.Handler
 	Leads       *leads.Handler
+	Reviews     *reviews.Handler
 
 	WebDir string
 
@@ -71,6 +74,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/specialists/{id}", d.Profiles.Public)
 			r.Get("/search", d.Search.Search)
 			r.Get("/categories/stats", d.Search.CategoryStats)
+			r.Get("/specialists/{id}/reviews", d.Reviews.ListBySpecialist)
 			if d.Feed != nil {
 				r.Get("/feed", d.Feed.Feed)
 			}
@@ -112,7 +116,19 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/me/leads/incoming", d.Leads.ListIncoming)
 			r.Patch("/me/leads/{id}/recipient", d.Leads.UpdateRecipient)
 		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(auth.Middleware(d.TokenIssuer))
+			r.Use(RateLimit(d.Limiter, "leads", d.LeadsWindows))
+			r.Post("/reviews", d.Reviews.Create)
+			r.Patch("/reviews/{id}", d.Reviews.Update)
+			r.Delete("/reviews/{id}", d.Reviews.Delete)
+		})
 	})
+
+	// Swagger UI монтируется до static/SPA-fallback, чтобы `/swagger/*` не
+	// перехватывался NotFound-хендлером и реально отдавал доку.
+	r.Get("/swagger/*", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
 
 	if d.WebDir != "" {
 		mountStatic(r, d.WebDir)
