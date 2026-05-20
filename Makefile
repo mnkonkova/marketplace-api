@@ -1,5 +1,5 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt swag \
-        deploy prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed
+        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -66,6 +66,18 @@ swag:
 # ── Prod-стек на VDS (см. docs/DEPLOY.md) ───────────────────────────
 deploy:
 	./scripts/deploy.sh
+
+# redeploy — то же что deploy, но zero-downtime: образы билдятся ЗАРАНЕЕ,
+# контейнеры пересоздаются с graceful shutdown, Caddy ретраит /api/*.
+# Параметры через ENV: SKIP_PULL=1 (без git pull), SKIP_MIGRATE=1 (без goose).
+redeploy:
+	./scripts/redeploy.sh
+
+redeploy-api:
+	./scripts/redeploy.sh api
+
+redeploy-web:
+	./scripts/redeploy.sh web
 
 prod-up:
 	$(PROD_DC) up -d
