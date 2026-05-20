@@ -57,6 +57,13 @@ echo "→ (re)start app services"
 "${COMPOSE[@]}" up -d --no-deps --build api worker
 "${COMPOSE[@]}" up -d --no-deps --build web
 
+# Observability — node-exporter (хост-метрики) + alloy (агент Grafana Cloud).
+# Идемпотентно: если уже подняты — no-op. Креды берутся из .env.prod
+# (GRAFANA_CLOUD_*). Если они пустые — alloy запустится, но push зафейлится
+# с 401, это видно в `docker compose logs alloy`.
+echo "→ start observability (node-exporter + alloy)"
+"${COMPOSE[@]}" up -d node-exporter alloy
+
 echo "→ prune dangling images"
 docker image prune -f
 
