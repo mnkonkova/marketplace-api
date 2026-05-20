@@ -57,7 +57,10 @@ type Config struct {
 
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 
-	WebDir string `env:"WEB_DIR" envDefault:"web"`
+	// CORSOrigins — список разрешённых origin'ов через запятую
+	// (например "http://localhost:5173,https://app.example.com"). Пусто —
+	// CORS-заголовки не выставляются (фронт на том же домене / прокси).
+	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:","`
 }
 
 func Load() (Config, error) {

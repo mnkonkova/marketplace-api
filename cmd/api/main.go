@@ -186,7 +186,7 @@ func main() {
 		Clarify:      clarifyHandler,
 		Leads:        leadsHandler,
 		Reviews:      reviewsHandler,
-		WebDir:       cfg.WebDir,
+		CORSOrigins:  cfg.CORSOrigins,
 		Limiter:     limiter,
 		ReadWindows: []ratelimit.Window{
 			{Limit: cfg.RateReadPerMin, Period: time.Minute},

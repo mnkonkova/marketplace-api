@@ -1,4 +1,4 @@
-.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt build-css watch-css swag \
+.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt swag \
         deploy prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed
 
 DC ?= docker compose
@@ -56,12 +56,6 @@ fmt:
 
 lint:
 	go vet ./...
-
-build-css:
-	npm run build:css
-
-watch-css:
-	npm run watch:css
 
 # Перегенерировать docs/swagger из аннотаций над хендлерами. После любых
 # правок в публичном API (новые ручки, изменения DTO) — `make swag` и

@@ -12,13 +12,6 @@ bin/
 *.log
 *.swp
 
-# Frontend deps — стили уже собраны и закоммичены (web/styles.css).
-node_modules/
-package-lock.json
-package.json
-tailwind.config.js
-web/src/
-
 # Тесты/coverage
 *.test
 *.out
