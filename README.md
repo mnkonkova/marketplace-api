@@ -84,6 +84,15 @@ SKIP_MIGRATE=1 make redeploy   # без goose up (только код)
 - **Breaking API contract** (фронт ждёт новое поле, бэк ещё старый):
   деплой по порядку — сначала `make redeploy-api`, потом `make redeploy-web`.
 
+### Мониторинг
+
+Метрики (HTTP/Go runtime/CPU/RAM) и логи всех контейнеров пушатся в
+**Grafana Cloud free tier** через Grafana Alloy. Self-hosted Prometheus
+поднимать не нужно. Setup и список алертов — в [`docs/MONITORING.md`](docs/MONITORING.md).
+
+`/metrics` эндпоинт API доступен только внутри docker network (Caddy его
+не проксирует наружу) — alloy ходит к `api:8080/metrics` напрямую.
+
 ### Полезные команды
 
 ```bash

@@ -1,0 +1,89 @@
+// Grafana Alloy: единый агент сбора observability-данных на VDS.
+// Скрейпит /metrics с api и node-exporter (CPU/RAM/диск), тянет логи всех
+// docker-контейнеров и пушит всё в Grafana Cloud по remote_write/push.
+//
+// Конфиг написан на Alloy River-syntax. Документация:
+//   https://grafana.com/docs/alloy/latest/reference/components/
+
+// ── Метрики Go API ─────────────────────────────────────────────────
+// Alloy ходит по docker-сети к api:8080/metrics. Эндпоинт виден только
+// изнутри сети (Caddy /metrics не проксирует).
+prometheus.scrape "api" {
+	targets = [
+		{
+			__address__ = "api:8080",
+			service     = "api",
+			job         = "marketpclce-api",
+		},
+	]
+	metrics_path    = "/metrics"
+	scrape_interval = "30s"
+	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// ── Хост-метрики (CPU/RAM/диск/сеть VDS) ───────────────────────────
+prometheus.scrape "node" {
+	targets = [
+		{
+			__address__ = "node-exporter:9100",
+			service     = "node",
+			job         = "node-exporter",
+		},
+	]
+	scrape_interval = "30s"
+	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// ── Remote-write метрик в Grafana Cloud ────────────────────────────
+prometheus.remote_write "grafana_cloud" {
+	endpoint {
+		url = sys.env("GRAFANA_CLOUD_PROM_URL")
+		basic_auth {
+			username = sys.env("GRAFANA_CLOUD_PROM_USER")
+			password = sys.env("GRAFANA_CLOUD_PROM_KEY")
+		}
+	}
+	external_labels = {
+		instance = "marketpclce-prod",
+	}
+}
+
+// ── Логи docker-контейнеров → Loki ─────────────────────────────────
+// discovery.docker сам находит все запущенные контейнеры (читает
+// /var/run/docker.sock смонтированный в контейнер Alloy). relabel
+// превращает имя контейнера "/marketpclce-api-1" в метку container="api".
+discovery.docker "containers" {
+	host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+	rule {
+		source_labels = ["__meta_docker_container_log_stream"]
+		target_label  = "stream"
+	}
+}
+
+loki.source.docker "containers" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.containers.output
+	forward_to = [loki.write.grafana_cloud.receiver]
+	labels = {
+		instance = "marketpclce-prod",
+	}
+}
+
+loki.write "grafana_cloud" {
+	endpoint {
+		url = sys.env("GRAFANA_CLOUD_LOKI_URL")
+		basic_auth {
+			username = sys.env("GRAFANA_CLOUD_LOKI_USER")
+			password = sys.env("GRAFANA_CLOUD_LOKI_KEY")
+		}
+	}
+}

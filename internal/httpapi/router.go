@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 
 	"marketpclce/internal/auth"
@@ -54,10 +55,16 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.Timeout(120 * time.Second))
 	r.Use(slogRequestLogger(d.Logger))
 	r.Use(CORS(d.CORSOrigins))
+	r.Use(PrometheusMetrics())
 
 	health := handlers.NewHealth(d.HealthDB)
 	r.Get("/healthz", health.Live)
 	r.Get("/readyz", health.Ready)
+
+	// /metrics не проходит через Caddy (он проксирует только /api/* и
+	// /swagger/*), поэтому эндпоинт доступен только внутри docker network —
+	// alloy скрейпит api:8080/metrics, наружу не торчит.
+	r.Handle("/metrics", promhttp.Handler())
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/auth/register", d.Auth.Register)

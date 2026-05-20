@@ -32,6 +32,13 @@ Hard-фильтры: `is_published`, `skill_slugs`. Soft: `city`, `rate_min/max`
 - LLM-эндпоинты (`/search/summarize`, `/clarify`, `/me/profile/check`) опциональны — без `LLM_API_KEY` хендлеры не маунтятся / возвращают пусто.
 - Без Redis API стартует, но rate-limit и кеш summarize отключены (логируется warn).
 
+## Observability
+
+`/metrics` (Prometheus) + структурированные slog-логи. На VDS их собирает
+Grafana Alloy и пушит в Grafana Cloud free tier (см. `docs/MONITORING.md`).
+HTTP-метрики помечаются chi route pattern (`/api/v1/specialists/{id}`),
+а не raw URL — кардинальность под контролем.
+
 ## Не трогать без причины
 
 `migrations/00001_init.sql` (initial schema), `internal/search/mapping.go` (поменяешь — переиндексировать).

@@ -116,8 +116,59 @@ services:
       api:
         condition: service_healthy
 
+  # ── Observability: node-exporter + Grafana Alloy → Grafana Cloud ──
+  # node-exporter раздаёт CPU/RAM/диск/сеть VDS как Prometheus-метрики.
+  # Порт наружу не торчит — только внутри docker network, alloy скрейпит
+  # его как node-exporter:9100.
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro,rslave
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    mem_limit: 64m
+
+  # Grafana Alloy — единый агент: метрики (api + node) и логи (docker)
+  # пушит в Grafana Cloud. Креды берутся из .env.prod (GRAFANA_CLOUD_*).
+  # Если креды пустые — контейнер запустится, но скрейп будет фейлиться;
+  # это видно в `docker compose logs alloy`. Чтобы выключить полностью —
+  # просто не запускай этот сервис: `--scale alloy=0`.
+  alloy:
+    image: grafana/alloy:v1.4.2
+    restart: unless-stopped
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    environment:
+      GRAFANA_CLOUD_PROM_URL: ${GRAFANA_CLOUD_PROM_URL:-}
+      GRAFANA_CLOUD_PROM_USER: ${GRAFANA_CLOUD_PROM_USER:-}
+      GRAFANA_CLOUD_PROM_KEY: ${GRAFANA_CLOUD_PROM_KEY:-}
+      GRAFANA_CLOUD_LOKI_URL: ${GRAFANA_CLOUD_LOKI_URL:-}
+      GRAFANA_CLOUD_LOKI_USER: ${GRAFANA_CLOUD_LOKI_USER:-}
+      GRAFANA_CLOUD_LOKI_KEY: ${GRAFANA_CLOUD_LOKI_KEY:-}
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+    depends_on:
+      api:
+        condition: service_started
+      node-exporter:
+        condition: service_started
+    mem_limit: 256m
+
 volumes:
   pgdata:
   osdata:
   caddydata:
   caddyconfig:
+  alloy-data:
