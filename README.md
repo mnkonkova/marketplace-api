@@ -30,6 +30,73 @@ S3 (Yandex Object Storage) подключается опционально: ес
 
 Проверка: `curl localhost:8080/healthz`.
 
+## Деплой и redeploy
+
+Прод-стек поднимается на одной VDS через `docker-compose.prod.yml`: postgres,
+opensearch, redis, api, worker, web (Caddy + статика фронта). Полная
+шпаргалка по первому развёртыванию — в [`docs/DEPLOY.md`](docs/DEPLOY.md):
+DNS, ufw, sysctl, заполнение `.env.prod`.
+
+Раскладка на сервере (оба репо рядом):
+```
+/opt/marketpclce/
+├── api/   ← этот репо, отсюда запускаются make-цели
+└── web/   ← git clone marketplace-web (compose билдит фронт из ../web)
+```
+
+### Первый запуск
+
+```bash
+cd /opt/marketpclce/api
+cp .env.prod.example .env.prod && nano .env.prod   # секреты — см. docs/DEPLOY.md
+make deploy                                         # build + migrate + start всего стека
+```
+
+### Повседневные обновления — `make redeploy`
+
+Zero-downtime передеплой: образы билдятся **заранее**, пока старые
+контейнеры обслуживают трафик. Потом graceful shutdown (Go API ловит
+SIGTERM, дослуживает активные запросы), recreate, Caddy ретраит `/api/*`
+на время рестарта — пользователь видит «медленный» запрос, не 502.
+
+```bash
+make redeploy        # git pull api+web → build → goose up → recreate api/worker/web
+make redeploy-api    # только Go (api + worker)
+make redeploy-web    # только фронт (без миграций и без рестарта Go)
+```
+
+Флаги через ENV:
+```bash
+SKIP_PULL=1    make redeploy   # без git pull (правки уже на сервере)
+SKIP_MIGRATE=1 make redeploy   # без goose up (только код)
+```
+
+Под капотом — [`scripts/redeploy.sh`](scripts/redeploy.sh). Идемпотентен:
+`goose up` пропустит уже применённые миграции, `docker compose build`
+переиспользует слои.
+
+### Когда `redeploy` **не** zero-downtime
+
+- **Breaking migration** (`DROP COLUMN`, `RENAME`, не-аддитивные изменения):
+  старый api сломается на новой схеме. Используй expand-contract: сначала
+  аддитивная миграция + код, читающий обе формы → потом drop. Или прими
+  короткий downtime через `make deploy`.
+- **Breaking API contract** (фронт ждёт новое поле, бэк ещё старый):
+  деплой по порядку — сначала `make redeploy-api`, потом `make redeploy-web`.
+
+### Полезные команды
+
+```bash
+make prod-ps                                  # статусы всех сервисов
+make prod-logs                                # tail логов
+$(PROD_DC) logs -f api worker                 # только Go
+$(PROD_DC) logs -f web                        # только Caddy
+$(PROD_DC) exec postgres psql -U marketpclce  # SQL-консоль
+make prod-seed                                # демо-данные
+```
+
+(`PROD_DC = docker compose -f docker-compose.prod.yml --env-file .env.prod`)
+
 ## Структура
 
 ```
