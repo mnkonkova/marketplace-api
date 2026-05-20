@@ -36,17 +36,22 @@ type seedVideo struct {
 // SeedVideoSlugs — список slug'ов в каталоге, в порядке. cmd/seed импортирует
 // этот же файл (через build-tag нет, а через main-пакет нельзя), поэтому
 // в cmd/seed повторили константу — синхронизированы вручную.
+// Источники — samplelib.com, публичные mp4 без auth/referer. Pexels и Google
+// CDN блокируют прямые скачивания. Видео горизонтальные — для TikTok-feed
+// компромисс: проиграются, но не идеально вертикально. Для нормальных
+// вертикальных сэмплов положи свои файлы в ./seed-videos/{slug}.mp4 —
+// у локальных приоритет.
 var seedSet = []seedVideo{
-	{Slug: "vert-01", Title: "Reels-формат, городская съёмка",
-		Source: "https://videos.pexels.com/video-files/4145074/4145074-hd_1080_1920_25fps.mp4"},
-	{Slug: "vert-02", Title: "Beauty-съёмка, крупный план",
-		Source: "https://videos.pexels.com/video-files/3209828/3209828-hd_1080_1920_25fps.mp4"},
-	{Slug: "vert-03", Title: "Food-shorts, ритмичный монтаж",
-		Source: "https://videos.pexels.com/video-files/3209376/3209376-hd_1080_1920_30fps.mp4"},
-	{Slug: "vert-04", Title: "Городские кадры для блога",
-		Source: "https://videos.pexels.com/video-files/4109155/4109155-hd_1080_1920_25fps.mp4"},
-	{Slug: "vert-05", Title: "Lifestyle-Reels с движением",
-		Source: "https://videos.pexels.com/video-files/5752729/5752729-hd_1080_1920_25fps.mp4"},
+	{Slug: "vert-01", Title: "Sample 5s",
+		Source: "https://download.samplelib.com/mp4/sample-5s.mp4"},
+	{Slug: "vert-02", Title: "Sample 10s",
+		Source: "https://download.samplelib.com/mp4/sample-10s.mp4"},
+	{Slug: "vert-03", Title: "Sample 15s",
+		Source: "https://download.samplelib.com/mp4/sample-15s.mp4"},
+	{Slug: "vert-04", Title: "Sample 20s",
+		Source: "https://download.samplelib.com/mp4/sample-20s.mp4"},
+	{Slug: "vert-05", Title: "Sample 30s",
+		Source: "https://download.samplelib.com/mp4/sample-30s.mp4"},
 }
 
 func main() {
