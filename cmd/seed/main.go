@@ -457,14 +457,15 @@ func main() {
 			slog.Error("seed reviews", "email", s.Email, "err", err)
 			continue
 		}
-		// Когда S3 настроен — пропускаем demo-портфолио, чтобы не разбавлять
-		// ленту 404-ссылками (реальные ролики придут через /me-аплоад).
-		// Без S3 — оставляем fallback-mp4, чтобы лента локально не была пустой.
-		if publicBase == "" {
-			if err := seedPortfolio(ctx, pool, uid, i, publicBase); err != nil {
-				slog.Error("seed portfolio", "email", s.Email, "err", err)
-				continue
-			}
+		// Портфолио сеем всегда:
+		// - S3 настроен → ссылки на seed/{slug}.mp4 в бакете (объекты заливает
+		//   `make prod-seed-videos` отдельно).
+		// - S3 не настроен → fallback на публичные mp4 (w3schools/Google).
+		// Без demo-портфолио /api/v1/feed возвращает пустой пул, поэтому держим
+		// его на проде до тех пор, пока спецы не начнут заливать реальные ролики.
+		if err := seedPortfolio(ctx, pool, uid, i, publicBase); err != nil {
+			slog.Error("seed portfolio", "email", s.Email, "err", err)
+			continue
 		}
 		doc, err := searchRepo.LoadDoc(ctx, uid)
 		if err != nil {
