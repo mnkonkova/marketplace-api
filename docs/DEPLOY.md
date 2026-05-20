@@ -1,8 +1,12 @@
 # Deploy на Timeweb (beta-MVP)
 
-Шпаргалка для разворачивания marketpclce на одной VDS Timeweb с Docker Compose.
-Все сервисы (postgres / opensearch / redis / api / worker / caddy) живут на
-одной машине; медиа уезжает в Yandex Object Storage по S3.
+Шпаргалка для разворачивания marketpclce на одной VDS Timeweb с Docker
+Compose. Все сервисы (postgres / opensearch / redis / api / worker / web)
+живут на одной машине; медиа уезжает в Yandex Object Storage по S3.
+
+Бэкенд и фронт лежат в двух репо: `marketplace-api` (этот) и
+`marketplace-web`. На сервере они клонируются рядом, prod-compose из
+этого репо билдит оба образа.
 
 ---
 
@@ -63,12 +67,21 @@ app.<твой-поддомен>   A   <IP VDS>   TTL 300
 
 ---
 
-## 4. Клон и конфиг
+## 4. Клон обоих репо и конфиг
+
+Раскладка на сервере:
+```
+/opt/marketpclce/
+├── api/   ← marketplace-api (этот репо, .env.prod и compose внутри)
+└── web/   ← marketplace-web (фронт, билдится из соседней папки)
+```
 
 ```bash
-git clone https://github.com/mnkonkova/marketplace-mvp.git /opt/marketpclce
-cd /opt/marketpclce
+mkdir -p /opt/marketpclce && cd /opt/marketpclce
+git clone https://github.com/mnkonkova/marketplace-api  api
+git clone https://github.com/mnkonkova/marketplace-web  web
 
+cd api
 cp .env.prod.example .env.prod
 nano .env.prod
 ```
@@ -85,25 +98,31 @@ nano .env.prod
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | Yandex Cloud Console → Service Account → Static access key |
 | `LLM_API_KEY` | console.anthropic.com или DeepSeek |
 
+`CORS_ORIGINS` оставь пустым — фронт и API под одним доменом, CORS не
+нужен (Caddy фронта проксирует `/api/*` на API-контейнер).
+
 ---
 
 ## 5. Первый запуск
 
 ```bash
+cd /opt/marketpclce/api
 make deploy
 ```
 
 Скрипт:
-1. Соберёт docker-image (api/worker/seed/goose в одном).
-2. Поднимет postgres / opensearch / redis.
-3. Прогонит миграции через goose.
-4. Стартанёт api / worker / caddy. Caddy сам выпишет TLS-сертификат от
-   Let's Encrypt — это занимает 10–60 секунд.
+1. `git pull` в `api/` и `web/`.
+2. Соберёт два docker-image: api (Go: api/worker/seed/goose) и web (Caddy + статика).
+3. Поднимет postgres / opensearch / redis.
+4. Прогонит миграции через goose.
+5. Стартанёт api / worker / web. Caddy внутри web-контейнера сам выпишет
+   TLS-сертификат от Let's Encrypt — это 10–60 секунд.
 
 Проверь:
 ```bash
 make prod-ps                                    # все сервисы healthy
-curl -fsSL https://app.твой-поддомен.timeweb.cloud/health
+curl -fsSL https://app.твой-поддомен.timeweb.cloud/healthz   # API через прокси
+curl -fsSL https://app.твой-поддомен.timeweb.cloud/          # фронт (index.html)
 ```
 
 Открой `https://app.твой-поддомен.timeweb.cloud` в браузере.
@@ -124,16 +143,22 @@ make prod-seed
 
 ## 7. Дальнейшие деплои
 
-После пуша в `main`:
+После пуша в `main` **любого** из двух репо:
 ```bash
 ssh root@<IP>
-cd /opt/marketpclce
-git pull
+cd /opt/marketpclce/api
 make deploy
 ```
 
-`make deploy` идемпотентен: если в коде ничего не поменялось — ребилд
-будет no-op, миграции пропустит уже применённые.
+`make deploy` сам подтянет оба репо (`git pull` в `api/` и `web/`) и
+переподнимет только изменившиеся образы. Если хочешь пропустить pull
+(например, прогоняешь руками из локальной правки) — `SKIP_PULL=1 make deploy`.
+
+Если поправил только фронт — можно собрать и перезапустить только его:
+```bash
+cd /opt/marketpclce/web && git pull
+cd /opt/marketpclce/api && $(PROD_DC) up -d --no-deps --build web
+```
 
 ---
 
@@ -141,6 +166,7 @@ make deploy
 
 Разовый дамп:
 ```bash
+cd /opt/marketpclce/api
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
   exec -T postgres pg_dump -U marketpclce marketpclce \
   | gzip > /var/backups/marketpclce-$(date +%F).sql.gz
@@ -148,21 +174,23 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod \
 
 Cron (ежесуточно в 04:00):
 ```cron
-0 4 * * * cd /opt/marketpclce && docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T postgres pg_dump -U marketpclce marketpclce | gzip > /var/backups/marketpclce-$(date +\%F).sql.gz
+0 4 * * * cd /opt/marketpclce/api && docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T postgres pg_dump -U marketpclce marketpclce | gzip > /var/backups/marketpclce-$(date +\%F).sql.gz
 ```
 
 ---
 
 ## 9. Полезные команды
 
+Запускать из `/opt/marketpclce/api`:
+
 ```bash
 make prod-logs                                              # все сервисы
-$(PROD_DC) logs -f api worker                               # только app
+$(PROD_DC) logs -f api worker web                           # точечно
 $(PROD_DC) restart api worker                               # рестарт без билда
 make prod-down                                              # остановить всё
 $(PROD_DC) exec postgres psql -U marketpclce marketpclce    # SQL-консоль
 $(PROD_DC) exec redis redis-cli                             # redis-cli
-$(PROD_DC) exec api wget -qO- http://localhost:8080/health  # healthcheck из контейнера
+$(PROD_DC) exec api wget -qO- http://localhost:8080/healthz # healthcheck из контейнера
 ```
 
 (`PROD_DC = docker compose -f docker-compose.prod.yml --env-file .env.prod`)
@@ -190,3 +218,13 @@ worker должен индексировать outbox. `make prod-logs` → ищ
 **LLM-эндпоинты возвращают 404** —
 не задан `LLM_API_KEY` — `/search/summarize` и `/clarify` в этом случае не
 маунтятся (это by-design, см. `internal/httpapi/router.go`).
+
+**`web` контейнер падает с `build context ../web not found`** —
+не склонировал marketplace-web в соседнюю папку. Сделай
+`git clone https://github.com/mnkonkova/marketplace-web /opt/marketpclce/web`
+и повтори `make deploy`.
+
+**На фронте `404` для статических файлов** —
+проверь, что `web/styles.css` собрался внутри образа web (этим занимается
+`npm run build:css` в его Dockerfile). Если пусто — пересобери образ:
+`$(PROD_DC) build --no-cache web && $(PROD_DC) up -d web`.

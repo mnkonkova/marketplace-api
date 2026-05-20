@@ -90,19 +90,28 @@ services:
     command: ["worker"]
     mem_limit: 128m
 
-  caddy:
-    image: caddy:2-alpine
+  # Фронт + reverse-proxy. Образ собирается из соседнего клона
+  # marketplace-web (../web). На VDS оба репо живут рядом:
+  #   /opt/marketpclce/api  (этот репо)
+  #   /opt/marketpclce/web  (git clone marketplace-web)
+  # Caddyfile внутри образа уже знает: /api/* и /swagger/* → API_UPSTREAM,
+  # всё остальное — статика + SPA fallback.
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    image: marketpclce/web:latest
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddydata:/data
-      - caddyconfig:/config
     environment:
       DOMAIN: ${DOMAIN:?DOMAIN is required, e.g. app.example.com}
+      API_UPSTREAM: api:8080
+    volumes:
+      - caddydata:/data
+      - caddyconfig:/config
     depends_on:
       api:
         condition: service_healthy

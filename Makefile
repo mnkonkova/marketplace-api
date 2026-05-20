@@ -80,7 +80,7 @@ prod-ps:
 	$(PROD_DC) ps
 
 prod-build:
-	$(PROD_DC) build api
+	$(PROD_DC) build api web
 
 prod-migrate:
 	$(PROD_DC) run --rm api goose -dir /app/migrations postgres "$(PROD_DSN)" up
