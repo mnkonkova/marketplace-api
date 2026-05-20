@@ -1,5 +1,5 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt swag \
-        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed
+        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -99,3 +99,11 @@ prod-migrate:
 
 prod-seed:
 	$(PROD_DC) run --rm api seed
+
+# Заливает 5 сэмплов (Pexels mp4) в S3-бакет под ключами seed/vert-01.mp4…
+# seed/vert-05.mp4. Идемпотентно: для каждого слота HEAD; если объект уже
+# есть — пропускает. Требует заполненных S3_ACCESS_KEY / S3_SECRET_KEY /
+# S3_BUCKET в .env.prod. Нужно один раз — после этого `make prod-seed`
+# напишет в БД ссылки на эти объекты, и фид заработает.
+prod-seed-videos:
+	$(PROD_DC) run --rm api seed-videos
