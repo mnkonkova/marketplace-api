@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -558,8 +559,8 @@ func upsertProfile(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, s see
 	const q = `
 INSERT INTO specialist_profiles (
   user_id, display_name, bio, city, rate_min, rate_max, currency,
-  is_published, rating_avg, reviews_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $9)
+  avatar_url, is_published, rating_avg, reviews_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10)
 ON CONFLICT (user_id) DO UPDATE SET
   display_name = EXCLUDED.display_name,
   bio          = EXCLUDED.bio,
@@ -567,6 +568,7 @@ ON CONFLICT (user_id) DO UPDATE SET
   rate_min     = EXCLUDED.rate_min,
   rate_max     = EXCLUDED.rate_max,
   currency     = EXCLUDED.currency,
+  avatar_url   = EXCLUDED.avatar_url,
   is_published = TRUE,
   rating_avg   = EXCLUDED.rating_avg,
   reviews_count= EXCLUDED.reviews_count,
@@ -574,9 +576,17 @@ ON CONFLICT (user_id) DO UPDATE SET
 	_, err := pool.Exec(ctx, q,
 		uid, s.DisplayName, s.Bio, s.City,
 		s.RateMin, s.RateMax, s.Currency,
+		seedAvatarURL(s.Email),
 		s.Rating, s.Reviews,
 	)
 	return err
+}
+
+// seedAvatarURL — детерминированная аватарка по email через pravatar.cc.
+// Реалистичные лица людей, один и тот же email всегда даёт одно и то же фото,
+// так что после повторного seed картинки не меняются.
+func seedAvatarURL(email string) string {
+	return fmt.Sprintf("https://i.pravatar.cc/300?u=%s", url.QueryEscape(email))
 }
 
 func replaceCategories(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, codes []string, primary string) error {
