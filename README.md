@@ -109,21 +109,39 @@ make prod-seed                                # демо-данные
 ## Структура
 
 ```
-cmd/api              точка входа
+cmd/{api,worker,seed,seed-videos}   точки входа
 internal/
   config             загрузка env
   httpapi            chi router, middleware, handlers
+  httpx              общий WriteJSON/WriteErr для всех хендлеров
   platform/{db,es,s3,redisx}  инфраструктурные клиенты
   auth               регистрация/логин/JWT
   profiles           профили специалистов и портфолио
-  catalog            справочники категорий и навыков
-  search             обёртка над OpenSearch + индексация
+  catalog            справочники категорий (с типом Производство/Продвижение) и навыков
+  search             обёртка над OpenSearch: индекс `specialists` + индекс `feed_videos` (один doc = одно видео + денорм спеца)
+  feed               лента видео: ES search_after, diversity round-robin, Redis-кэш
+  llm                Provider-интерфейс + реализации anthropic / deepseek
   summarize          LLM-подбор по результатам поиска
+  clarify            LLM-диалог
+  profilecheck       LLM-валидация bio/имени при публикации
   leads              заявки клиентов
-  media              загрузка/обработка медиа
-  outbox             outbox-паттерн для индексации
-migrations           goose SQL миграции
+  reviews            отзывы
+  outbox             outbox-паттерн (specialist.upserted → reindex обоих индексов)
+  ratelimit          Redis-окна для read/leads/summarize/clarify
+migrations           goose SQL миграции (00001 — initial с актуальной схемой)
 ```
+
+### Concurrency / целостность
+
+- `PATCH /me/profile`, `PUT /me/profile/{categories,skills}`, `PUT /me/portfolio/{id}/categories`,
+  `PATCH /reviews/{id}`, `PATCH /me/leads/{id}/recipient` — optimistic locking
+  через `updated_at` (необязательное поле в body). Несовпадение → **409
+  `stale_updated_at`**, фронт должен перечитать и применить заново. Без поля
+  — старое поведение (для обратной совместимости).
+- Outbox-worker использует `SELECT FOR UPDATE SKIP LOCKED` — безопасно
+  масштабируется по репликам.
+- `reviews` имеет PG-триггер `reviews_recalc_trg`, пересчитывающий
+  `rating_avg`/`reviews_count` под row-lock'ом.
 
 ## Миграции
 
@@ -154,7 +172,7 @@ make migrate-create name=add_reviews
 
 | Method | Path           | Описание                                                   |
 | ------ | -------------- | ---------------------------------------------------------- |
-| GET    | `/categories`  | Список категорий специалистов                              |
+| GET    | `/categories`  | Список категорий специалистов. Поле `type` = `Производство` / `Продвижение` |
 | GET    | `/skills`      | Список навыков (filter `kind=tool|platform|genre`)         |
 
 ### search & feed (read, под общим rate-limit `read`)
@@ -162,18 +180,17 @@ make migrate-create name=add_reviews
 | Method | Path                          | Описание                                                |
 | ------ | ----------------------------- | ------------------------------------------------------- |
 | GET    | `/search`                     | Поиск спецов: `q`, `category`, `skill`, `city`, `rate_min`, `rate_max`, `limit`, `offset` |
-| GET    | `/specialists`                | Алиас `/search`                                         |
 | GET    | `/specialists/{id}`           | Публичный профиль (включает первые 20 отзывов)          |
 | GET    | `/specialists/{id}/reviews`   | Пагинированный листинг отзывов: `limit`, `offset`       |
 | GET    | `/categories/stats`           | Счётчики опубликованных спецов по категориям            |
-| GET    | `/feed`                       | Лента портфолио по категориям, cursor-пагинация         |
+| GET    | `/feed`                       | Лента видео: `q`, `category` (csv), `skill` (csv), `city`, `per_specialist`, `cursor`, **`ids` (csv user_id, до 100 — жёсткий фильтр после `/search` или `/search/summarize`)**. Cursor-пагинация. См. ниже **Архитектуру feed**. |
 
 ### LLM (доступны только при `LLM_API_KEY != ""`)
 
-| Method | Path                  | Описание                                                  |
-| ------ | --------------------- | --------------------------------------------------------- |
-| POST   | `/search/summarize`   | LLM-подбор «топ-N» по результатам поиска (Redis-кеш + RL) |
-| POST   | `/clarify`            | Уточняющий диалог: следующий вопрос или финальный запрос  |
+| Method | Path                  | Rate-limit                          | Описание                                                  |
+| ------ | --------------------- | ----------------------------------- | --------------------------------------------------------- |
+| POST   | `/search/summarize`   | `summarize` (5/min, 30/hour) после cache-miss | LLM-подбор «топ-N» по результатам поиска (Redis-кеш + RL) |
+| POST   | `/clarify`            | `clarify` (15/min, 120/hour)         | Уточняющий диалог: следующий вопрос или финальный запрос. Stateless на сервере — клиент шлёт всю историю каждым запросом. |
 
 ### leads (rate-limit `leads`)
 
@@ -215,3 +232,68 @@ make migrate-create name=add_reviews
 | ------ | ----------- | --------------------------------------- |
 | GET    | `/healthz`  | Liveness                                |
 | GET    | `/readyz`   | Readiness (включая PG)                  |
+
+## Архитектура `/feed`
+
+Лента построена поверх **отдельного OpenSearch-индекса `feed_videos`**: один документ = одно видео + денормализованные поля специалиста (`display_name`, `avatar_url`, `rating_avg`, `reviews_count`, `city`, etc.). Не путать с индексом `specialists` (один документ = один спец) — он остался для `/search`/`/categories/stats`.
+
+### Индексация
+
+- Источник истины — PostgreSQL (`portfolio_items` + `specialist_profiles`).
+- Worker слушает outbox-события `specialist.upserted` / `specialist.deleted`.
+- На `upserted`: `search.Indexer.Reconcile` (специалист в `specialists`) **и** `search.FeedIndexer.ReconcileVideos` (все его видео в `feed_videos`).
+- `ReconcileVideos` = `delete_by_query user_id=X` + upsert каждого актуального видео. Идемпотентно.
+- Outbox-событие пишется в одной транзакции с любой записью в `portfolio_items` или `specialist_profiles` (см. `internal/profiles/service.go`).
+- При первом запуске воркера на новом инстансе (`feed_videos` пуст) автоматически прогоняется bootstrap по всем опубликованным спецам.
+
+### Запрос
+
+```
+GET /api/v1/feed?category=editor&q=анимация&cursor=<base64>
+```
+
+ES-запрос против `feed_videos`:
+
+- `filter`: `is_published=true`, плюс `terms.category_codes` / `term.city` / `terms.user_id` (для `?ids=...`-флоу).
+- `must`: `multi_match` по `display_name`/`title`/`bio`/`description`/`city.text` (если `q` непустой), иначе `match_all`.
+- `must_not`: `terms.video_id` (seen-set из курсора).
+- `sort`: `rating_avg DESC, video_created_at DESC, video_id ASC` (последний — уникальный tiebreaker, нужен для детерминированного `search_after`).
+- `search_after`: sort-key последнего хита прошлой страницы.
+- `size`: 50.
+
+### Курсор
+
+Opaque base64-JSON, фронт не парсит. Внутри:
+- `sa` — sort-key последнего хита (для ES `search_after`).
+- `sv` — seen video_id'шки (FIFO, cap **500**). Защита от дублей при пере-ранжировании индекса между страницами. ~22 KB в URL.
+
+Фронт-флоу: ответ `{items, next_cursor, total}` → следующий запрос с `?cursor=<next_cursor>` повторяя исходные фильтры. Пустой `next_cursor` = лента закончилась.
+
+### Diversity (round-robin внутри страницы)
+
+ES возвращает top-50 по score. `interleaveByUser` группирует их по `user_id` сохраняя ES-порядок внутри группы и раскладывает round-robin: первое видео каждого юзера → второе видео каждого → и т.д. Так 5 видео одного спеца подряд не валятся.
+
+`video_idx` / `video_total` в ответе = позиция и количество видео этого спеца **в текущей странице** (для overlay «N/M»).
+
+### Кэш
+
+Redis, ключ = `feed:cache:sha256(filters+cursor)`, TTL `FEED_CACHE_TTL` (по умолчанию **30s**). Кэшируется для всех — `/feed` публичный, без персонализации. При появлении per-user ленты — добавится skip-cache для авторизованных.
+
+### Поток данных
+
+```
+Юзер ищет ─→ /search или /clarify+/summarize
+                         │
+              user_ids:  ▼
+                  /feed?ids=u1,u2,u3
+                         │
+            (опц.) кэш ─►├─ есть? — отдаём
+                         │
+                         ▼
+              ES feed_videos с terms.user_id
+                         │
+                         ▼
+          interleave by user, build Items, cursor
+```
+
+Без `ids`: тот же flow, но с фильтрами по `q`/`category`/`city`.
