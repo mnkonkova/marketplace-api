@@ -48,6 +48,15 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 	if q.PerSpecialist <= 0 || q.PerSpecialist > maxPerSpecialist {
 		q.PerSpecialist = maxPerSpecialist
 	}
+	// Жёсткий ids-фильтр перекрывает любые soft-фильтры: юзер уже выбрал
+	// кого смотреть на предыдущем шаге, не нужно ещё раз срезать по категории
+	// (иначе у спеца пропадут видео других категорий, что неожиданно).
+	if len(q.UserIDs) > 0 {
+		q.Categories = nil
+		q.SkillSlugs = nil
+		q.City = ""
+		q.Q = ""
+	}
 
 	offset := 0
 	if q.Cursor != "" {
@@ -62,49 +71,10 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 		offset = c.Offset
 	}
 
-	// Skills из AI-флоу clarify: они извлечены LLM из свободного текста и
-	// часть спецов их явно не проставила. Чтобы фид симметрично с
-	// /search/summarize находил тех же спецов (иначе при тогле «В ленту» из
-	// AI-подбора пропадает запиканный кандидат), подмешиваем slug'и в Q и
-	// убираем как hard-фильтр. Жёсткие skill-фильтры из UI-чипов прилетают
-	// в /specialists и /search напрямую — они тут не задействованы.
-	searchQ := q.Q
-	if len(q.SkillSlugs) > 0 {
-		extra := strings.Join(q.SkillSlugs, " ")
-		if searchQ == "" {
-			searchQ = extra
-		} else {
-			searchQ = searchQ + " " + extra
-		}
+	allDocs, totalMatched, err := s.fetchCandidates(ctx, q)
+	if err != nil {
+		return Result{}, err
 	}
-
-	// 1) тянем пул спецов под фильтром страницами по searchPageSize, до poolSize.
-	//    Локально пере-ранжируем: с видео — выше, потом по рейтингу. Альтернатива —
-	//    хранить videos_count в индексе и сортировать в ES, но это требует
-	//    реиндексации на каждое изменение портфолио.
-	allDocs := make([]search.IndexDoc, 0, poolSize)
-	totalMatched := 0
-	for off := 0; off < poolSize; off += searchPageSize {
-		page, err := s.search.Search(ctx, search.Query{
-			Q:          searchQ,
-			Categories: q.Categories,
-			City:       q.City,
-			Limit:      searchPageSize,
-			Offset:     off,
-		})
-		if err != nil {
-			return Result{}, fmt.Errorf("search: %w", err)
-		}
-		if len(page.Items) == 0 {
-			break
-		}
-		allDocs = append(allDocs, page.Items...)
-		totalMatched = page.Total
-		if len(allDocs) >= page.Total || len(page.Items) < searchPageSize {
-			break
-		}
-	}
-
 	if len(allDocs) == 0 {
 		return Result{Items: []Item{}, Total: totalMatched}, nil
 	}
@@ -179,6 +149,74 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 		out.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
 	}
 	return out, nil
+}
+
+// fetchCandidates — кандидаты для ранжирования. Две ветки:
+//
+//  1. q.UserIDs непустой → жёсткий список (после /search → /feed?ids=...).
+//     Один batch-запрос в ES (terms по user_id, is_published=true). Без
+//     поискового q/category/city — юзер уже выбрал кого смотреть.
+//     totalMatched = сколько фактически нашлось (могло быть меньше len(ids)
+//     если кто-то снят с публикации между шагами).
+//
+//  2. UserIDs пустой → текущее поведение: пул до poolSize спецов под
+//     текстовый/категорийный/городской фильтр, страницами по searchPageSize.
+func (s *Service) fetchCandidates(ctx context.Context, q Query) ([]search.IndexDoc, int, error) {
+	if len(q.UserIDs) > 0 {
+		ids := make([]string, len(q.UserIDs))
+		for i, id := range q.UserIDs {
+			ids[i] = id.String()
+		}
+		docs, err := s.search.LoadDocsByIDs(ctx, ids)
+		if err != nil {
+			return nil, 0, fmt.Errorf("load by ids: %w", err)
+		}
+		return docs, len(docs), nil
+	}
+
+	// Skills из AI-флоу clarify: они извлечены LLM из свободного текста и
+	// часть спецов их явно не проставила. Чтобы фид симметрично с
+	// /search/summarize находил тех же спецов (иначе при тогле «В ленту» из
+	// AI-подбора пропадает запиканный кандидат), подмешиваем slug'и в Q и
+	// убираем как hard-фильтр. Жёсткие skill-фильтры из UI-чипов прилетают
+	// в /specialists и /search напрямую — они тут не задействованы.
+	searchQ := q.Q
+	if len(q.SkillSlugs) > 0 {
+		extra := strings.Join(q.SkillSlugs, " ")
+		if searchQ == "" {
+			searchQ = extra
+		} else {
+			searchQ = searchQ + " " + extra
+		}
+	}
+
+	// Тянем пул спецов под фильтром страницами по searchPageSize, до poolSize.
+	// Локально пере-ранжируем: с видео — выше, потом по рейтингу. Альтернатива —
+	// хранить videos_count в индексе и сортировать в ES, но это требует
+	// реиндексации на каждое изменение портфолио.
+	allDocs := make([]search.IndexDoc, 0, poolSize)
+	totalMatched := 0
+	for off := 0; off < poolSize; off += searchPageSize {
+		page, err := s.search.Search(ctx, search.Query{
+			Q:          searchQ,
+			Categories: q.Categories,
+			City:       q.City,
+			Limit:      searchPageSize,
+			Offset:     off,
+		})
+		if err != nil {
+			return nil, 0, fmt.Errorf("search: %w", err)
+		}
+		if len(page.Items) == 0 {
+			break
+		}
+		allDocs = append(allDocs, page.Items...)
+		totalMatched = page.Total
+		if len(allDocs) >= page.Total || len(page.Items) < searchPageSize {
+			break
+		}
+	}
+	return allDocs, totalMatched, nil
 }
 
 func specFromDoc(d search.IndexDoc) Specialist {

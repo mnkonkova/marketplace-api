@@ -136,6 +136,44 @@ func (s *Service) CategoryStats(ctx context.Context) ([]CategoryCount, error) {
 	return parseCategoryAggs(resp.Aggregations), nil
 }
 
+// LoadDocsByIDs — батч-фетч опубликованных спецов из ES по списку user_id.
+// Используется в /feed?ids=... — когда фронт уже знает кого хочет в ленте
+// (например, после /search или /search/summarize) и не нужно прогонять
+// текстовый запрос. Возвращает только опубликованных спецов (как и Search):
+// если кто-то снят с публикации между шагами «поиск → лента», он не покажется.
+// Порядок документов в ответе — как ES вернул (по релевантности _score внутри
+// terms-фильтра); смысловой ranking делает вызывающий код.
+func (s *Service) LoadDocsByIDs(ctx context.Context, ids []string) ([]IndexDoc, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	body := map[string]any{
+		"from": 0,
+		"size": len(ids),
+		"query": map[string]any{
+			"bool": map[string]any{
+				"filter": []any{
+					map[string]any{"term": map[string]any{"is_published": true}},
+					map[string]any{"terms": map[string]any{"user_id": ids}},
+				},
+			},
+		},
+	}
+	resp, err := s.es.Search(ctx, s.index, body)
+	if err != nil {
+		return nil, fmt.Errorf("es load by ids: %w", err)
+	}
+	out := make([]IndexDoc, 0, len(resp.Hits.Hits))
+	for _, h := range resp.Hits.Hits {
+		var doc IndexDoc
+		if err := json.Unmarshal(h.Source, &doc); err != nil {
+			return nil, fmt.Errorf("decode hit: %w", err)
+		}
+		out = append(out, doc)
+	}
+	return out, nil
+}
+
 // CountByCategory считает опубликованных спецов в одной категории.
 func (s *Service) CountByCategory(ctx context.Context, code string) (int, error) {
 	if code == "" {

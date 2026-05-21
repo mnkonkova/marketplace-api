@@ -55,11 +55,16 @@ type Result struct {
 
 // Query — то, что приходит из URL. Аналогично search.Query, но с курсором
 // вместо offset (round-robin несимметричен относительно offset).
+//
+// UserIDs — жёсткий список спецов: если непустой, фильтры Q/Categories/
+// SkillSlugs/City игнорируются (юзер уже выбрал кого смотреть на предыдущем
+// шаге — например, через /search или /search/summarize). Лимит ~100.
 type Query struct {
-	Q              string
-	Categories     []string
-	SkillSlugs     []string
-	City           string
-	Cursor         string
-	PerSpecialist  int // максимум видео на одного спеца, default 5
+	Q             string
+	Categories    []string
+	SkillSlugs    []string
+	City          string
+	Cursor        string
+	PerSpecialist int          // максимум видео на одного спеца, default 5
+	UserIDs       []uuid.UUID  // если непустой — жёсткий фильтр по этим спецам
 }

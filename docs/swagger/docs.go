@@ -253,7 +253,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "search text",
+                        "description": "search text (игнорируется если задан ids)",
                         "name": "q",
                         "in": "query"
                     },
@@ -263,7 +263,7 @@ const docTemplate = `{
                             "type": "string"
                         },
                         "collectionFormat": "csv",
-                        "description": "category codes (multi)",
+                        "description": "category codes (multi, csv; игнорируется если задан ids)",
                         "name": "category",
                         "in": "query"
                     },
@@ -273,14 +273,24 @@ const docTemplate = `{
                             "type": "string"
                         },
                         "collectionFormat": "csv",
-                        "description": "skill slugs (multi)",
+                        "description": "skill slugs (multi, csv; игнорируется если задан ids)",
                         "name": "skill",
                         "in": "query"
                     },
                     {
                         "type": "string",
-                        "description": "city",
+                        "description": "city (игнорируется если задан ids)",
                         "name": "city",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "user_id (csv, до 100) — жёсткий фильтр: показывать видео только этих спецов",
+                        "name": "ids",
                         "in": "query"
                     },
                     {
