@@ -37,6 +37,7 @@ CREATE TABLE specialty_categories (
     code        TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    type        TEXT NOT NULL DEFAULT '',
     icon        TEXT,
     sort_order  INTEGER NOT NULL DEFAULT 0
 );
@@ -130,16 +131,16 @@ CREATE TABLE outbox (
 );
 CREATE INDEX outbox_unprocessed_idx ON outbox(created_at) WHERE processed_at IS NULL;
 
-INSERT INTO specialty_categories (code, title, description, sort_order) VALUES
-    ('editor',         'Монтажёр',                    'Видеомонтаж, нарезка, цветокор',                        10),
-    ('video_director', 'Видеоредактор / режиссёр монтажа', 'Концепция, сторителлинг, режиссура монтажа',  20),
-    ('motion',         'Моушн-дизайнер',              'After Effects, анимация, графика, титры',                30),
-    ('scriptwriter',   'Сценарист',                   'Сценарии для роликов, шортсов, рекламы',                 40),
-    ('smm',            'СММ',                         'Ведение соцсетей, контент-планы',                        50),
-    ('ugc',            'UGC-контент',                 'Создание UGC-роликов под бренды',                        60),
-    ('blogger',        'Блогер',                      'Интеграции, нативная реклама',                           70),
-    ('ads_seo',        'Таргет + SEO',                'Настройка таргетированной рекламы и SEO-продвижение',    80),
-    ('seeding',        'Посевы',                      'Посевы в каналах и пабликах',                            90);
+INSERT INTO specialty_categories (code, title, description, type, sort_order) VALUES
+    ('editor',         'Монтажёр',                    'Видеомонтаж, нарезка, цветокор',                        'Производство', 10),
+    ('video_director', 'Видеоредактор / режиссёр монтажа', 'Концепция, сторителлинг, режиссура монтажа',  'Производство', 20),
+    ('motion',         'Моушн-дизайнер',              'After Effects, анимация, графика, титры',                'Производство', 30),
+    ('scriptwriter',   'Сценарист',                   'Сценарии для роликов, шортсов, рекламы',                 'Производство', 40),
+    ('smm',            'СММ',                         'Ведение соцсетей, контент-планы',                        'Продвижение',  50),
+    ('ugc',            'UGC-контент',                 'Создание UGC-роликов под бренды',                        'Производство', 60),
+    ('blogger',        'Блогер',                      'Интеграции, нативная реклама',                           'Продвижение',  70),
+    ('ads_seo',        'Таргет + SEO',                'Настройка таргетированной рекламы и SEO-продвижение',    'Продвижение',  80),
+    ('seeding',        'Посевы',                      'Посевы в каналах и пабликах',                            'Продвижение',  90);
 
 INSERT INTO skills (slug, title, kind) VALUES
     ('premiere',     'Adobe Premiere Pro',  'tool'),

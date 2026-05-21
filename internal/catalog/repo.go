@@ -15,12 +15,13 @@ type Category struct {
 	Code        string `json:"code"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
+	Type        string `json:"type"`
 	Icon        string `json:"icon,omitempty"`
 	SortOrder   int    `json:"sort_order"`
 }
 
 func (r *Repo) ListCategories(ctx context.Context) ([]Category, error) {
-	const q = `SELECT code, title, description, COALESCE(icon, ''), sort_order
+	const q = `SELECT code, title, description, type, COALESCE(icon, ''), sort_order
                FROM specialty_categories ORDER BY sort_order, title`
 	rows, err := r.db.Query(ctx, q)
 	if err != nil {
@@ -31,7 +32,7 @@ func (r *Repo) ListCategories(ctx context.Context) ([]Category, error) {
 	out := make([]Category, 0, 16)
 	for rows.Next() {
 		var c Category
-		if err := rows.Scan(&c.Code, &c.Title, &c.Description, &c.Icon, &c.SortOrder); err != nil {
+		if err := rows.Scan(&c.Code, &c.Title, &c.Description, &c.Type, &c.Icon, &c.SortOrder); err != nil {
 			return nil, fmt.Errorf("scan category: %w", err)
 		}
 		out = append(out, c)
