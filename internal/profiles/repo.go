@@ -4,13 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrNotFound = errors.New("profile not found")
+var (
+	ErrNotFound = errors.New("profile not found")
+	// ErrConflict — клиент прислал PatchInput.UpdatedAt, не совпадающий
+	// с текущим в БД (кто-то параллельно успел сохранить).
+	ErrConflict = errors.New("profile updated_at mismatch")
+)
 
 type Repo struct{ db *pgxpool.Pool }
 
@@ -24,7 +30,8 @@ SELECT p.user_id, p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
        p.is_published, p.rating_avg, p.reviews_count,
-       COALESCE(p.contact_email, ''), COALESCE(p.contact_phone, '')
+       COALESCE(p.contact_email, ''), COALESCE(p.contact_phone, ''),
+       p.updated_at
 FROM specialist_profiles p
 WHERE p.user_id = $1`
 	var p Profile
@@ -34,6 +41,7 @@ WHERE p.user_id = $1`
 		&p.RateMin, &p.RateMax, &p.Currency,
 		&p.IsPublished, &p.RatingAvg, &p.ReviewsCount,
 		&p.ContactEmail, &p.ContactPhone,
+		&p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{}, ErrNotFound
@@ -125,7 +133,8 @@ UPDATE specialist_profiles SET
   contact_email = COALESCE($11, contact_email),
   contact_phone = COALESCE($12, contact_phone),
   updated_at    = now()
-WHERE user_id = $1`
+WHERE user_id = $1
+  AND ($13::timestamptz IS NULL OR updated_at = $13)`
 	tag, err := tx.Exec(ctx, q,
 		userID,
 		in.DisplayName,
@@ -137,11 +146,40 @@ WHERE user_id = $1`
 		in.Currency,
 		in.ContactEmail,
 		in.ContactPhone,
+		in.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("update profile: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		// 0 строк может быть по двум причинам: нет такого профиля или updated_at не совпал.
+		// Если клиент прислал UpdatedAt, считаем что профиль существует (для
+		// авторизованного юзера так и есть) — это конфликт.
+		if in.UpdatedAt != nil {
+			return ErrConflict
+		}
+		return ErrNotFound
+	}
+	return nil
+}
+
+// LockProfileForUpdateInTx бампит updated_at родительского профиля и берёт
+// row-level лок до конца транзакции. Если expected != nil — проверяет,
+// что прежнее updated_at совпадает (optimistic concurrency check для
+// PUT /me/profile/{categories,skills} и т.п., где DELETE+INSERT не
+// защищён от lost-update).
+func (r *Repo) LockProfileForUpdateInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, expected *time.Time) error {
+	tag, err := tx.Exec(ctx,
+		`UPDATE specialist_profiles SET updated_at = now()
+		 WHERE user_id = $1 AND ($2::timestamptz IS NULL OR updated_at = $2)`,
+		userID, expected)
+	if err != nil {
+		return fmt.Errorf("lock profile: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if expected != nil {
+			return ErrConflict
+		}
 		return ErrNotFound
 	}
 	return nil

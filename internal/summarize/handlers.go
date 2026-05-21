@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"marketpclce/internal/httpx"
 	"marketpclce/internal/llm"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/search"
@@ -65,7 +66,7 @@ type request struct {
 func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 	q := search.Query{
@@ -87,7 +88,7 @@ func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 	if cached, ok := h.cache.Get(r.Context(), q); ok {
 		cached.Cached = true
 		h.attachCategoryTotal(r.Context(), &cached, targetCategory)
-		writeJSON(w, http.StatusOK, cached)
+		httpx.WriteJSON(w, http.StatusOK, cached)
 		return
 	}
 
@@ -95,7 +96,7 @@ func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 		err := h.rl.Allow(r.Context(), "summarize", ratelimit.ClientIP(r), h.rlWindows)
 		if rlErr, ok := ratelimit.IsRateLimited(err); ok {
 			w.Header().Set("Retry-After", strconv.Itoa(int(rlErr.RetryAfter.Seconds())))
-			writeErr(w, http.StatusTooManyRequests, "rate_limited")
+			httpx.WriteErr(w, http.StatusTooManyRequests, "rate_limited")
 			return
 		}
 		if err != nil {
@@ -111,13 +112,13 @@ func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.Error("summarize", "err", err)
 		}
-		writeErr(w, http.StatusBadGateway, "summarize_failed")
+		httpx.WriteErr(w, http.StatusBadGateway, "summarize_failed")
 		return
 	}
 
 	h.cache.Set(r.Context(), q, res)
 	h.attachCategoryTotal(r.Context(), &res, targetCategory)
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 // attachCategoryTotal дорисовывает total_in_category. Ошибку count'а проглатываем —
@@ -135,15 +136,6 @@ func (h *Handler) attachCategoryTotal(ctx context.Context, res *Result, targetCa
 	res.TotalInCategory = n
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorResponse{Error: msg})
-}
 
 type errorResponse struct {
 	Error string `json:"error"`

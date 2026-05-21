@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"marketpclce/internal/auth"
+	"marketpclce/internal/httpx"
 )
 
 type Handler struct{ svc *Service }
@@ -43,7 +44,7 @@ type createReq struct {
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var in createReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 
@@ -51,7 +52,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range in.SpecialistIDs {
 		id, err := uuid.Parse(strings.TrimSpace(raw))
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_specialist_id")
+			httpx.WriteErr(w, http.StatusBadRequest, "bad_specialist_id")
 			return
 		}
 		ids = append(ids, id)
@@ -61,7 +62,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if s := strings.TrimSpace(in.Deadline); s != "" {
 		d, err := time.Parse("2006-01-02", s)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_deadline")
+			httpx.WriteErr(w, http.StatusBadRequest, "bad_deadline")
 			return
 		}
 		deadline = &d
@@ -85,16 +86,16 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNoSpecialists):
-		writeErr(w, http.StatusBadRequest, "no_valid_specialists")
+		httpx.WriteErr(w, http.StatusBadRequest, "no_valid_specialists")
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	default:
 		// Ответ включает контакты выбранных спецов — эту ветку видит ТОЛЬКО
 		// менеджер/клиент, который только что создал заявку. В feed/search/
 		// публичный профиль контакты не уезжают (см. profiles.PublicProfile).
-		writeJSON(w, http.StatusCreated, res)
+		httpx.WriteJSON(w, http.StatusCreated, res)
 	}
 }
 
@@ -113,7 +114,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
 		return
 	}
 	v := r.URL.Query()
@@ -124,13 +125,13 @@ func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.ListIncoming(r.Context(), uid, status, limit, offset)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 		return
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 type recipientReq struct {
@@ -153,29 +154,29 @@ type recipientReq struct {
 func (h *Handler) UpdateRecipient(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
 		return
 	}
 	leadID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_lead_id")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_lead_id")
 		return
 	}
 	var in recipientReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 	err = h.svc.UpdateRecipientStatus(r.Context(), leadID, uid, in.Status)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrRecipientMissing):
-		writeErr(w, http.StatusNotFound, "recipient_not_found")
+		httpx.WriteErr(w, http.StatusNotFound, "recipient_not_found")
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	default:
-		writeJSON(w, http.StatusOK, map[string]string{"status": in.Status})
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": in.Status})
 	}
 }
 
@@ -190,15 +191,6 @@ func atoi(s string, def int) int {
 	return n
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorResponse{Error: msg})
-}
 
 // типы для swaggo
 type errorResponse struct {

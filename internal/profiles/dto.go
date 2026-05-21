@@ -71,6 +71,10 @@ type Profile struct {
 	Categories    []string  `json:"categories"`
 	PrimaryCategory string  `json:"primary_category,omitempty"`
 	SkillIDs      []string  `json:"skill_ids"`
+	// UpdatedAt — версия профиля для optimistic locking.
+	// Клиент должен прислать это значение обратно в PatchInput.UpdatedAt,
+	// чтобы защититься от lost-update при параллельных PATCH'ах.
+	UpdatedAt     time.Time `json:"updated_at"`
 	// Контакты для прямой связи. Возвращаются только владельцу профиля
 	// (через /me/profile) и менеджеру после создания заявки (см. /leads).
 	// В публичные DTO (PublicProfile, search.IndexDoc, feed.Specialist) НЕ
@@ -89,15 +93,24 @@ type PatchInput struct {
 	Currency     *string `json:"currency"`
 	ContactEmail *string `json:"contact_email"`
 	ContactPhone *string `json:"contact_phone"`
+	// UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.
+	// Несовпадение → 409 conflict (кто-то параллельно отредактировал).
+	// Без поля — старый небезопасный поведение для обратной совместимости.
+	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
 }
 
 type SetCategoriesInput struct {
 	Codes   []string `json:"codes"`
 	Primary string   `json:"primary"`
+	// UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.
+	// Если задан — несовпадение → 409. Без поля — старое поведение.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 type SetSkillsInput struct {
 	SkillIDs []string `json:"skill_ids"`
+	// UpdatedAt — см. SetCategoriesInput.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // PortfolioCreateInput — добавление видео в портфолио. URL-форма (юзер сам

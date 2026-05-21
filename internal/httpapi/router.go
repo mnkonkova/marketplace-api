@@ -41,9 +41,10 @@ type Deps struct {
 
 	CORSOrigins []string
 
-	Limiter      *ratelimit.Limiter
-	ReadWindows  []ratelimit.Window
-	LeadsWindows []ratelimit.Window
+	Limiter         *ratelimit.Limiter
+	ReadWindows     []ratelimit.Window
+	LeadsWindows    []ratelimit.Window
+	ClarifyWindows  []ratelimit.Window
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -88,7 +89,10 @@ func NewRouter(d Deps) http.Handler {
 
 		r.Post("/search/summarize", d.Summarize.Summarize)
 		if d.Clarify != nil {
-			r.Post("/clarify", d.Clarify.Clarify)
+			r.Group(func(r chi.Router) {
+				r.Use(RateLimit(d.Limiter, "clarify", d.ClarifyWindows))
+				r.Post("/clarify", d.Clarify.Clarify)
+			})
 		}
 
 		r.Group(func(r chi.Router) {

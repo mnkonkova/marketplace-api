@@ -1,10 +1,11 @@
 package search
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"marketpclce/internal/httpx"
 )
 
 type Handler struct{ svc *Service }
@@ -31,10 +32,10 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	q := parseQuery(r)
 	res, err := h.svc.Search(r.Context(), q)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "search_unavailable")
+		httpx.WriteErr(w, http.StatusBadGateway, "search_unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 // CategoryStats godoc
@@ -47,10 +48,10 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CategoryStats(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.CategoryStats(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "search_unavailable")
+		httpx.WriteErr(w, http.StatusBadGateway, "search_unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func parseQuery(r *http.Request) Query {
@@ -97,15 +98,6 @@ func splitCSV(values []string) []string {
 	return out
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorResponse{Error: msg})
-}
 
 type errorResponse struct {
 	Error string `json:"error"`

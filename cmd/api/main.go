@@ -196,6 +196,10 @@ func main() {
 			{Limit: cfg.RateLeadsPerMin, Period: time.Minute},
 			{Limit: cfg.RateLeadsPerHour, Period: time.Hour},
 		},
+		ClarifyWindows: []ratelimit.Window{
+			{Limit: cfg.RateClarifyPerMin, Period: time.Minute},
+			{Limit: cfg.RateClarifyPerHour, Period: time.Hour},
+		},
 	})
 
 	srv := &http.Server{

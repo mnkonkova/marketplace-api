@@ -158,6 +158,9 @@ func (s *Service) SetCategories(ctx context.Context, userID uuid.UUID, in SetCat
 	}
 
 	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.LockProfileForUpdateInTx(ctx, tx, userID, in.UpdatedAt); err != nil {
+			return err
+		}
 		if err := s.repo.ReplaceCategoriesInTx(ctx, tx, userID, codes, in.Primary); err != nil {
 			return err
 		}
@@ -194,6 +197,9 @@ func (s *Service) SetSkills(ctx context.Context, userID uuid.UUID, in SetSkillsI
 	}
 
 	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.LockProfileForUpdateInTx(ctx, tx, userID, in.UpdatedAt); err != nil {
+			return err
+		}
 		if err := s.repo.ReplaceSkillsInTx(ctx, tx, userID, ids); err != nil {
 			return err
 		}

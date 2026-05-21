@@ -50,6 +50,8 @@ type Config struct {
 	SummarizeCacheTTL    time.Duration `env:"SUMMARIZE_CACHE_TTL" envDefault:"10m"`
 	RateSummarizePerMin  int           `env:"RATE_SUMMARIZE_PER_MIN" envDefault:"5"`
 	RateSummarizePerHour int           `env:"RATE_SUMMARIZE_PER_HOUR" envDefault:"30"`
+	RateClarifyPerMin    int           `env:"RATE_CLARIFY_PER_MIN" envDefault:"15"`
+	RateClarifyPerHour   int           `env:"RATE_CLARIFY_PER_HOUR" envDefault:"120"`
 	RateReadPerMin       int           `env:"RATE_READ_PER_MIN" envDefault:"60"`
 	RateReadPerHour      int           `env:"RATE_READ_PER_HOUR" envDefault:"600"`
 	RateLeadsPerMin      int           `env:"RATE_LEADS_PER_MIN" envDefault:"5"`

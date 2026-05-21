@@ -1,10 +1,11 @@
 package feed
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"marketpclce/internal/httpx"
 )
 
 type Handler struct{ svc *Service }
@@ -29,10 +30,10 @@ func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
 	q := parseQuery(r)
 	res, err := h.svc.Feed(r.Context(), q)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "feed_unavailable"})
+		httpx.WriteErr(w, http.StatusBadGateway, "feed_unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func parseQuery(r *http.Request) Query {
@@ -65,13 +66,7 @@ func splitCSV(values []string) []string {
 	return out
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-// feedError — форма ошибки для swaggo. Сам handler пишет такую же структуру вручную.
+// feedError — форма ошибки для swaggo.
 type feedError struct {
 	Error string `json:"error"`
 }

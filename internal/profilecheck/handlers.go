@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"marketpclce/internal/auth"
+	"marketpclce/internal/httpx"
 	"marketpclce/internal/llm"
 )
 
@@ -48,12 +49,12 @@ type checkReq struct {
 func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
 		return
 	}
 	var in checkReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 
@@ -73,10 +74,10 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, ErrEmptyInput):
-		writeErr(w, http.StatusBadRequest, "empty_input")
+		httpx.WriteErr(w, http.StatusBadRequest, "empty_input")
 		return
 	case errors.Is(err, ErrLLMDisabled):
-		writeErr(w, http.StatusServiceUnavailable, "llm_disabled")
+		httpx.WriteErr(w, http.StatusServiceUnavailable, "llm_disabled")
 		return
 	case err != nil:
 		var apiErr *llm.APIError
@@ -85,21 +86,12 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.Error("profilecheck", "err", err)
 		}
-		writeErr(w, http.StatusBadGateway, "check_failed")
+		httpx.WriteErr(w, http.StatusBadGateway, "check_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorResponse{Error: msg})
-}
 
 type errorResponse struct {
 	Error string `json:"error"`

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"marketpclce/internal/httpx"
 	"marketpclce/internal/llm"
 )
 
@@ -34,18 +35,18 @@ type request struct {
 func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 	if len(in.History) == 0 {
-		writeErr(w, http.StatusBadRequest, "empty_history")
+		httpx.WriteErr(w, http.StatusBadRequest, "empty_history")
 		return
 	}
 
 	res, err := h.svc.Run(r.Context(), Input{Category: in.Category, History: in.History})
 	switch {
 	case errors.Is(err, ErrLLMDisabled):
-		writeErr(w, http.StatusServiceUnavailable, "llm_disabled")
+		httpx.WriteErr(w, http.StatusServiceUnavailable, "llm_disabled")
 		return
 	case err != nil:
 		var apiErr *llm.APIError
@@ -68,13 +69,13 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 			if in.Category != "" {
 				fallback.Search.Categories = []string{in.Category}
 			}
-			writeJSON(w, http.StatusOK, fallback)
+			httpx.WriteJSON(w, http.StatusOK, fallback)
 			return
 		}
-		writeErr(w, http.StatusBadGateway, "clarify_failed")
+		httpx.WriteErr(w, http.StatusBadGateway, "clarify_failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 func lastUserText(history []Message) string {
@@ -87,16 +88,6 @@ func lastUserText(history []Message) string {
 		}
 	}
 	return ""
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorResponse{Error: msg})
 }
 
 type errorResponse struct {

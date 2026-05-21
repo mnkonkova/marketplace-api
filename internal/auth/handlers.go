@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+
+	"marketpclce/internal/httpx"
 )
 
 type Handler struct{ svc *Service }
@@ -36,7 +38,7 @@ type registerResp struct {
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var in registerReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 	res, err := h.svc.Register(r.Context(), RegisterInput{
@@ -48,16 +50,16 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		writeErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 		return
 	case errors.Is(err, ErrAlreadyExists):
-		writeErr(w, http.StatusConflict, "user_exists")
+		httpx.WriteErr(w, http.StatusConflict, "user_exists")
 		return
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	writeJSON(w, http.StatusCreated, registerResp{UserID: res.UserID.String(), Tokens: res.Tokens})
+	httpx.WriteJSON(w, http.StatusCreated, registerResp{UserID: res.UserID.String(), Tokens: res.Tokens})
 }
 
 type loginReq struct {
@@ -78,22 +80,22 @@ type loginReq struct {
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var in loginReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 	pair, err := h.svc.Login(r.Context(), in.Login, in.Password)
 	switch {
 	case errors.Is(err, ErrBadCredentials):
-		writeErr(w, http.StatusUnauthorized, "bad_credentials")
+		httpx.WriteErr(w, http.StatusUnauthorized, "bad_credentials")
 		return
 	case errors.Is(err, ErrInactive):
-		writeErr(w, http.StatusForbidden, "inactive")
+		httpx.WriteErr(w, http.StatusForbidden, "inactive")
 		return
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	writeJSON(w, http.StatusOK, pair)
+	httpx.WriteJSON(w, http.StatusOK, pair)
 }
 
 type refreshReq struct {
@@ -112,15 +114,15 @@ type refreshReq struct {
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var in refreshReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
 	pair, err := h.svc.Refresh(r.Context(), in.RefreshToken)
 	if err != nil {
-		writeErr(w, http.StatusUnauthorized, "invalid_token")
+		httpx.WriteErr(w, http.StatusUnauthorized, "invalid_token")
 		return
 	}
-	writeJSON(w, http.StatusOK, pair)
+	httpx.WriteJSON(w, http.StatusOK, pair)
 }
 
 type meResp struct {
@@ -142,26 +144,17 @@ type meResp struct {
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFrom(r.Context())
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
 		return
 	}
 	u, err := h.svc.GetUser(r.Context(), uid)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not_found")
+		httpx.WriteErr(w, http.StatusNotFound, "not_found")
 		return
 	}
-	writeJSON(w, http.StatusOK, meResp{UserID: u.ID.String(), Email: u.Email, Phone: u.Phone, Kind: u.Kind})
+	httpx.WriteJSON(w, http.StatusOK, meResp{UserID: u.ID.String(), Email: u.Email, Phone: u.Phone, Kind: u.Kind})
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func writeErr(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorResponse{Error: msg})
-}
 
 // errorResponse — стандартная форма ошибки `{ "error": "..." }`. Объявлено
 // тут, чтобы swaggo подхватил тип в @Failure.
