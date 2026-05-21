@@ -48,6 +48,7 @@ type Config struct {
 	JWTRefreshTTL time.Duration `env:"JWT_REFRESH_TTL" envDefault:"720h"`
 
 	SummarizeCacheTTL    time.Duration `env:"SUMMARIZE_CACHE_TTL" envDefault:"10m"`
+	FeedCacheTTL         time.Duration `env:"FEED_CACHE_TTL" envDefault:"30s"`
 	RateSummarizePerMin  int           `env:"RATE_SUMMARIZE_PER_MIN" envDefault:"5"`
 	RateSummarizePerHour int           `env:"RATE_SUMMARIZE_PER_HOUR" envDefault:"30"`
 	RateClarifyPerMin    int           `env:"RATE_CLARIFY_PER_MIN" envDefault:"15"`

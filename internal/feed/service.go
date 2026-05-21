@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -33,16 +34,34 @@ const searchPageSize = 50
 type Service struct {
 	search *search.Service
 	repo   *Repo
+	cache  *Cache
 }
 
 func NewService(searchSvc *search.Service, repo *Repo) *Service {
 	return &Service{search: searchSvc, repo: repo}
 }
 
+// WithCache подключает Redis-кэш страниц. nil-safe: без вызова Service
+// работает без кэша. main подключает только если redis-клиент доступен.
+func (s *Service) WithCache(c *Cache) *Service {
+	s.cache = c
+	return s
+}
+
 type cursorPayload struct {
 	// Offset — индекс в локально пересортированном пуле спецов-с-видео.
 	Offset int `json:"o"`
+	// Seen — user_id'шки, уже отданные в предыдущих страницах. Защита от
+	// дублей при параллельных правках портфолио (новое видео переставляет
+	// спеца в пуле, без seen клиент бы увидел его дважды). Хранится последние
+	// до cursorSeenCap записей, FIFO. Для очень глубоких сессий лимит может
+	// не вместить всех — это даст редкий дубль, но не растёт безгранично.
+	Seen []string `json:"s,omitempty"`
 }
+
+// cursorSeenCap — потолок размера seen-сета в курсоре. ~200 user_id в base64
+// JSON ≈ 7-8 KB, безопасно ходить в URL query.
+const cursorSeenCap = 200
 
 func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 	if q.PerSpecialist <= 0 || q.PerSpecialist > maxPerSpecialist {
@@ -58,17 +77,25 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 		q.Q = ""
 	}
 
-	offset := 0
+	// Кэш-чек до тяжёлых запросов в ES/PG. /feed публичный, контента под
+	// одну и ту же URL никто не персонализирует — кэшируем по форме запроса.
+	if cached, ok := s.cache.Get(ctx, q); ok {
+		return cached, nil
+	}
+
+	var cursor cursorPayload
 	if q.Cursor != "" {
-		var c cursorPayload
 		raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 		if err != nil {
 			return Result{}, fmt.Errorf("decode cursor: %w", err)
 		}
-		if err := json.Unmarshal(raw, &c); err != nil {
+		if err := json.Unmarshal(raw, &cursor); err != nil {
 			return Result{}, fmt.Errorf("parse cursor: %w", err)
 		}
-		offset = c.Offset
+	}
+	seen := make(map[string]struct{}, len(cursor.Seen))
+	for _, id := range cursor.Seen {
+		seen[id] = struct{}{}
 	}
 
 	allDocs, totalMatched, err := s.fetchCandidates(ctx, q)
@@ -109,21 +136,39 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 		if len(vids) == 0 {
 			continue
 		}
+		// Дедуп по seen — спеца уже видели на предыдущих страницах,
+		// не показываем снова даже если пул сместился из-за новых видео.
+		if _, dup := seen[doc.UserID]; dup {
+			continue
+		}
 		pool = append(pool, ranked{doc: doc, vids: vids})
 	}
+	// Ранжирование: rating_avg DESC, потом last_video_at DESC (свежее видео
+	// выше), потом стабильный tiebreaker по user_id чтобы порядок между
+	// страницами не плавал при равных значениях.
 	sort.SliceStable(pool, func(i, j int) bool {
-		return pool[i].doc.RatingAvg > pool[j].doc.RatingAvg
+		a, b := pool[i].doc, pool[j].doc
+		if a.RatingAvg != b.RatingAvg {
+			return a.RatingAvg > b.RatingAvg
+		}
+		ai := timeOrZero(a.LastVideoAt)
+		bi := timeOrZero(b.LastVideoAt)
+		if !ai.Equal(bi) {
+			return ai.After(bi)
+		}
+		return a.UserID < b.UserID
 	})
 
-	// 4) пагинация по slice'у. Курсор — индекс начала следующей страницы в pool.
-	if offset >= len(pool) {
+	// 4) пагинация: берём первые specialistsPerPage из отфильтрованного пула.
+	// Дедуп по seen уже сделан выше, offset больше не нужен.
+	if len(pool) == 0 {
 		return Result{Items: []Item{}, Total: totalMatched}, nil
 	}
-	end := offset + specialistsPerPage
+	end := specialistsPerPage
 	if end > len(pool) {
 		end = len(pool)
 	}
-	page := pool[offset:end]
+	page := pool[:end]
 
 	// 5) round-robin внутри страницы: round 0 — первое видео каждого спеца,
 	//    round 1 — второе и т.д.
@@ -143,11 +188,25 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 	}
 
 	out := Result{Items: items, Total: totalMatched}
+	// Курсор есть смысл отдавать, только если в пуле осталось ещё что-то
+	// после текущей страницы (а в /feed?ids= ещё и есть смысл вообще делать
+	// next-page: ids ограничены и могут целиком влезть в одну страницу).
 	if end < len(pool) {
-		next := cursorPayload{Offset: end}
+		// Новый seen = старый + user_id'шки текущей страницы, с FIFO-отрезанием
+		// до cursorSeenCap. На очень длинных сессиях старые id будут выпадать;
+		// это даст редкий дубль, но не блокирует пагинацию.
+		newSeen := append([]string(nil), cursor.Seen...)
+		for _, r := range page {
+			newSeen = append(newSeen, r.doc.UserID)
+		}
+		if over := len(newSeen) - cursorSeenCap; over > 0 {
+			newSeen = newSeen[over:]
+		}
+		next := cursorPayload{Seen: newSeen}
 		raw, _ := json.Marshal(next)
 		out.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
 	}
+	s.cache.Set(ctx, q, out)
 	return out, nil
 }
 
@@ -217,6 +276,13 @@ func (s *Service) fetchCandidates(ctx context.Context, q Query) ([]search.IndexD
 		}
 	}
 	return allDocs, totalMatched, nil
+}
+
+func timeOrZero(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
 }
 
 func specFromDoc(d search.IndexDoc) Specialist {

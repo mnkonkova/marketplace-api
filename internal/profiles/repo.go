@@ -386,9 +386,10 @@ func (r *Repo) ListPortfolio(ctx context.Context, userID uuid.UUID) ([]Portfolio
 	return r.listPortfolio(ctx, userID)
 }
 
-// CreatePortfolioVideo — добавляет видео-айтем. sort_order выставляем на
-// MAX+1, чтобы новое видео было в конце списка (юзер потом перемешает).
-func (r *Repo) CreatePortfolioVideo(ctx context.Context, userID uuid.UUID, in PortfolioCreateInput) (PortfolioItem, error) {
+// CreatePortfolioVideoInTx — добавляет видео-айтем внутри переданной
+// транзакции. Вызывающий код в одной tx эмитит outbox-событие, чтобы
+// ES-индекс спеца (last_video_at) обновился атомарно с записью в PG.
+func (r *Repo) CreatePortfolioVideoInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, in PortfolioCreateInput) (PortfolioItem, error) {
 	const q = `
 INSERT INTO portfolio_items (
     user_id, title, description,
@@ -421,7 +422,7 @@ RETURNING id, title, description,
 	if aspect == "" {
 		aspect = "9:16"
 	}
-	err := r.db.QueryRow(ctx, q,
+	err := tx.QueryRow(ctx, q,
 		userID, in.Title, in.Description,
 		in.VideoURL, in.ThumbnailURL,
 		cats,
@@ -437,13 +438,12 @@ RETURNING id, title, description,
 	return p, nil
 }
 
-// UpdatePortfolioCategories — переписывает category_codes у видео-айтема,
-// принадлежащего userID. Возвращает обновлённую запись (как POST), чтобы
-// фронт мог переиспользовать рендер.
+// UpdatePortfolioCategoriesInTx — переписывает category_codes у видео-айтема
+// внутри переданной транзакции. См. CreatePortfolioVideoInTx про outbox.
 // Если expectedUpdatedAt != nil, добавляется optimistic-lock проверка
 // updated_at = expected. ErrConflict если версия устарела, ErrNotFound
 // если записи нет или она чужая.
-func (r *Repo) UpdatePortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string, expectedUpdatedAt *time.Time) (PortfolioItem, error) {
+func (r *Repo) UpdatePortfolioCategoriesInTx(ctx context.Context, tx pgx.Tx, userID, itemID uuid.UUID, codes []string, expectedUpdatedAt *time.Time) (PortfolioItem, error) {
 	if codes == nil {
 		codes = []string{}
 	}
@@ -457,7 +457,7 @@ RETURNING id, title, description,
           COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
           category_codes, sort_order, created_at, updated_at`
 	var p PortfolioItem
-	err := r.db.QueryRow(ctx, q, itemID, userID, codes, expectedUpdatedAt).Scan(
+	err := tx.QueryRow(ctx, q, itemID, userID, codes, expectedUpdatedAt).Scan(
 		&p.ID, &p.Title, &p.Description,
 		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
@@ -478,11 +478,12 @@ RETURNING id, title, description,
 	return p, nil
 }
 
-// DeletePortfolioItem — удаляет видео если оно принадлежит userID.
+// DeletePortfolioItemInTx — удаляет видео внутри tx. Outbox-эмиссия в той же
+// tx, чтобы ES (last_video_at у спеца) обновился атомарно.
 // Возвращает ErrNotFound если запись не найдена/чужая (без утечки factов
 // о существовании чужих ID).
-func (r *Repo) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.UUID) error {
-	tag, err := r.db.Exec(ctx,
+func (r *Repo) DeletePortfolioItemInTx(ctx context.Context, tx pgx.Tx, userID, itemID uuid.UUID) error {
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM portfolio_items WHERE id = $1 AND user_id = $2`,
 		itemID, userID)
 	if err != nil {

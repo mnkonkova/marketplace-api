@@ -356,11 +356,32 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		return PortfolioItem{}, fmt.Errorf("%w: max %d videos", ErrInvalidInput, portfolioMaxVideosPerUser)
 	}
 
-	return s.repo.CreatePortfolioVideo(ctx, userID, in)
+	var item PortfolioItem
+	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		item, txErr = s.repo.CreatePortfolioVideoInTx(ctx, tx, userID, in)
+		if txErr != nil {
+			return txErr
+		}
+		// Outbox-событие: воркер переиндексирует ES-документ спеца,
+		// в т.ч. last_video_at — это критично для /feed ранжирования.
+		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+	})
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	return item, nil
 }
 
 func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.UUID) error {
-	return s.repo.DeletePortfolioItem(ctx, userID, itemID)
+	return s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.DeletePortfolioItemInTx(ctx, tx, userID, itemID); err != nil {
+			return err
+		}
+		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+	})
 }
 
 // SetPortfolioCategories — обновляет category_codes у видео-айтема.
@@ -383,7 +404,20 @@ func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uui
 			return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
 		}
 	}
-	return s.repo.UpdatePortfolioCategories(ctx, userID, itemID, codes, expectedUpdatedAt)
+	var item PortfolioItem
+	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		item, txErr = s.repo.UpdatePortfolioCategoriesInTx(ctx, tx, userID, itemID, codes, expectedUpdatedAt)
+		if txErr != nil {
+			return txErr
+		}
+		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+	})
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	return item, nil
 }
 
 // CreatePortfolioUploadURL — выдаёт presigned PUT URL для прямого аплоада в S3.

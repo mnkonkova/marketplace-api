@@ -2706,6 +2706,10 @@ const docTemplate = `{
                 "is_published": {
                     "type": "boolean"
                 },
+                "last_video_at": {
+                    "description": "LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.\nИспользуется /feed для tie-breaker'а после rating_avg.",
+                    "type": "string"
+                },
                 "primary_category": {
                     "type": "string"
                 },
@@ -2921,6 +2925,10 @@ const docTemplate = `{
                 },
                 "is_published": {
                     "type": "boolean"
+                },
+                "last_video_at": {
+                    "description": "LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.\nИспользуется /feed для tie-breaker'а после rating_avg.",
+                    "type": "string"
                 },
                 "primary_category": {
                     "type": "string"

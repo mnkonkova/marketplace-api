@@ -125,6 +125,9 @@ func main() {
 
 	feedRepo := feed.NewRepo(pool)
 	feedSvc := feed.NewService(searchSvc, feedRepo)
+	if rdb != nil {
+		feedSvc.WithCache(feed.NewCache(rdb, cfg.FeedCacheTTL))
+	}
 	feedHandler := feed.NewHandler(feedSvc)
 
 	llmClient, err := llm.NewProvider(llm.ProviderConfig{
