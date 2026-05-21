@@ -508,6 +508,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_leads.errorResponse"
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_leads.errorResponse"
+                        }
                     }
                 }
             }
@@ -747,6 +753,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
                     }
                 }
             }
@@ -837,6 +849,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
                         }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
                     }
                 }
             }
@@ -884,6 +902,18 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
                         }
@@ -1039,6 +1069,18 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
                         }
@@ -1305,6 +1347,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_reviews.errResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_reviews.errResponse"
                         }
@@ -1684,6 +1732,9 @@ const docTemplate = `{
                 },
                 "title": {
                     "type": "string"
+                },
+                "type": {
+                    "type": "string"
                 }
             }
         },
@@ -1968,6 +2019,10 @@ const docTemplate = `{
                 "recipient_status": {
                     "type": "string"
                 },
+                "recipient_updated_at": {
+                    "description": "RecipientUpdatedAt — версия lead_recipients для optimistic-lock в PATCH.",
+                    "type": "string"
+                },
                 "status": {
                     "type": "string"
                 },
@@ -2048,6 +2103,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "description": "UpdatedAt — optimistic-lock версия lead_recipients.updated_at,\nприслана фронтом из последнего GET /me/leads/incoming\n(поле recipient_updated_at). Несовпадение → 409.",
                     "type": "string"
                 }
             }
@@ -2170,6 +2229,10 @@ const docTemplate = `{
                 },
                 "rate_min": {
                     "type": "integer"
+                },
+                "updated_at": {
+                    "description": "UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.\nНесовпадение → 409 conflict (кто-то параллельно отредактировал).\nБез поля — старый небезопасный поведение для обратной совместимости.",
+                    "type": "string"
                 }
             }
         },
@@ -2232,6 +2295,9 @@ const docTemplate = `{
                 "title": {
                     "type": "string"
                 },
+                "updated_at": {
+                    "type": "string"
+                },
                 "video_url": {
                     "type": "string"
                 }
@@ -2245,6 +2311,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "updated_at": {
+                    "description": "UpdatedAt — optimistic-lock версия portfolio_items.updated_at.\nНесовпадение → 409. Без поля — старое поведение.",
+                    "type": "string"
                 }
             }
         },
@@ -2334,6 +2404,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "updated_at": {
+                    "description": "UpdatedAt — версия профиля для optimistic locking.\nКлиент должен прислать это значение обратно в PatchInput.UpdatedAt,\nчтобы защититься от lost-update при параллельных PATCH'ах.",
+                    "type": "string"
                 },
                 "user_id": {
                     "type": "string"
@@ -2430,6 +2504,10 @@ const docTemplate = `{
                 },
                 "primary": {
                     "type": "string"
+                },
+                "updated_at": {
+                    "description": "UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.\nЕсли задан — несовпадение → 409. Без поля — старое поведение.",
+                    "type": "string"
                 }
             }
         },
@@ -2441,6 +2519,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "updated_at": {
+                    "description": "UpdatedAt — см. SetCategoriesInput.",
+                    "type": "string"
                 }
             }
         },
@@ -2506,6 +2588,9 @@ const docTemplate = `{
                 },
                 "text": {
                     "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },
@@ -2516,6 +2601,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "text": {
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }

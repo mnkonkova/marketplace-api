@@ -77,7 +77,6 @@ func NewRouter(d Deps) http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(RateLimit(d.Limiter, "read", d.ReadWindows))
-			r.Get("/specialists", d.Search.Search)
 			r.Get("/specialists/{id}", d.Profiles.Public)
 			r.Get("/search", d.Search.Search)
 			r.Get("/categories/stats", d.Search.CategoryStats)

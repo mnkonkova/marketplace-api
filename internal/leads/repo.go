@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,8 +13,10 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("lead not found")
+	ErrNotFound         = errors.New("lead not found")
 	ErrRecipientMissing = errors.New("recipient not found")
+	// ErrConflict — PATCH /me/leads/{id}/recipient прислал устаревший updated_at.
+	ErrConflict = errors.New("recipient updated_at mismatch")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -109,7 +112,7 @@ SELECT l.id, l.client_user_id, l.client_name, l.client_contact, l.brief,
        COALESCE(l.target_category_code, ''),
        l.status, l.created_at,
        (SELECT COUNT(*) FROM lead_recipients WHERE lead_id = l.id),
-       lr.status, lr.responded_at
+       lr.status, lr.responded_at, lr.updated_at
 FROM leads l
 JOIN lead_recipients lr ON lr.lead_id = l.id
 WHERE lr.specialist_user_id = $1`
@@ -135,7 +138,7 @@ WHERE lr.specialist_user_id = $1`
 			&l.BudgetMin, &l.BudgetMax, &l.Deadline,
 			&l.TargetCategoryCode, &l.Status, &l.CreatedAt,
 			&l.RecipientCount,
-			&l.RecipientStatus, &l.RecipientRespondedAt,
+			&l.RecipientStatus, &l.RecipientRespondedAt, &l.RecipientUpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan incoming: %w", err)
 		}
@@ -144,16 +147,33 @@ WHERE lr.specialist_user_id = $1`
 	return out, rows.Err()
 }
 
-func (r *Repo) UpdateRecipientStatus(ctx context.Context, leadID, specialistID uuid.UUID, status string) error {
+// UpdateRecipientStatus меняет статус получателя по лиду. Если
+// expectedUpdatedAt != nil, делает optimistic-lock проверку updated_at.
+// 0 строк → различаем NotFound vs Conflict через probe.
+func (r *Repo) UpdateRecipientStatus(ctx context.Context, leadID, specialistID uuid.UUID, status string, expectedUpdatedAt *time.Time) error {
 	tag, err := r.db.Exec(ctx, `
 UPDATE lead_recipients
-SET status = $3, responded_at = now()
-WHERE lead_id = $1 AND specialist_user_id = $2`,
-		leadID, specialistID, status)
+SET status = $3, responded_at = now(), updated_at = now()
+WHERE lead_id = $1 AND specialist_user_id = $2
+  AND ($4::timestamptz IS NULL OR updated_at = $4)`,
+		leadID, specialistID, status, expectedUpdatedAt)
 	if err != nil {
 		return fmt.Errorf("update recipient: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		if expectedUpdatedAt != nil {
+			// Различаем: строка отсутствует (404) vs устарел updated_at (409).
+			var exists bool
+			if err := r.db.QueryRow(ctx,
+				`SELECT EXISTS(SELECT 1 FROM lead_recipients
+				                WHERE lead_id = $1 AND specialist_user_id = $2)`,
+				leadID, specialistID).Scan(&exists); err != nil {
+				return fmt.Errorf("probe recipient: %w", err)
+			}
+			if exists {
+				return ErrConflict
+			}
+		}
 		return ErrRecipientMissing
 	}
 	return nil

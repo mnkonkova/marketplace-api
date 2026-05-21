@@ -15,6 +15,7 @@ type Review struct {
 	Rating       int        `json:"rating"`
 	Text         string     `json:"text"`
 	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type CreateInput struct {
@@ -27,6 +28,7 @@ type CreateInput struct {
 }
 
 type UpdateInput struct {
-	Rating *int    `json:"rating"`
-	Text   *string `json:"text"`
+	Rating    *int       `json:"rating"`
+	Text      *string    `json:"text"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }

@@ -91,13 +91,13 @@ func (s *Service) ListIncoming(ctx context.Context, specialistID uuid.UUID, stat
 	return s.repo.ListIncoming(ctx, specialistID, status, limit, offset)
 }
 
-func (s *Service) UpdateRecipientStatus(ctx context.Context, leadID, specialistID uuid.UUID, status string) error {
+func (s *Service) UpdateRecipientStatus(ctx context.Context, leadID, specialistID uuid.UUID, status string, expectedUpdatedAt *time.Time) error {
 	switch status {
 	case RecipientStatusViewed, RecipientStatusAccepted, RecipientStatusDeclined:
 	default:
 		return fmt.Errorf("%w: status must be viewed, accepted or declined", ErrInvalidInput)
 	}
-	return s.repo.UpdateRecipientStatus(ctx, leadID, specialistID, status)
+	return s.repo.UpdateRecipientStatus(ctx, leadID, specialistID, status, expectedUpdatedAt)
 }
 
 func dedupUUIDs(in []uuid.UUID) []uuid.UUID {

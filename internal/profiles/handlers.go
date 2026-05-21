@@ -384,6 +384,7 @@ func (h *Handler) ImageUploadURL(w http.ResponseWriter, r *http.Request) {
 // @Failure      400   {object}  errorResponse
 // @Failure      401   {object}  errorResponse
 // @Failure      404   {object}  errorResponse
+// @Failure      409   {object}  errorResponse
 // @Router       /me/portfolio/{id}/categories [put]
 func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
@@ -401,12 +402,14 @@ func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request)
 		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
-	item, err := h.svc.SetPortfolioCategories(r.Context(), uid, itemID, in.Codes)
+	item, err := h.svc.SetPortfolioCategories(r.Context(), uid, itemID, in.Codes, in.UpdatedAt)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
 		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErr(w, http.StatusNotFound, "not_found")
+	case errors.Is(err, ErrConflict):
+		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	default:

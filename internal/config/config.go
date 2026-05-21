@@ -15,7 +15,7 @@ type Config struct {
 	HTTPShutdownTimeout time.Duration `env:"HTTP_SHUTDOWN_TIMEOUT" envDefault:"15s"`
 
 	DatabaseURL      string `env:"DATABASE_URL,required"`
-	DatabaseMaxConns int32  `env:"DATABASE_MAX_CONNS" envDefault:"10"`
+	DatabaseMaxConns int32  `env:"DATABASE_MAX_CONNS" envDefault:"25"`
 
 	OpenSearchURL          string `env:"OPENSEARCH_URL" envDefault:"http://localhost:9200"`
 	OpenSearchIndexProfile string `env:"OPENSEARCH_INDEX_SPECIALISTS" envDefault:"specialists"`

@@ -16,6 +16,9 @@ var (
 	ErrNotFound  = errors.New("review not found")
 	ErrForbidden = errors.New("not the author")
 	ErrLeadCheck = errors.New("lead does not authorize this review")
+	// ErrConflict — клиент прислал UpdateInput.UpdatedAt не совпадающий
+	// с текущим updated_at (кто-то параллельно отредактировал отзыв).
+	ErrConflict = errors.New("review updated_at mismatch")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -100,24 +103,32 @@ func (r *Repo) Update(ctx context.Context, id, authorID uuid.UUID, in UpdateInpu
 	var target uuid.UUID
 	err = tx.QueryRow(ctx, `
 UPDATE reviews SET
-  rating = COALESCE($3, rating),
-  text   = COALESCE($4, text)
+  rating     = COALESCE($3, rating),
+  text       = COALESCE($4, text),
+  updated_at = now()
 WHERE id = $1 AND author_user_id = $2
+  AND ($5::timestamptz IS NULL OR updated_at = $5)
 RETURNING target_user_id`,
-		id, authorID, in.Rating, in.Text,
+		id, authorID, in.Rating, in.Text, in.UpdatedAt,
 	).Scan(&target)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Либо отзыва нет, либо автор не он. Различаем доп. запросом —
-		// 404 vs 403 информативнее, чем общий 404.
-		var exists bool
-		if err := r.db.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM reviews WHERE id = $1)`, id).Scan(&exists); err != nil {
+		// 0 строк: 3 варианта — нет отзыва (404), чужой автор (403),
+		// устаревший updated_at (409). Различаем доп. запросом.
+		var rowExists, authorMatches bool
+		if err := r.db.QueryRow(ctx, `
+SELECT EXISTS(SELECT 1 FROM reviews WHERE id = $1),
+       EXISTS(SELECT 1 FROM reviews WHERE id = $1 AND author_user_id = $2)`,
+			id, authorID).Scan(&rowExists, &authorMatches); err != nil {
 			return uuid.Nil, fmt.Errorf("probe review: %w", err)
 		}
-		if !exists {
+		if !rowExists {
 			return uuid.Nil, ErrNotFound
 		}
-		return uuid.Nil, ErrForbidden
+		if !authorMatches {
+			return uuid.Nil, ErrForbidden
+		}
+		// Запись есть, автор тот — значит провалилась optimistic-проверка.
+		return uuid.Nil, ErrConflict
 	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("update review: %w", err)
@@ -174,10 +185,10 @@ RETURNING target_user_id`, id, authorID).Scan(&target)
 func (r *Repo) GetByID(ctx context.Context, id uuid.UUID) (Review, error) {
 	var rv Review
 	err := r.db.QueryRow(ctx, `
-SELECT id, lead_id, author_user_id, author_name, target_user_id, rating, text, created_at
+SELECT id, lead_id, author_user_id, author_name, target_user_id, rating, text, created_at, updated_at
 FROM reviews WHERE id = $1`, id).Scan(
 		&rv.ID, &rv.LeadID, &rv.AuthorUserID, &rv.AuthorName, &rv.TargetUserID,
-		&rv.Rating, &rv.Text, &rv.CreatedAt,
+		&rv.Rating, &rv.Text, &rv.CreatedAt, &rv.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Review{}, ErrNotFound
@@ -190,7 +201,7 @@ FROM reviews WHERE id = $1`, id).Scan(
 
 func (r *Repo) ListByTarget(ctx context.Context, targetID uuid.UUID, limit, offset int) ([]Review, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT id, lead_id, author_user_id, author_name, target_user_id, rating, text, created_at
+SELECT id, lead_id, author_user_id, author_name, target_user_id, rating, text, created_at, updated_at
 FROM reviews
 WHERE target_user_id = $1
 ORDER BY created_at DESC
@@ -204,7 +215,7 @@ LIMIT $2 OFFSET $3`, targetID, limit, offset)
 		var rv Review
 		if err := rows.Scan(
 			&rv.ID, &rv.LeadID, &rv.AuthorUserID, &rv.AuthorName, &rv.TargetUserID,
-			&rv.Rating, &rv.Text, &rv.CreatedAt,
+			&rv.Rating, &rv.Text, &rv.CreatedAt, &rv.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan review: %w", err)
 		}

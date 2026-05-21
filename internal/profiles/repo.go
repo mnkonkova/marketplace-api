@@ -357,7 +357,7 @@ func (r *Repo) listPortfolio(ctx context.Context, userID uuid.UUID) ([]Portfolio
 	rows, err := r.db.Query(ctx, `
 SELECT id, title, description,
        COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-       category_codes, sort_order, created_at
+       category_codes, sort_order, created_at, updated_at
 FROM portfolio_items
 WHERE user_id = $1
 ORDER BY sort_order, created_at DESC`, userID)
@@ -371,7 +371,7 @@ ORDER BY sort_order, created_at DESC`, userID)
 		if err := rows.Scan(
 			&p.ID, &p.Title, &p.Description,
 			&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-			&p.CategoryCodes, &p.SortOrder, &p.CreatedAt,
+			&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -406,7 +406,7 @@ VALUES (
 )
 RETURNING id, title, description,
           COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-          category_codes, sort_order, created_at`
+          category_codes, sort_order, created_at, updated_at`
 	var p PortfolioItem
 	cats := in.CategoryCodes
 	if cats == nil {
@@ -429,7 +429,7 @@ RETURNING id, title, description,
 	).Scan(
 		&p.ID, &p.Title, &p.Description,
 		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt,
+		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
 		return PortfolioItem{}, fmt.Errorf("insert portfolio: %w", err)
@@ -439,26 +439,37 @@ RETURNING id, title, description,
 
 // UpdatePortfolioCategories — переписывает category_codes у видео-айтема,
 // принадлежащего userID. Возвращает обновлённую запись (как POST), чтобы
-// фронт мог переиспользовать рендер. ErrNotFound — если запись чужая/не
-// существует.
-func (r *Repo) UpdatePortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string) (PortfolioItem, error) {
+// фронт мог переиспользовать рендер.
+// Если expectedUpdatedAt != nil, добавляется optimistic-lock проверка
+// updated_at = expected. ErrConflict если версия устарела, ErrNotFound
+// если записи нет или она чужая.
+func (r *Repo) UpdatePortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string, expectedUpdatedAt *time.Time) (PortfolioItem, error) {
 	if codes == nil {
 		codes = []string{}
 	}
 	const q = `
 UPDATE portfolio_items
-   SET category_codes = $3
+   SET category_codes = $3,
+       updated_at     = now()
  WHERE id = $1 AND user_id = $2
+   AND ($4::timestamptz IS NULL OR updated_at = $4)
 RETURNING id, title, description,
           COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-          category_codes, sort_order, created_at`
+          category_codes, sort_order, created_at, updated_at`
 	var p PortfolioItem
-	err := r.db.QueryRow(ctx, q, itemID, userID, codes).Scan(
+	err := r.db.QueryRow(ctx, q, itemID, userID, codes, expectedUpdatedAt).Scan(
 		&p.ID, &p.Title, &p.Description,
 		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt,
+		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// 0 строк: либо записи нет/чужая, либо updated_at не совпал.
+		// Если клиент прислал ожидание — считаем что это conflict (наиболее
+		// частый кейс при гонке); фронт всё равно перезагрузит и увидит, что
+		// записи нет, если она и правда удалена.
+		if expectedUpdatedAt != nil {
+			return PortfolioItem{}, ErrConflict
+		}
 		return PortfolioItem{}, ErrNotFound
 	}
 	if err != nil {

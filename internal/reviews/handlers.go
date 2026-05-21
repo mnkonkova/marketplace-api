@@ -99,6 +99,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 // @Failure      401   {object}  errResponse
 // @Failure      403   {object}  errResponse
 // @Failure      404   {object}  errResponse
+// @Failure      409   {object}  errResponse
 // @Router       /reviews/{id} [patch]
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
@@ -124,6 +125,8 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusNotFound, "review_not_found")
 	case errors.Is(err, ErrForbidden):
 		httpx.WriteErr(w, http.StatusForbidden, "not_the_author")
+	case errors.Is(err, ErrConflict):
+		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	default:

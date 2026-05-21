@@ -75,7 +75,8 @@ CREATE TABLE portfolio_items (
     external_url   TEXT,
     category_codes TEXT[] NOT NULL DEFAULT '{}',
     sort_order     INTEGER NOT NULL DEFAULT 0,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX portfolio_items_user_idx ON portfolio_items(user_id);
 
@@ -104,6 +105,7 @@ CREATE TABLE lead_recipients (
                          CHECK (status IN ('sent', 'viewed', 'accepted', 'declined')),
     responded_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (lead_id, specialist_user_id)
 );
 CREATE INDEX lead_recipients_specialist_idx ON lead_recipients(specialist_user_id, status);
@@ -116,6 +118,7 @@ CREATE TABLE reviews (
     rating          SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
     text            TEXT NOT NULL DEFAULT '',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (lead_id, author_user_id, target_user_id)
 );
 CREATE INDEX reviews_target_idx ON reviews(target_user_id);

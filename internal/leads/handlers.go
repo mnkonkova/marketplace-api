@@ -15,6 +15,7 @@ import (
 	"marketpclce/internal/httpx"
 )
 
+
 type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
@@ -136,6 +137,10 @@ func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 
 type recipientReq struct {
 	Status string `json:"status"`
+	// UpdatedAt — optimistic-lock версия lead_recipients.updated_at,
+	// прислана фронтом из последнего GET /me/leads/incoming
+	// (поле recipient_updated_at). Несовпадение → 409.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // UpdateRecipient godoc
@@ -150,6 +155,7 @@ type recipientReq struct {
 // @Failure      400   {object}  errorResponse
 // @Failure      401   {object}  errorResponse
 // @Failure      404   {object}  errorResponse
+// @Failure      409   {object}  errorResponse
 // @Router       /me/leads/{id}/recipient [patch]
 func (h *Handler) UpdateRecipient(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
@@ -167,12 +173,14 @@ func (h *Handler) UpdateRecipient(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
-	err = h.svc.UpdateRecipientStatus(r.Context(), leadID, uid, in.Status)
+	err = h.svc.UpdateRecipientStatus(r.Context(), leadID, uid, in.Status, in.UpdatedAt)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
 		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrRecipientMissing):
 		httpx.WriteErr(w, http.StatusNotFound, "recipient_not_found")
+	case errors.Is(err, ErrConflict):
+		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	default:

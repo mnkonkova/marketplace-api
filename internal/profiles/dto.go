@@ -37,6 +37,7 @@ type PortfolioItem struct {
 	CategoryCodes []string  `json:"category_codes"`
 	SortOrder     int       `json:"sort_order"`
 	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type PublicProfile struct {
@@ -130,6 +131,9 @@ type PortfolioCreateInput struct {
 // Пустой массив = «убрать все». Категории должны быть ⊆ категорий профиля.
 type PortfolioSetCategoriesInput struct {
 	Codes []string `json:"codes"`
+	// UpdatedAt — optimistic-lock версия portfolio_items.updated_at.
+	// Несовпадение → 409. Без поля — старое поведение.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // PortfolioUploadURLInput — запрос на presigned PUT для прямого аплоада в S3.

@@ -74,6 +74,8 @@ definitions:
         type: integer
       title:
         type: string
+      type:
+        type: string
     type: object
   internal_catalog.Skill:
     properties:
@@ -258,6 +260,10 @@ definitions:
         type: string
       recipient_status:
         type: string
+      recipient_updated_at:
+        description: RecipientUpdatedAt — версия lead_recipients для optimistic-lock
+          в PATCH.
+        type: string
       status:
         type: string
       target_category_code:
@@ -310,6 +316,12 @@ definitions:
   internal_leads.recipientReq:
     properties:
       status:
+        type: string
+      updated_at:
+        description: |-
+          UpdatedAt — optimistic-lock версия lead_recipients.updated_at,
+          прислана фронтом из последнего GET /me/leads/incoming
+          (поле recipient_updated_at). Несовпадение → 409.
         type: string
     type: object
   internal_leads.recipientStatusResp:
@@ -389,6 +401,12 @@ definitions:
         type: integer
       rate_min:
         type: integer
+      updated_at:
+        description: |-
+          UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.
+          Несовпадение → 409 conflict (кто-то параллельно отредактировал).
+          Без поля — старый небезопасный поведение для обратной совместимости.
+        type: string
     type: object
   internal_profiles.PortfolioCreateInput:
     properties:
@@ -429,6 +447,8 @@ definitions:
         type: string
       title:
         type: string
+      updated_at:
+        type: string
       video_url:
         type: string
     type: object
@@ -438,6 +458,11 @@ definitions:
         items:
           type: string
         type: array
+      updated_at:
+        description: |-
+          UpdatedAt — optimistic-lock версия portfolio_items.updated_at.
+          Несовпадение → 409. Без поля — старое поведение.
+        type: string
     type: object
   internal_profiles.PortfolioUploadURL:
     properties:
@@ -501,6 +526,12 @@ definitions:
         items:
           type: string
         type: array
+      updated_at:
+        description: |-
+          UpdatedAt — версия профиля для optimistic locking.
+          Клиент должен прислать это значение обратно в PatchInput.UpdatedAt,
+          чтобы защититься от lost-update при параллельных PATCH'ах.
+        type: string
       user_id:
         type: string
     type: object
@@ -564,6 +595,11 @@ definitions:
         type: array
       primary:
         type: string
+      updated_at:
+        description: |-
+          UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.
+          Если задан — несовпадение → 409. Без поля — старое поведение.
+        type: string
     type: object
   internal_profiles.SetSkillsInput:
     properties:
@@ -571,6 +607,9 @@ definitions:
         items:
           type: string
         type: array
+      updated_at:
+        description: UpdatedAt — см. SetCategoriesInput.
+        type: string
     type: object
   internal_profiles.SkillRef:
     properties:
@@ -613,12 +652,16 @@ definitions:
         type: string
       text:
         type: string
+      updated_at:
+        type: string
     type: object
   internal_reviews.UpdateInput:
     properties:
       rating:
         type: integer
       text:
+        type: string
+      updated_at:
         type: string
     type: object
   internal_reviews.createReq:
@@ -1126,6 +1169,10 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/internal_leads.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
       security:
       - BearerAuth: []
       summary: Обновить статус получателя по лиду
@@ -1275,6 +1322,10 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/internal_profiles.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
       security:
       - BearerAuth: []
       summary: Заменить категории у элемента портфолио
@@ -1366,6 +1417,10 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/internal_profiles.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
       security:
       - BearerAuth: []
       summary: Частично обновить свой профиль
@@ -1395,6 +1450,14 @@ paths:
             $ref: '#/definitions/internal_profiles.errorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/internal_profiles.errorResponse'
       security:
@@ -1493,6 +1556,14 @@ paths:
             $ref: '#/definitions/internal_profiles.errorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/internal_profiles.errorResponse'
       security:
@@ -1662,6 +1733,10 @@ paths:
             $ref: '#/definitions/internal_reviews.errResponse'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/internal_reviews.errResponse'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/internal_reviews.errResponse'
       security:

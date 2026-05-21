@@ -25,6 +25,8 @@ type IncomingLead struct {
 	Lead
 	RecipientStatus      string     `json:"recipient_status"`
 	RecipientRespondedAt *time.Time `json:"recipient_responded_at,omitempty"`
+	// RecipientUpdatedAt — версия lead_recipients для optimistic-lock в PATCH.
+	RecipientUpdatedAt time.Time `json:"recipient_updated_at"`
 }
 
 type CreateInput struct {

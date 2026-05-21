@@ -366,7 +366,9 @@ func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.U
 // SetPortfolioCategories — обновляет category_codes у видео-айтема.
 // Категории должны быть подмножеством категорий профиля специалиста; пустой
 // список разрешён (видео не попадёт ни под один категорийный фильтр).
-func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string) (PortfolioItem, error) {
+// expectedUpdatedAt — optimistic-lock версия portfolio_items.updated_at,
+// прислана фронтом из последнего GET. nil = без проверки.
+func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string, expectedUpdatedAt *time.Time) (PortfolioItem, error) {
 	codes = dedupStrings(codes)
 	profile, err := s.repo.Get(ctx, userID)
 	if err != nil {
@@ -381,7 +383,7 @@ func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uui
 			return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
 		}
 	}
-	return s.repo.UpdatePortfolioCategories(ctx, userID, itemID, codes)
+	return s.repo.UpdatePortfolioCategories(ctx, userID, itemID, codes, expectedUpdatedAt)
 }
 
 // CreatePortfolioUploadURL — выдаёт presigned PUT URL для прямого аплоада в S3.
