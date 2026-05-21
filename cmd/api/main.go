@@ -71,6 +71,9 @@ func main() {
 	if err := esClient.EnsureIndex(rootCtx, cfg.OpenSearchIndexProfile, search.IndexMapping()); err != nil {
 		slog.Warn("ensure index (continuing)", "err", err)
 	}
+	if err := esClient.EnsureIndex(rootCtx, cfg.OpenSearchIndexFeedVideos, search.FeedVideoMapping()); err != nil {
+		slog.Warn("ensure feed_videos index (continuing)", "err", err)
+	}
 
 	rdb, err := redisx.New(rootCtx, redisx.Config{
 		Addr:     cfg.RedisAddr,
@@ -123,8 +126,7 @@ func main() {
 	searchSvc := search.NewService(esClient, cfg.OpenSearchIndexProfile)
 	searchHandler := search.NewHandler(searchSvc)
 
-	feedRepo := feed.NewRepo(pool)
-	feedSvc := feed.NewService(searchSvc, feedRepo)
+	feedSvc := feed.NewService(esClient, cfg.OpenSearchIndexFeedVideos)
 	if rdb != nil {
 		feedSvc.WithCache(feed.NewCache(rdb, cfg.FeedCacheTTL))
 	}

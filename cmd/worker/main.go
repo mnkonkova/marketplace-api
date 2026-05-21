@@ -44,8 +44,28 @@ func main() {
 		slog.Error("ensure index", "err", err)
 		os.Exit(1)
 	}
+	if err := esClient.EnsureIndex(rootCtx, cfg.OpenSearchIndexFeedVideos, search.FeedVideoMapping()); err != nil {
+		slog.Error("ensure feed_videos index", "err", err)
+		os.Exit(1)
+	}
 
-	indexer := search.NewIndexer(search.NewRepo(pool), esClient, cfg.OpenSearchIndexProfile)
+	repo := search.NewRepo(pool)
+	indexer := search.NewIndexer(repo, esClient, cfg.OpenSearchIndexProfile)
+	feedIndexer := search.NewFeedIndexer(repo, esClient, cfg.OpenSearchIndexFeedVideos)
+
+	// Bootstrap: если feed_videos пустой (первый запуск после деплоя Stage 2
+	// или после ручного reset'а индекса) — прогоняем всех опубликованных спецов
+	// один раз. Дальше держим индекс актуальным через outbox-события.
+	if empty, err := feedIndexer.IsEmpty(rootCtx); err != nil {
+		slog.Warn("feed_videos isEmpty check failed (skipping bootstrap)", "err", err)
+	} else if empty {
+		n, err := feedIndexer.Bootstrap(rootCtx)
+		if err != nil {
+			slog.Error("feed_videos bootstrap failed", "err", err)
+		} else {
+			slog.Info("feed_videos bootstrapped", "specialists", n)
+		}
+	}
 
 	specialistHandler := func(ctx context.Context, aggregateID, eventType string, _ []byte) error {
 		uid, err := uuid.Parse(aggregateID)
@@ -54,9 +74,15 @@ func main() {
 		}
 		switch eventType {
 		case outbox.EventSpecialistDeleted:
-			return indexer.Delete(ctx, uid)
+			if err := indexer.Delete(ctx, uid); err != nil {
+				return err
+			}
+			return feedIndexer.DeleteByUser(ctx, uid)
 		default:
-			return indexer.Reconcile(ctx, uid)
+			if err := indexer.Reconcile(ctx, uid); err != nil {
+				return err
+			}
+			return feedIndexer.ReconcileVideos(ctx, uid)
 		}
 	}
 

@@ -118,6 +118,10 @@ type SearchHit struct {
 	ID     string          `json:"_id"`
 	Score  float64         `json:"_score"`
 	Source json.RawMessage `json:"_source"`
+	// Sort — массив значений по которым ES отсортировал хит. Используется
+	// как курсор для search_after-пагинации (передаём ровно эти значения
+	// в следующий запрос). Пустой если в запросе не указан sort.
+	Sort []any `json:"sort,omitempty"`
 }
 
 type SearchResponse struct {
@@ -137,6 +141,25 @@ func (c *Client) Search(ctx context.Context, index string, query any) (*SearchRe
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// DeleteByQuery — массовое удаление по запросу. Используется feed-индексером
+// чтобы при reconcile одного спеца снести все его видео-доки одной командой.
+func (c *Client) DeleteByQuery(ctx context.Context, index string, query any) error {
+	return c.do(ctx, http.MethodPost, "/"+index+"/_delete_by_query?refresh=false", query, nil)
+}
+
+// CountDocs — сколько документов в индексе. Используется при bootstrap'е
+// feed_videos: если 0, прогоняем ReconcileVideos по всем опубликованным
+// спецам один раз.
+func (c *Client) CountDocs(ctx context.Context, index string) (int, error) {
+	var resp struct {
+		Count int `json:"count"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/"+index+"/_count", nil, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Count, nil
 }
 
 func (c *Client) Ping(ctx context.Context) error {

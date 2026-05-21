@@ -17,8 +17,9 @@ type Config struct {
 	DatabaseURL      string `env:"DATABASE_URL,required"`
 	DatabaseMaxConns int32  `env:"DATABASE_MAX_CONNS" envDefault:"25"`
 
-	OpenSearchURL          string `env:"OPENSEARCH_URL" envDefault:"http://localhost:9200"`
-	OpenSearchIndexProfile string `env:"OPENSEARCH_INDEX_SPECIALISTS" envDefault:"specialists"`
+	OpenSearchURL             string `env:"OPENSEARCH_URL" envDefault:"http://localhost:9200"`
+	OpenSearchIndexProfile    string `env:"OPENSEARCH_INDEX_SPECIALISTS" envDefault:"specialists"`
+	OpenSearchIndexFeedVideos string `env:"OPENSEARCH_INDEX_FEED_VIDEOS" envDefault:"feed_videos"`
 
 	RedisAddr     string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
 	RedisPassword string `env:"REDIS_PASSWORD"`
