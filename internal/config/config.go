@@ -46,7 +46,7 @@ type Config struct {
 
 	JWTSecret     string        `env:"JWT_SECRET,required"`
 	JWTAccessTTL  time.Duration `env:"JWT_ACCESS_TTL" envDefault:"30m"`
-	JWTRefreshTTL time.Duration `env:"JWT_REFRESH_TTL" envDefault:"720h"`
+	JWTRefreshTTL time.Duration `env:"JWT_REFRESH_TTL" envDefault:"168h"`
 
 	// Email verification (Unisender Go). Без UNISENDER_API_KEY — отправка
 	// отключена: register работает, но письма не уходят, в логах warn.
