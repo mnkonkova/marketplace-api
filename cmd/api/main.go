@@ -183,13 +183,8 @@ func main() {
 		limiter = ratelimit.New(rdb)
 	}
 	summarizeHandler := summarize.NewHandler(summarizeSvc, summarize.HandlerConfig{
-		Search:  searchSvc,
-		Cache:   summarizeCache,
-		Limiter: limiter,
-		RLWindows: []ratelimit.Window{
-			{Limit: cfg.RateSummarizePerMin, Period: time.Minute},
-			{Limit: cfg.RateSummarizePerHour, Period: time.Hour},
-		},
+		Search: searchSvc,
+		Cache:  summarizeCache,
 	})
 
 	router := httpapi.NewRouter(httpapi.Deps{
@@ -223,6 +218,10 @@ func main() {
 		AuthWindows: []ratelimit.Window{
 			{Limit: cfg.RateAuthPerMin, Period: time.Minute},
 			{Limit: cfg.RateAuthPerHour, Period: time.Hour},
+		},
+		SummarizeWindows: []ratelimit.Window{
+			{Limit: cfg.RateSummarizePerMin, Period: time.Minute},
+			{Limit: cfg.RateSummarizePerHour, Period: time.Hour},
 		},
 	})
 

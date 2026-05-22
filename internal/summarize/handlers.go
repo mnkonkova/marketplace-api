@@ -6,12 +6,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"marketpclce/internal/httpx"
 	"marketpclce/internal/llm"
-	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/search"
 )
 
@@ -19,15 +17,11 @@ type Handler struct {
 	svc       *Service
 	searchSvc *search.Service
 	cache     *Cache
-	rl        *ratelimit.Limiter
-	rlWindows []ratelimit.Window
 }
 
 type HandlerConfig struct {
-	Search    *search.Service
-	Cache     *Cache
-	Limiter   *ratelimit.Limiter
-	RLWindows []ratelimit.Window
+	Search *search.Service
+	Cache  *Cache
 }
 
 func NewHandler(svc *Service, c HandlerConfig) *Handler {
@@ -35,8 +29,6 @@ func NewHandler(svc *Service, c HandlerConfig) *Handler {
 		svc:       svc,
 		searchSvc: c.Search,
 		cache:     c.Cache,
-		rl:        c.Limiter,
-		rlWindows: c.RLWindows,
 	}
 }
 
@@ -90,18 +82,6 @@ func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 		h.attachCategoryTotal(r.Context(), &cached, targetCategory)
 		httpx.WriteJSON(w, http.StatusOK, cached)
 		return
-	}
-
-	if h.rl != nil && len(h.rlWindows) > 0 {
-		err := h.rl.Allow(r.Context(), "summarize", ratelimit.ClientIP(r), h.rlWindows)
-		if rlErr, ok := ratelimit.IsRateLimited(err); ok {
-			w.Header().Set("Retry-After", strconv.Itoa(int(rlErr.RetryAfter.Seconds())))
-			httpx.WriteErr(w, http.StatusTooManyRequests, "rate_limited")
-			return
-		}
-		if err != nil {
-			slog.Error("rate limit eval", "err", err)
-		}
 	}
 
 	res, err := h.svc.Run(r.Context(), q)
