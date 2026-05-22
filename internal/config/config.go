@@ -75,6 +75,11 @@ type Config struct {
 	RateReadPerHour      int           `env:"RATE_READ_PER_HOUR" envDefault:"600"`
 	RateLeadsPerMin      int           `env:"RATE_LEADS_PER_MIN" envDefault:"5"`
 	RateLeadsPerHour     int           `env:"RATE_LEADS_PER_HOUR" envDefault:"20"`
+	// Лимиты на /auth/* — анти-брутфорс по логину и анти-флуд по регистрации.
+	// Считается по IP. На login достаточно жёстко: 10 попыток/мин ловит
+	// автоматику, но не мешает живому юзеру опечататься 2-3 раза.
+	RateAuthPerMin       int           `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
+	RateAuthPerHour      int           `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
 
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 

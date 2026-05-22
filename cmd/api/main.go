@@ -220,6 +220,10 @@ func main() {
 			{Limit: cfg.RateClarifyPerMin, Period: time.Minute},
 			{Limit: cfg.RateClarifyPerHour, Period: time.Hour},
 		},
+		AuthWindows: []ratelimit.Window{
+			{Limit: cfg.RateAuthPerMin, Period: time.Minute},
+			{Limit: cfg.RateAuthPerHour, Period: time.Hour},
+		},
 	})
 
 	srv := &http.Server{

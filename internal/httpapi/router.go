@@ -45,6 +45,7 @@ type Deps struct {
 	ReadWindows     []ratelimit.Window
 	LeadsWindows    []ratelimit.Window
 	ClarifyWindows  []ratelimit.Window
+	AuthWindows     []ratelimit.Window
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -68,10 +69,17 @@ func NewRouter(d Deps) http.Handler {
 	r.Handle("/metrics", promhttp.Handler())
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Post("/auth/register", d.Auth.Register)
-		r.Post("/auth/login", d.Auth.Login)
-		r.Post("/auth/refresh", d.Auth.Refresh)
-		r.Post("/auth/verify-email", d.Auth.VerifyEmail)
+		// /auth/* — анти-брутфорс по IP. register/login/refresh/verify-email
+		// без auth, поэтому ключ — только IP. Логин/регистрация на одной
+		// корзине: 10 попыток в минуту суммарно достаточно для живого юзера
+		// и душит автоматизированный перебор.
+		r.Group(func(r chi.Router) {
+			r.Use(RateLimit(d.Limiter, "auth", d.AuthWindows))
+			r.Post("/auth/register", d.Auth.Register)
+			r.Post("/auth/login", d.Auth.Login)
+			r.Post("/auth/refresh", d.Auth.Refresh)
+			r.Post("/auth/verify-email", d.Auth.VerifyEmail)
+		})
 
 		r.Get("/categories", d.Catalog.Categories)
 		r.Get("/skills", d.Catalog.Skills)

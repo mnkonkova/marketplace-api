@@ -26,13 +26,14 @@ type registerResp struct {
 
 // Register godoc
 // @Summary      Регистрация пользователя
+// @Description  При невалидном вводе или занятом email отвечает 400 invalid_input
+// @Description  (разные причины не различаются — anti-enumeration).
 // @Tags         auth
 // @Accept       json
 // @Produce      json
 // @Param        body  body      registerReq  true  "регистрационные данные"
 // @Success      201   {object}  registerResp
 // @Failure      400   {object}  errorResponse
-// @Failure      409   {object}  errorResponse
 // @Router       /auth/register [post]
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var in registerReq
@@ -47,11 +48,14 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		DisplayName: in.DisplayName,
 	})
 	switch {
-	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
-		return
-	case errors.Is(err, ErrAlreadyExists):
-		httpx.WriteErr(w, http.StatusConflict, "user_exists")
+	// ErrAlreadyExists и ErrInvalidInput возвращаем одним статусом и кодом,
+	// чтобы атакующий не мог по 409 vs 400 перебирать список зарегистрированных
+	// email'ов. Конкретика (формат, длина пароля, занято) уходит во внутренний
+	// лог, наружу — generic invalid_input. Anti-enumeration частичная: 201 vs
+	// 400 различимы при корректном вводе, поэтому работает в паре с RL на
+	// /auth/* (10/мин per IP).
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, ErrAlreadyExists):
+		httpx.WriteErr(w, http.StatusBadRequest, "invalid_input")
 		return
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
