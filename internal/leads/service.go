@@ -12,13 +12,35 @@ import (
 )
 
 var (
-	ErrInvalidInput   = errors.New("invalid input")
-	ErrNoSpecialists  = errors.New("no valid specialists in recipients")
+	ErrInvalidInput    = errors.New("invalid input")
+	ErrNoSpecialists   = errors.New("no valid specialists in recipients")
+	// ErrEmailUnverified — soft-gate: для авторизованного клиента почта
+	// должна быть подтверждена. Хендлер мапит в 403 email_unverified.
+	ErrEmailUnverified = errors.New("email is not verified")
 )
 
-type Service struct{ repo *Repo }
+// EmailVerifier — узкий интерфейс soft-gate'а. Реализуется auth.Service.
+// (true, nil) = подтверждена; (false, nil) = НЕ подтверждена; (_, err) = ошибка.
+// nil-safe: без подключения gate не действует (анонимные лиды всегда
+// проходят без проверки).
+type EmailVerifier interface {
+	IsEmailVerified(ctx context.Context, userID uuid.UUID) (bool, error)
+}
+
+type Service struct {
+	repo     *Repo
+	verifier EmailVerifier
+}
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
+
+// WithEmailVerifier — подключает soft-gate: авторизованный клиент с
+// неподтверждённым email не может создать лид. Анонимные (без auth)
+// продолжают работать без проверки.
+func (s *Service) WithEmailVerifier(v EmailVerifier) *Service {
+	s.verifier = v
+	return s
+}
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
 	in.ClientName = strings.TrimSpace(in.ClientName)
@@ -49,6 +71,18 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	}
 	if len(in.SpecialistIDs) == 0 {
 		return CreateResult{}, fmt.Errorf("%w: at least one specialist is required", ErrInvalidInput)
+	}
+
+	// Soft-gate: авторизованный клиент должен подтвердить email перед
+	// созданием лида. Анонимный путь (ClientUserID == nil) — без проверки.
+	if in.ClientUserID != nil && s.verifier != nil {
+		ok, err := s.verifier.IsEmailVerified(ctx, *in.ClientUserID)
+		if err != nil {
+			return CreateResult{}, fmt.Errorf("verify email: %w", err)
+		}
+		if !ok {
+			return CreateResult{}, ErrEmailUnverified
+		}
 	}
 
 	in.SpecialistIDs = dedupUUIDs(in.SpecialistIDs)

@@ -16,10 +16,20 @@ import (
 )
 
 var (
-	ErrInvalidInput     = errors.New("invalid input")
-	ErrProfileRejected  = errors.New("profile rejected")
+	ErrInvalidInput      = errors.New("invalid input")
+	ErrProfileRejected   = errors.New("profile rejected")
 	ErrPublishIncomplete = errors.New("publish incomplete")
+	// ErrEmailUnverified — soft-gate на publish: пока почта не подтверждена,
+	// профиль нельзя опубликовать. Хендлер мапит в 403 email_unverified.
+	ErrEmailUnverified = errors.New("email is not verified")
 )
+
+// EmailVerifier — узкий интерфейс soft-gate'а. Реализуется auth.Service.
+// (true, nil) = подтверждена; (false, nil) = НЕ подтверждена; (_, err) = ошибка.
+// nil-safe: без подключения soft-gate не действует (для тестов).
+type EmailVerifier interface {
+	IsEmailVerified(ctx context.Context, userID uuid.UUID) (bool, error)
+}
 
 type ProfileChecker interface {
 	Available() bool
@@ -55,9 +65,10 @@ type MediaStorage interface {
 }
 
 type Service struct {
-	repo    *Repo
-	checker ProfileChecker
-	media   MediaStorage
+	repo     *Repo
+	checker  ProfileChecker
+	media    MediaStorage
+	verifier EmailVerifier
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -69,6 +80,13 @@ func (s *Service) WithProfileChecker(c ProfileChecker) *Service {
 
 func (s *Service) WithMediaStorage(m MediaStorage) *Service {
 	s.media = m
+	return s
+}
+
+// WithEmailVerifier подключает soft-gate на publish (требует подтверждённой
+// почты). nil-safe: без вызова publish проходит без проверки.
+func (s *Service) WithEmailVerifier(v EmailVerifier) *Service {
+	s.verifier = v
 	return s
 }
 
@@ -216,6 +234,17 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 	event := outbox.EventSpecialistPublished
 	if !published {
 		event = outbox.EventSpecialistRetracted
+	}
+	// Soft-gate: публиковать профиль можно только после подтверждения email.
+	// Снять с публикации — без ограничений (юзер может всегда «уйти»).
+	if published && s.verifier != nil {
+		ok, err := s.verifier.IsEmailVerified(ctx, userID)
+		if err != nil {
+			return Profile{}, fmt.Errorf("verify email: %w", err)
+		}
+		if !ok {
+			return Profile{}, ErrEmailUnverified
+		}
 	}
 	if published && s.checker != nil && s.checker.Available() {
 		p, err := s.repo.Get(ctx, userID)

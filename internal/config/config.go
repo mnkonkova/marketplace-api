@@ -48,6 +48,23 @@ type Config struct {
 	JWTAccessTTL  time.Duration `env:"JWT_ACCESS_TTL" envDefault:"30m"`
 	JWTRefreshTTL time.Duration `env:"JWT_REFRESH_TTL" envDefault:"720h"`
 
+	// Email verification (Unisender Go). Без UNISENDER_API_KEY — отправка
+	// отключена: register работает, но письма не уходят, в логах warn.
+	// APP_BASE_URL нужен воркеру для сборки verify-ссылки (у воркера нет
+	// HTTP-контекста, на dev/staging/prod разный URL).
+	UnisenderAPIKey      string        `env:"UNISENDER_API_KEY"`
+	UnisenderAPIBaseURL  string        `env:"UNISENDER_API_BASE_URL" envDefault:"https://go1.unisender.ru/ru/transactional/api/v1"`
+	UnisenderFromEmail   string        `env:"UNISENDER_FROM_EMAIL"`
+	UnisenderFromName    string        `env:"UNISENDER_FROM_NAME" envDefault:"marketpclce"`
+	AppBaseURL           string        `env:"APP_BASE_URL" envDefault:"http://localhost:5173"`
+	EmailVerifyTokenTTL  time.Duration `env:"EMAIL_VERIFY_TOKEN_TTL" envDefault:"24h"`
+	RateEmailResendPer   time.Duration `env:"RATE_EMAIL_RESEND_PER" envDefault:"60s"`
+	// EmailVerificationDisabled — выключает весь soft-gate целиком: юзер при
+	// регистрации сразу email_verified=true, publish/leads проходят без
+	// проверки, resend/verify становятся no-op'ами. Для локального запуска
+	// без Unisender. В проде .env.prod не должен ставить true.
+	EmailVerificationDisabled bool `env:"EMAIL_VERIFICATION_DISABLED" envDefault:"false"`
+
 	SummarizeCacheTTL    time.Duration `env:"SUMMARIZE_CACHE_TTL" envDefault:"10m"`
 	FeedCacheTTL         time.Duration `env:"FEED_CACHE_TTL" envDefault:"30s"`
 	RateSummarizePerMin  int           `env:"RATE_SUMMARIZE_PER_MIN" envDefault:"5"`

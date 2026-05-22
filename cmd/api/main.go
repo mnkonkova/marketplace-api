@@ -92,13 +92,28 @@ func main() {
 	tokenIssuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 	authRepo := auth.NewRepo(pool)
 	authSvc := auth.NewService(authRepo, tokenIssuer)
+	// Resend-cooldown — простая обёртка над общим ratelimit.Limiter
+	// (limit=1, period=cfg.RateEmailResendPer). Без Redis cooldown nil,
+	// resend проходит без ограничений (это намеренно: не валим фичу
+	// если Redis недоступен, только теряем защиту от спама ящика).
+	var resendCooldown auth.ResendCooldown
+	if rdb != nil {
+		resendCooldown = emailResendCooldown{
+			limiter: ratelimit.New(rdb),
+			period:  cfg.RateEmailResendPer,
+		}
+	}
+	authSvc.WithEmailVerification(cfg.EmailVerifyTokenTTL, cfg.AppBaseURL, resendCooldown, cfg.EmailVerificationDisabled)
+	if cfg.EmailVerificationDisabled {
+		slog.Warn("email verification DISABLED — users auto-verified on register; soft-gate skipped (для прода держать выключенным!)")
+	}
 	authHandler := auth.NewHandler(authSvc)
 
 	catalogRepo := catalog.NewRepo(pool)
 	catalogHandler := catalog.NewHandler(catalogRepo)
 
 	profilesRepo := profiles.NewRepo(pool)
-	profilesSvc := profiles.NewService(profilesRepo)
+	profilesSvc := profiles.NewService(profilesRepo).WithEmailVerifier(authSvc)
 	profilesHandler := profiles.NewHandler(profilesSvc)
 
 	// S3 — опционально: без ключей API стартует без upload-функционала.
@@ -154,7 +169,7 @@ func main() {
 	profilesSvc.WithProfileChecker(profileCheckerAdapter{svc: profileCheckSvc})
 
 	leadsRepo := leads.NewRepo(pool)
-	leadsSvc := leads.NewService(leadsRepo)
+	leadsSvc := leads.NewService(leadsRepo).WithEmailVerifier(authSvc)
 	leadsHandler := leads.NewHandler(leadsSvc)
 
 	reviewsRepo := reviews.NewRepo(pool)
@@ -253,6 +268,25 @@ func (a profileCheckerAdapter) Check(ctx context.Context, in profiles.CheckInput
 		Bio:  profiles.PartResult(res.Bio),
 		Name: profiles.PartResult(res.Name),
 	}, nil
+}
+
+// emailResendCooldown — адаптер ratelimit.Limiter под auth.ResendCooldown.
+// Окно (limit=1, period=cfg.RateEmailResendPer) — «не чаще раза в N
+// секунд». Acquire возвращает false если cooldown ещё активен.
+type emailResendCooldown struct {
+	limiter *ratelimit.Limiter
+	period  time.Duration
+}
+
+func (c emailResendCooldown) Acquire(ctx context.Context, key string) (bool, error) {
+	err := c.limiter.Allow(ctx, "email-resend", key, []ratelimit.Window{{Limit: 1, Period: c.period}})
+	if _, ok := ratelimit.IsRateLimited(err); ok {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 type primaryCategoryLookup struct{ repo *profiles.Repo }

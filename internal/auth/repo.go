@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,8 +13,9 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("user not found")
-	ErrAlreadyExists = errors.New("user already exists")
+	ErrNotFound       = errors.New("user not found")
+	ErrAlreadyExists  = errors.New("user already exists")
+	ErrTokenInvalid   = errors.New("verification token invalid or expired")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -21,12 +23,13 @@ type Repo struct{ db *pgxpool.Pool }
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
 type User struct {
-	ID           uuid.UUID
-	Email        *string
-	Phone        *string
-	PasswordHash string
-	Kind         string
-	IsActive     bool
+	ID              uuid.UUID
+	Email           *string
+	Phone           *string
+	PasswordHash    string
+	Kind            string
+	IsActive        bool
+	EmailVerifiedAt *time.Time
 }
 
 func (r *Repo) CreateUser(ctx context.Context, tx pgx.Tx, u User) (uuid.UUID, error) {
@@ -47,12 +50,12 @@ RETURNING id`
 
 func (r *Repo) FindByLogin(ctx context.Context, login string) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at
 FROM users
 WHERE (email = $1 OR phone = $1) AND is_active = TRUE
 LIMIT 1`
 	var u User
-	err := r.db.QueryRow(ctx, q, login).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive)
+	err := r.db.QueryRow(ctx, q, login).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -64,10 +67,10 @@ LIMIT 1`
 
 func (r *Repo) FindByID(ctx context.Context, id uuid.UUID) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at
 FROM users WHERE id = $1`
 	var u User
-	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive)
+	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -89,7 +92,98 @@ func (r *Repo) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	return tx.Commit(ctx)
 }
 
+// GetDisplayName — display_name из specialist_profiles, если есть. Для
+// именования юзера в письме. Для kind=client (без профиля) вернёт "".
+func (r *Repo) GetDisplayName(ctx context.Context, userID uuid.UUID) (string, error) {
+	var name string
+	err := r.db.QueryRow(ctx,
+		`SELECT display_name FROM specialist_profiles WHERE user_id = $1`,
+		userID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get display name: %w", err)
+	}
+	return name, nil
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// InvalidatePrevVerificationsInTx — гасит все непогашенные токены этого
+// юзера (resend). Идемпотентно: если активных нет — no-op.
+func (r *Repo) InvalidatePrevVerificationsInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE email_verifications SET used_at = now() WHERE user_id = $1 AND used_at IS NULL`,
+		userID)
+	if err != nil {
+		return fmt.Errorf("invalidate verifications: %w", err)
+	}
+	return nil
+}
+
+// InsertVerificationInTx — записать новый токен. tokenHash — sha256 от raw,
+// сам raw в БД не уезжает (защита от дампа). expiresAt передаём из сервиса.
+func (r *Repo) InsertVerificationInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email string, tokenHash string, expiresAt time.Time) error {
+	_, err := tx.Exec(ctx,
+		`INSERT INTO email_verifications (token_hash, user_id, email, expires_at)
+		 VALUES ($1, $2, $3, $4)`,
+		tokenHash, userID, email, expiresAt)
+	if err != nil {
+		return fmt.Errorf("insert verification: %w", err)
+	}
+	return nil
+}
+
+// ConsumeVerification — атомарно: найти неиспользованный непросроченный
+// токен → пометить used → проставить users.email_verified_at, если ещё не
+// проставлено и email в записи совпадает с current users.email.
+// Возвращает user_id успешно подтверждённого. ErrTokenInvalid если токен
+// неизвестен/использован/просрочен/email сменился.
+func (r *Repo) ConsumeVerification(ctx context.Context, tokenHash string) (uuid.UUID, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var userID uuid.UUID
+	var verifyEmail string
+	err = tx.QueryRow(ctx,
+		`UPDATE email_verifications
+		 SET used_at = now()
+		 WHERE token_hash = $1
+		   AND used_at IS NULL
+		   AND expires_at > now()
+		 RETURNING user_id, email`,
+		tokenHash).Scan(&userID, &verifyEmail)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrTokenInvalid
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("consume token: %w", err)
+	}
+
+	// Проверяем что email в токене ещё совпадает с current users.email.
+	// Защита: если юзер сменил email между выдачей и подтверждением,
+	// старый токен подтверждает «не тот» адрес.
+	tag, err := tx.Exec(ctx,
+		`UPDATE users
+		 SET email_verified_at = COALESCE(email_verified_at, now()),
+		     updated_at = now()
+		 WHERE id = $1 AND email = $2`,
+		userID, verifyEmail)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("mark verified: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return uuid.Nil, ErrTokenInvalid
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("commit: %w", err)
+	}
+	return userID, nil
 }

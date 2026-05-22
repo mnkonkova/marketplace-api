@@ -188,11 +188,13 @@ func (h *Handler) SetSkills(w http.ResponseWriter, r *http.Request) {
 
 // Publish godoc
 // @Summary      Опубликовать профиль
+// @Description  Требует подтверждённого email. Без подтверждения — 403 `email_unverified`, фронт должен показать баннер с предложением подтвердить (и кнопку «Отправить ещё раз» → POST /auth/resend-verification).
 // @Tags         profile
 // @Produce      json
 // @Security     BearerAuth
 // @Success      200  {object}  Profile
 // @Failure      401  {object}  errorResponse
+// @Failure      403  {object}  errorResponse   "email_unverified"
 // @Failure      404  {object}  errorResponse
 // @Failure      422  {object}  errorResponse
 // @Router       /me/profile/publish [post]
@@ -225,6 +227,8 @@ func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 		})
 	case errors.Is(err, ErrPublishIncomplete):
 		httpx.WriteErr(w, http.StatusUnprocessableEntity, "publish_incomplete")
+	case errors.Is(err, ErrEmailUnverified):
+		httpx.WriteErr(w, http.StatusForbidden, "email_unverified")
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErr(w, http.StatusNotFound, "no_profile")
 	case err != nil:

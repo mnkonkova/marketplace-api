@@ -23,6 +23,8 @@ definitions:
     properties:
       email:
         type: string
+      email_verified:
+        type: boolean
       kind:
         type: string
       phone:
@@ -45,14 +47,17 @@ definitions:
         type: string
       password:
         type: string
-      phone:
-        type: string
     type: object
   internal_auth.registerResp:
     properties:
       tokens:
         $ref: '#/definitions/internal_auth.TokenPair'
       user_id:
+        type: string
+    type: object
+  internal_auth.verifyEmailReq:
+    properties:
+      token:
         type: string
     type: object
   internal_catalog.CategoriesResponse:
@@ -982,6 +987,57 @@ paths:
       summary: Регистрация пользователя
       tags:
       - auth
+  /auth/resend-verification:
+    post:
+      description: Гасит прошлые токены и шлёт новое письмо. Cooldown 60s по user_id.
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "429":
+          description: resend_cooldown
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Перевыслать письмо подтверждения email
+      tags:
+      - auth
+  /auth/verify-email:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: token из ссылки в письме
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.verifyEmailReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: новая пара токенов с актуальным email_verified
+          schema:
+            $ref: '#/definitions/internal_auth.TokenPair'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "410":
+          description: 'token_invalid: токен неизвестен, использован, просрочен или
+            email сменился'
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Подтвердить email по токену из письма
+      tags:
+      - auth
   /categories:
     get:
       produces:
@@ -1123,6 +1179,11 @@ paths:
             $ref: '#/definitions/internal_leads.CreateResult'
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_leads.errorResponse'
+        "403":
+          description: email_unverified — для авторизованного клиента email должен
+            быть подтверждён
           schema:
             $ref: '#/definitions/internal_leads.errorResponse'
       security:
@@ -1526,6 +1587,9 @@ paths:
       - profile
   /me/profile/publish:
     post:
+      description: Требует подтверждённого email. Без подтверждения — 403 `email_unverified`,
+        фронт должен показать баннер с предложением подтвердить (и кнопку «Отправить
+        ещё раз» → POST /auth/resend-verification).
       produces:
       - application/json
       responses:
@@ -1535,6 +1599,10 @@ paths:
             $ref: '#/definitions/internal_profiles.Profile'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "403":
+          description: email_unverified
           schema:
             $ref: '#/definitions/internal_profiles.errorResponse'
         "404":

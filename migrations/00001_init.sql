@@ -5,16 +5,31 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS citext;
 
 CREATE TABLE users (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email         CITEXT UNIQUE,
-    phone         TEXT UNIQUE,
-    password_hash TEXT NOT NULL,
-    kind          TEXT NOT NULL CHECK (kind IN ('client', 'specialist', 'both')),
-    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email             CITEXT UNIQUE,
+    phone             TEXT UNIQUE,
+    password_hash     TEXT NOT NULL,
+    kind              TEXT NOT NULL CHECK (kind IN ('client', 'specialist', 'both')),
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+    email_verified_at TIMESTAMPTZ,                    -- NULL = почта не подтверждена
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (email IS NOT NULL OR phone IS NOT NULL)
 );
+
+-- Токены подтверждения email. Храним sha256(token), не raw — чтобы дамп БД
+-- не позволял верифицировать чужие письма. На раздачу всегда генерим новый
+-- случайный токен, raw отдаётся юзеру в письме и больше нигде не лежит.
+CREATE TABLE email_verifications (
+    token_hash TEXT PRIMARY KEY,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email      CITEXT NOT NULL,                       -- адрес на момент выдачи; при смене email старые токены автоматически перестают подтверждать (сверяем с current users.email)
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at    TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX email_verifications_user_active_idx
+    ON email_verifications(user_id) WHERE used_at IS NULL;
 
 CREATE TABLE specialist_profiles (
     user_id        UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

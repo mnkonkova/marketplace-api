@@ -41,6 +41,7 @@ type createReq struct {
 // @Param        body  body      createReq  true  "lead payload"
 // @Success      201   {object}  CreateResult
 // @Failure      400   {object}  errorResponse
+// @Failure      403   {object}  errorResponse  "email_unverified — для авторизованного клиента email должен быть подтверждён"
 // @Router       /leads [post]
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var in createReq
@@ -90,6 +91,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNoSpecialists):
 		httpx.WriteErr(w, http.StatusBadRequest, "no_valid_specialists")
+	case errors.Is(err, ErrEmailUnverified):
+		httpx.WriteErr(w, http.StatusForbidden, "email_unverified")
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	default:

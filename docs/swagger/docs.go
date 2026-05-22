@@ -144,6 +144,85 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/resend-verification": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Гасит прошлые токены и шлёт новое письмо. Cooldown 60s по user_id.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Перевыслать письмо подтверждения email",
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "resend_cooldown",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/verify-email": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Подтвердить email по токену из письма",
+                "parameters": [
+                    {
+                        "description": "token из ссылки в письме",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.verifyEmailReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "новая пара токенов с актуальным email_verified",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.TokenPair"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "token_invalid: токен неизвестен, использован, просрочен или email сменился",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/categories": {
             "get": {
                 "produces": [
@@ -360,6 +439,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_leads.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "email_unverified — для авторизованного клиента email должен быть подтверждён",
                         "schema": {
                             "$ref": "#/definitions/internal_leads.errorResponse"
                         }
@@ -1001,6 +1086,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Требует подтверждённого email. Без подтверждения — 403 ` + "`" + `email_unverified` + "`" + `, фронт должен показать баннер с предложением подтвердить (и кнопку «Отправить ещё раз» → POST /auth/resend-verification).",
                 "produces": [
                     "application/json"
                 ],
@@ -1017,6 +1103,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "email_unverified",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
                         }
@@ -1664,6 +1756,9 @@ const docTemplate = `{
                 "email": {
                     "type": "string"
                 },
+                "email_verified": {
+                    "type": "boolean"
+                },
                 "kind": {
                     "type": "string"
                 },
@@ -1697,9 +1792,6 @@ const docTemplate = `{
                 },
                 "password": {
                     "type": "string"
-                },
-                "phone": {
-                    "type": "string"
                 }
             }
         },
@@ -1710,6 +1802,14 @@ const docTemplate = `{
                     "$ref": "#/definitions/internal_auth.TokenPair"
                 },
                 "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.verifyEmailReq": {
+            "type": "object",
+            "properties": {
+                "token": {
                     "type": "string"
                 }
             }

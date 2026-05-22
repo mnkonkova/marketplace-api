@@ -71,6 +71,7 @@ func NewRouter(d Deps) http.Handler {
 		r.Post("/auth/register", d.Auth.Register)
 		r.Post("/auth/login", d.Auth.Login)
 		r.Post("/auth/refresh", d.Auth.Refresh)
+		r.Post("/auth/verify-email", d.Auth.VerifyEmail)
 
 		r.Get("/categories", d.Catalog.Categories)
 		r.Get("/skills", d.Catalog.Skills)
@@ -103,6 +104,7 @@ func NewRouter(d Deps) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(d.TokenIssuer))
 			r.Get("/me", d.Auth.Me)
+			r.Post("/auth/resend-verification", d.Auth.ResendVerification)
 			r.Get("/me/profile", d.Profiles.Get)
 			r.Patch("/me/profile", d.Profiles.Patch)
 			r.Put("/me/profile/categories", d.Profiles.SetCategories)

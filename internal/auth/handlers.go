@@ -14,7 +14,6 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
 type registerReq struct {
 	Email       string `json:"email"`
-	Phone       string `json:"phone"`
 	Password    string `json:"password"`
 	Kind        string `json:"kind"`
 	DisplayName string `json:"display_name"`
@@ -43,7 +42,6 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.svc.Register(r.Context(), RegisterInput{
 		Email:       in.Email,
-		Phone:       in.Phone,
 		Password:    in.Password,
 		Kind:        in.Kind,
 		DisplayName: in.DisplayName,
@@ -126,10 +124,11 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type meResp struct {
-	UserID string  `json:"user_id"`
-	Email  *string `json:"email,omitempty"`
-	Phone  *string `json:"phone,omitempty"`
-	Kind   string  `json:"kind"`
+	UserID         string  `json:"user_id"`
+	Email          *string `json:"email,omitempty"`
+	Phone          *string `json:"phone,omitempty"`
+	Kind           string  `json:"kind"`
+	EmailVerified  bool    `json:"email_verified"`
 }
 
 // Me godoc
@@ -152,7 +151,75 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusNotFound, "not_found")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, meResp{UserID: u.ID.String(), Email: u.Email, Phone: u.Phone, Kind: u.Kind})
+	httpx.WriteJSON(w, http.StatusOK, meResp{
+		UserID:        u.ID.String(),
+		Email:         u.Email,
+		Phone:         u.Phone,
+		Kind:          u.Kind,
+		EmailVerified: u.EmailVerifiedAt != nil,
+	})
+}
+
+type verifyEmailReq struct {
+	Token string `json:"token"`
+}
+
+// VerifyEmail godoc
+// @Summary      Подтвердить email по токену из письма
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      verifyEmailReq  true  "token из ссылки в письме"
+// @Success      200   {object}  TokenPair       "новая пара токенов с актуальным email_verified"
+// @Failure      400   {object}  errorResponse
+// @Failure      410   {object}  errorResponse   "token_invalid: токен неизвестен, использован, просрочен или email сменился"
+// @Router       /auth/verify-email [post]
+func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var in verifyEmailReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	pair, err := h.svc.VerifyEmail(r.Context(), in.Token)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErr(w, http.StatusBadRequest, "empty_token")
+	case errors.Is(err, ErrTokenInvalid):
+		httpx.WriteErr(w, http.StatusGone, "token_invalid")
+	case err != nil:
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+	default:
+		httpx.WriteJSON(w, http.StatusOK, pair)
+	}
+}
+
+// ResendVerification godoc
+// @Summary      Перевыслать письмо подтверждения email
+// @Description  Гасит прошлые токены и шлёт новое письмо. Cooldown 60s по user_id.
+// @Tags         auth
+// @Produce      json
+// @Security     BearerAuth
+// @Success      204
+// @Failure      401  {object}  errorResponse
+// @Failure      429  {object}  errorResponse  "resend_cooldown"
+// @Router       /auth/resend-verification [post]
+func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	uid, ok := UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	err := h.svc.ResendVerification(r.Context(), uid)
+	switch {
+	case errors.Is(err, ErrResendCooldown):
+		httpx.WriteErr(w, http.StatusTooManyRequests, "resend_cooldown")
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErr(w, http.StatusBadRequest, "no_email")
+	case err != nil:
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 
