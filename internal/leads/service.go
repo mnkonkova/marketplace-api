@@ -85,7 +85,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 		}
 	}
 
-	in.SpecialistIDs = dedupUUIDs(in.SpecialistIDs)
+	in.SpecialistIDs = DedupUUIDs(in.SpecialistIDs)
 
 	valid, err := s.repo.ValidPublishedSpecialists(ctx, in.SpecialistIDs)
 	if err != nil {
@@ -134,7 +134,7 @@ func (s *Service) UpdateRecipientStatus(ctx context.Context, leadID, specialistI
 	return s.repo.UpdateRecipientStatus(ctx, leadID, specialistID, status, expectedUpdatedAt)
 }
 
-func dedupUUIDs(in []uuid.UUID) []uuid.UUID {
+func DedupUUIDs(in []uuid.UUID) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{}, len(in))
 	out := make([]uuid.UUID, 0, len(in))
 	for _, id := range in {

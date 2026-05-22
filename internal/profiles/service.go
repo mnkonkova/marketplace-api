@@ -156,7 +156,7 @@ func (s *Service) Patch(ctx context.Context, userID uuid.UUID, in PatchInput) (P
 }
 
 func (s *Service) SetCategories(ctx context.Context, userID uuid.UUID, in SetCategoriesInput) (Profile, error) {
-	codes := dedupStrings(in.Codes)
+	codes := DedupStrings(in.Codes)
 	if len(codes) == 0 {
 		return Profile{}, fmt.Errorf("%w: at least one category is required", ErrInvalidInput)
 	}
@@ -331,10 +331,10 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 	if in.VideoURL == "" {
 		return PortfolioItem{}, fmt.Errorf("%w: video_url is required", ErrInvalidInput)
 	}
-	if !isHTTPURL(in.VideoURL) {
+	if !IsHTTPURL(in.VideoURL) {
 		return PortfolioItem{}, fmt.Errorf("%w: video_url must be http(s)", ErrInvalidInput)
 	}
-	if in.ThumbnailURL != "" && !isHTTPURL(in.ThumbnailURL) {
+	if in.ThumbnailURL != "" && !IsHTTPURL(in.ThumbnailURL) {
 		return PortfolioItem{}, fmt.Errorf("%w: thumbnail_url must be http(s)", ErrInvalidInput)
 	}
 	if in.Title == "" {
@@ -346,7 +346,7 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 	if len(in.Description) > portfolioMaxDescriptionLen {
 		return PortfolioItem{}, fmt.Errorf("%w: description too long", ErrInvalidInput)
 	}
-	in.CategoryCodes = dedupStrings(in.CategoryCodes)
+	in.CategoryCodes = DedupStrings(in.CategoryCodes)
 	// Категории видео должны быть подмножеством категорий профиля. Если юзер
 	// не выбрал — по дефолту ставим primary (видео должно где-то «жить»).
 	profile, err := s.repo.Get(ctx, userID)
@@ -419,7 +419,7 @@ func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.U
 // expectedUpdatedAt — optimistic-lock версия portfolio_items.updated_at,
 // прислана фронтом из последнего GET. nil = без проверки.
 func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string, expectedUpdatedAt *time.Time) (PortfolioItem, error) {
-	codes = dedupStrings(codes)
+	codes = DedupStrings(codes)
 	profile, err := s.repo.Get(ctx, userID)
 	if err != nil {
 		return PortfolioItem{}, err
@@ -546,7 +546,7 @@ func (s *Service) CreateImageUploadURL(
 	}, nil
 }
 
-func isHTTPURL(s string) bool {
+func IsHTTPURL(s string) bool {
 	u, err := url.Parse(s)
 	if err != nil {
 		return false
@@ -563,7 +563,7 @@ func (e *ProfileRejectedError) Is(target error) bool {
 	return target == ErrProfileRejected
 }
 
-func dedupStrings(in []string) []string {
+func DedupStrings(in []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(in))
 	for _, v := range in {

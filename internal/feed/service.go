@@ -123,7 +123,7 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 
 	// Diversity: round-robin по user_id, чтобы 5 видео одного спеца подряд
 	// не валились. Внутри юзера сохраняется ES-порядок (score DESC).
-	interleaved := interleaveByUser(docs)
+	interleaved := InterleaveByUser(docs)
 
 	// video_idx / video_total — позиция и количество видео этого спеца
 	// в текущей странице. Используется фронтом для overlay "N/M".
@@ -255,10 +255,10 @@ func buildFeedQuery(q Query, cursor cursorPayload) map[string]any {
 	return body
 }
 
-// interleaveByUser — round-robin по user_id, сохраняя ES-порядок внутри
+// InterleaveByUser — round-robin по user_id, сохраняя ES-порядок внутри
 // каждого пользователя. На вход — ES-выдача (sorted by score), на выход —
 // диверсифицированный список: первое видео каждого юзера, потом второе и т.д.
-func interleaveByUser(docs []search.FeedVideoDoc) []search.FeedVideoDoc {
+func InterleaveByUser(docs []search.FeedVideoDoc) []search.FeedVideoDoc {
 	if len(docs) <= 1 {
 		return docs
 	}

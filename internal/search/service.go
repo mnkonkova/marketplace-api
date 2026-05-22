@@ -133,7 +133,7 @@ func (s *Service) CategoryStats(ctx context.Context) ([]CategoryCount, error) {
 	if err != nil {
 		return nil, fmt.Errorf("es category stats: %w", err)
 	}
-	return parseCategoryAggs(resp.Aggregations), nil
+	return ParseCategoryAggs(resp.Aggregations), nil
 }
 
 // LoadDocsByIDs — батч-фетч опубликованных спецов из ES по списку user_id.
@@ -222,15 +222,15 @@ func (s *Service) runQuery(ctx context.Context, q Query, opts queryOpts) (Result
 		out.Items = append(out.Items, doc)
 	}
 	if !opts.skipFacets {
-		if cats := parseCategoryAggs(resp.Aggregations); len(cats) > 0 {
+		if cats := ParseCategoryAggs(resp.Aggregations); len(cats) > 0 {
 			out.Facets = &Facets{Categories: cats}
 		}
 	}
 	return out, nil
 }
 
-// parseCategoryAggs — общая распаковка bucket'ов из `aggregations.categories.buckets`.
-func parseCategoryAggs(raw json.RawMessage) []CategoryCount {
+// ParseCategoryAggs — общая распаковка bucket'ов из `aggregations.categories.buckets`.
+func ParseCategoryAggs(raw json.RawMessage) []CategoryCount {
 	if len(raw) == 0 {
 		return nil
 	}

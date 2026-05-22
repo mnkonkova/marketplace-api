@@ -100,7 +100,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 	in.Email = strings.TrimSpace(in.Email)
 	in.DisplayName = strings.TrimSpace(in.DisplayName)
 
-	email, err := validateEmail(in.Email)
+	email, err := ValidateEmail(in.Email)
 	if err != nil {
 		return RegisterResult{}, err
 	}
@@ -245,7 +245,7 @@ func (s *Service) VerifyEmail(ctx context.Context, rawToken string) (TokenPair, 
 	if s.verificationOff {
 		return TokenPair{}, ErrTokenInvalid
 	}
-	userID, err := s.repo.ConsumeVerification(ctx, hashToken(rawToken))
+	userID, err := s.repo.ConsumeVerification(ctx, HashToken(rawToken))
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -297,12 +297,12 @@ func (s *Service) ResendVerification(ctx context.Context, userID uuid.UUID) erro
 // issueVerifyTokenInTx — общий код для register и resend: генерит токен,
 // пишет хэш в БД, эмитит outbox-событие с raw-токеном для письма.
 func (s *Service) issueVerifyTokenInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email, displayName string) error {
-	raw, err := generateToken()
+	raw, err := GenerateToken()
 	if err != nil {
 		return fmt.Errorf("gen token: %w", err)
 	}
 	expiresAt := s.now().Add(s.verifyTokenTTL)
-	if err := s.repo.InsertVerificationInTx(ctx, tx, userID, email, hashToken(raw), expiresAt); err != nil {
+	if err := s.repo.InsertVerificationInTx(ctx, tx, userID, email, HashToken(raw), expiresAt); err != nil {
 		return err
 	}
 	return outbox.Emit(ctx, tx, outbox.AggregateEmail, userID.String(),
@@ -314,10 +314,10 @@ func (s *Service) issueVerifyTokenInTx(ctx context.Context, tx pgx.Tx, userID uu
 		})
 }
 
-// generateToken — 32 случайных байта в base64 URL-safe (43 символа).
+// GenerateToken — 32 случайных байта в base64 URL-safe (43 символа).
 // crypto/rand — заведомо CSPRNG, для одноразовых ссылок подтверждения
 // этого с большим запасом достаточно.
-func generateToken() (string, error) {
+func GenerateToken() (string, error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
@@ -325,21 +325,21 @@ func generateToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
-// hashToken — sha256(raw) → hex. В БД храним хэш, не raw, чтобы дамп БД
+// HashToken — sha256(raw) → hex. В БД храним хэш, не raw, чтобы дамп БД
 // не позволял подтвердить чужую почту.
-func hashToken(raw string) string {
+func HashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
 
-// validateEmail — RFC 5322 разбор + санитарные проверки.
+// ValidateEmail — RFC 5322 разбор + санитарные проверки.
 // Возвращает нормализованный email (lower-case, trimmed) или ErrInvalidInput.
 //
 // net/mail.ParseAddress принимает форму "Name <addr@host>" — нам нужен только
 // addr, иначе пропустим "Foo <a@b>". Поэтому ловим .Address из результата
 // и сверяем что во входе не было display-name-обёртки (== addr.Address ровно
 // равен input после lower).
-func validateEmail(s string) (string, error) {
+func ValidateEmail(s string) (string, error) {
 	if s == "" {
 		return "", fmt.Errorf("%w: email is required", ErrInvalidInput)
 	}

@@ -118,8 +118,8 @@ func (s *Service) Run(ctx context.Context, in Input) (Result, error) {
 	if parsed.Done && parsed.Search != nil {
 		out.Search = &SearchParams{
 			Q:          strings.TrimSpace(parsed.Search.Q),
-			Categories: dedupNonEmpty(parsed.Search.Categories),
-			Skills:     dedupNonEmpty(parsed.Search.Skills),
+			Categories: DedupNonEmpty(parsed.Search.Categories),
+			Skills:     DedupNonEmpty(parsed.Search.Skills),
 			City:       strings.TrimSpace(parsed.Search.City),
 			RateMin:    parsed.Search.RateMin,
 			RateMax:    parsed.Search.RateMax,
@@ -131,7 +131,7 @@ func (s *Service) Run(ctx context.Context, in Input) (Result, error) {
 	return out, nil
 }
 
-func dedupNonEmpty(xs []string) []string {
+func DedupNonEmpty(xs []string) []string {
 	seen := make(map[string]struct{}, len(xs))
 	out := make([]string, 0, len(xs))
 	for _, x := range xs {
