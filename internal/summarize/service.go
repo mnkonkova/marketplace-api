@@ -92,6 +92,19 @@ func (s *Service) Run(ctx context.Context, q search.Query) (Result, error) {
 		}, nil
 	}
 
+	// Поиск по имени: если запрос точно совпадает с display_name одного из
+	// кандидатов (регистр и пробелы не важны), отдаём этого спеца без LLM —
+	// экономия токенов на самом частом name-lookup кейсе. Всё, что сложнее
+	// (диминутивы, падежи, mixed-queries), обрабатывает LLM по пункту
+	// «ИМЕНА И НИКИ» в systemPrompt.
+	if hit := pickNameMatch(q.Q, res.Items); hit != nil {
+		return Result{
+			Summary:   fmt.Sprintf("Найден специалист %s.", hit.DisplayName),
+			Picks:     []Pick{{UserID: hit.UserID, Rank: 1, Reason: "Совпадение по имени.", Profile: *hit}},
+			Broadened: res.Broadened,
+		}, nil
+	}
+
 	userMsg := buildUserMessage(q, res.Items)
 
 	resp, err := s.client.Messages(ctx, llm.MessagesRequest{
@@ -217,6 +230,30 @@ func buildUserMessage(q search.Query, cands []search.IndexDoc) string {
 	enc, _ := json.Marshal(short)
 	sb.Write(enc)
 	return sb.String()
+}
+
+// pickNameMatch срабатывает только на тривиальный случай: запрос точно равен
+// display_name одного из кандидатов (lower + collapse spaces). Покрывает
+// сценарий «скопировал имя из карточки и вставил в поиск», экономит LLM-вызов.
+// Все остальные случаи — диминутивы (Ваня/Иван), падежи (Конковой/Конкова),
+// транслит, частичные/смешанные запросы — отдаются LLM: добавленный пункт
+// «ИМЕНА И НИКИ» в systemPrompt велит ему распознавать такие формы и ставить
+// нужного спеца первым в picks.
+func pickNameMatch(q string, items []search.IndexDoc) *search.IndexDoc {
+	nq := normalizeName(q)
+	if nq == "" {
+		return nil
+	}
+	for i := range items {
+		if normalizeName(items[i].DisplayName) == nq {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func normalizeName(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 func truncRunes(s string, max int) string {
