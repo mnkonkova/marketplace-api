@@ -463,7 +463,7 @@ func main() {
 		// - S3 не настроен → fallback на публичные mp4 (w3schools/Google).
 		// Без demo-портфолио /api/v1/feed возвращает пустой пул, поэтому держим
 		// его на проде до тех пор, пока спецы не начнут заливать реальные ролики.
-		if err := seedPortfolio(ctx, pool, uid, i, publicBase); err != nil {
+		if err := seedPortfolio(ctx, pool, uid, i, publicBase, s.Categories); err != nil {
 			slog.Error("seed portfolio", "email", s.Email, "err", err)
 			continue
 		}
@@ -647,7 +647,9 @@ var fallbackVideoURLs = []string{
 //
 // publicBase — префикс для S3-объектов (`{publicBase}/seed/{slug}.mp4`).
 // Пустая строка → используем fallbackVideoURLs (для голой локалки).
-func seedPortfolio(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, idx int, publicBase string) error {
+// categories — коды категорий спеца; проставляются на каждое видео, чтобы
+// /search и /feed по category-фильтру находили сэмпл-портфолио.
+func seedPortfolio(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, idx int, publicBase string, categories []string) error {
 	if _, err := pool.Exec(ctx,
 		`DELETE FROM portfolio_items WHERE user_id = $1 AND kind = 'video'`, uid); err != nil {
 		return fmt.Errorf("clear portfolio: %w", err)
@@ -667,11 +669,11 @@ INSERT INTO portfolio_items (
     video_url, thumbnail_url,
     category_codes, sort_order,
     kind, duration_sec, aspect
-) VALUES ($1, $2, $3, $4, $5, ARRAY[]::text[], $6, 'video', $7, $8)`
+) VALUES ($1, $2, $3, $4, $5, $6, $7, 'video', $8, $9)`
 		if _, err := pool.Exec(ctx, q,
 			uid, v.Title, v.Description,
 			videoURL, thumbURL,
-			k, v.DurationSec, v.Aspect,
+			categories, k, v.DurationSec, v.Aspect,
 		); err != nil {
 			return fmt.Errorf("insert portfolio: %w", err)
 		}
