@@ -146,6 +146,14 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 				id, in.DisplayName, *user.Email); err != nil {
 				return fmt.Errorf("insert profile: %w", err)
 			}
+			// Инвариант «любая запись в specialist_profiles → outbox-событие».
+			// Сейчас Reconcile увидит is_published=false и удалит из индекса
+			// (no-op для нового спеца), но без эмита будущая регрессия (напр.
+			// автопубликация) тихо оставит спеца вне индекса.
+			if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, id.String(),
+				outbox.EventSpecialistUpserted, map[string]string{"user_id": id.String(), "source": "register"}); err != nil {
+				return err
+			}
 		}
 		// Если soft-gate выключен (локальный запуск без Unisender) — сразу
 		// помечаем юзера verified и не плодим outbox-события: писем не будет.

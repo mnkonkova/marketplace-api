@@ -196,6 +196,20 @@ func (r *Repo) ReplaceCategoriesInTx(ctx context.Context, tx pgx.Tx, userID uuid
 			return fmt.Errorf("insert category %s: %w", code, err)
 		}
 	}
+	// Каскад: если из профиля убрали категорию X, у его видео в
+	// portfolio_items.category_codes её тоже не должно остаться — иначе
+	// /feed?category=X покажет ролик «editor» от спеца, который editor'ом
+	// уже не является. INTERSECT по unnest сохраняет порядок и убирает
+	// «осиротевшие» коды.
+	if _, err := tx.Exec(ctx, `
+UPDATE portfolio_items pi
+SET category_codes = COALESCE(ARRAY(
+    SELECT c FROM unnest(pi.category_codes) AS c
+    WHERE c IN (SELECT category_code FROM specialist_categories WHERE user_id = $1)
+), ARRAY[]::TEXT[])
+WHERE pi.user_id = $1`, userID); err != nil {
+		return fmt.Errorf("cascade portfolio category_codes: %w", err)
+	}
 	return nil
 }
 
