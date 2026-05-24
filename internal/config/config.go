@@ -81,6 +81,16 @@ type Config struct {
 	RateAuthPerMin       int           `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
 	RateAuthPerHour      int           `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
 
+	// Outbox-воркер. MaxAttempts/BackoffCap определяют поведение ретраев и
+	// порог для DLQ (dead_at). Retention/CleanupInterval — TTL на обработанные
+	// записи (dead-записи cleanup не трогает). WorkerMetricsAddr — отдельный
+	// HTTP-listener у воркера для /metrics (alloy скрейпит worker:9090/metrics).
+	OutboxMaxAttempts     int           `env:"OUTBOX_MAX_ATTEMPTS" envDefault:"10"`
+	OutboxBackoffCap      time.Duration `env:"OUTBOX_BACKOFF_CAP" envDefault:"10m"`
+	OutboxRetention       time.Duration `env:"OUTBOX_RETENTION" envDefault:"168h"`
+	OutboxCleanupInterval time.Duration `env:"OUTBOX_CLEANUP_INTERVAL" envDefault:"1h"`
+	WorkerMetricsAddr     string        `env:"WORKER_METRICS_ADDR" envDefault:":9090"`
+
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 
 	// CORSOrigins — список разрешённых origin'ов через запятую

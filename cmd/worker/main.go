@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"marketpclce/internal/config"
 	"marketpclce/internal/mailer"
@@ -43,11 +46,15 @@ func main() {
 	defer pool.Close()
 
 	esClient := es.New(cfg.OpenSearchURL)
-	if err := esClient.EnsureIndex(rootCtx, cfg.OpenSearchIndexProfile, search.IndexMapping()); err != nil {
+	// EnsureIndex с ретраями: при холодном старте compose OS может быть ещё
+	// не готов, EOF/connection-reset — норма в первые секунды. Раньше worker
+	// падал os.Exit(1), оставляя outbox без обработчика. Ждём до 60 c
+	// (60×1 c), затем — fatal: что-то серьёзно сломано.
+	if err := ensureIndexWithRetry(rootCtx, esClient, cfg.OpenSearchIndexProfile, search.IndexMapping(), "specialists"); err != nil {
 		slog.Error("ensure index", "err", err)
 		os.Exit(1)
 	}
-	if err := esClient.EnsureIndex(rootCtx, cfg.OpenSearchIndexFeedVideos, search.FeedVideoMapping()); err != nil {
+	if err := ensureIndexWithRetry(rootCtx, esClient, cfg.OpenSearchIndexFeedVideos, search.FeedVideoMapping(), "feed_videos"); err != nil {
 		slog.Error("ensure feed_videos index", "err", err)
 		os.Exit(1)
 	}
@@ -140,7 +147,39 @@ func main() {
 			outbox.AggregateSpecialist: specialistHandler,
 			outbox.AggregateEmail:      emailHandler,
 		},
-		outbox.Config{})
+		outbox.Config{
+			MaxAttempts:     cfg.OutboxMaxAttempts,
+			BackoffCap:      cfg.OutboxBackoffCap,
+			Retention:       cfg.OutboxRetention,
+			CleanupInterval: cfg.OutboxCleanupInterval,
+		})
+
+	// /metrics для alloy. Отдельный listener, чтобы не путать с api:8080 и
+	// чтобы worker оставался без бизнес-API. /healthz нужен compose'у — без
+	// него health-check'и не зацепятся.
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	metricsSrv := &http.Server{
+		Addr:              cfg.WorkerMetricsAddr,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		slog.Info("worker metrics listening", "addr", cfg.WorkerMetricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("worker metrics server", "err", err)
+		}
+	}()
+	go func() {
+		<-rootCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = metricsSrv.Shutdown(shutdownCtx)
+	}()
 
 	if err := worker.Run(rootCtx); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("worker stopped", "err", err)
@@ -167,4 +206,33 @@ func renderVerifyEmail(p outbox.EmailVerifyPayload) (subject, plain string) {
 		"Если это не вы — просто проигнорируйте письмо.\n\n" +
 		"— marketpclce"
 	return subject, plain
+}
+
+// ensureIndexWithRetry — EnsureIndex с экспоненциальным ожиданием.
+// На холодном старте docker compose OpenSearch ещё может не принимать
+// соединения; раньше worker падал с os.Exit(1) и outbox-события копились
+// без обработчика. 60 секунд (60×1 c) с запасом покрывают cold start.
+func ensureIndexWithRetry(ctx context.Context, esClient *es.Client, index string, mapping map[string]any, label string) error {
+	const maxAttempts = 60
+	var lastErr error
+	for i := 0; i < maxAttempts; i++ {
+		if err := esClient.EnsureIndex(ctx, index, mapping); err != nil {
+			lastErr = err
+			if i == 0 || i == maxAttempts-1 || i%10 == 0 {
+				slog.Warn("ensure index retrying",
+					"index", label, "attempt", i+1, "max", maxAttempts, "err", err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		if i > 0 {
+			slog.Info("ensure index ok after retry", "index", label, "attempts", i+1)
+		}
+		return nil
+	}
+	return fmt.Errorf("ensure index %q after %d attempts: %w", label, maxAttempts, lastErr)
 }

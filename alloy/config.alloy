@@ -21,6 +21,22 @@ prometheus.scrape "api" {
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// ── Метрики outbox-воркера ──────────────────────────────────────────
+// У воркера отдельный HTTP-listener на 9090 (см. cmd/worker/main.go) —
+// бизнес-API нет, только /metrics и /healthz. Видно изнутри docker-сети.
+prometheus.scrape "worker" {
+	targets = [
+		{
+			__address__ = "worker:9090",
+			service     = "worker",
+			job         = "marketpclce-worker",
+		},
+	]
+	metrics_path    = "/metrics"
+	scrape_interval = "30s"
+	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
 // ── Хост-метрики (CPU/RAM/диск/сеть VDS) ───────────────────────────
 prometheus.scrape "node" {
 	targets = [
