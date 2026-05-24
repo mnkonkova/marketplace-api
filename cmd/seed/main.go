@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"marketpclce/internal/config"
+	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
 	"marketpclce/internal/search"
@@ -435,6 +437,8 @@ func main() {
 	}
 
 	count := 0
+	portfolioByCategory := make(map[string]int)
+	specialistsByCategory := make(map[string]int)
 	for i, s := range seeds {
 		uid, err := upsertUser(ctx, pool, s.Email, string(hash))
 		if err != nil {
@@ -463,9 +467,14 @@ func main() {
 		// - S3 не настроен → fallback на публичные mp4 (w3schools/Google).
 		// Без demo-портфолио /api/v1/feed возвращает пустой пул, поэтому держим
 		// его на проде до тех пор, пока спецы не начнут заливать реальные ролики.
-		if err := seedPortfolio(ctx, pool, uid, i, publicBase, s.Categories); err != nil {
+		portfolioRows, err := seedPortfolio(ctx, pool, uid, i, publicBase, s.Categories)
+		if err != nil {
 			slog.Error("seed portfolio", "email", s.Email, "err", err)
 			continue
+		}
+		for _, c := range s.Categories {
+			portfolioByCategory[c] += portfolioRows
+			specialistsByCategory[c]++
 		}
 		doc, err := searchRepo.LoadDoc(ctx, uid)
 		if err != nil {
@@ -476,10 +485,52 @@ func main() {
 			slog.Error("index", "email", s.Email, "err", err)
 			continue
 		}
+		// Триггерим outbox-событие, чтобы worker пересобрал feed_videos
+		// (категории/портфолио/категори_codes). Без этого после повторного
+		// seed'а индекс feed_videos оставался со старыми доками.
+		if err := emitSpecialistUpserted(ctx, pool, uid); err != nil {
+			slog.Error("emit outbox", "email", s.Email, "err", err)
+			continue
+		}
 		count++
-		slog.Info("seeded", "email", s.Email, "user_id", uid.String())
+		slog.Info("seeded",
+			"email", s.Email,
+			"user_id", uid.String(),
+			"primary_category", s.PrimaryCategory,
+			"categories", s.Categories,
+			"portfolio_rows", portfolioRows,
+		)
+	}
+	for _, cat := range sortedKeys(specialistsByCategory) {
+		slog.Info("category summary",
+			"category", cat,
+			"specialists", specialistsByCategory[cat],
+			"portfolio_rows", portfolioByCategory[cat],
+		)
 	}
 	slog.Info("done", "seeded", count, "total", len(seeds))
+}
+
+func emitSpecialistUpserted(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, uid.String(),
+		outbox.EventSpecialistUpserted, map[string]any{"source": "seed"}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func fatal(label string, err error) {
@@ -649,10 +700,10 @@ var fallbackVideoURLs = []string{
 // Пустая строка → используем fallbackVideoURLs (для голой локалки).
 // categories — коды категорий спеца; проставляются на каждое видео, чтобы
 // /search и /feed по category-фильтру находили сэмпл-портфолио.
-func seedPortfolio(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, idx int, publicBase string, categories []string) error {
+func seedPortfolio(ctx context.Context, pool *pgxpool.Pool, uid uuid.UUID, idx int, publicBase string, categories []string) (int, error) {
 	if _, err := pool.Exec(ctx,
 		`DELETE FROM portfolio_items WHERE user_id = $1 AND kind = 'video'`, uid); err != nil {
-		return fmt.Errorf("clear portfolio: %w", err)
+		return 0, fmt.Errorf("clear portfolio: %w", err)
 	}
 
 	// 2 + (idx % 2) → 2 или 3 видео на спеца, чтобы round-robin было что разворачивать.
@@ -675,10 +726,10 @@ INSERT INTO portfolio_items (
 			videoURL, thumbURL,
 			categories, k, v.DurationSec, v.Aspect,
 		); err != nil {
-			return fmt.Errorf("insert portfolio: %w", err)
+			return 0, fmt.Errorf("insert portfolio: %w", err)
 		}
 	}
-	return nil
+	return count, nil
 }
 
 func buildSampleURL(publicBase, slug string, slot int) string {
