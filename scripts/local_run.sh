@@ -36,6 +36,14 @@ if [[ "${SKIP_UP:-0}" != "1" ]]; then
   until "${DC[@]}" exec -T postgres pg_isready -U "${POSTGRES_USER:-marketpclce}" -d "${POSTGRES_DB:-marketpclce}" >/dev/null 2>&1; do
     sleep 1
   done
+
+  # OpenSearch стартует медленнее, чем pg — worker без него падает с
+  # os.Exit(1) на EnsureIndex. Ждём пока кластер ответит хотя бы yellow.
+  os_url="${OPENSEARCH_URL:-http://localhost:9200}"
+  echo "→ wait for opensearch ready (${os_url})"
+  until curl -sf "${os_url}/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null 2>&1; do
+    sleep 1
+  done
 fi
 
 if [[ "${SKIP_MIGRATE:-0}" != "1" ]]; then
