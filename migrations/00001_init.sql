@@ -94,13 +94,8 @@ CREATE TABLE portfolio_items (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX portfolio_items_user_idx ON portfolio_items(user_id);
--- Горячий путь /feed.LoadVideosByUsers: фильтр user_id ∈ (...) с kind=video и
--- видимым video_url, потом row_number() ORDER BY sort_order, created_at DESC
--- на разбиение по спецу. Покрывающий индекс убирает heap-scan + сразу даёт
--- готовый порядок внутри партиции.
-CREATE INDEX portfolio_items_videos_idx
-    ON portfolio_items(user_id, sort_order, created_at DESC)
-    WHERE kind = 'video' AND video_url IS NOT NULL AND video_url <> '';
+-- portfolio_items_videos_idx (partial по kind='video') создаётся в 00003,
+-- после ADD COLUMN kind.
 
 CREATE TABLE leads (
     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
