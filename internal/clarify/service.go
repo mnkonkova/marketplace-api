@@ -5,17 +5,35 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
+	"time"
 
 	"marketpclce/internal/llm"
 )
 
 var ErrLLMDisabled = errors.New("llm_disabled")
 
+// CategoryLister — источник актуального списка категорий для system-промпта.
+// Реализуется тонким адаптером поверх catalog.Repo на стороне main, чтобы
+// не вводить здесь обратную зависимость на catalog.
+type CategoryLister interface {
+	ListCategoriesForPrompt(ctx context.Context) ([]CategoryRef, error)
+}
+
+const categoryCacheTTL = 5 * time.Minute
+
 type Service struct {
 	client    llm.Provider
 	maxTokens int
 	effort    string
+
+	lister CategoryLister
+
+	catMu     sync.Mutex
+	catCache  []CategoryRef
+	catExpiry time.Time
 }
 
 func NewService(client llm.Provider, maxTokens int, effort string) *Service {
@@ -23,6 +41,35 @@ func NewService(client llm.Provider, maxTokens int, effort string) *Service {
 		maxTokens = 1024
 	}
 	return &Service{client: client, maxTokens: maxTokens, effort: effort}
+}
+
+// WithCategoryLister включает динамическую подгрузку категорий из БД.
+// Без вызова — Service использует fallbackCategories из prompt.go.
+func (s *Service) WithCategoryLister(l CategoryLister) *Service {
+	s.lister = l
+	return s
+}
+
+// categories возвращает кешированный список категорий (TTL 5 минут).
+// Если lister упал или не настроен — возвращает nil; вызывающий код
+// должен передать nil в buildSystemPrompt, тот подставит fallbackCategories.
+func (s *Service) categories(ctx context.Context) []CategoryRef {
+	if s.lister == nil {
+		return nil
+	}
+	s.catMu.Lock()
+	defer s.catMu.Unlock()
+	if time.Now().Before(s.catExpiry) && s.catCache != nil {
+		return s.catCache
+	}
+	cats, err := s.lister.ListCategoriesForPrompt(ctx)
+	if err != nil {
+		slog.Warn("clarify: list categories for prompt failed, using fallback", "err", err)
+		return nil
+	}
+	s.catCache = cats
+	s.catExpiry = time.Now().Add(categoryCacheTTL)
+	return cats
 }
 
 type Message struct {
@@ -71,7 +118,7 @@ func (s *Service) Run(ctx context.Context, in Input) (Result, error) {
 		return Result{}, fmt.Errorf("empty history")
 	}
 
-	system := buildSystemPrompt(in.Category)
+	system := buildSystemPrompt(s.categories(ctx), in.Category)
 
 	resp, err := s.client.Messages(ctx, llm.MessagesRequest{
 		MaxTokens: s.maxTokens,

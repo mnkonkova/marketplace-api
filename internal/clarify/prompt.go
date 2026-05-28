@@ -1,20 +1,26 @@
 package clarify
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
-const baseSystemPrompt = `Ты — ассистент маркетплейса marketpclce, который помогает заказчику сформулировать задачу до запуска поиска по каталогу специалистов в сфере видео и контент-продакшна.
+// CategoryRef — минимальное описание категории для промпта. Совместимо
+// с `catalog.Category` по полям Code/Title/Description; чтобы не тащить
+// зависимость от catalog в clarify, конкретный тип переезжает через
+// тонкий адаптер на стороне main (см. CategoryLister).
+type CategoryRef struct {
+	Code        string
+	Title       string
+	Description string
+}
+
+const promptHeader = `Ты — ассистент маркетплейса marketpclce, который помогает заказчику сформулировать задачу до запуска поиска по каталогу специалистов в сфере видео и контент-продакшна.
 
 КАТЕГОРИИ
-- editor — Монтажёр (видеомонтаж, нарезка, цветокор)
-- video_director — Видеоредактор / режиссёр монтажа (концепция и сторителлинг)
-- motion — Моушн-дизайнер (After Effects, анимация)
-- scriptwriter — Сценарист
-- smm — СММ-специалист (контент-планы, ведение соцсетей)
-- ugc — UGC-контент (ролики от первого лица для брендов)
-- blogger — Блогер (своя аудитория, интеграции)
-- ads_seo — Таргет + SEO
-- seeding — Посевы
+`
 
+const promptTail = `
 НАВЫКИ (slug)
 premiere, after-effects, davinci, final-cut, capcut, photoshop, figma,
 reels, tiktok, youtube, shorts, vk-clips, telegram
@@ -39,15 +45,43 @@ reels, tiktok, youtube, shorts, vk-clips, telegram
 ФОРМАТ
 Возвращай строго JSON по схеме. Если done=false — search можно опустить или оставить пустым. Если done=true — search обязательно заполнен.`
 
-func buildSystemPrompt(category string) string {
-	if category == "" {
-		return baseSystemPrompt
+// fallbackCategories — статический список, используется если БД-источник
+// категорий недоступен (lister == nil или вернул ошибку). Промпт остаётся
+// рабочим, но без свежих кодов из catalog.
+var fallbackCategories = []CategoryRef{
+	{"editor", "Монтажёр", "видеомонтаж, нарезка, цветокор"},
+	{"video_director", "Видеоредактор / режиссёр монтажа", "концепция и сторителлинг"},
+	{"motion", "Моушн-дизайнер", "After Effects, анимация"},
+	{"scriptwriter", "Сценарист", ""},
+	{"smm", "СММ-специалист", "контент-планы, ведение соцсетей"},
+	{"ugc", "UGC-контент", "ролики от первого лица для брендов"},
+	{"blogger", "Блогер", "своя аудитория, интеграции"},
+	{"ads_seo", "Таргет + SEO", ""},
+	{"seeding", "Посевы", ""},
+}
+
+// buildSystemPrompt собирает system-prompt из живого списка категорий.
+// Если cats пустой — берёт fallbackCategories. Если задан category — добавляет
+// в конец секцию ТЕКУЩИЙ КОНТЕКСТ с зафиксированным кодом.
+func buildSystemPrompt(cats []CategoryRef, category string) string {
+	if len(cats) == 0 {
+		cats = fallbackCategories
 	}
 	var b strings.Builder
-	b.WriteString(baseSystemPrompt)
-	b.WriteString("\n\nТЕКУЩИЙ КОНТЕКСТ\nПользователь уже выбрал категорию `")
-	b.WriteString(category)
-	b.WriteString("`. Категорию переспрашивать не надо — она уже зафиксирована и должна попасть в search.categories.")
+	b.WriteString(promptHeader)
+	for _, c := range cats {
+		if c.Description != "" {
+			fmt.Fprintf(&b, "- %s — %s (%s)\n", c.Code, c.Title, c.Description)
+		} else {
+			fmt.Fprintf(&b, "- %s — %s\n", c.Code, c.Title)
+		}
+	}
+	b.WriteString(promptTail)
+	if category != "" {
+		b.WriteString("\n\nТЕКУЩИЙ КОНТЕКСТ\nПользователь уже выбрал категорию `")
+		b.WriteString(category)
+		b.WriteString("`. Категорию переспрашивать не надо — она уже зафиксирована и должна попасть в search.categories.")
+	}
 	return b.String()
 }
 

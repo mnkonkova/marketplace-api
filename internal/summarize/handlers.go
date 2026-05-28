@@ -58,7 +58,7 @@ type request struct {
 func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON в теле запроса.")
 		return
 	}
 	q := search.Query{
@@ -92,7 +92,8 @@ func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.Error("summarize", "err", err)
 		}
-		httpx.WriteErr(w, http.StatusBadGateway, "summarize_failed")
+		httpx.WriteErrMsg(w, http.StatusBadGateway, "summarize_failed",
+			"LLM не смог собрать саммари по выдаче. Попробуйте позже.")
 		return
 	}
 

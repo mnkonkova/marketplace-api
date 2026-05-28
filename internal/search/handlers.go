@@ -32,7 +32,8 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	q := parseQuery(r)
 	res, err := h.svc.Search(r.Context(), q)
 	if err != nil {
-		httpx.WriteErr(w, http.StatusBadGateway, "search_unavailable")
+		httpx.WriteErrMsg(w, http.StatusBadGateway, "search_unavailable",
+			"Поиск временно недоступен. Попробуйте позже.")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, res)
@@ -48,7 +49,8 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CategoryStats(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.CategoryStats(r.Context())
 	if err != nil {
-		httpx.WriteErr(w, http.StatusBadGateway, "search_unavailable")
+		httpx.WriteErrMsg(w, http.StatusBadGateway, "search_unavailable",
+			"Поиск временно недоступен. Попробуйте позже.")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})

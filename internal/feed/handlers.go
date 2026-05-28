@@ -38,7 +38,8 @@ func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
 	q := parseQuery(r)
 	res, err := h.svc.Feed(r.Context(), q)
 	if err != nil {
-		httpx.WriteErr(w, http.StatusBadGateway, "feed_unavailable")
+		httpx.WriteErrMsg(w, http.StatusBadGateway, "feed_unavailable",
+			"Лента временно недоступна. Попробуйте позже.")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, res)

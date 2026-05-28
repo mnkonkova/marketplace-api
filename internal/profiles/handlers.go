@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -15,6 +16,34 @@ import (
 type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
+
+// Человекочитаемые сообщения. Стабильные коды (`error`) остаются прежними,
+// сообщения добавляются в `message` — фронт ветвится по коду, в UI кладёт текст.
+const (
+	msgInternal       = "Внутренняя ошибка сервера. Попробуйте позже."
+	msgNoUser         = "Требуется авторизация."
+	msgBadJSON        = "Некорректный JSON в теле запроса."
+	msgBadID          = "Неверный формат идентификатора."
+	msgNoProfile      = "Профиль не найден."
+	msgNotFound       = "Объект не найден."
+	msgStale          = "Объект был изменён другим запросом. Перезагрузите данные."
+	msgPublishInc     = "Профиль не готов к публикации: проверьте обязательные поля."
+	msgEmailUnverif   = "Подтвердите email — на него отправлено письмо."
+	msgStorageOff     = "Хранилище медиа недоступно."
+)
+
+// invalidInputMessage достаёт человеческое сообщение из обёрнутой ErrInvalidInput.
+// Сервисный слой обёртывает ошибки как `fmt.Errorf("%w: <detail>", ErrInvalidInput)`,
+// поэтому err.Error() выглядит как "invalid input: <detail>". Возвращаем <detail>
+// для UI; если префикса нет (на всякий случай), вернётся текст ошибки целиком.
+func invalidInputMessage(err error) string {
+	const prefix = "invalid input: "
+	s := err.Error()
+	if strings.HasPrefix(s, prefix) {
+		return strings.TrimPrefix(s, prefix)
+	}
+	return s
+}
 
 // Public godoc
 // @Summary      Публичный профиль специалиста
@@ -28,15 +57,16 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 func (h *Handler) Public(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_id")
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
 		return
 	}
 	p, err := h.svc.GetPublic(r.Context(), id)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		httpx.WriteErr(w, http.StatusNotFound, "not_found")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Специалист не найден.")
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, p)
 	}
@@ -54,16 +84,16 @@ func (h *Handler) Public(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	p, err := h.svc.Get(r.Context(), uid)
 	if errors.Is(err, ErrNotFound) {
-		httpx.WriteErr(w, http.StatusNotFound, "no_profile")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 		return
 	}
 	if err != nil {
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, p)
@@ -85,24 +115,24 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	var in PatchInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	p, err := h.svc.Patch(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
-		httpx.WriteErr(w, http.StatusNotFound, "no_profile")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 	case errors.Is(err, ErrConflict):
-		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
+		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, p)
 	}
@@ -124,24 +154,24 @@ func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SetCategories(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	var in SetCategoriesInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	p, err := h.svc.SetCategories(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
-		httpx.WriteErr(w, http.StatusNotFound, "no_profile")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 	case errors.Is(err, ErrConflict):
-		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
+		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, p)
 	}
@@ -163,24 +193,24 @@ func (h *Handler) SetCategories(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SetSkills(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	var in SetSkillsInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	p, err := h.svc.SetSkills(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
-		httpx.WriteErr(w, http.StatusNotFound, "no_profile")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 	case errors.Is(err, ErrConflict):
-		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
+		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, p)
 	}
@@ -214,25 +244,28 @@ func (h *Handler) Unpublish(w http.ResponseWriter, r *http.Request) { h.setPubli
 func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	p, err := h.svc.SetPublished(r.Context(), uid, v)
 	var rejected *ProfileRejectedError
 	switch {
 	case errors.As(err, &rejected):
+		// Особый случай: возвращаем расширенный ответ с check-деталями,
+		// помимо message — поэтому пишем JSON руками, а не через WriteErrMsg.
 		httpx.WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error": "profile_rejected",
-			"check": rejected.Result,
+			"error":   "profile_rejected",
+			"message": "Профиль не прошёл автоматическую проверку.",
+			"check":   rejected.Result,
 		})
 	case errors.Is(err, ErrPublishIncomplete):
-		httpx.WriteErr(w, http.StatusUnprocessableEntity, "publish_incomplete")
+		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "publish_incomplete", msgPublishInc)
 	case errors.Is(err, ErrEmailUnverified):
-		httpx.WriteErr(w, http.StatusForbidden, "email_unverified")
+		httpx.WriteErrMsg(w, http.StatusForbidden, "email_unverified", msgEmailUnverif)
 	case errors.Is(err, ErrNotFound):
-		httpx.WriteErr(w, http.StatusNotFound, "no_profile")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, p)
 	}
@@ -251,12 +284,12 @@ func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 func (h *Handler) PortfolioList(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	items, err := h.svc.ListPortfolio(r.Context(), uid)
 	if err != nil {
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -276,20 +309,20 @@ func (h *Handler) PortfolioList(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	var in PortfolioCreateInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	item, err := h.svc.AddPortfolioVideo(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusCreated, item)
 	}
@@ -310,24 +343,24 @@ func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	if !h.svc.MediaAvailable() {
-		httpx.WriteErr(w, http.StatusServiceUnavailable, "storage_disabled")
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "storage_disabled", msgStorageOff)
 		return
 	}
 	var in PortfolioUploadURLInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	out, err := h.svc.CreatePortfolioUploadURL(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, out)
 	}
@@ -353,24 +386,24 @@ func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ImageUploadURL(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	if !h.svc.MediaAvailable() {
-		httpx.WriteErr(w, http.StatusServiceUnavailable, "storage_disabled")
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "storage_disabled", msgStorageOff)
 		return
 	}
 	var in ImageUploadURLInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	out, err := h.svc.CreateImageUploadURL(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, out)
 	}
@@ -393,29 +426,30 @@ func (h *Handler) ImageUploadURL(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_id")
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
 		return
 	}
 	var in PortfolioSetCategoriesInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	item, err := h.svc.SetPortfolioCategories(r.Context(), uid, itemID, in.Codes, in.UpdatedAt)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
-		httpx.WriteErr(w, http.StatusNotFound, "not_found")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Элемент портфолио не найден.")
 	case errors.Is(err, ErrConflict):
-		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
+		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, item)
 	}
@@ -434,20 +468,21 @@ func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request)
 func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_id")
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
 		return
 	}
 	if err := h.svc.DeletePortfolioItem(r.Context(), uid, itemID); err != nil {
 		switch {
 		case errors.Is(err, ErrNotFound):
-			httpx.WriteErr(w, http.StatusNotFound, "not_found")
+			httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Элемент портфолио не найден.")
 		default:
-			httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+			httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 		}
 		return
 	}

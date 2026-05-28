@@ -35,18 +35,21 @@ type request struct {
 func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON в теле запроса.")
 		return
 	}
 	if len(in.History) == 0 {
-		httpx.WriteErr(w, http.StatusBadRequest, "empty_history")
+		httpx.WriteErrFields(w, http.StatusBadRequest, "empty_history",
+			"История диалога пустая — добавьте хотя бы одно сообщение пользователя.",
+			httpx.FieldError{Field: "history", Message: "Должна содержать минимум одно сообщение"})
 		return
 	}
 
 	res, err := h.svc.Run(r.Context(), Input{Category: in.Category, History: in.History})
 	switch {
 	case errors.Is(err, ErrLLMDisabled):
-		httpx.WriteErr(w, http.StatusServiceUnavailable, "llm_disabled")
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "llm_disabled",
+			"LLM-провайдер не настроен на сервере.")
 		return
 	case err != nil:
 		var apiErr *llm.APIError
@@ -72,7 +75,8 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteJSON(w, http.StatusOK, fallback)
 			return
 		}
-		httpx.WriteErr(w, http.StatusBadGateway, "clarify_failed")
+		httpx.WriteErrMsg(w, http.StatusBadGateway, "clarify_failed",
+			"LLM не смог обработать запрос. Попробуйте перефразировать.")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, res)

@@ -49,12 +49,12 @@ type checkReq struct {
 func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Требуется авторизация.")
 		return
 	}
 	var in checkReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON в теле запроса.")
 		return
 	}
 
@@ -74,10 +74,14 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, ErrEmptyInput):
-		httpx.WriteErr(w, http.StatusBadRequest, "empty_input")
+		httpx.WriteErrFields(w, http.StatusBadRequest, "empty_input",
+			"Заполните хотя бы одно поле: bio или display_name.",
+			httpx.FieldError{Field: "bio", Message: "Пустое поле"},
+			httpx.FieldError{Field: "display_name", Message: "Пустое поле"})
 		return
 	case errors.Is(err, ErrLLMDisabled):
-		httpx.WriteErr(w, http.StatusServiceUnavailable, "llm_disabled")
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "llm_disabled",
+			"LLM-провайдер не настроен на сервере.")
 		return
 	case err != nil:
 		var apiErr *llm.APIError
@@ -86,7 +90,8 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.Error("profilecheck", "err", err)
 		}
-		httpx.WriteErr(w, http.StatusBadGateway, "check_failed")
+		httpx.WriteErrMsg(w, http.StatusBadGateway, "check_failed",
+			"Не удалось проверить профиль через LLM.")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, res)

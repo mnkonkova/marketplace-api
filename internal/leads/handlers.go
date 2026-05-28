@@ -31,6 +31,16 @@ type createReq struct {
 	SpecialistIDs  []string `json:"specialist_ids"`
 }
 
+// invalidInputMessage — детали валидации без префикса "invalid input: ".
+func invalidInputMessage(err error) string {
+	const prefix = "invalid input: "
+	s := err.Error()
+	if strings.HasPrefix(s, prefix) {
+		return strings.TrimPrefix(s, prefix)
+	}
+	return s
+}
+
 // Create godoc
 // @Summary      Создать заявку (lead)
 // @Description  Менеджер/клиент создаёт лид и выбирает специалистов-получателей. В ответе — id и контакты выбранных спецов (видны только создателю).
@@ -46,15 +56,20 @@ type createReq struct {
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var in createReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON в теле запроса.")
 		return
 	}
 
 	ids := make([]uuid.UUID, 0, len(in.SpecialistIDs))
-	for _, raw := range in.SpecialistIDs {
+	for i, raw := range in.SpecialistIDs {
 		id, err := uuid.Parse(strings.TrimSpace(raw))
 		if err != nil {
-			httpx.WriteErr(w, http.StatusBadRequest, "bad_specialist_id")
+			httpx.WriteErrFields(w, http.StatusBadRequest, "bad_specialist_id",
+				"В списке specialist_ids есть невалидный UUID.",
+				httpx.FieldError{
+					Field:   "specialist_ids[" + strconv.Itoa(i) + "]",
+					Message: "Должен быть UUID специалиста",
+				})
 			return
 		}
 		ids = append(ids, id)
@@ -64,7 +79,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if s := strings.TrimSpace(in.Deadline); s != "" {
 		d, err := time.Parse("2006-01-02", s)
 		if err != nil {
-			httpx.WriteErr(w, http.StatusBadRequest, "bad_deadline")
+			httpx.WriteErrFields(w, http.StatusBadRequest, "bad_deadline",
+				"Поле deadline должно быть в формате YYYY-MM-DD.",
+				httpx.FieldError{Field: "deadline", Message: "Ожидался формат YYYY-MM-DD"})
 			return
 		}
 		deadline = &d
@@ -88,13 +105,15 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case errors.Is(err, ErrNoSpecialists):
-		httpx.WriteErr(w, http.StatusBadRequest, "no_valid_specialists")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "no_valid_specialists",
+			"Среди выбранных специалистов нет ни одного валидного получателя.")
 	case errors.Is(err, ErrEmailUnverified):
-		httpx.WriteErr(w, http.StatusForbidden, "email_unverified")
+		httpx.WriteErrMsg(w, http.StatusForbidden, "email_unverified",
+			"Подтвердите email — на него отправлено письмо.")
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось создать заявку.")
 	default:
 		// Ответ включает контакты выбранных спецов — эту ветку видит ТОЛЬКО
 		// менеджер/клиент, который только что создал заявку. В feed/search/
@@ -118,7 +137,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Требуется авторизация.")
 		return
 	}
 	v := r.URL.Query()
@@ -129,10 +148,10 @@ func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.ListIncoming(r.Context(), uid, status, limit, offset)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 		return
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить входящие заявки.")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -163,29 +182,33 @@ type recipientReq struct {
 func (h *Handler) UpdateRecipient(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Требуется авторизация.")
 		return
 	}
 	leadID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_lead_id")
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_lead_id",
+			"Неверный id лида.",
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
 		return
 	}
 	var in recipientReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON в теле запроса.")
 		return
 	}
 	err = h.svc.UpdateRecipientStatus(r.Context(), leadID, uid, in.Status, in.UpdatedAt)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErr(w, http.StatusBadRequest, err.Error())
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
 	case errors.Is(err, ErrRecipientMissing):
-		httpx.WriteErr(w, http.StatusNotFound, "recipient_not_found")
+		httpx.WriteErrMsg(w, http.StatusNotFound, "recipient_not_found",
+			"Вы не получатель этого лида.")
 	case errors.Is(err, ErrConflict):
-		httpx.WriteErr(w, http.StatusConflict, "stale_updated_at")
+		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at",
+			"Лид был обновлён другим запросом. Перезагрузите данные.")
 	case err != nil:
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось обновить статус.")
 	default:
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": in.Status})
 	}

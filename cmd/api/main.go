@@ -161,7 +161,8 @@ func main() {
 	slog.Info("llm provider ready", "provider", cfg.LLMProvider, "model", llmClient.Model(), "has_key", llmClient.HasKey())
 	summarizeSvc := summarize.NewService(searchSvc, llmClient, cfg.LLMMaxTokens, cfg.LLMEffort)
 
-	clarifySvc := clarify.NewService(llmClient, 1024, cfg.LLMEffort)
+	clarifySvc := clarify.NewService(llmClient, 1024, cfg.LLMEffort).
+		WithCategoryLister(clarifyCategoryAdapter{repo: catalogRepo})
 	clarifyHandler := clarify.NewHandler(clarifySvc)
 
 	profileCheckSvc := profilecheck.NewService(llmClient, 1024, cfg.LLMEffort)
@@ -290,6 +291,28 @@ func (c emailResendCooldown) Acquire(ctx context.Context, key string) (bool, err
 		return false, err
 	}
 	return true, nil
+}
+
+// clarifyCategoryAdapter — мост между catalog.Repo и clarify.CategoryLister.
+// Тянет актуальный список категорий из БД, чтобы LLM-промпт в /clarify
+// видел свежие коды (включая ai_creator и прочие, добавленные после
+// первой версии prompt.go). Кеш TTL — на стороне clarify.Service.
+type clarifyCategoryAdapter struct{ repo *catalog.Repo }
+
+func (a clarifyCategoryAdapter) ListCategoriesForPrompt(ctx context.Context) ([]clarify.CategoryRef, error) {
+	cats, err := a.repo.ListCategories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]clarify.CategoryRef, 0, len(cats))
+	for _, c := range cats {
+		out = append(out, clarify.CategoryRef{
+			Code:        c.Code,
+			Title:       c.Title,
+			Description: c.Description,
+		})
+	}
+	return out, nil
 }
 
 type primaryCategoryLookup struct{ repo *profiles.Repo }

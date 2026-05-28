@@ -19,7 +19,7 @@ func NewHandler(repo *Repo) *Handler { return &Handler{repo: repo} }
 func (h *Handler) Categories(w http.ResponseWriter, r *http.Request) {
 	cats, err := h.repo.ListCategories(r.Context())
 	if err != nil {
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить категории")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": cats})
@@ -38,12 +38,14 @@ func (h *Handler) Skills(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case "", "tool", "platform", "genre":
 	default:
-		httpx.WriteErr(w, http.StatusBadRequest, "bad_kind")
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_kind",
+			"Параметр kind должен быть одним из: tool, platform, genre",
+			httpx.FieldError{Field: "kind", Message: "Допустимо: tool, platform, genre или пусто"})
 		return
 	}
 	skills, err := h.repo.ListSkills(r.Context(), kind)
 	if err != nil {
-		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить навыки")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": skills})
