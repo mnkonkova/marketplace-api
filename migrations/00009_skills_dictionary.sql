@@ -8,6 +8,13 @@ ALTER TABLE skills DROP CONSTRAINT skills_kind_check;
 ALTER TABLE skills ADD CONSTRAINT skills_kind_check
     CHECK (kind IN ('tool', 'platform', 'genre', 'skill'));
 
+-- Категория ugc отсутствует в 00001_init (не вставлялась), а skill_categories
+-- ниже ссылается на неё (capcut → ugc). Без этой страховки миграция падает
+-- с FK 23503 на свежей БД, где ugc никто не добавил руками.
+INSERT INTO specialty_categories (code, title, description, type, sort_order) VALUES
+    ('ugc', 'UGC-контент', 'Ролики от первого лица для брендов', 'Производство', 50)
+ON CONFLICT (code) DO NOTHING;
+
 -- Расширяем словарь навыков по канону «Приложения B» из тикета.
 -- Один канонический slug на сущность; кросс-навыки (photoshop, after-effects,
 -- premiere, copywriting) намеренно используются в нескольких категориях —
