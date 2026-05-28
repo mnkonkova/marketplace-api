@@ -53,7 +53,7 @@ type Config struct {
 	// APP_BASE_URL нужен воркеру для сборки verify-ссылки (у воркера нет
 	// HTTP-контекста, на dev/staging/prod разный URL).
 	UnisenderAPIKey      string        `env:"UNISENDER_API_KEY"`
-	UnisenderAPIBaseURL  string        `env:"UNISENDER_API_BASE_URL" envDefault:"https://go1.unisender.ru/ru/transactional/api/v1"`
+	UnisenderAPIBaseURL  string        `env:"UNISENDER_API_BASE_URL" envDefault:"https://goapi.unisender.ru/ru/transactional/api/v1"`
 	UnisenderFromEmail   string        `env:"UNISENDER_FROM_EMAIL"`
 	UnisenderFromName    string        `env:"UNISENDER_FROM_NAME" envDefault:"marketpclce"`
 	AppBaseURL           string        `env:"APP_BASE_URL" envDefault:"http://localhost:5173"`
