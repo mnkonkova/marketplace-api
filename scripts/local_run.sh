@@ -48,7 +48,8 @@ fi
 
 if [[ "${SKIP_MIGRATE:-0}" != "1" ]]; then
   echo "→ goose up"
-  go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$DATABASE_URL" up
+  go run -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' \
+    github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$DATABASE_URL" up
 fi
 
 if [[ "${SEED:-0}" == "1" ]]; then

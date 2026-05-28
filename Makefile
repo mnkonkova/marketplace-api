@@ -35,14 +35,19 @@ run-worker:
 seed:
 	go run ./cmd/seed
 
+# goose тянет драйверы под все БД по умолчанию (ClickHouse/MySQL/MSSQL/SQLite/…).
+# Нам нужен только postgres — исключаем остальные через build tags, чтобы не
+# раздувать Docker-образ и module cache.
+GOOSE_TAGS := no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb
+
 migrate-up:
-	go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" up
+	go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" up
 
 migrate-down:
-	go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" down
+	go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" down
 
 migrate-status:
-	go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" status
+	go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" status
 
 migrate-create:
 	@test -n "$(name)" || (echo "Usage: make migrate-create name=add_xxx"; exit 1)

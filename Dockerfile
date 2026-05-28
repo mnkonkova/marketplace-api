@@ -15,7 +15,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/api    
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/worker       ./cmd/worker && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/seed         ./cmd/seed && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/seed-videos  ./cmd/seed-videos && \
-    CGO_ENABLED=0 GOOS=linux go install github.com/pressly/goose/v3/cmd/goose@latest
+    CGO_ENABLED=0 GOOS=linux go install \
+        -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' \
+        github.com/pressly/goose/v3/cmd/goose@latest
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata && \
