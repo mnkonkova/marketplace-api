@@ -369,6 +369,96 @@ var seeds = []seedSpec{
 		SkillSlugs:      []string{"capcut", "tiktok", "reels"},
 		Rating:          4.4, Reviews: 19,
 	},
+
+	// designer
+	{
+		Email: "anya.designer@example.com", DisplayName: "Аня Лужина",
+		Bio:             "Графический дизайн под бренды: фирменный стиль, упаковка, полиграфия, презентации. Студийный опыт 5+ лет, работаю в Figma и Illustrator.",
+		City:            "Москва", RateMin: 20000, RateMax: 90000, Currency: "RUB",
+		PrimaryCategory: "designer", Categories: []string{"designer"},
+		SkillSlugs:      []string{"graphic-design", "branding", "packaging-design", "typography", "figma", "illustrator", "photoshop"},
+		Rating:          4.8, Reviews: 23,
+	},
+	{
+		Email: "mark.designer@example.com", DisplayName: "Марк Орешкин",
+		Bio:             "Веб- и SMM-дизайн: обложки, рекламные креативы, лендинги, email-шаблоны. Быстрые итерации, акцент на конверсию.",
+		City:            "Санкт-Петербург", RateMin: 15000, RateMax: 60000, Currency: "RUB",
+		PrimaryCategory: "designer", Categories: []string{"designer"},
+		SkillSlugs:      []string{"web-design", "email-design", "graphic-design", "figma", "photoshop"},
+		Rating:          4.7, Reviews: 15,
+	},
+
+	// videographer
+	{
+		Email: "stepan.videographer@example.com", DisplayName: "Степан Берёзов",
+		Bio:             "Видеосъёмка рекламных роликов и интервью в Москве. Sony FX6, набор оптики, свет. Работаю с агентствами и брендами.",
+		City:            "Москва", RateMin: 40000, RateMax: 150000, Currency: "RUB",
+		PrimaryCategory: "videographer", Categories: []string{"videographer", "editor"},
+		SkillSlugs:      []string{"videography", "premiere"},
+		Rating:          4.8, Reviews: 17,
+	},
+	{
+		Email: "ira.videographer@example.com", DisplayName: "Ира Гончарова",
+		Bio:             "Съёмка ивентов, конференций, корпоративных роликов. Многокамерная съёмка, базовый монтаж под передачу заказчику.",
+		City:            "Екатеринбург", RateMin: 25000, RateMax: 80000, Currency: "RUB",
+		PrimaryCategory: "videographer", Categories: []string{"videographer"},
+		SkillSlugs:      []string{"videography", "premiere"},
+		Rating:          4.6, Reviews: 12,
+	},
+
+	// photographer
+	{
+		Email: "lana.photographer@example.com", DisplayName: "Лана Терентьева",
+		Bio:             "Предметная и продуктовая фотосъёмка для маркетплейсов и e-commerce: одежда, косметика, гаджеты. Студия и lifestyle на локации.",
+		City:            "Москва", RateMin: 15000, RateMax: 60000, Currency: "RUB",
+		PrimaryCategory: "photographer", Categories: []string{"photographer"},
+		SkillSlugs:      []string{"product-photography", "photography", "photo-retouching", "photoshop"},
+		Rating:          4.9, Reviews: 34,
+	},
+	{
+		Email: "ruslan.photographer@example.com", DisplayName: "Руслан Кулагин",
+		Bio:             "Портретная и репортажная съёмка: мероприятия, бэкстейджи, бизнес-портреты. Быстрая сдача обработанных кадров.",
+		City:            "Казань", RateMin: 10000, RateMax: 40000, Currency: "RUB",
+		PrimaryCategory: "photographer", Categories: []string{"photographer"},
+		SkillSlugs:      []string{"photography", "photo-retouching", "photoshop"},
+		Rating:          4.7, Reviews: 21,
+	},
+
+	// actor
+	{
+		Email: "olya.actor@example.com", DisplayName: "Оля Самохина",
+		Bio:             "Актриса для UGC и рекламных роликов. Естественная подача, опыт работы с брендами косметики и фуд-сегмента. Озвучка коммерческих видео.",
+		City:            "Москва", RateMin: 8000, RateMax: 35000, Currency: "RUB",
+		PrimaryCategory: "actor", Categories: []string{"actor", "ugc"},
+		SkillSlugs:      []string{"acting", "voiceover"},
+		Rating:          4.8, Reviews: 19,
+	},
+	{
+		Email: "dima.actor@example.com", DisplayName: "Дима Левченко",
+		Bio:             "Озвучка рекламы, дикторская работа, дубляж. Студия дома, быстрая сдача. Опыт игры в коммерческих роликах.",
+		City:            "удалённо", RateMin: 5000, RateMax: 25000, Currency: "RUB",
+		PrimaryCategory: "actor", Categories: []string{"actor"},
+		SkillSlugs:      []string{"voiceover", "acting"},
+		Rating:          4.7, Reviews: 14,
+	},
+
+	// ai_creator
+	{
+		Email: "kris.ai@example.com", DisplayName: "Крис Иволгин",
+		Bio:             "ИИ-генерация рекламных видео и плакатов: Midjourney, Stable Diffusion, Runway. Промптинг под бренд, доводка в Photoshop.",
+		City:            "удалённо", RateMin: 20000, RateMax: 80000, Currency: "RUB",
+		PrimaryCategory: "ai_creator", Categories: []string{"ai_creator", "designer"},
+		SkillSlugs:      []string{"midjourney", "stable-diffusion", "runway", "prompt-engineering", "photoshop"},
+		Rating:          4.7, Reviews: 11,
+	},
+	{
+		Email: "tanya.ai@example.com", DisplayName: "Таня Луценко",
+		Bio:             "ИИ-видео и аудио: Sora, Kling, Suno. Делаю быстрые черновики для брендов, тесты идей до дорогого продакшна.",
+		City:            "Москва", RateMin: 15000, RateMax: 60000, Currency: "RUB",
+		PrimaryCategory: "ai_creator", Categories: []string{"ai_creator"},
+		SkillSlugs:      []string{"sora", "kling", "suno", "prompt-engineering"},
+		Rating:          4.5, Reviews: 7,
+	},
 }
 
 func main() {

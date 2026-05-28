@@ -22,31 +22,57 @@ type CategoryLister interface {
 	ListCategoriesForPrompt(ctx context.Context) ([]CategoryRef, error)
 }
 
-const categoryCacheTTL = 5 * time.Minute
+// SkillLister — источник актуального словаря навыков. Принимает category:
+// пустая строка → все навыки + платформы (используется когда категория ещё
+// не выбрана); код → только навыки этой категории плюс платформы (они
+// фасет, общий для всех категорий).
+type SkillLister interface {
+	ListSkillsForPrompt(ctx context.Context, category string) ([]SkillRef, error)
+}
+
+const promptCacheTTL = 5 * time.Minute
 
 type Service struct {
 	client    llm.Provider
 	maxTokens int
 	effort    string
 
-	lister CategoryLister
+	lister      CategoryLister
+	skillLister SkillLister
 
 	catMu     sync.Mutex
 	catCache  []CategoryRef
 	catExpiry time.Time
+
+	skMu     sync.Mutex
+	skCache  map[string][]SkillRef
+	skExpiry map[string]time.Time
 }
 
 func NewService(client llm.Provider, maxTokens int, effort string) *Service {
 	if maxTokens <= 0 {
 		maxTokens = 1024
 	}
-	return &Service{client: client, maxTokens: maxTokens, effort: effort}
+	return &Service{
+		client:    client,
+		maxTokens: maxTokens,
+		effort:    effort,
+		skCache:   map[string][]SkillRef{},
+		skExpiry:  map[string]time.Time{},
+	}
 }
 
 // WithCategoryLister включает динамическую подгрузку категорий из БД.
 // Без вызова — Service использует fallbackCategories из prompt.go.
 func (s *Service) WithCategoryLister(l CategoryLister) *Service {
 	s.lister = l
+	return s
+}
+
+// WithSkillLister включает динамическую подгрузку словаря навыков из БД.
+// Без вызова — Service использует fallbackSkills из prompt.go.
+func (s *Service) WithSkillLister(l SkillLister) *Service {
+	s.skillLister = l
 	return s
 }
 
@@ -68,8 +94,31 @@ func (s *Service) categories(ctx context.Context) []CategoryRef {
 		return nil
 	}
 	s.catCache = cats
-	s.catExpiry = time.Now().Add(categoryCacheTTL)
+	s.catExpiry = time.Now().Add(promptCacheTTL)
 	return cats
+}
+
+// skills возвращает кешированный словарь навыков для категории (TTL 5 минут).
+// Кеш по ключу category, чтобы фильтр был дешёвым на горячих категориях.
+// Если lister упал или не настроен — возвращает nil, и buildSystemPrompt
+// подставит fallbackSkills.
+func (s *Service) skills(ctx context.Context, category string) []SkillRef {
+	if s.skillLister == nil {
+		return nil
+	}
+	s.skMu.Lock()
+	defer s.skMu.Unlock()
+	if exp, ok := s.skExpiry[category]; ok && time.Now().Before(exp) {
+		return s.skCache[category]
+	}
+	skills, err := s.skillLister.ListSkillsForPrompt(ctx, category)
+	if err != nil {
+		slog.Warn("clarify: list skills for prompt failed, using fallback", "err", err, "category", category)
+		return nil
+	}
+	s.skCache[category] = skills
+	s.skExpiry[category] = time.Now().Add(promptCacheTTL)
+	return skills
 }
 
 type Message struct {
@@ -118,7 +167,7 @@ func (s *Service) Run(ctx context.Context, in Input) (Result, error) {
 		return Result{}, fmt.Errorf("empty history")
 	}
 
-	system := buildSystemPrompt(s.categories(ctx), in.Category)
+	system := buildSystemPrompt(s.categories(ctx), s.skills(ctx, in.Category), in.Category)
 
 	resp, err := s.client.Messages(ctx, llm.MessagesRequest{
 		MaxTokens: s.maxTokens,

@@ -47,12 +47,26 @@ type Skill struct {
 	Kind  string `json:"kind"`
 }
 
-func (r *Repo) ListSkills(ctx context.Context, kind string) ([]Skill, error) {
-	q := `SELECT id, slug, title, kind FROM skills`
+// SkillFilter — параметры фильтрации /skills. Все поля опциональны.
+// Category — код категории из specialty_categories: фильтрует через JOIN
+// со skill_categories. Платформы (kind='platform') в skill_categories не
+// заводятся, поэтому при Category != "" они в выдачу не попадают —
+// фронт показывает платформы отдельным блоком, см. cabinet.page.html.
+type SkillFilter struct {
+	Kind     string
+	Category string
+}
+
+func (r *Repo) ListSkills(ctx context.Context, f SkillFilter) ([]Skill, error) {
 	args := []any{}
-	if kind != "" {
-		q += ` WHERE kind = $1`
-		args = append(args, kind)
+	q := `SELECT DISTINCT s.id, s.slug, s.title, s.kind FROM skills s`
+	if f.Category != "" {
+		args = append(args, f.Category)
+		q += fmt.Sprintf(` JOIN skill_categories sc ON sc.skill_id = s.id AND sc.category_code = $%d`, len(args))
+	}
+	if f.Kind != "" {
+		args = append(args, f.Kind)
+		q += fmt.Sprintf(` WHERE s.kind = $%d`, len(args))
 	}
 	q += ` ORDER BY kind, title`
 

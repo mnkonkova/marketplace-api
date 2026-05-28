@@ -29,21 +29,23 @@ func (h *Handler) Categories(w http.ResponseWriter, r *http.Request) {
 // @Summary      Список навыков
 // @Tags         catalog
 // @Produce      json
-// @Param        kind  query     string  false  "tool|platform|genre"
-// @Success      200   {object}  SkillsResponse
-// @Failure      400   {object}  errorResponse
+// @Param        kind      query     string  false  "tool|platform|genre|skill"
+// @Param        category  query     string  false  "Код категории из /categories — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы при фильтре по категории не возвращаются."
+// @Success      200       {object}  SkillsResponse
+// @Failure      400       {object}  errorResponse
 // @Router       /skills [get]
 func (h *Handler) Skills(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get("kind")
 	switch kind {
-	case "", "tool", "platform", "genre":
+	case "", "tool", "platform", "genre", "skill":
 	default:
 		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_kind",
-			"Параметр kind должен быть одним из: tool, platform, genre",
-			httpx.FieldError{Field: "kind", Message: "Допустимо: tool, platform, genre или пусто"})
+			"Параметр kind должен быть одним из: tool, platform, genre, skill",
+			httpx.FieldError{Field: "kind", Message: "Допустимо: tool, platform, genre, skill или пусто"})
 		return
 	}
-	skills, err := h.repo.ListSkills(r.Context(), kind)
+	category := r.URL.Query().Get("category")
+	skills, err := h.repo.ListSkills(r.Context(), SkillFilter{Kind: kind, Category: category})
 	if err != nil {
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить навыки")
 		return

@@ -15,16 +15,20 @@ type CategoryRef struct {
 	Description string
 }
 
+// SkillRef — slug навыка для словаря в промпте. Title нужен LLM'у,
+// чтобы корректно распознать русские названия инструментов в свободном
+// тексте пользователя и отобразить на канонический slug.
+type SkillRef struct {
+	Slug  string
+	Title string
+}
+
 const promptHeader = `Ты — ассистент маркетплейса marketpclce, который помогает заказчику сформулировать задачу до запуска поиска по каталогу специалистов в сфере видео и контент-продакшна.
 
 КАТЕГОРИИ
 `
 
-const promptTail = `
-НАВЫКИ (slug)
-premiere, after-effects, davinci, final-cut, capcut, photoshop, figma,
-reels, tiktok, youtube, shorts, vk-clips, telegram
-
+const promptTailStart = `
 ЗАДАЧА
 Веди короткий деловой диалог (максимум 1-2 уточнения, лучше одно). Цель — собрать достаточно деталей, чтобы запустить поиск:
 - категория (если ещё не выбрана)
@@ -45,6 +49,52 @@ reels, tiktok, youtube, shorts, vk-clips, telegram
 
 ФОРМАТ
 Возвращай строго JSON по схеме. Если done=false — search можно опустить или оставить пустым. Если done=true — search обязательно заполнен.`
+
+// fallbackSkills — статический словарь навыков, используется если БД-источник
+// недоступен (lister == nil или вернул ошибку). Покрывает базу из миграций
+// 00001 + 00009; если расширяешь skills в БД и хочешь, чтобы LLM понимал
+// их даже при упавшей БД — добавь сюда же. Платформы тоже здесь, чтобы
+// промпт без БД был полным.
+var fallbackSkills = []SkillRef{
+	// tools
+	{"premiere", "Adobe Premiere Pro"}, {"after-effects", "Adobe After Effects"},
+	{"davinci", "DaVinci Resolve"}, {"final-cut", "Final Cut Pro"},
+	{"capcut", "CapCut"}, {"audition", "Adobe Audition"}, {"videoleap", "Videoleap"},
+	{"cinema-4d", "Cinema 4D"},
+	{"photoshop", "Adobe Photoshop"}, {"illustrator", "Adobe Illustrator"},
+	{"indesign", "Adobe InDesign"}, {"coreldraw", "CorelDRAW"},
+	{"figma", "Figma"}, {"adobe-xd", "Adobe XD"}, {"sketch", "Sketch"},
+	{"yandex-direct", "Яндекс.Директ"}, {"google-ads", "Google Ads"},
+	{"yandex-metrica", "Яндекс.Метрика"}, {"google-analytics", "Google Analytics"},
+	{"midjourney", "Midjourney"}, {"stable-diffusion", "Stable Diffusion"},
+	{"runway", "Runway"}, {"sora", "Sora"}, {"kling", "Kling"}, {"suno", "Suno"},
+	// skills
+	{"video-editing", "Видеомонтаж"}, {"color-grading", "Цветокоррекция"},
+	{"audio-editing", "Обработка звука"}, {"editing-theory", "Теория монтажа"},
+	{"storytelling", "Сторителлинг"}, {"editing-direction", "Режиссура монтажа"},
+	{"motion-design", "Моушн-дизайн"},
+	{"graphic-design", "Графический дизайн"}, {"illustration", "Иллюстрирование"},
+	{"vector-graphics", "Векторная графика"}, {"typography", "Типографика"},
+	{"branding", "Фирменный стиль"}, {"design-concept", "Дизайн-концепция"},
+	{"web-design", "Веб-дизайн"}, {"print-design", "Полиграфический дизайн"},
+	{"packaging-design", "Дизайн упаковки"}, {"outdoor-design", "Наружная реклама"},
+	{"email-design", "Дизайн рассылок"}, {"retouching", "Ретушь"},
+	{"videography", "Видеосъёмка"},
+	{"photography", "Фотография"}, {"product-photography", "Предметная фотосъёмка"},
+	{"photo-retouching", "Фото-ретушь"},
+	{"scriptwriting", "Сценарии"}, {"copywriting", "Копирайтинг"},
+	{"smm-strategy", "SMM-стратегия"}, {"content-planning", "Контент-план"},
+	{"content-marketing", "Контент-маркетинг"}, {"stories-making", "Сторисмейкинг"},
+	{"influencer-marketing", "Инфлюенс-маркетинг"}, {"messenger-marketing", "Мессенджер-маркетинг"},
+	{"targeted-ads", "Таргетированная реклама"}, {"contextual-ads", "Контекстная реклама"},
+	{"retargeting", "Ретаргетинг"}, {"lead-generation", "Лидогенерация"},
+	{"campaign-planning", "Планирование кампаний"}, {"seo", "SEO"},
+	{"prompt-engineering", "Промптинг"},
+	{"acting", "Актёрское мастерство"}, {"voiceover", "Озвучка"},
+	// platforms
+	{"reels", "Instagram Reels"}, {"tiktok", "TikTok"}, {"youtube", "YouTube"},
+	{"shorts", "YouTube Shorts"}, {"vk-clips", "VK Клипы"}, {"telegram", "Telegram"},
+}
 
 // fallbackCategories — статический список, используется если БД-источник
 // категорий недоступен (lister == nil или вернул ошибку). Должен совпадать
@@ -67,12 +117,17 @@ var fallbackCategories = []CategoryRef{
 	{"seeding", "Посевы", "размещения в каналах и пабликах"},
 }
 
-// buildSystemPrompt собирает system-prompt из живого списка категорий.
-// Если cats пустой — берёт fallbackCategories. Если задан category — добавляет
-// в конец секцию ТЕКУЩИЙ КОНТЕКСТ с зафиксированным кодом.
-func buildSystemPrompt(cats []CategoryRef, category string) string {
+// buildSystemPrompt собирает system-prompt из живых списков категорий и
+// навыков. Если cats/skills пустые — берёт fallback'и из этого же файла.
+// Если задан category — добавляет в конец секцию ТЕКУЩИЙ КОНТЕКСТ с
+// зафиксированным кодом, и навыки приходят уже отфильтрованные по нему +
+// платформы.
+func buildSystemPrompt(cats []CategoryRef, skills []SkillRef, category string) string {
 	if len(cats) == 0 {
 		cats = fallbackCategories
+	}
+	if len(skills) == 0 {
+		skills = fallbackSkills
 	}
 	var b strings.Builder
 	b.WriteString(promptHeader)
@@ -83,11 +138,15 @@ func buildSystemPrompt(cats []CategoryRef, category string) string {
 			fmt.Fprintf(&b, "- %s — %s\n", c.Code, c.Title)
 		}
 	}
-	b.WriteString(promptTail)
+	b.WriteString("\nНАВЫКИ (slug — название)\nИспользуй только slug из этого списка. Если пользователь упомянул что-то другое — оставь свободным текстом в q.\n")
+	for _, s := range skills {
+		fmt.Fprintf(&b, "- %s — %s\n", s.Slug, s.Title)
+	}
+	b.WriteString(promptTailStart)
 	if category != "" {
 		b.WriteString("\n\nТЕКУЩИЙ КОНТЕКСТ\nПользователь уже выбрал категорию `")
 		b.WriteString(category)
-		b.WriteString("`. Категорию переспрашивать не надо — она уже зафиксирована и должна попасть в search.categories.")
+		b.WriteString("`. Категорию переспрашивать не надо — она уже зафиксирована и должна попасть в search.categories. Скиллы выше отфильтрованы под эту категорию плюс универсальные платформы.")
 	}
 	return b.String()
 }

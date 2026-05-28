@@ -162,7 +162,8 @@ func main() {
 	summarizeSvc := summarize.NewService(searchSvc, llmClient, cfg.LLMMaxTokens, cfg.LLMEffort)
 
 	clarifySvc := clarify.NewService(llmClient, 1024, cfg.LLMEffort).
-		WithCategoryLister(clarifyCategoryAdapter{repo: catalogRepo})
+		WithCategoryLister(clarifyCategoryAdapter{repo: catalogRepo}).
+		WithSkillLister(clarifySkillAdapter{repo: catalogRepo})
 	clarifyHandler := clarify.NewHandler(clarifySvc)
 
 	profileCheckSvc := profilecheck.NewService(llmClient, 1024, cfg.LLMEffort)
@@ -311,6 +312,37 @@ func (a clarifyCategoryAdapter) ListCategoriesForPrompt(ctx context.Context) ([]
 			Title:       c.Title,
 			Description: c.Description,
 		})
+	}
+	return out, nil
+}
+
+// clarifySkillAdapter — мост к clarify.SkillLister. Когда category пустая,
+// отдаём весь словарь (нужен для первой реплики, до выбора категории).
+// Когда выбрана — фильтруем по skill_categories и докидываем все платформы
+// сверху, потому что reels/tiktok/... — кросс-категорийный фасет, который
+// LLM должен узнавать в любой ситуации.
+type clarifySkillAdapter struct{ repo *catalog.Repo }
+
+func (a clarifySkillAdapter) ListSkillsForPrompt(ctx context.Context, category string) ([]clarify.SkillRef, error) {
+	skills, err := a.repo.ListSkills(ctx, catalog.SkillFilter{Category: category})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]clarify.SkillRef, 0, len(skills))
+	for _, s := range skills {
+		out = append(out, clarify.SkillRef{Slug: s.Slug, Title: s.Title})
+	}
+	if category != "" {
+		// Платформы не входят в skill_categories (отдельный фасет), но в
+		// промпте они нужны всегда — иначе LLM не сможет вернуть skill=reels,
+		// когда категория уже зафиксирована.
+		platforms, err := a.repo.ListSkills(ctx, catalog.SkillFilter{Kind: "platform"})
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range platforms {
+			out = append(out, clarify.SkillRef{Slug: p.Slug, Title: p.Title})
+		}
 	}
 	return out, nil
 }
