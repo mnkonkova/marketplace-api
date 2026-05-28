@@ -100,129 +100,135 @@ func (s *Service) GetPublic(ctx context.Context, userID uuid.UUID) (PublicProfil
 	return s.repo.GetPublic(ctx, userID)
 }
 
-func (s *Service) Patch(ctx context.Context, userID uuid.UUID, in PatchInput) (Profile, error) {
-	if in.DisplayName != nil {
-		v := strings.TrimSpace(*in.DisplayName)
+// PatchFull — атомарный апдейт профиля + (опционально) категорий + (опционально)
+// навыков под одной optimistic-lock версией UpdatedAt в ОДНОЙ транзакции.
+//
+// Проектная мотивация: фронт раньше последовательно дёргал три ручки
+// (PATCH /me/profile → PUT /me/profile/categories → PUT /me/profile/skills),
+// между ними updated_at в БД успевал бампнуться → второй и третий получали
+// 409. Здесь — одна проверка версии, и либо все три части применились,
+// либо ни одной.
+//
+// Семантика nil: каждое поле/секция, оставленные nil во входе, не трогаются.
+func (s *Service) PatchFull(ctx context.Context, userID uuid.UUID, in PatchFullInput) (Profile, error) {
+	patch := in.toPatchInput()
+
+	// 1. Валидация profile-полей (если есть). Дублирует логику из Patch,
+	// но вынести её в общий хелпер сейчас — больше шума чем пользы:
+	// 9 строк здесь vs новая функция + сигнатура.
+	if patch.DisplayName != nil {
+		v := strings.TrimSpace(*patch.DisplayName)
 		if v == "" {
 			return Profile{}, fmt.Errorf("%w: display_name cannot be empty", ErrInvalidInput)
 		}
-		in.DisplayName = &v
+		patch.DisplayName = &v
 	}
-	if in.Currency != nil {
-		c := strings.ToUpper(strings.TrimSpace(*in.Currency))
+	if patch.Currency != nil {
+		c := strings.ToUpper(strings.TrimSpace(*patch.Currency))
 		if len(c) != 3 {
 			return Profile{}, fmt.Errorf("%w: currency must be 3-letter code", ErrInvalidInput)
 		}
-		in.Currency = &c
+		patch.Currency = &c
 	}
-	if in.RateMin != nil && *in.RateMin < 0 {
+	if patch.RateMin != nil && *patch.RateMin < 0 {
 		return Profile{}, fmt.Errorf("%w: rate_min must be >= 0", ErrInvalidInput)
 	}
-	if in.RateMax != nil && *in.RateMax < 0 {
+	if patch.RateMax != nil && *patch.RateMax < 0 {
 		return Profile{}, fmt.Errorf("%w: rate_max must be >= 0", ErrInvalidInput)
 	}
-	if in.RateMin != nil && in.RateMax != nil && *in.RateMin > *in.RateMax {
+	if patch.RateMin != nil && patch.RateMax != nil && *patch.RateMin > *patch.RateMax {
 		return Profile{}, fmt.Errorf("%w: rate_min must be <= rate_max", ErrInvalidInput)
 	}
-	// Контакты — лёгкий тримминг и cap по длине. Формат не валидируем
-	// строго (телефоны бывают всякие, e-mail с unicode-доменами и т.п.) —
-	// специалист сам понимает что вписывает; оно нигде не парсится автоматически.
-	if in.ContactEmail != nil {
-		v := strings.TrimSpace(*in.ContactEmail)
+	if patch.ContactEmail != nil {
+		v := strings.TrimSpace(*patch.ContactEmail)
 		if len(v) > 254 {
 			return Profile{}, fmt.Errorf("%w: contact_email too long", ErrInvalidInput)
 		}
-		in.ContactEmail = &v
+		patch.ContactEmail = &v
 	}
-	if in.ContactPhone != nil {
-		v := strings.TrimSpace(*in.ContactPhone)
+	if patch.ContactPhone != nil {
+		v := strings.TrimSpace(*patch.ContactPhone)
 		if len(v) > 64 {
 			return Profile{}, fmt.Errorf("%w: contact_phone too long", ErrInvalidInput)
 		}
-		in.ContactPhone = &v
+		patch.ContactPhone = &v
 	}
 
+	// 2. Валидация categories (если переданы). Те же правила, что в SetCategories.
+	var catCodes []string
+	var catPrimary string
+	if in.Categories != nil {
+		catCodes = DedupStrings(in.Categories.Codes)
+		catPrimary = in.Categories.Primary
+		if len(catCodes) == 0 {
+			return Profile{}, fmt.Errorf("%w: at least one category is required", ErrInvalidInput)
+		}
+		if catPrimary == "" {
+			return Profile{}, fmt.Errorf("%w: primary category is required", ErrInvalidInput)
+		}
+		if !contains(catCodes, catPrimary) {
+			return Profile{}, fmt.Errorf("%w: primary must be in codes", ErrInvalidInput)
+		}
+		valid, err := s.repo.ValidCategoryCodes(ctx, catCodes)
+		if err != nil {
+			return Profile{}, err
+		}
+		if len(valid) != len(catCodes) {
+			return Profile{}, fmt.Errorf("%w: unknown category code", ErrInvalidInput)
+		}
+	}
+
+	// 3. Валидация skills (если переданы). Те же правила, что в SetSkills.
+	var skillIDs []uuid.UUID
+	if in.Skills != nil {
+		ids := make([]uuid.UUID, 0, len(in.Skills.SkillIDs))
+		seen := map[uuid.UUID]struct{}{}
+		for _, raw := range in.Skills.SkillIDs {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return Profile{}, fmt.Errorf("%w: bad skill id %q", ErrInvalidInput, raw)
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+		valid, err := s.repo.ValidSkillIDs(ctx, ids)
+		if err != nil {
+			return Profile{}, err
+		}
+		if len(valid) != len(ids) {
+			return Profile{}, fmt.Errorf("%w: unknown skill id", ErrInvalidInput)
+		}
+		skillIDs = ids
+	}
+
+	// 4. Одна транзакция: optimistic-lock проверяется один раз
+	// (в PatchInTx или в LockProfileForUpdateInTx), дальше идём под row-lock.
 	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := s.repo.PatchInTx(ctx, tx, userID, in); err != nil {
-			return err
+		if in.hasProfileFields() {
+			if err := s.repo.PatchInTx(ctx, tx, userID, patch); err != nil {
+				return err
+			}
+		} else {
+			// patch-полей нет — просто взять row-lock и проверить версию.
+			if err := s.repo.LockProfileForUpdateInTx(ctx, tx, userID, in.UpdatedAt); err != nil {
+				return err
+			}
+		}
+		if in.Categories != nil {
+			if err := s.repo.ReplaceCategoriesInTx(ctx, tx, userID, catCodes, catPrimary); err != nil {
+				return err
+			}
+		}
+		if in.Skills != nil {
+			if err := s.repo.ReplaceSkillsInTx(ctx, tx, userID, skillIDs); err != nil {
+				return err
+			}
 		}
 		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
 			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
-	})
-	if err != nil {
-		return Profile{}, err
-	}
-	return s.repo.Get(ctx, userID)
-}
-
-func (s *Service) SetCategories(ctx context.Context, userID uuid.UUID, in SetCategoriesInput) (Profile, error) {
-	codes := DedupStrings(in.Codes)
-	if len(codes) == 0 {
-		return Profile{}, fmt.Errorf("%w: at least one category is required", ErrInvalidInput)
-	}
-	if in.Primary == "" {
-		return Profile{}, fmt.Errorf("%w: primary category is required", ErrInvalidInput)
-	}
-	if !contains(codes, in.Primary) {
-		return Profile{}, fmt.Errorf("%w: primary must be in codes", ErrInvalidInput)
-	}
-
-	valid, err := s.repo.ValidCategoryCodes(ctx, codes)
-	if err != nil {
-		return Profile{}, err
-	}
-	if len(valid) != len(codes) {
-		return Profile{}, fmt.Errorf("%w: unknown category code", ErrInvalidInput)
-	}
-
-	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := s.repo.LockProfileForUpdateInTx(ctx, tx, userID, in.UpdatedAt); err != nil {
-			return err
-		}
-		if err := s.repo.ReplaceCategoriesInTx(ctx, tx, userID, codes, in.Primary); err != nil {
-			return err
-		}
-		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String()})
-	})
-	if err != nil {
-		return Profile{}, err
-	}
-	return s.repo.Get(ctx, userID)
-}
-
-func (s *Service) SetSkills(ctx context.Context, userID uuid.UUID, in SetSkillsInput) (Profile, error) {
-	ids := make([]uuid.UUID, 0, len(in.SkillIDs))
-	seen := map[uuid.UUID]struct{}{}
-	for _, raw := range in.SkillIDs {
-		id, err := uuid.Parse(raw)
-		if err != nil {
-			return Profile{}, fmt.Errorf("%w: bad skill id %q", ErrInvalidInput, raw)
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-
-	valid, err := s.repo.ValidSkillIDs(ctx, ids)
-	if err != nil {
-		return Profile{}, err
-	}
-	if len(valid) != len(ids) {
-		return Profile{}, fmt.Errorf("%w: unknown skill id", ErrInvalidInput)
-	}
-
-	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := s.repo.LockProfileForUpdateInTx(ctx, tx, userID, in.UpdatedAt); err != nil {
-			return err
-		}
-		if err := s.repo.ReplaceSkillsInTx(ctx, tx, userID, ids); err != nil {
-			return err
-		}
-		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String()})
 	})
 	if err != nil {
 		return Profile{}, err

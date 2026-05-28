@@ -100,18 +100,69 @@ type PatchInput struct {
 	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
 }
 
-type SetCategoriesInput struct {
+// CategoriesPart — секция категорий внутри PatchFullInput. Указатель в
+// PatchFullInput означает "поле задано": nil = не трогать категории,
+// не-nil = заменить полностью на Codes (с Primary).
+type CategoriesPart struct {
 	Codes   []string `json:"codes"`
 	Primary string   `json:"primary"`
-	// UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.
-	// Если задан — несовпадение → 409. Без поля — старое поведение.
+}
+
+// SkillsPart — секция навыков внутри PatchFullInput. Семантика как у
+// CategoriesPart: nil = не трогать, не-nil = полностью заменить на SkillIDs.
+type SkillsPart struct {
+	SkillIDs []string `json:"skill_ids"`
+}
+
+// PatchFullInput — атомарный апдейт профиля: patch-поля + (опционально)
+// замена категорий + (опционально) замена навыков, всё в одной транзакции
+// под одной optimistic-lock версией UpdatedAt. Решает проблему цепочки
+// из трёх запросов на фронте, где между запросами updated_at расходился.
+//
+// Если UpdatedAt задан — проверяется ровно один раз (на первой write-операции
+// в транзакции); последующие правки идут под уже взятым row-lock без
+// повторных проверок.
+type PatchFullInput struct {
+	DisplayName  *string `json:"display_name"`
+	Bio          *string `json:"bio"`
+	AvatarURL    *string `json:"avatar_url"`
+	City         *string `json:"city"`
+	RateMin      *int    `json:"rate_min"`
+	RateMax      *int    `json:"rate_max"`
+	Currency     *string `json:"currency"`
+	ContactEmail *string `json:"contact_email"`
+	ContactPhone *string `json:"contact_phone"`
+
+	Categories *CategoriesPart `json:"categories,omitempty"`
+	Skills     *SkillsPart     `json:"skills,omitempty"`
+
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
-type SetSkillsInput struct {
-	SkillIDs []string `json:"skill_ids"`
-	// UpdatedAt — см. SetCategoriesInput.
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+// hasProfileFields — есть ли хоть одно поле основной части профиля, которое
+// надо обновить. Если нет — на patch-step делается просто LockProfileForUpdateInTx
+// (без UPDATE полей, только бамп updated_at и проверка версии).
+func (in PatchFullInput) hasProfileFields() bool {
+	return in.DisplayName != nil || in.Bio != nil || in.AvatarURL != nil ||
+		in.City != nil || in.RateMin != nil || in.RateMax != nil ||
+		in.Currency != nil || in.ContactEmail != nil || in.ContactPhone != nil
+}
+
+// toPatchInput — переиспользуем PatchInTx, который уже умеет COALESCE
+// по nil-полям. UpdatedAt передаём чтобы он сам проверил optimistic-lock.
+func (in PatchFullInput) toPatchInput() PatchInput {
+	return PatchInput{
+		DisplayName:  in.DisplayName,
+		Bio:          in.Bio,
+		AvatarURL:    in.AvatarURL,
+		City:         in.City,
+		RateMin:      in.RateMin,
+		RateMax:      in.RateMax,
+		Currency:     in.Currency,
+		ContactEmail: in.ContactEmail,
+		ContactPhone: in.ContactPhone,
+		UpdatedAt:    in.UpdatedAt,
+	}
 }
 
 // PortfolioCreateInput — добавление видео в портфолио. URL-форма (юзер сам

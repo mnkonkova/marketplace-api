@@ -99,109 +99,34 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, p)
 }
 
-// Patch godoc
-// @Summary      Частично обновить свой профиль
+// PatchFull godoc
+// @Summary      Обновить свой профиль (атомарно)
+// @Description  Одной транзакцией под одной optimistic-lock версией:
+// @Description  поля профиля + (опционально) categories + (опционально) skills.
+// @Description  Любая секция, оставленная nil/неуказанной, не трогается.
 // @Tags         profile
 // @Accept       json
 // @Produce      json
 // @Security     BearerAuth
-// @Param        body  body      PatchInput  true  "поля для апдейта"
+// @Param        body  body      PatchFullInput  true  "профиль + categories + skills + updated_at"
 // @Success      200   {object}  Profile
 // @Failure      400   {object}  errorResponse
 // @Failure      401   {object}  errorResponse
 // @Failure      404   {object}  errorResponse
 // @Failure      409   {object}  errorResponse
 // @Router       /me/profile [patch]
-func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) PatchFull(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
-	var in PatchInput
+	var in PatchFullInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
-	p, err := h.svc.Patch(r.Context(), uid, in)
-	switch {
-	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
-	case errors.Is(err, ErrConflict):
-		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
-	case err != nil:
-		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
-	default:
-		httpx.WriteJSON(w, http.StatusOK, p)
-	}
-}
-
-// SetCategories godoc
-// @Summary      Заменить список категорий специалиста
-// @Tags         profile
-// @Accept       json
-// @Produce      json
-// @Security     BearerAuth
-// @Param        body  body      SetCategoriesInput  true  "categories"
-// @Success      200   {object}  Profile
-// @Failure      400   {object}  errorResponse
-// @Failure      401   {object}  errorResponse
-// @Failure      404   {object}  errorResponse
-// @Failure      409   {object}  errorResponse
-// @Router       /me/profile/categories [put]
-func (h *Handler) SetCategories(w http.ResponseWriter, r *http.Request) {
-	uid, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
-		return
-	}
-	var in SetCategoriesInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
-		return
-	}
-	p, err := h.svc.SetCategories(r.Context(), uid, in)
-	switch {
-	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
-	case errors.Is(err, ErrConflict):
-		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
-	case err != nil:
-		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
-	default:
-		httpx.WriteJSON(w, http.StatusOK, p)
-	}
-}
-
-// SetSkills godoc
-// @Summary      Заменить список навыков
-// @Tags         profile
-// @Accept       json
-// @Produce      json
-// @Security     BearerAuth
-// @Param        body  body      SetSkillsInput  true  "skills"
-// @Success      200   {object}  Profile
-// @Failure      400   {object}  errorResponse
-// @Failure      401   {object}  errorResponse
-// @Failure      404   {object}  errorResponse
-// @Failure      409   {object}  errorResponse
-// @Router       /me/profile/skills [put]
-func (h *Handler) SetSkills(w http.ResponseWriter, r *http.Request) {
-	uid, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
-		return
-	}
-	var in SetSkillsInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
-		return
-	}
-	p, err := h.svc.SetSkills(r.Context(), uid, in)
+	p, err := h.svc.PatchFull(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
