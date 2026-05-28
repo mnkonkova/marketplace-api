@@ -80,6 +80,8 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/auth/login", d.Auth.Login)
 			r.Post("/auth/refresh", d.Auth.Refresh)
 			r.Post("/auth/verify-email", d.Auth.VerifyEmail)
+			r.Post("/auth/password-reset/request", d.Auth.RequestPasswordReset)
+			r.Post("/auth/password-reset/confirm", d.Auth.ConfirmPasswordReset)
 		})
 
 		r.Get("/categories", d.Catalog.Categories)

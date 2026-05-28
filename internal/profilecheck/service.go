@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"marketpclce/internal/llm"
@@ -115,7 +118,7 @@ func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 }
 
 func (s *Service) checkPart(ctx context.Context, system, userMsg string) (PartResult, error) {
-	resp, err := s.client.Messages(ctx, llm.MessagesRequest{
+	req := llm.MessagesRequest{
 		MaxTokens: s.maxTokens,
 		System: []llm.SystemBlock{{
 			Type:         "text",
@@ -128,7 +131,32 @@ func (s *Service) checkPart(ctx context.Context, system, userMsg string) (PartRe
 			Format: llm.OutputFormat{Type: "json_schema", Schema: partResponseSchema()},
 			Effort: s.effort,
 		},
-	})
+	}
+
+	// Один ретрай на транзиентных сбоях LLM-провайдера: сетевые ошибки,
+	// таймауты, 5xx/429. Холодный коннект к deepseek/anthropic иногда зависает
+	// дольше HTTP-таймаута, а publish без чекера падает 500 — это плохой UX.
+	// Парс-ошибки и 4xx (кроме 429) не ретраим: LLM вернул что-то осмысленное
+	// и проблема не уйдёт от повтора.
+	var (
+		resp *llm.MessagesResponse
+		err  error
+	)
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err = s.client.Messages(ctx, req)
+		if err == nil {
+			break
+		}
+		if !isTransientLLMError(err) || ctx.Err() != nil {
+			break
+		}
+		slog.Warn("profilecheck llm transient, retrying", "attempt", attempt+1, "err", err)
+		select {
+		case <-time.After(300 * time.Millisecond):
+		case <-ctx.Done():
+			return PartResult{}, fmt.Errorf("llm: %w", ctx.Err())
+		}
+	}
 	if err != nil {
 		return PartResult{}, fmt.Errorf("llm: %w", err)
 	}
@@ -141,6 +169,34 @@ func (s *Service) checkPart(ctx context.Context, system, userMsg string) (PartRe
 		return PartResult{}, fmt.Errorf("parse: %w", err)
 	}
 	return normalizePart(parsed), nil
+}
+
+// isTransientLLMError — стоит ли повторить запрос. Берём:
+//   - context.DeadlineExceeded (наш HTTP-таймаут на клиенте);
+//   - net.Error (включая io timeout, connection reset, EOF от прокси);
+//   - llm.APIError с 5xx / 408 / 429.
+//
+// Не берём 4xx (кроме 408/429) и context.Canceled (юзер ушёл — повторять
+// бессмысленно).
+func isTransientLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var apiErr *llm.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status >= 500 || apiErr.Status == 408 || apiErr.Status == 429
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return false
 }
 
 func skippedPart() PartResult {

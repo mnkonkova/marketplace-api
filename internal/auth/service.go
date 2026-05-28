@@ -44,6 +44,7 @@ type Service struct {
 	tokens              *TokenIssuer
 	now                 func() time.Time
 	verifyTokenTTL      time.Duration
+	passwordResetTTL    time.Duration
 	appBaseURL          string
 	resendCooldown      ResendCooldown
 	verificationOff     bool // если true — soft-gate выключен, юзеры авто-verified
@@ -60,12 +61,23 @@ type ResendCooldown interface {
 
 func NewService(repo *Repo, tokens *TokenIssuer) *Service {
 	return &Service{
-		repo:           repo,
-		tokens:         tokens,
-		now:            time.Now,
-		verifyTokenTTL: 24 * time.Hour,
-		appBaseURL:     "http://localhost:5173",
+		repo:             repo,
+		tokens:           tokens,
+		now:              time.Now,
+		verifyTokenTTL:   24 * time.Hour,
+		passwordResetTTL: time.Hour,
+		appBaseURL:       "http://localhost:5173",
 	}
+}
+
+// WithPasswordResetTTL — переопределить TTL reset-токена из конфига.
+// По умолчанию 1 час; слишком короткий — пользователь не успеет открыть
+// почту, слишком длинный — окно атаки на украденную ссылку растёт.
+func (s *Service) WithPasswordResetTTL(ttl time.Duration) *Service {
+	if ttl > 0 {
+		s.passwordResetTTL = ttl
+	}
+	return s
 }
 
 // WithEmailVerification конфигурирует параметры подтверждения email:
@@ -369,4 +381,75 @@ func ValidateEmail(s string) (string, error) {
 		return "", fmt.Errorf("%w: email domain must contain a dot", ErrInvalidInput)
 	}
 	return normalized, nil
+}
+
+// RequestPasswordReset — пользователь забыл пароль и хочет получить
+// одноразовую ссылку. Anti-enumeration: если такого email нет / юзер
+// неактивен — возвращаем nil без ошибки (хендлер всё равно отдаст 204).
+// Не подсказываем атакующему, какие адреса зарегистрированы.
+//
+// При успехе: гасим прежние reset-токены этого юзера, генерим новый,
+// пишем хеш в БД, эмитим outbox-событие с raw-токеном для письма.
+func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return nil
+	}
+	normalized, err := ValidateEmail(email)
+	if err != nil {
+		return nil
+	}
+	u, err := s.repo.FindByEmail(ctx, normalized)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !u.IsActive || u.Email == nil {
+		return nil
+	}
+	displayName, _ := s.repo.GetDisplayName(ctx, u.ID)
+	return s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.InvalidatePrevPasswordResetTokensInTx(ctx, tx, u.ID); err != nil {
+			return err
+		}
+		raw, err := GenerateToken()
+		if err != nil {
+			return fmt.Errorf("gen reset token: %w", err)
+		}
+		expiresAt := s.now().Add(s.passwordResetTTL)
+		if err := s.repo.InsertPasswordResetTokenInTx(ctx, tx, u.ID, HashToken(raw), expiresAt); err != nil {
+			return err
+		}
+		return outbox.Emit(ctx, tx, outbox.AggregateEmail, u.ID.String(),
+			outbox.EventEmailPasswordResetSend, outbox.EmailPasswordResetPayload{
+				To:      *u.Email,
+				ToName:  displayName,
+				Token:   raw,
+				BaseURL: s.appBaseURL,
+			})
+	})
+}
+
+// ConfirmPasswordReset — пользователь перешёл по ссылке из письма и ввёл
+// новый пароль. Валидируем токен, хешируем пароль, апдейтим users.password_hash
+// и возвращаем свежую пару tokens — фронт может авто-логинить.
+func (s *Service) ConfirmPasswordReset(ctx context.Context, rawToken, newPassword string) (TokenPair, error) {
+	rawToken = strings.TrimSpace(rawToken)
+	if rawToken == "" {
+		return TokenPair{}, ErrInvalidInput
+	}
+	if utf8.RuneCountInString(newPassword) < 8 {
+		return TokenPair{}, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return TokenPair{}, fmt.Errorf("hash password: %w", err)
+	}
+	userID, err := s.repo.ConsumePasswordResetTokenAndUpdate(ctx, HashToken(rawToken), string(hash))
+	if err != nil {
+		return TokenPair{}, err
+	}
+	return s.tokens.Issue(userID, s.now())
 }

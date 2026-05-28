@@ -227,6 +227,70 @@ func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 }
 
 
+type passwordResetRequestReq struct {
+	Email string `json:"email"`
+}
+
+// RequestPasswordReset godoc
+// @Summary      Запросить ссылку сброса пароля
+// @Description  Всегда 204 (anti-enumeration). Если email зарегистрирован,
+// @Description  на него уйдёт письмо со ссылкой DOMAIN/auth/reset?token=...
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      passwordResetRequestReq  true  "email"
+// @Success      204
+// @Failure      400   {object}  errorResponse
+// @Router       /auth/password-reset/request [post]
+func (h *Handler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var in passwordResetRequestReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	// Внутренние ошибки не разглашаем; на anti-enumeration работает тот же
+	// принцип что у Register — наружу всегда 204 если ввод не битый.
+	if err := h.svc.RequestPasswordReset(r.Context(), in.Email); err != nil {
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type passwordResetConfirmReq struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+// ConfirmPasswordReset godoc
+// @Summary      Применить новый пароль по токену из письма
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body      passwordResetConfirmReq  true  "token + новый пароль"
+// @Success      200   {object}  TokenPair                "свежая пара tokens — фронт может авто-логинить"
+// @Failure      400   {object}  errorResponse
+// @Failure      410   {object}  errorResponse            "token_invalid: токен неизвестен, использован или просрочен"
+// @Router       /auth/password-reset/confirm [post]
+func (h *Handler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var in passwordResetConfirmReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	pair, err := h.svc.ConfirmPasswordReset(r.Context(), in.Token, in.Password)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", "Пароль должен быть не короче 8 символов.")
+	case errors.Is(err, ErrTokenInvalid):
+		httpx.WriteErrMsg(w, http.StatusGone, "token_invalid", "Ссылка устарела или уже использована — закажите новую.")
+	case err != nil:
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+	default:
+		httpx.WriteJSON(w, http.StatusOK, pair)
+	}
+}
+
 // errorResponse — стандартная форма ошибки `{ "error": "..." }`. Объявлено
 // тут, чтобы swaggo подхватил тип в @Failure.
 type errorResponse struct {

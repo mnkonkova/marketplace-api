@@ -136,6 +136,25 @@ func main() {
 				Subject: subj,
 				Plain:   plain,
 			})
+		case outbox.EventEmailPasswordResetSend:
+			var p outbox.EmailPasswordResetPayload
+			if err := json.Unmarshal(payload, &p); err != nil {
+				return fmt.Errorf("decode password reset payload: %w", err)
+			}
+			if sender == nil {
+				slog.Info("password-reset (mailer disabled, copy this URL manually)",
+					"to", p.To,
+					"url", p.BaseURL+"/auth/reset?token="+p.Token,
+				)
+				return nil
+			}
+			subj, plain := renderPasswordResetEmail(p)
+			return sender.Send(ctx, mailer.Message{
+				To:      p.To,
+				ToName:  p.ToName,
+				Subject: subj,
+				Plain:   plain,
+			})
 		default:
 			slog.Warn("unknown email event", "type", eventType)
 			return nil
@@ -204,6 +223,25 @@ func renderVerifyEmail(p outbox.EmailVerifyPayload) (subject, plain string) {
 		link + "\n\n" +
 		"Ссылка действует 24 часа.\n" +
 		"Если это не вы — просто проигнорируйте письмо.\n\n" +
+		"— marketpclce"
+	return subject, plain
+}
+
+// renderPasswordResetEmail — письмо со ссылкой сброса пароля. Plain-only
+// по тем же причинам что у verify: меньше шансов в спам, нет HTML-зоопарка.
+func renderPasswordResetEmail(p outbox.EmailPasswordResetPayload) (subject, plain string) {
+	greeting := "Привет!"
+	if p.ToName != "" {
+		greeting = "Привет, " + p.ToName + "!"
+	}
+	link := p.BaseURL + "/auth/reset?token=" + p.Token
+	subject = "Сброс пароля на marketpclce"
+	plain = greeting + "\n\n" +
+		"Кто-то запросил сброс пароля для вашего аккаунта.\n" +
+		"Если это вы — перейдите по ссылке и задайте новый пароль:\n\n" +
+		link + "\n\n" +
+		"Ссылка действует 1 час.\n" +
+		"Если это не вы — просто проигнорируйте письмо, пароль не изменится.\n\n" +
 		"— marketpclce"
 	return subject, plain
 }

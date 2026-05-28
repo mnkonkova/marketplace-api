@@ -187,3 +187,98 @@ func (r *Repo) ConsumeVerification(ctx context.Context, tokenHash string) (uuid.
 	}
 	return userID, nil
 }
+
+// FindByEmail — поиск по email (case-insensitive через CITEXT). Используется
+// в RequestPasswordReset: не отдаём наружу различие «нет такого юзера» vs
+// «есть» (anti-enumeration), но сами должны знать чтобы решить, выпускать
+// токен или нет.
+func (r *Repo) FindByEmail(ctx context.Context, email string) (User, error) {
+	const q = `
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at
+FROM users
+WHERE email = $1 AND is_active = TRUE
+LIMIT 1`
+	var u User
+	err := r.db.QueryRow(ctx, q, email).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("find user by email: %w", err)
+	}
+	return u, nil
+}
+
+// InvalidatePrevPasswordResetTokensInTx — гасит активные reset-токены юзера
+// при выпуске нового. Без этого старая ссылка из почты осталась бы валидной
+// до expires_at, что плохо если её утянули после того как пользователь
+// заказал новую.
+func (r *Repo) InvalidatePrevPasswordResetTokensInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE password_reset_tokens SET used_at = now()
+		 WHERE user_id = $1 AND used_at IS NULL`,
+		userID)
+	if err != nil {
+		return fmt.Errorf("invalidate password reset tokens: %w", err)
+	}
+	return nil
+}
+
+// InsertPasswordResetTokenInTx — записать хеш токена. raw в БД не уезжает.
+func (r *Repo) InsertPasswordResetTokenInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
+	_, err := tx.Exec(ctx,
+		`INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
+		 VALUES ($1, $2, $3)`,
+		tokenHash, userID, expiresAt)
+	if err != nil {
+		return fmt.Errorf("insert password reset token: %w", err)
+	}
+	return nil
+}
+
+// ConsumePasswordResetTokenAndUpdate — атомарно: найти валидный токен →
+// пометить used → обновить password_hash юзера. Всё в одной транзакции,
+// чтобы между «нашли токен» и «обновили пароль» не могло что-то втиснуться.
+// Возвращает user_id для последующей выдачи tokens.
+func (r *Repo) ConsumePasswordResetTokenAndUpdate(ctx context.Context, tokenHash, newPasswordHash string) (uuid.UUID, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var userID uuid.UUID
+	err = tx.QueryRow(ctx,
+		`UPDATE password_reset_tokens
+		 SET used_at = now()
+		 WHERE token_hash = $1
+		   AND used_at IS NULL
+		   AND expires_at > now()
+		 RETURNING user_id`,
+		tokenHash).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrTokenInvalid
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("consume password reset token: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE users
+		 SET password_hash = $2, updated_at = now()
+		 WHERE id = $1 AND is_active = TRUE`,
+		userID, newPasswordHash)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("update password hash: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Юзер был деактивирован между выдачей и подтверждением — токен валидным
+		// уже не считаем, пароль не меняем.
+		return uuid.Nil, ErrTokenInvalid
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("commit: %w", err)
+	}
+	return userID, nil
+}

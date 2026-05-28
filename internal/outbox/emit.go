@@ -20,6 +20,10 @@ const (
 	// EventEmailVerifySend — payload: {to, to_name, token, base_url}.
 	// Воркер на это событие шлёт письмо подтверждения через mailer.Sender.
 	EventEmailVerifySend = "email.verify_send"
+
+	// EventEmailPasswordResetSend — payload: {to, to_name, token, base_url}.
+	// Письмо со ссылкой на сброс пароля (BaseURL + /auth/reset?token=).
+	EventEmailPasswordResetSend = "email.password_reset_send"
 )
 
 // EmailVerifyPayload — структура payload для EventEmailVerifySend.
@@ -30,6 +34,17 @@ type EmailVerifyPayload struct {
 	ToName  string `json:"to_name,omitempty"`
 	Token   string `json:"token"`    // raw токен (нешифрованный) — для вставки в URL
 	BaseURL string `json:"base_url"` // публичный URL фронта (APP_BASE_URL)
+}
+
+// EmailPasswordResetPayload — payload для EventEmailPasswordResetSend.
+// Та же форма что у EmailVerifyPayload, но отдельный тип чтобы хендлер
+// в воркере не путал шаблоны и не отправил «подтвердите почту» вместо
+// «сброс пароля».
+type EmailPasswordResetPayload struct {
+	To      string `json:"to"`
+	ToName  string `json:"to_name,omitempty"`
+	Token   string `json:"token"`
+	BaseURL string `json:"base_url"`
 }
 
 func Emit(ctx context.Context, tx pgx.Tx, aggregate, aggregateID, eventType string, payload any) error {
