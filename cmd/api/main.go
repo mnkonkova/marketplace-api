@@ -3,14 +3,18 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 
 	"marketpclce/internal/auth"
@@ -19,6 +23,7 @@ import (
 	"marketpclce/internal/config"
 	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi"
+	"marketpclce/internal/invites"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/llm"
 	"marketpclce/internal/platform/db"
@@ -193,6 +198,13 @@ func main() {
 		WithRecipientAcceptor(projectsRecipientAcceptor{leadsSvc: leadsSvc})
 	projectsHandler := projects.NewHandler(projectsSvc)
 
+	invitesRepo := invites.NewRepo(pool)
+	invitesSvc := invites.NewService(invitesRepo).
+		WithUserDirectory(projectsUserDirectory{authRepo: authRepo}).
+		WithAppBaseURL(cfg.AppBaseURL)
+	invitesHandler := invites.NewHandler(invitesSvc, invitesClientCreator{pool: pool})
+	invitesRedeem := invites.NewRedeemHandler(invitesSvc, tokenIssuer)
+
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter
 	if rdb != nil {
@@ -205,24 +217,26 @@ func main() {
 	})
 
 	router := httpapi.NewRouter(httpapi.Deps{
-		Logger:       logger,
-		HealthDB:     pool,
-		TokenIssuer:  tokenIssuer,
-		Auth:         authHandler,
-		Catalog:      catalogHandler,
-		Profiles:     profilesHandler,
-		ProfileCheck: profileCheckHandler,
-		Search:       searchHandler,
-		Feed:         feedHandler,
-		Summarize:    summarizeHandler,
-		Clarify:      clarifyHandler,
-		Leads:        leadsHandler,
-		Reviews:      reviewsHandler,
-		Productions:  productionsHandler,
-		Projects:     projectsHandler,
-		RoleLookup:   authRepo,
-		CORSOrigins:  cfg.CORSOrigins,
-		Limiter:      limiter,
+		Logger:        logger,
+		HealthDB:      pool,
+		TokenIssuer:   tokenIssuer,
+		Auth:          authHandler,
+		Catalog:       catalogHandler,
+		Profiles:      profilesHandler,
+		ProfileCheck:  profileCheckHandler,
+		Search:        searchHandler,
+		Feed:          feedHandler,
+		Summarize:     summarizeHandler,
+		Clarify:       clarifyHandler,
+		Leads:         leadsHandler,
+		Reviews:       reviewsHandler,
+		Productions:   productionsHandler,
+		Projects:      projectsHandler,
+		Invites:       invitesHandler,
+		InvitesRedeem: invitesRedeem,
+		RoleLookup:    authRepo,
+		CORSOrigins:   cfg.CORSOrigins,
+		Limiter:       limiter,
 		ReadWindows: []ratelimit.Window{
 			{Limit: cfg.RateReadPerMin, Period: time.Minute},
 			{Limit: cfg.RateReadPerHour, Period: time.Hour},
@@ -419,6 +433,47 @@ func (p projectsRecipientAcceptor) AcceptRecipient(ctx context.Context, leadID, 
 	// для optimistic-lock; для админской кнопки мы не знаем версию —
 	// передаём nil, действие безусловное (под admin-ролью).
 	return p.leadsSvc.UpdateRecipientStatus(ctx, leadID, specialistID, "accepted", nil)
+}
+
+// invitesClientCreator — INSERT нового user'а (или возврат существующего)
+// для POST /admin/users. Создаёт user с role=client/kind=client и dummy
+// password_hash, чтобы прямой логин был невозможен — только через
+// redeem invite. email_verified_at=NULL до redeem'а.
+type invitesClientCreator struct{ pool *pgxpool.Pool }
+
+func (c invitesClientCreator) CreateClient(ctx context.Context, email, displayName string) (uuid.UUID, bool, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return uuid.Nil, false, fmt.Errorf("email required")
+	}
+
+	// 1. Проверяем существование.
+	var existing uuid.UUID
+	err := c.pool.QueryRow(ctx, `SELECT id FROM users WHERE email = $1 LIMIT 1`, email).Scan(&existing)
+	if err == nil {
+		return existing, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, fmt.Errorf("lookup user: %w", err)
+	}
+
+	// 2. Создаём нового. dummy hash (никогда не матчится при login).
+	id := uuid.New()
+	const dummyHash = "!magic-link-only-no-password-login!"
+	_, err = c.pool.Exec(ctx, `
+INSERT INTO users (id, email, password_hash, kind, role)
+VALUES ($1, $2, $3, 'client', 'client')`,
+		id, email, dummyHash)
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("insert user: %w", err)
+	}
+
+	// Если передано имя — заведём минимальный specialist_profile-стаб?
+	// Нет — клиенты не имеют specialist_profile. Имя пока теряется
+	// (можно положить в notes на проектах). Для MVP это OK.
+	_ = displayName
+
+	return id, false, nil
 }
 
 // projectsUserDirectory — мост от projects.UserDirectory к auth.Repo.

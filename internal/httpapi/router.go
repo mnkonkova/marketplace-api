@@ -15,6 +15,7 @@ import (
 	"marketpclce/internal/clarify"
 	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi/handlers"
+	"marketpclce/internal/invites"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
@@ -27,21 +28,23 @@ import (
 )
 
 type Deps struct {
-	Logger       *slog.Logger
-	HealthDB     handlers.HealthDB
-	TokenIssuer  *auth.TokenIssuer
-	Auth         *auth.Handler
-	Catalog      *catalog.Handler
-	Profiles     *profiles.Handler
-	ProfileCheck *profilecheck.Handler
-	Search       *search.Handler
-	Feed         *feed.Handler
-	Summarize    *summarize.Handler
-	Clarify      *clarify.Handler
-	Leads        *leads.Handler
-	Reviews      *reviews.Handler
-	Productions  *productions.Handler
-	Projects     *projects.Handler
+	Logger        *slog.Logger
+	HealthDB      handlers.HealthDB
+	TokenIssuer   *auth.TokenIssuer
+	Auth          *auth.Handler
+	Catalog       *catalog.Handler
+	Profiles      *profiles.Handler
+	ProfileCheck  *profilecheck.Handler
+	Search        *search.Handler
+	Feed          *feed.Handler
+	Summarize     *summarize.Handler
+	Clarify       *clarify.Handler
+	Leads         *leads.Handler
+	Reviews       *reviews.Handler
+	Productions   *productions.Handler
+	Projects      *projects.Handler
+	Invites       *invites.Handler
+	InvitesRedeem *invites.RedeemHandler
 
 	// RoleLookup читает users.role для access-токенов в /admin/*.
 	// nil → /admin/* недоступны (middleware вернёт 500 role_lookup_unavailable).
@@ -90,6 +93,11 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/auth/verify-email", d.Auth.VerifyEmail)
 			r.Post("/auth/password-reset/request", d.Auth.RequestPasswordReset)
 			r.Post("/auth/password-reset/confirm", d.Auth.ConfirmPasswordReset)
+			// Magic-link redeem для manual-клиентов (бриф §6.4).
+			// Под тем же anti-bruteforce-лимитом.
+			if d.InvitesRedeem != nil {
+				r.Post("/auth/redeem_invite/{token}", d.InvitesRedeem.Redeem)
+			}
 		})
 
 		r.Get("/categories", d.Catalog.Categories)
@@ -207,6 +215,16 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/admin/projects/{id}/steps/{step_id}/complete", d.Projects.AdminCompleteStep)
 				r.Post("/admin/projects/{id}/steps/{step_id}/skip", d.Projects.AdminSkipStep)
 				r.Post("/admin/lead_recipients/{lead_id}/{specialist_id}/accept", d.Projects.AdminAcceptRecipient)
+			})
+		}
+
+		// /admin/users — создание клиентов и выпуск magic-link.
+		// Только admin (не moderator), потому что это управление учётками.
+		if d.Invites != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "admin"))
+				r.Post("/admin/users", d.Invites.AdminCreateUser)
+				r.Post("/admin/users/{id}/generate_invite", d.Invites.AdminGenerateInvite)
 			})
 		}
 

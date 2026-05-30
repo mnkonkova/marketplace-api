@@ -242,6 +242,46 @@ definitions:
       error:
         type: string
     type: object
+  internal_invites.AdminCreateUserInput:
+    properties:
+      email:
+        type: string
+      name:
+        type: string
+      send_invite:
+        type: boolean
+    type: object
+  internal_invites.AdminCreateUserResponse:
+    properties:
+      already_existed:
+        type: boolean
+      invite_expires_at:
+        type: string
+      invite_token:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_invites.GenerateResult:
+    properties:
+      expires_at:
+        type: string
+      invite_id:
+        type: string
+      token:
+        description: '"<invite_id>.<random>"'
+        type: string
+    type: object
+  internal_invites.RedeemResponse:
+    properties:
+      tokens:
+        $ref: '#/definitions/marketpclce_internal_auth.TokenPair'
+    type: object
+  internal_invites.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
   internal_leads.CreateResult:
     properties:
       id:
@@ -1335,6 +1375,13 @@ definitions:
       target_category:
         type: string
     type: object
+  marketpclce_internal_auth.TokenPair:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+    type: object
   marketpclce_internal_search.IndexDoc:
     properties:
       avatar_url:
@@ -1903,6 +1950,60 @@ paths:
       summary: Создать marketplace-проект из принятого recipient'а
       tags:
       - admin-projects
+  /admin/users:
+    post:
+      consumes:
+      - application/json
+      description: Используется Directus Flow «Create manual project». Если send_invite=true
+        — сразу выпускается magic-link и публикуется outbox-событие client_invite.generated
+        (n8n шлёт письмо).
+      parameters:
+      - description: email + name + send_invite
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_invites.AdminCreateUserInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_invites.AdminCreateUserResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_invites.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать клиента вручную (admin)
+      tags:
+      - admin-users
+  /admin/users/{id}/generate_invite:
+    post:
+      parameters:
+      - description: User ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_invites.GenerateResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_invites.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сгенерировать magic-link для существующего user'а
+      tags:
+      - admin-users
   /auth/login:
     post:
       consumes:
@@ -1985,6 +2086,32 @@ paths:
           schema:
             $ref: '#/definitions/internal_auth.errorResponse'
       summary: Запросить ссылку сброса пароля
+      tags:
+      - auth
+  /auth/redeem_invite/{token}:
+    post:
+      consumes:
+      - application/json
+      description: Принимает compound-токен из email-ссылки, помечает invite использованным,
+        выставляет users.email_verified_at, выдаёт JWT-пару (как при логине).
+      parameters:
+      - description: compound invite token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_invites.RedeemResponse'
+        "400":
+          description: invalid|expired|used
+          schema:
+            $ref: '#/definitions/internal_invites.errorResponse'
+      summary: Погасить magic-link инвайт (публичный)
       tags:
       - auth
   /auth/refresh:

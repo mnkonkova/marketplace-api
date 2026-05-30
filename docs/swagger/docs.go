@@ -832,6 +832,90 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/users": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Используется Directus Flow «Create manual project». Если send_invite=true — сразу выпускается magic-link и публикуется outbox-событие client_invite.generated (n8n шлёт письмо).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Создать клиента вручную (admin)",
+                "parameters": [
+                    {
+                        "description": "email + name + send_invite",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_invites.AdminCreateUserInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_invites.AdminCreateUserResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_invites.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/users/{id}/generate_invite": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Сгенерировать magic-link для существующего user'а",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_invites.GenerateResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_invites.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "consumes": [
@@ -954,6 +1038,44 @@ const docTemplate = `{
                         "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/redeem_invite/{token}": {
+            "post": {
+                "description": "Принимает compound-токен из email-ссылки, помечает invite использованным, выставляет users.email_verified_at, выдаёт JWT-пару (как при логине).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Погасить magic-link инвайт (публичный)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "compound invite token",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_invites.RedeemResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid|expired|used",
+                        "schema": {
+                            "$ref": "#/definitions/internal_invites.errorResponse"
                         }
                     }
                 }
@@ -3316,6 +3438,68 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_invites.AdminCreateUserInput": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "send_invite": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_invites.AdminCreateUserResponse": {
+            "type": "object",
+            "properties": {
+                "already_existed": {
+                    "type": "boolean"
+                },
+                "invite_expires_at": {
+                    "type": "string"
+                },
+                "invite_token": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_invites.GenerateResult": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "invite_id": {
+                    "type": "string"
+                },
+                "token": {
+                    "description": "\"\u003cinvite_id\u003e.\u003crandom\u003e\"",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_invites.RedeemResponse": {
+            "type": "object",
+            "properties": {
+                "tokens": {
+                    "$ref": "#/definitions/marketpclce_internal_auth.TokenPair"
+                }
+            }
+        },
+        "internal_invites.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_leads.CreateResult": {
             "type": "object",
             "properties": {
@@ -4914,6 +5098,17 @@ const docTemplate = `{
                     }
                 },
                 "target_category": {
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_auth.TokenPair": {
+            "type": "object",
+            "properties": {
+                "access_token": {
+                    "type": "string"
+                },
+                "refresh_token": {
                     "type": "string"
                 }
             }
