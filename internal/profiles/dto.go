@@ -58,24 +58,24 @@ type PublicProfile struct {
 }
 
 type Profile struct {
-	UserID        uuid.UUID `json:"user_id"`
-	DisplayName   string    `json:"display_name"`
-	Bio           string    `json:"bio"`
-	AvatarURL     string    `json:"avatar_url,omitempty"`
-	City          string    `json:"city,omitempty"`
-	RateMin       *int      `json:"rate_min,omitempty"`
-	RateMax       *int      `json:"rate_max,omitempty"`
-	Currency      string    `json:"currency"`
-	IsPublished   bool      `json:"is_published"`
-	RatingAvg     float64   `json:"rating_avg"`
-	ReviewsCount  int       `json:"reviews_count"`
-	Categories    []string  `json:"categories"`
-	PrimaryCategory string  `json:"primary_category,omitempty"`
-	SkillIDs      []string  `json:"skill_ids"`
+	UserID          uuid.UUID `json:"user_id"`
+	DisplayName     string    `json:"display_name"`
+	Bio             string    `json:"bio"`
+	AvatarURL       string    `json:"avatar_url,omitempty"`
+	City            string    `json:"city,omitempty"`
+	RateMin         *int      `json:"rate_min,omitempty"`
+	RateMax         *int      `json:"rate_max,omitempty"`
+	Currency        string    `json:"currency"`
+	IsPublished     bool      `json:"is_published"`
+	RatingAvg       float64   `json:"rating_avg"`
+	ReviewsCount    int       `json:"reviews_count"`
+	Categories      []string  `json:"categories"`
+	PrimaryCategory string    `json:"primary_category,omitempty"`
+	SkillIDs        []string  `json:"skill_ids"`
 	// UpdatedAt — версия профиля для optimistic locking.
 	// Клиент должен прислать это значение обратно в PatchInput.UpdatedAt,
 	// чтобы защититься от lost-update при параллельных PATCH'ах.
-	UpdatedAt     time.Time `json:"updated_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// Контакты для прямой связи. Возвращаются только владельцу профиля
 	// (через /me/profile) и менеджеру после создания заявки (см. /leads).
 	// В публичные DTO (PublicProfile, search.IndexDoc, feed.Specialist) НЕ
@@ -97,7 +97,7 @@ type PatchInput struct {
 	// UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.
 	// Несовпадение → 409 conflict (кто-то параллельно отредактировал).
 	// Без поля — старый небезопасный поведение для обратной совместимости.
-	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // CategoriesPart — секция категорий внутри PatchFullInput. Указатель в

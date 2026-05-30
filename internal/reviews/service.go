@@ -13,7 +13,7 @@ import (
 var ErrInvalidInput = errors.New("invalid input")
 
 const (
-	textMaxLen   = 2000
+	textMaxLen    = 2000
 	textMinNoLead = 10 // если отзыв без привязки к lead'у, текст обязателен
 	authorNameCap = 120
 )

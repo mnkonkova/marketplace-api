@@ -32,6 +32,18 @@ definitions:
       user_id:
         type: string
     type: object
+  internal_auth.passwordResetConfirmReq:
+    properties:
+      password:
+        type: string
+      token:
+        type: string
+    type: object
+  internal_auth.passwordResetRequestReq:
+    properties:
+      email:
+        type: string
+    type: object
   internal_auth.refreshReq:
     properties:
       refresh_token:
@@ -334,6 +346,65 @@ definitions:
       status:
         type: string
     type: object
+  internal_productions.AdminProductionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_productions.Production'
+        type: array
+    type: object
+  internal_productions.CreateInput:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_productions.Production:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_productions.ProductionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_productions.PublicProduction'
+        type: array
+    type: object
+  internal_productions.PublicProduction:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_productions.UpdateInput:
+    properties:
+      description:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_productions.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
   internal_profilecheck.PartResult:
     properties:
       ok:
@@ -368,6 +439,15 @@ definitions:
       error:
         type: string
     type: object
+  internal_profiles.CategoriesPart:
+    properties:
+      codes:
+        items:
+          type: string
+        type: array
+      primary:
+        type: string
+    type: object
   internal_profiles.CategoryRef:
     properties:
       code:
@@ -386,12 +466,14 @@ definitions:
       size_bytes:
         type: integer
     type: object
-  internal_profiles.PatchInput:
+  internal_profiles.PatchFullInput:
     properties:
       avatar_url:
         type: string
       bio:
         type: string
+      categories:
+        $ref: '#/definitions/internal_profiles.CategoriesPart'
       city:
         type: string
       contact_email:
@@ -406,11 +488,9 @@ definitions:
         type: integer
       rate_min:
         type: integer
+      skills:
+        $ref: '#/definitions/internal_profiles.SkillsPart'
       updated_at:
-        description: |-
-          UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.
-          Несовпадение → 409 conflict (кто-то параллельно отредактировал).
-          Без поля — старый небезопасный поведение для обратной совместимости.
         type: string
     type: object
   internal_profiles.PortfolioCreateInput:
@@ -592,30 +672,6 @@ definitions:
       text:
         type: string
     type: object
-  internal_profiles.SetCategoriesInput:
-    properties:
-      codes:
-        items:
-          type: string
-        type: array
-      primary:
-        type: string
-      updated_at:
-        description: |-
-          UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.
-          Если задан — несовпадение → 409. Без поля — старое поведение.
-        type: string
-    type: object
-  internal_profiles.SetSkillsInput:
-    properties:
-      skill_ids:
-        items:
-          type: string
-        type: array
-      updated_at:
-        description: UpdatedAt — см. SetCategoriesInput.
-        type: string
-    type: object
   internal_profiles.SkillRef:
     properties:
       id:
@@ -626,6 +682,13 @@ definitions:
         type: string
       title:
         type: string
+    type: object
+  internal_profiles.SkillsPart:
+    properties:
+      skill_ids:
+        items:
+          type: string
+        type: array
     type: object
   internal_profiles.errorResponse:
     properties:
@@ -904,6 +967,165 @@ info:
   title: marketpclce API
   version: "1.0"
 paths:
+  /admin/productions:
+    get:
+      description: Только для роли admin/moderator или service-токена (Directus).
+        Включает is_active=false.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.AdminProductionsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Список всех продакшенов (включая архивные)
+      tags:
+      - admin-productions
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Поля создания
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_productions.CreateInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_productions.Production'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "409":
+          description: Продакшен с таким именем уже существует среди активных
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать продакшен
+      tags:
+      - admin-productions
+  /admin/productions/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Запись остаётся в БД (is_active=false). Привязанные специалисты
+        не блокируются. В публичном /productions запись больше не появляется.
+      parameters:
+      - description: Production ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Optimistic-lock версия (RFC3339). Если задана и не совпадает
+          — 409.
+        in: query
+        name: updated_at
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.Production'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "409":
+          description: stale_updated_at
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Деактивировать продакшен (soft-delete)
+      tags:
+      - admin-productions
+    get:
+      parameters:
+      - description: Production ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.Production'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Получить продакшен по ID
+      tags:
+      - admin-productions
+    patch:
+      consumes:
+      - application/json
+      description: Клиент должен прислать updated_at, полученный из GET/PATCH. Несовпадение
+        → 409.
+      parameters:
+      - description: Production ID (UUID)
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Частичный апдейт + updated_at
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_productions.UpdateInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.Production'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "409":
+          description: stale_updated_at | duplicate_name
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Изменить продакшен (optimistic-lock через updated_at)
+      tags:
+      - admin-productions
   /auth/login:
     post:
       consumes:
@@ -931,6 +1153,61 @@ paths:
           schema:
             $ref: '#/definitions/internal_auth.errorResponse'
       summary: Логин по email/телефону и паролю
+      tags:
+      - auth
+  /auth/password-reset/confirm:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: token + новый пароль
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.passwordResetConfirmReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: свежая пара tokens — фронт может авто-логинить
+          schema:
+            $ref: '#/definitions/internal_auth.TokenPair'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "410":
+          description: 'token_invalid: токен неизвестен, использован или просрочен'
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Применить новый пароль по токену из письма
+      tags:
+      - auth
+  /auth/password-reset/request:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Всегда 204 (anti-enumeration). Если email зарегистрирован,
+        на него уйдёт письмо со ссылкой DOMAIN/auth/reset?token=...
+      parameters:
+      - description: email
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.passwordResetRequestReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Запросить ссылку сброса пароля
       tags:
       - auth
   /auth/refresh:
@@ -962,6 +1239,9 @@ paths:
     post:
       consumes:
       - application/json
+      description: |-
+        При невалидном вводе или занятом email отвечает 400 invalid_input
+        (разные причины не различаются — anti-enumeration).
       parameters:
       - description: регистрационные данные
         in: body
@@ -978,10 +1258,6 @@ paths:
             $ref: '#/definitions/internal_auth.registerResp'
         "400":
           description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_auth.errorResponse'
-        "409":
-          description: Conflict
           schema:
             $ref: '#/definitions/internal_auth.errorResponse'
       summary: Регистрация пользователя
@@ -1470,13 +1746,17 @@ paths:
     patch:
       consumes:
       - application/json
+      description: |-
+        Одной транзакцией под одной optimistic-lock версией:
+        поля профиля + (опционально) categories + (опционально) skills.
+        Любая секция, оставленная nil/неуказанной, не трогается.
       parameters:
-      - description: поля для апдейта
+      - description: профиль + categories + skills + updated_at
         in: body
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_profiles.PatchInput'
+          $ref: '#/definitions/internal_profiles.PatchFullInput'
       produces:
       - application/json
       responses:
@@ -1502,46 +1782,7 @@ paths:
             $ref: '#/definitions/internal_profiles.errorResponse'
       security:
       - BearerAuth: []
-      summary: Частично обновить свой профиль
-      tags:
-      - profile
-  /me/profile/categories:
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: categories
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/internal_profiles.SetCategoriesInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_profiles.Profile'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Заменить список категорий специалиста
+      summary: Обновить свой профиль (атомарно)
       tags:
       - profile
   /me/profile/check:
@@ -1618,45 +1859,6 @@ paths:
       summary: Опубликовать профиль
       tags:
       - profile
-  /me/profile/skills:
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: skills
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/internal_profiles.SetSkillsInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_profiles.Profile'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Заменить список навыков
-      tags:
-      - profile
   /me/profile/unpublish:
     post:
       produces:
@@ -1714,6 +1916,24 @@ paths:
       summary: Presigned PUT URL для аплоада картинки (аватар / превью)
       tags:
       - portfolio
+  /productions:
+    get:
+      description: Публичный справочник для выпадающего списка в профиле специалиста.
+        Возвращает только is_active=true. Сортировка по имени (case-insensitive).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.ProductionsResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      summary: Список активных продакшенов
+      tags:
+      - productions
   /reviews:
     post:
       consumes:
@@ -1923,9 +2143,15 @@ paths:
   /skills:
     get:
       parameters:
-      - description: tool|platform|genre
+      - description: tool|platform|genre|skill
         in: query
         name: kind
+        type: string
+      - description: Код категории из /categories — отфильтровать навыки, релевантные
+          категории (см. skill_categories). Платформы при фильтре по категории не
+          возвращаются.
+        in: query
+        name: category
         type: string
       produces:
       - application/json

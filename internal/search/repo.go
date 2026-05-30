@@ -18,25 +18,25 @@ type Repo struct{ db *pgxpool.Pool }
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
 type IndexDoc struct {
-	UserID          string     `json:"user_id"`
-	DisplayName     string     `json:"display_name"`
-	Bio             string     `json:"bio"`
-	AvatarURL       string     `json:"avatar_url,omitempty"`
-	City            string     `json:"city,omitempty"`
-	Categories      []string   `json:"categories"`
-	PrimaryCategory string     `json:"primary_category,omitempty"`
-	SkillSlugs      []string   `json:"skill_slugs"`
-	SkillTitles     string     `json:"skill_titles"`
-	RateMin         *int       `json:"rate_min,omitempty"`
-	RateMax         *int       `json:"rate_max,omitempty"`
-	Currency        string     `json:"currency"`
-	RatingAvg       float64    `json:"rating_avg"`
-	ReviewsCount    int        `json:"reviews_count"`
-	IsPublished     bool       `json:"is_published"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	UserID          string    `json:"user_id"`
+	DisplayName     string    `json:"display_name"`
+	Bio             string    `json:"bio"`
+	AvatarURL       string    `json:"avatar_url,omitempty"`
+	City            string    `json:"city,omitempty"`
+	Categories      []string  `json:"categories"`
+	PrimaryCategory string    `json:"primary_category,omitempty"`
+	SkillSlugs      []string  `json:"skill_slugs"`
+	SkillTitles     string    `json:"skill_titles"`
+	RateMin         *int      `json:"rate_min,omitempty"`
+	RateMax         *int      `json:"rate_max,omitempty"`
+	Currency        string    `json:"currency"`
+	RatingAvg       float64   `json:"rating_avg"`
+	ReviewsCount    int       `json:"reviews_count"`
+	IsPublished     bool      `json:"is_published"`
+	UpdatedAt       time.Time `json:"updated_at"`
 	// LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.
 	// Используется /feed для tie-breaker'а после rating_avg.
-	LastVideoAt     *time.Time `json:"last_video_at,omitempty"`
+	LastVideoAt *time.Time `json:"last_video_at,omitempty"`
 }
 
 func (r *Repo) LoadDoc(ctx context.Context, userID uuid.UUID) (IndexDoc, error) {

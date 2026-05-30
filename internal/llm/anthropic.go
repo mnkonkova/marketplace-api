@@ -83,12 +83,12 @@ type OutputConfig struct {
 }
 
 type MessagesRequest struct {
-	Model        string         `json:"model"`
-	MaxTokens    int            `json:"max_tokens"`
-	System       []SystemBlock  `json:"system,omitempty"`
-	Messages     []Message      `json:"messages"`
-	Thinking     *Thinking      `json:"thinking,omitempty"`
-	OutputConfig *OutputConfig  `json:"output_config,omitempty"`
+	Model        string        `json:"model"`
+	MaxTokens    int           `json:"max_tokens"`
+	System       []SystemBlock `json:"system,omitempty"`
+	Messages     []Message     `json:"messages"`
+	Thinking     *Thinking     `json:"thinking,omitempty"`
+	OutputConfig *OutputConfig `json:"output_config,omitempty"`
 }
 
 type ContentBlock struct {

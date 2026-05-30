@@ -299,9 +299,9 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
    аплоадит в бакет и зовёт ту же CreatePortfolioVideo. */
 
 const (
-	portfolioMaxVideosPerUser   = 20
-	portfolioMaxTitleLen        = 200
-	portfolioMaxDescriptionLen  = 1000
+	portfolioMaxVideosPerUser  = 20
+	portfolioMaxTitleLen       = 200
+	portfolioMaxDescriptionLen = 1000
 
 	// 50 МБ — синхронизировано с фронтом. Увеличим, когда будет HLS-транскод.
 	portfolioMaxUploadBytes = 50 * 1024 * 1024
@@ -459,8 +459,8 @@ func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uui
 // Сам файл клиент кладёт в YC через возвращённый upload_url; затем
 // шлёт POST /me/portfolio с public_url, чтобы создать запись в БД.
 // Это разделение даёт две полезные вещи:
-//  - наш сервер не проксирует mp4 (нет нагрузки)
-//  - запись в БД создаётся только если аплоад реально прошёл
+//   - наш сервер не проксирует mp4 (нет нагрузки)
+//   - запись в БД создаётся только если аплоад реально прошёл
 func (s *Service) CreatePortfolioUploadURL(
 	ctx context.Context,
 	userID uuid.UUID,

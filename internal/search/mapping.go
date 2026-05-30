@@ -36,7 +36,7 @@ func IndexMapping() map[string]any {
 				// last_video_at — MAX(created_at) опубликованных видео спеца.
 				// Денормализовано из portfolio_items, чтобы /feed мог
 				// ранжировать без N запросов в PG. null если у спеца нет видео.
-				"last_video_at":    map[string]any{"type": "date"},
+				"last_video_at": map[string]any{"type": "date"},
 			},
 		},
 	}

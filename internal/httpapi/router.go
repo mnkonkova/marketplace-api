@@ -16,6 +16,7 @@ import (
 	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi/handlers"
 	"marketpclce/internal/leads"
+	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
@@ -25,19 +26,24 @@ import (
 )
 
 type Deps struct {
-	Logger      *slog.Logger
-	HealthDB    handlers.HealthDB
-	TokenIssuer *auth.TokenIssuer
-	Auth        *auth.Handler
-	Catalog     *catalog.Handler
+	Logger       *slog.Logger
+	HealthDB     handlers.HealthDB
+	TokenIssuer  *auth.TokenIssuer
+	Auth         *auth.Handler
+	Catalog      *catalog.Handler
 	Profiles     *profiles.Handler
 	ProfileCheck *profilecheck.Handler
 	Search       *search.Handler
 	Feed         *feed.Handler
-	Summarize   *summarize.Handler
-	Clarify     *clarify.Handler
-	Leads       *leads.Handler
-	Reviews     *reviews.Handler
+	Summarize    *summarize.Handler
+	Clarify      *clarify.Handler
+	Leads        *leads.Handler
+	Reviews      *reviews.Handler
+	Productions  *productions.Handler
+
+	// RoleLookup читает users.role для access-токенов в /admin/*.
+	// nil → /admin/* недоступны (middleware вернёт 500 role_lookup_unavailable).
+	RoleLookup auth.RoleLookup
 
 	CORSOrigins []string
 
@@ -86,6 +92,9 @@ func NewRouter(d Deps) http.Handler {
 
 		r.Get("/categories", d.Catalog.Categories)
 		r.Get("/skills", d.Catalog.Skills)
+		if d.Productions != nil {
+			r.Get("/productions", d.Productions.List)
+		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(RateLimit(d.Limiter, "read", d.ReadWindows))
@@ -147,6 +156,21 @@ func NewRouter(d Deps) http.Handler {
 			r.Patch("/reviews/{id}", d.Reviews.Update)
 			r.Delete("/reviews/{id}", d.Reviews.Delete)
 		})
+
+		// /admin/* — admin/moderator или service-токен (см. RequireRoles).
+		// Сюда ходит Directus (через server-to-server) и потенциально другие
+		// внутренние инструменты. Rate-limit здесь не вешаем намеренно: вызовы
+		// служебные, объёмы малы.
+		if d.Productions != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "admin", "moderator"))
+				r.Get("/admin/productions", d.Productions.AdminList)
+				r.Get("/admin/productions/{id}", d.Productions.AdminGet)
+				r.Post("/admin/productions", d.Productions.AdminCreate)
+				r.Patch("/admin/productions/{id}", d.Productions.AdminUpdate)
+				r.Delete("/admin/productions/{id}", d.Productions.AdminDeactivate)
+			})
+		}
 	})
 
 	r.Get("/swagger/*", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))

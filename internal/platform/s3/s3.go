@@ -17,13 +17,13 @@ import (
 )
 
 type Config struct {
-	Endpoint    string // напр. https://storage.yandexcloud.net (с http(s)://)
-	AccessKey   string
-	SecretKey   string
-	Bucket      string
-	Region      string // YC: ru-central1; AWS — свой
-	UseSSL      bool
-	PublicURL   string // опциональный CNAME, иначе берём ${endpoint}/${bucket}
+	Endpoint  string // напр. https://storage.yandexcloud.net (с http(s)://)
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	Region    string // YC: ru-central1; AWS — свой
+	UseSSL    bool
+	PublicURL string // опциональный CNAME, иначе берём ${endpoint}/${bucket}
 }
 
 type Client struct {

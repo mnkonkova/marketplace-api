@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("user not found")
-	ErrAlreadyExists  = errors.New("user already exists")
-	ErrTokenInvalid   = errors.New("verification token invalid or expired")
+	ErrNotFound      = errors.New("user not found")
+	ErrAlreadyExists = errors.New("user already exists")
+	ErrTokenInvalid  = errors.New("verification token invalid or expired")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -90,6 +90,21 @@ func (r *Repo) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// GetRole — текущая роль из users.role. Используется в
+// RequireAdminOrModerator: claims access-токена не несут role (могла
+// поменяться после выпуска), поэтому источник истины — БД.
+func (r *Repo) GetRole(ctx context.Context, userID uuid.UUID) (string, error) {
+	var role string
+	err := r.db.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, userID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get role: %w", err)
+	}
+	return role, nil
 }
 
 // GetDisplayName — display_name из specialist_profiles, если есть. Для

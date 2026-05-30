@@ -25,6 +25,7 @@ import (
 	"marketpclce/internal/platform/es"
 	"marketpclce/internal/platform/redisx"
 	"marketpclce/internal/platform/s3"
+	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
@@ -178,6 +179,10 @@ func main() {
 	reviewsSvc := reviews.NewService(reviewsRepo)
 	reviewsHandler := reviews.NewHandler(reviewsSvc)
 
+	productionsRepo := productions.NewRepo(pool)
+	productionsSvc := productions.NewService(productionsRepo)
+	productionsHandler := productions.NewHandler(productionsSvc)
+
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter
 	if rdb != nil {
@@ -203,8 +208,10 @@ func main() {
 		Clarify:      clarifyHandler,
 		Leads:        leadsHandler,
 		Reviews:      reviewsHandler,
+		Productions:  productionsHandler,
+		RoleLookup:   authRepo,
 		CORSOrigins:  cfg.CORSOrigins,
-		Limiter:     limiter,
+		Limiter:      limiter,
 		ReadWindows: []ratelimit.Window{
 			{Limit: cfg.RateReadPerMin, Period: time.Minute},
 			{Limit: cfg.RateReadPerHour, Period: time.Hour},

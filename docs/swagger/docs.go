@@ -15,6 +15,251 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/productions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только для роли admin/moderator или service-токена (Directus). Включает is_active=false.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Список всех продакшенов (включая архивные)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.AdminProductionsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Создать продакшен",
+                "parameters": [
+                    {
+                        "description": "Поля создания",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.CreateInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.Production"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Продакшен с таким именем уже существует среди активных",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/productions/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Получить продакшен по ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Production ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.Production"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Запись остаётся в БД (is_active=false). Привязанные специалисты не блокируются. В публичном /productions запись больше не появляется.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Деактивировать продакшен (soft-delete)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Production ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Optimistic-lock версия (RFC3339). Если задана и не совпадает — 409.",
+                        "name": "updated_at",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.Production"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "stale_updated_at",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Клиент должен прислать updated_at, полученный из GET/PATCH. Несовпадение → 409.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Изменить продакшен (optimistic-lock через updated_at)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Production ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Частичный апдейт + updated_at",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.UpdateInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.Production"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "stale_updated_at | duplicate_name",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "consumes": [
@@ -53,6 +298,88 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/password-reset/confirm": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Применить новый пароль по токену из письма",
+                "parameters": [
+                    {
+                        "description": "token + новый пароль",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.passwordResetConfirmReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "свежая пара tokens — фронт может авто-логинить",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.TokenPair"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "token_invalid: токен неизвестен, использован или просрочен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/password-reset/request": {
+            "post": {
+                "description": "Всегда 204 (anti-enumeration). Если email зарегистрирован,\nна него уйдёт письмо со ссылкой DOMAIN/auth/reset?token=...",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Запросить ссылку сброса пароля",
+                "parameters": [
+                    {
+                        "description": "email",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.passwordResetRequestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.errorResponse"
                         }
@@ -101,6 +428,7 @@ const docTemplate = `{
         },
         "/auth/register": {
             "post": {
+                "description": "При невалидном вводе или занятом email отвечает 400 invalid_input\n(разные причины не различаются — anti-enumeration).",
                 "consumes": [
                     "application/json"
                 ],
@@ -131,12 +459,6 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_auth.errorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.errorResponse"
                         }
@@ -899,6 +1221,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Одной транзакцией под одной optimistic-lock версией:\nполя профиля + (опционально) categories + (опционально) skills.\nЛюбая секция, оставленная nil/неуказанной, не трогается.",
                 "consumes": [
                     "application/json"
                 ],
@@ -908,77 +1231,15 @@ const docTemplate = `{
                 "tags": [
                     "profile"
                 ],
-                "summary": "Частично обновить свой профиль",
+                "summary": "Обновить свой профиль (атомарно)",
                 "parameters": [
                     {
-                        "description": "поля для апдейта",
+                        "description": "профиль + categories + skills + updated_at",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_profiles.PatchInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.Profile"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/me/profile/categories": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "profile"
-                ],
-                "summary": "Заменить список категорий специалиста",
-                "parameters": [
-                    {
-                        "description": "categories",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.SetCategoriesInput"
+                            "$ref": "#/definitions/internal_profiles.PatchFullInput"
                         }
                     }
                 ],
@@ -1128,68 +1389,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/me/profile/skills": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "profile"
-                ],
-                "summary": "Заменить список навыков",
-                "parameters": [
-                    {
-                        "description": "skills",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.SetSkillsInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.Profile"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/me/profile/unpublish": {
             "post": {
                 "security": [
@@ -1277,6 +1476,32 @@ const docTemplate = `{
                         "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/productions": {
+            "get": {
+                "description": "Публичный справочник для выпадающего списка в профиле специалиста. Возвращает только is_active=true. Сортировка по имени (case-insensitive).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "productions"
+                ],
+                "summary": "Список активных продакшенов",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.ProductionsResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
                         }
                     }
                 }
@@ -1610,8 +1835,14 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "tool|platform|genre",
+                        "description": "tool|platform|genre|skill",
                         "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Код категории из /categories — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы при фильтре по категории не возвращаются.",
+                        "name": "category",
                         "in": "query"
                     }
                 ],
@@ -1766,6 +1997,25 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.passwordResetConfirmReq": {
+            "type": "object",
+            "properties": {
+                "password": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.passwordResetRequestReq": {
+            "type": "object",
+            "properties": {
+                "email": {
                     "type": "string"
                 }
             }
@@ -2229,6 +2479,98 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_productions.AdminProductionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_productions.Production"
+                    }
+                }
+            }
+        },
+        "internal_productions.CreateInput": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.Production": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.ProductionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_productions.PublicProduction"
+                    }
+                }
+            }
+        },
+        "internal_productions.PublicProduction": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.UpdateInput": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_profilecheck.PartResult": {
             "type": "object",
             "properties": {
@@ -2282,6 +2624,20 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_profiles.CategoriesPart": {
+            "type": "object",
+            "properties": {
+                "codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "primary": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_profiles.CategoryRef": {
             "type": "object",
             "properties": {
@@ -2310,7 +2666,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_profiles.PatchInput": {
+        "internal_profiles.PatchFullInput": {
             "type": "object",
             "properties": {
                 "avatar_url": {
@@ -2318,6 +2674,9 @@ const docTemplate = `{
                 },
                 "bio": {
                     "type": "string"
+                },
+                "categories": {
+                    "$ref": "#/definitions/internal_profiles.CategoriesPart"
                 },
                 "city": {
                     "type": "string"
@@ -2340,8 +2699,10 @@ const docTemplate = `{
                 "rate_min": {
                     "type": "integer"
                 },
+                "skills": {
+                    "$ref": "#/definitions/internal_profiles.SkillsPart"
+                },
                 "updated_at": {
-                    "description": "UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.\nНесовпадение → 409 conflict (кто-то параллельно отредактировал).\nБез поля — старый небезопасный поведение для обратной совместимости.",
                     "type": "string"
                 }
             }
@@ -2603,39 +2964,6 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_profiles.SetCategoriesInput": {
-            "type": "object",
-            "properties": {
-                "codes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "primary": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "description": "UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.\nЕсли задан — несовпадение → 409. Без поля — старое поведение.",
-                    "type": "string"
-                }
-            }
-        },
-        "internal_profiles.SetSkillsInput": {
-            "type": "object",
-            "properties": {
-                "skill_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "updated_at": {
-                    "description": "UpdatedAt — см. SetCategoriesInput.",
-                    "type": "string"
-                }
-            }
-        },
         "internal_profiles.SkillRef": {
             "type": "object",
             "properties": {
@@ -2650,6 +2978,17 @@ const docTemplate = `{
                 },
                 "title": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_profiles.SkillsPart": {
+            "type": "object",
+            "properties": {
+                "skill_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

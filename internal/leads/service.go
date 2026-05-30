@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	ErrInvalidInput    = errors.New("invalid input")
-	ErrNoSpecialists   = errors.New("no valid specialists in recipients")
+	ErrInvalidInput  = errors.New("invalid input")
+	ErrNoSpecialists = errors.New("no valid specialists in recipients")
 	// ErrEmailUnverified — soft-gate: для авторизованного клиента почта
 	// должна быть подтверждена. Хендлер мапит в 403 email_unverified.
 	ErrEmailUnverified = errors.New("email is not verified")

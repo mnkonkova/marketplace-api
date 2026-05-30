@@ -40,14 +40,14 @@ const (
 )
 
 type Service struct {
-	repo                *Repo
-	tokens              *TokenIssuer
-	now                 func() time.Time
-	verifyTokenTTL      time.Duration
-	passwordResetTTL    time.Duration
-	appBaseURL          string
-	resendCooldown      ResendCooldown
-	verificationOff     bool // если true — soft-gate выключен, юзеры авто-verified
+	repo             *Repo
+	tokens           *TokenIssuer
+	now              func() time.Time
+	verifyTokenTTL   time.Duration
+	passwordResetTTL time.Duration
+	appBaseURL       string
+	resendCooldown   ResendCooldown
+	verificationOff  bool // если true — soft-gate выключен, юзеры авто-verified
 }
 
 // ResendCooldown — узкий интерфейс под Redis-ограничение «не чаще раза в N
@@ -240,6 +240,7 @@ func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 //   - (true, nil)  — почта подтверждена;
 //   - (false, nil) — почта НЕ подтверждена (нормальный кейс soft-gate);
 //   - (_, err)     — ошибка БД/чтения, не путать с «не подтверждено».
+//
 // Если verification выключен в конфиге — всегда возвращает (true, nil).
 func (s *Service) IsEmailVerified(ctx context.Context, id uuid.UUID) (bool, error) {
 	if s.verificationOff {

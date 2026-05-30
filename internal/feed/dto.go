@@ -10,14 +10,14 @@ import (
 // фронту в ленте; описание/категории портфолио-айтема в overlay'е не
 // показываем (там уже есть bio спеца).
 type Video struct {
-	ID           uuid.UUID `json:"id"`
-	URL          string    `json:"url"`
-	Thumb        string    `json:"thumb,omitempty"`
-	Title        string    `json:"title,omitempty"`
-	Description  string    `json:"description,omitempty"`
-	DurationSec  *int      `json:"duration_sec,omitempty"`
-	Aspect       string    `json:"aspect,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID          uuid.UUID `json:"id"`
+	URL         string    `json:"url"`
+	Thumb       string    `json:"thumb,omitempty"`
+	Title       string    `json:"title,omitempty"`
+	Description string    `json:"description,omitempty"`
+	DurationSec *int      `json:"duration_sec,omitempty"`
+	Aspect      string    `json:"aspect,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Specialist — компактная проекция профиля для overlay'я. Это подмножество
@@ -65,6 +65,6 @@ type Query struct {
 	SkillSlugs    []string
 	City          string
 	Cursor        string
-	PerSpecialist int          // максимум видео на одного спеца, default 5
-	UserIDs       []uuid.UUID  // если непустой — жёсткий фильтр по этим спецам
+	PerSpecialist int         // максимум видео на одного спеца, default 5
+	UserIDs       []uuid.UUID // если непустой — жёсткий фильтр по этим спецам
 }

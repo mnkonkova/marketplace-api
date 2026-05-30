@@ -100,7 +100,6 @@ func splitCSV(values []string) []string {
 	return out
 }
 
-
 type errorResponse struct {
 	Error string `json:"error"`
 }

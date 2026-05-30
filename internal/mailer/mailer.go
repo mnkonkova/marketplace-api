@@ -10,11 +10,11 @@ package mailer
 import "context"
 
 type Message struct {
-	To       string // получатель (валидный email)
-	ToName   string // имя получателя (опционально, для шапки)
-	Subject  string
-	Plain    string // обязательное plain-text тело (для клиентов без HTML)
-	HTML     string // опционально; если пусто — отдаём только plain
+	To      string // получатель (валидный email)
+	ToName  string // имя получателя (опционально, для шапки)
+	Subject string
+	Plain   string // обязательное plain-text тело (для клиентов без HTML)
+	HTML    string // опционально; если пусто — отдаём только plain
 }
 
 type Sender interface {

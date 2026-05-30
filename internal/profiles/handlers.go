@@ -20,16 +20,16 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 // Человекочитаемые сообщения. Стабильные коды (`error`) остаются прежними,
 // сообщения добавляются в `message` — фронт ветвится по коду, в UI кладёт текст.
 const (
-	msgInternal       = "Внутренняя ошибка сервера. Попробуйте позже."
-	msgNoUser         = "Требуется авторизация."
-	msgBadJSON        = "Некорректный JSON в теле запроса."
-	msgBadID          = "Неверный формат идентификатора."
-	msgNoProfile      = "Профиль не найден."
-	msgNotFound       = "Объект не найден."
-	msgStale          = "Объект был изменён другим запросом. Перезагрузите данные."
-	msgPublishInc     = "Профиль не готов к публикации: проверьте обязательные поля."
-	msgEmailUnverif   = "Подтвердите email — на него отправлено письмо."
-	msgStorageOff     = "Хранилище медиа недоступно."
+	msgInternal     = "Внутренняя ошибка сервера. Попробуйте позже."
+	msgNoUser       = "Требуется авторизация."
+	msgBadJSON      = "Некорректный JSON в теле запроса."
+	msgBadID        = "Неверный формат идентификатора."
+	msgNoProfile    = "Профиль не найден."
+	msgNotFound     = "Объект не найден."
+	msgStale        = "Объект был изменён другим запросом. Перезагрузите данные."
+	msgPublishInc   = "Профиль не готов к публикации: проверьте обязательные поля."
+	msgEmailUnverif = "Подтвердите email — на него отправлено письмо."
+	msgStorageOff   = "Хранилище медиа недоступно."
 )
 
 // invalidInputMessage достаёт человеческое сообщение из обёрнутой ErrInvalidInput.
@@ -413,7 +413,6 @@ func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
 
 // типы для swaggo
 type errorResponse struct {

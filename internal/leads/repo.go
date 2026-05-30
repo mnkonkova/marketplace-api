@@ -178,4 +178,3 @@ WHERE lead_id = $1 AND specialist_user_id = $2
 	}
 	return nil
 }
-

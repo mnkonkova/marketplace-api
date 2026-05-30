@@ -128,11 +128,11 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type meResp struct {
-	UserID         string  `json:"user_id"`
-	Email          *string `json:"email,omitempty"`
-	Phone          *string `json:"phone,omitempty"`
-	Kind           string  `json:"kind"`
-	EmailVerified  bool    `json:"email_verified"`
+	UserID        string  `json:"user_id"`
+	Email         *string `json:"email,omitempty"`
+	Phone         *string `json:"phone,omitempty"`
+	Kind          string  `json:"kind"`
+	EmailVerified bool    `json:"email_verified"`
 }
 
 // Me godoc
@@ -225,7 +225,6 @@ func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
-
 
 type passwordResetRequestReq struct {
 	Email string `json:"email"`

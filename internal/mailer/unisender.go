@@ -40,15 +40,16 @@ func NewUnisenderGo(cfg UnisenderGoConfig) *UnisenderGo {
 }
 
 // Тело запроса соответствует /email/send.json:
-// {
-//   "message": {
-//     "recipients": [{"email": "...", "substitutions": {"to_name": "..."}}],
-//     "subject": "...",
-//     "body": {"plaintext": "...", "html": "..."},
-//     "from_email": "...",
-//     "from_name": "..."
-//   }
-// }
+//
+//	{
+//	  "message": {
+//	    "recipients": [{"email": "...", "substitutions": {"to_name": "..."}}],
+//	    "subject": "...",
+//	    "body": {"plaintext": "...", "html": "..."},
+//	    "from_email": "...",
+//	    "from_name": "..."
+//	  }
+//	}
 type unisenderBody struct {
 	Message unisenderMessage `json:"message"`
 }

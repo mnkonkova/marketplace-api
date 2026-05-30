@@ -52,13 +52,13 @@ type Config struct {
 	// отключена: register работает, но письма не уходят, в логах warn.
 	// APP_BASE_URL нужен воркеру для сборки verify-ссылки (у воркера нет
 	// HTTP-контекста, на dev/staging/prod разный URL).
-	UnisenderAPIKey      string        `env:"UNISENDER_API_KEY"`
-	UnisenderAPIBaseURL  string        `env:"UNISENDER_API_BASE_URL" envDefault:"https://goapi.unisender.ru/ru/transactional/api/v1"`
-	UnisenderFromEmail   string        `env:"UNISENDER_FROM_EMAIL"`
-	UnisenderFromName    string        `env:"UNISENDER_FROM_NAME" envDefault:"marketpclce"`
-	AppBaseURL           string        `env:"APP_BASE_URL" envDefault:"http://localhost:5173"`
-	EmailVerifyTokenTTL  time.Duration `env:"EMAIL_VERIFY_TOKEN_TTL" envDefault:"24h"`
-	RateEmailResendPer   time.Duration `env:"RATE_EMAIL_RESEND_PER" envDefault:"60s"`
+	UnisenderAPIKey     string        `env:"UNISENDER_API_KEY"`
+	UnisenderAPIBaseURL string        `env:"UNISENDER_API_BASE_URL" envDefault:"https://goapi.unisender.ru/ru/transactional/api/v1"`
+	UnisenderFromEmail  string        `env:"UNISENDER_FROM_EMAIL"`
+	UnisenderFromName   string        `env:"UNISENDER_FROM_NAME" envDefault:"marketpclce"`
+	AppBaseURL          string        `env:"APP_BASE_URL" envDefault:"http://localhost:5173"`
+	EmailVerifyTokenTTL time.Duration `env:"EMAIL_VERIFY_TOKEN_TTL" envDefault:"24h"`
+	RateEmailResendPer  time.Duration `env:"RATE_EMAIL_RESEND_PER" envDefault:"60s"`
 	// EmailVerificationDisabled — выключает весь soft-gate целиком: юзер при
 	// регистрации сразу email_verified=true, publish/leads проходят без
 	// проверки, resend/verify становятся no-op'ами. Для локального запуска
@@ -78,8 +78,8 @@ type Config struct {
 	// Лимиты на /auth/* — анти-брутфорс по логину и анти-флуд по регистрации.
 	// Считается по IP. На login достаточно жёстко: 10 попыток/мин ловит
 	// автоматику, но не мешает живому юзеру опечататься 2-3 раза.
-	RateAuthPerMin       int           `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
-	RateAuthPerHour      int           `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
+	RateAuthPerMin  int `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
+	RateAuthPerHour int `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
 
 	// Outbox-воркер. MaxAttempts/BackoffCap определяют поведение ретраев и
 	// порог для DLQ (dead_at). Retention/CleanupInterval — TTL на обработанные
