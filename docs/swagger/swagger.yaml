@@ -750,12 +750,92 @@ definitions:
           $ref: '#/definitions/internal_profiles.PortfolioItem'
         type: array
     type: object
+  internal_projects.AdminEventsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.StepEvent'
+        type: array
+    type: object
+  internal_projects.AdminProjectsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.ProjectAdminView'
+        type: array
+    type: object
+  internal_projects.BulkFromLeadInput:
+    properties:
+      assigned_to_user_id:
+        type: string
+      template_code:
+        type: string
+      template_version:
+        type: integer
+      title:
+        type: string
+    type: object
+  internal_projects.BulkStartResultResponse:
+    properties:
+      created:
+        items:
+          $ref: '#/definitions/internal_projects.ProjectAdminView'
+        type: array
+      skipped_specialist_ids:
+        items:
+          type: string
+        type: array
+    type: object
   internal_projects.ClientProjectsResponse:
     properties:
       items:
         items:
           $ref: '#/definitions/internal_projects.ProjectClientView'
         type: array
+    type: object
+  internal_projects.CreateFromRecipientInput:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      lead_id:
+        type: string
+      notes:
+        type: string
+      specialist_user_id:
+        type: string
+      template_code:
+        type: string
+      template_version:
+        type: integer
+      title:
+        type: string
+    type: object
+  internal_projects.CreateManualInput:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      client_user_id:
+        type: string
+      notes:
+        type: string
+      source:
+        allOf:
+        - $ref: '#/definitions/internal_projects.ProjectSource'
+        description: manual|referral|returning_client
+      specialist_user_id:
+        type: string
+      template_code:
+        description: '"video_production"'
+        type: string
+      template_version:
+        description: "1"
+        type: integer
+      title:
+        type: string
     type: object
   internal_projects.FunnelView:
     properties:
@@ -765,6 +845,22 @@ definitions:
         items:
           $ref: '#/definitions/internal_projects.StageView'
         type: array
+    type: object
+  internal_projects.PatchAdminInput:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      notes:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      title:
+        type: string
+      updated_at:
+        description: обязателен — защита от lost-update
+        type: string
     type: object
   internal_projects.ProgressView:
     properties:
@@ -779,6 +875,43 @@ definitions:
         type: integer
       total_weight:
         type: integer
+    type: object
+  internal_projects.ProjectAdminView:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      client_user_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      lead_id:
+        type: string
+      notes:
+        type: string
+      revisions_included:
+        type: integer
+      revisions_used:
+        type: integer
+      source:
+        $ref: '#/definitions/internal_projects.ProjectSource'
+      specialist_user_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      template_id:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
     type: object
   internal_projects.ProjectClientView:
     properties:
@@ -805,6 +938,18 @@ definitions:
       updated_at:
         type: string
     type: object
+  internal_projects.ProjectSource:
+    enum:
+    - marketplace
+    - manual
+    - referral
+    - returning_client
+    type: string
+    x-enum-varnames:
+    - SourceMarketplace
+    - SourceManual
+    - SourceReferral
+    - SourceReturningClient
   internal_projects.ProjectSpecialistView:
     properties:
       client_user_id:
@@ -870,6 +1015,32 @@ definitions:
       title:
         type: string
     type: object
+  internal_projects.StepActionInput:
+    properties:
+      comment:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.StepEvent:
+    properties:
+      actor_type:
+        type: string
+      actor_user_id:
+        type: string
+      comment:
+        type: string
+      created_at:
+        type: string
+      from_status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+      id:
+        type: integer
+      step_id:
+        type: string
+      to_status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+    type: object
   internal_projects.StepOwner:
     enum:
     - client
@@ -927,6 +1098,22 @@ definitions:
         type: string
       weight:
         type: integer
+    type: object
+  internal_projects.SubmitReviewInput:
+    properties:
+      rating:
+        type: integer
+      text:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.SubmitReviewResponse:
+    properties:
+      review_id:
+        type: string
+      step:
+        $ref: '#/definitions/internal_projects.StepView'
     type: object
   internal_projects.errorResponse:
     properties:
@@ -1198,6 +1385,29 @@ info:
   title: marketpclce API
   version: "1.0"
 paths:
+  /admin/lead_recipients/{lead_id}/{specialist_id}/accept:
+    post:
+      description: Используется когда специалист не успел сам — менеджер выставляет
+        recipient.status='accepted' от его лица.
+      parameters:
+      - description: Lead ID
+        in: path
+        name: lead_id
+        required: true
+        type: string
+      - description: Specialist user ID
+        in: path
+        name: specialist_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: no content
+      security:
+      - BearerAuth: []
+      summary: Менеджер апрувит recipient'а за свой продакшен
+      tags:
+      - admin-projects
   /admin/productions:
     get:
       description: Только для роли admin/moderator или service-токена (Directus).
@@ -1357,6 +1567,342 @@ paths:
       summary: Изменить продакшен (optimistic-lock через updated_at)
       tags:
       - admin-productions
+  /admin/projects:
+    get:
+      parameters:
+      - description: draft|active|on_hold|done|cancelled|dispute
+        in: query
+        name: status
+        type: string
+      - description: marketplace|manual|referral|returning_client
+        in: query
+        name: source
+        type: string
+      - description: client_user_id (UUID)
+        in: query
+        name: client
+        type: string
+      - description: specialist_user_id (UUID)
+        in: query
+        name: specialist
+        type: string
+      - description: assigned_to_user_id (UUID)
+        in: query
+        name: assigned
+        type: string
+      - description: только с просроченными шагами
+        in: query
+        name: overdue
+        type: boolean
+      - description: default 100, max 500
+        in: query
+        name: limit
+        type: integer
+      - description: default 0
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.AdminProjectsResponse'
+      security:
+      - BearerAuth: []
+      summary: Список проектов (admin/moderator)
+      tags:
+      - admin-projects
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: поля для создания
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.CreateManualInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectAdminView'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать manual-проект (admin only)
+      tags:
+      - admin-projects
+  /admin/projects/{id}:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectAdminView'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Карточка проекта (admin)
+      tags:
+      - admin-projects
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: title/budget/notes/assigned/status + updated_at
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.PatchAdminInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectAdminView'
+        "409":
+          description: stale_updated_at
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "422":
+          description: invalid_transition
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Частичный апдейт проекта (whitelist + optimistic-lock)
+      tags:
+      - admin-projects
+  /admin/projects/{id}/events:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: default 100, max 500
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.AdminEventsResponse'
+      security:
+      - BearerAuth: []
+      summary: Аудит-лог проекта
+      tags:
+      - admin-projects
+  /admin/projects/{id}/funnel:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.FunnelView'
+      security:
+      - BearerAuth: []
+      summary: Воронка проекта (admin) — все шаги без фильтра
+      tags:
+      - admin-projects
+  /admin/projects/{id}/steps/{step_id}/complete:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Step ID
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: updated_at + comment
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_projects.StepActionInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.StepView'
+      security:
+      - BearerAuth: []
+      summary: Перевести шаг в done (закрывает стадию/проект)
+      tags:
+      - admin-projects
+  /admin/projects/{id}/steps/{step_id}/skip:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Step ID
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: updated_at + comment
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.StepActionInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.StepView'
+      security:
+      - BearerAuth: []
+      summary: Skip опционального шага (рекомендуется comment)
+      tags:
+      - admin-projects
+  /admin/projects/{id}/steps/{step_id}/start:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Step ID
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: updated_at для optimistic-lock
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_projects.StepActionInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.StepView'
+        "409":
+          description: stale_updated_at
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "422":
+          description: invalid_transition
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Перевести шаг в in_progress (ETA пересчитывается)
+      tags:
+      - admin-projects
+  /admin/projects/from_lead/{lead_id}/bulk:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Lead ID
+        in: path
+        name: lead_id
+        required: true
+        type: string
+      - description: title + assigned
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.BulkFromLeadInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.BulkStartResultResponse'
+      security:
+      - BearerAuth: []
+      summary: Bulk-создание проектов из всех accepted recipients одного лида
+      tags:
+      - admin-projects
+  /admin/projects/from_recipient:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: lead_id + specialist + title
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.CreateFromRecipientInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectAdminView'
+        "409":
+          description: already_started | recipient_not_ready
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать marketplace-проект из принятого recipient'а
+      tags:
+      - admin-projects
   /auth/login:
     post:
       consumes:
@@ -2176,6 +2722,111 @@ paths:
       security:
       - BearerAuth: []
       summary: Воронка проекта клиента (стадии и видимые шаги)
+      tags:
+      - me-projects
+  /me/projects/{id}/steps/{step_id}/approve:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Step ID
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: updated_at
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_projects.StepActionInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.StepView'
+        "409":
+          description: stale_updated_at
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "422":
+          description: invalid_transition
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Клиент: принять шаг (client_review → done)'
+      tags:
+      - me-projects
+  /me/projects/{id}/steps/{step_id}/request_revision:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Step ID
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: updated_at + comment
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_projects.StepActionInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.StepView'
+      security:
+      - BearerAuth: []
+      summary: 'Клиент: запрос правок (client_review → rejected; цикл правок)'
+      tags:
+      - me-projects
+  /me/projects/{id}/steps/{step_id}/submit_review:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Step ID
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: rating 1..5 + text
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.SubmitReviewInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.SubmitReviewResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Клиент: оставить отзыв (review → done)'
       tags:
       - me-projects
   /me/projects/by_lead/{lead_id}:

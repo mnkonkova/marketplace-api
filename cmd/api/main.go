@@ -188,7 +188,9 @@ func main() {
 
 	projectsRepo := projects.NewRepo(pool)
 	projectsSvc := projects.NewService(projectsRepo).
-		WithUserDirectory(projectsUserDirectory{authRepo: authRepo})
+		WithUserDirectory(projectsUserDirectory{authRepo: authRepo}).
+		WithReviewWriter(projectsReviewWriter{reviewsRepo: reviewsRepo}).
+		WithRecipientAcceptor(projectsRecipientAcceptor{leadsSvc: leadsSvc})
 	projectsHandler := projects.NewHandler(projectsSvc)
 
 	var summarizeCache *summarize.Cache
@@ -375,6 +377,48 @@ func (l primaryCategoryLookup) PrimaryCategory(ctx context.Context, userID uuid.
 	}
 	title, _ := l.repo.CategoryTitle(ctx, p.PrimaryCategory)
 	return p.PrimaryCategory, title, nil
+}
+
+// projectsReviewWriter — мост к reviews.Repo для submit_review.
+// Использует reviews.Repo.Create напрямую (так как нам нужен project_id,
+// которого нет в reviews.Service.CreateInput); добавляет project_id
+// через сырой SQL после Create.
+type projectsReviewWriter struct{ reviewsRepo *reviews.Repo }
+
+func (p projectsReviewWriter) CreateProjectReview(ctx context.Context, in projects.ProjectReviewInput) (uuid.UUID, error) {
+	id, err := p.reviewsRepo.Create(ctx, reviews.CreateInput{
+		LeadID:       in.LeadID,
+		AuthorUserID: in.AuthorUserID,
+		AuthorName:   in.AuthorName,
+		TargetUserID: in.TargetUserID,
+		Rating:       in.Rating,
+		Text:         in.Text,
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	// Reviews.Repo.Create НЕ заполняет project_id (он был добавлен миграцией
+	// 00011 после того, как Repo был написан). Заполняем отдельным UPDATE.
+	if _, err := p.reviewsRepo.Pool().Exec(ctx,
+		`UPDATE reviews SET project_id = $1 WHERE id = $2`,
+		in.ProjectID, id,
+	); err != nil {
+		// Review создан — UPDATE упал. На MVP терпимо: project_id NULL
+		// не ломает выдачу; админ может вручную допроставить через Directus.
+		return id, nil
+	}
+	return id, nil
+}
+
+// projectsRecipientAcceptor — мост к leads.Service для админ-кнопки
+// «акцептить за свой продакшен» в Directus.
+type projectsRecipientAcceptor struct{ leadsSvc *leads.Service }
+
+func (p projectsRecipientAcceptor) AcceptRecipient(ctx context.Context, leadID, specialistID uuid.UUID) error {
+	// leads.Service.UpdateRecipientStatus принимает expectedUpdatedAt
+	// для optimistic-lock; для админской кнопки мы не знаем версию —
+	// передаём nil, действие безусловное (под admin-ролью).
+	return p.leadsSvc.UpdateRecipientStatus(ctx, leadID, specialistID, "accepted", nil)
 }
 
 // projectsUserDirectory — мост от projects.UserDirectory к auth.Repo.

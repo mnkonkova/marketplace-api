@@ -170,6 +170,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/projects/{id}", d.Projects.GetClient)
 				r.Get("/me/projects/{id}/funnel", d.Projects.GetClientFunnel)
 				r.Get("/me/projects/by_lead/{lead_id}", d.Projects.ListClientByLead)
+				// Клиентские мутации шагов.
+				r.Post("/me/projects/{id}/steps/{step_id}/approve", d.Projects.ClientApprove)
+				r.Post("/me/projects/{id}/steps/{step_id}/request_revision", d.Projects.ClientRequestRevision)
+				r.Post("/me/projects/{id}/steps/{step_id}/submit_review", d.Projects.ClientSubmitReview)
 			})
 
 			// /me/specialist/projects/* — read-only выдача для назначенных
@@ -182,6 +186,27 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/specialist/projects", d.Projects.ListSpecialist)
 				r.Get("/me/specialist/projects/{id}", d.Projects.GetSpecialist)
 				r.Get("/me/specialist/projects/{id}/funnel", d.Projects.GetSpecialistFunnelHandler)
+			})
+
+			// /admin/projects/* — admin+moderator на read, admin на write/
+			// step-transitions. PATCH защищён updated_at-locking; шаги тоже.
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "admin", "moderator"))
+				r.Get("/admin/projects", d.Projects.AdminList)
+				r.Get("/admin/projects/{id}", d.Projects.AdminGet)
+				r.Get("/admin/projects/{id}/funnel", d.Projects.AdminFunnel)
+				r.Get("/admin/projects/{id}/events", d.Projects.AdminEvents)
+			})
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "admin"))
+				r.Post("/admin/projects", d.Projects.AdminCreateManual)
+				r.Post("/admin/projects/from_recipient", d.Projects.AdminCreateFromRecipient)
+				r.Post("/admin/projects/from_lead/{lead_id}/bulk", d.Projects.AdminBulkFromLead)
+				r.Patch("/admin/projects/{id}", d.Projects.AdminPatch)
+				r.Post("/admin/projects/{id}/steps/{step_id}/start", d.Projects.AdminStartStep)
+				r.Post("/admin/projects/{id}/steps/{step_id}/complete", d.Projects.AdminCompleteStep)
+				r.Post("/admin/projects/{id}/steps/{step_id}/skip", d.Projects.AdminSkipStep)
+				r.Post("/admin/lead_recipients/{lead_id}/{specialist_id}/accept", d.Projects.AdminAcceptRecipient)
 			})
 		}
 

@@ -395,6 +395,60 @@ WHERE project_id = $1`
 	return out, rows.Err()
 }
 
+// UpdateAdminInTx применяет PatchAdminInput с optimistic-lock через
+// updated_at. Применяется только к whitelist-полям (title/budget/notes/
+// assigned_to_user_id/status). 0 строк + expectedUpdatedAt != zero →
+// ErrConflict; 0 строк без updated_at-проверки → ErrNotFound.
+func (r *Repo) UpdateAdminInTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, in PatchAdminInput) (ProjectAdminView, error) {
+	const q = `
+UPDATE projects SET
+    title             = COALESCE($2, title),
+    budget            = CASE WHEN $3::boolean THEN $4 ELSE budget END,
+    notes             = COALESCE($5, notes),
+    assigned_to_user_id = CASE WHEN $6::boolean THEN $7 ELSE assigned_to_user_id END,
+    status            = COALESCE($8, status),
+    updated_at        = now()
+WHERE id = $1
+  AND ($9::timestamptz IS NULL OR updated_at = $9)
+RETURNING id, lead_id, client_user_id, specialist_user_id, assigned_to_user_id,
+          template_id, title, source, status, revisions_included, revisions_used,
+          budget, COALESCE(notes, ''), started_at, completed_at, created_at, updated_at`
+
+	var expected *time.Time
+	if !in.UpdatedAt.IsZero() {
+		expected = &in.UpdatedAt
+	}
+
+	var p ProjectAdminView
+	err := tx.QueryRow(ctx, q,
+		id,
+		in.Title,
+		in.Budget != nil, in.Budget,
+		in.Notes,
+		in.AssignedToUserID != nil, in.AssignedToUserID,
+		in.Status,
+		expected,
+	).Scan(
+		&p.ID, &p.LeadID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
+		&p.TemplateID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed,
+		&p.Budget, &p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if expected != nil {
+			// Различаем 404 от 409 через probe.
+			var exists bool
+			if perr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)`, id).Scan(&exists); perr == nil && exists {
+				return ProjectAdminView{}, ErrConflict
+			}
+		}
+		return ProjectAdminView{}, ErrNotFound
+	}
+	if err != nil {
+		return ProjectAdminView{}, fmt.Errorf("update project: %w", err)
+	}
+	return p, nil
+}
+
 // ─── Audit-log events (read-only в Фазе 1) ───────────────────────────
 
 type StepEvent struct {

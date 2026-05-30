@@ -25,6 +25,11 @@ type Repo struct{ db *pgxpool.Pool }
 
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
+// Pool — для внешних доменов, которым нужен прямой доступ к транзакциям
+// reviews (например, для UPDATE project_id после Create — см.
+// cmd/api/main.go projectsReviewWriter).
+func (r *Repo) Pool() *pgxpool.Pool { return r.db }
+
 // TargetIsPublishedSpecialist — target должен быть профилем спеца.
 // is_published проверять не нужно (отзыв ставится по факту работы, профиль
 // мог временно сняться с публикации), но запись в specialist_profiles обязана.

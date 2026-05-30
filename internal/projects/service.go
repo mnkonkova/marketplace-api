@@ -26,9 +26,18 @@ type UserDirectory interface {
 	GetEmailAndName(ctx context.Context, userID uuid.UUID) (email, name string, err error)
 }
 
+// RecipientAcceptor — узкий контракт для «менеджер апрувит recipient'a
+// за продакшен» через POST /admin/lead_recipients/{id}/accept.
+// Адаптер в main.go обращается к leads.Service.UpdateRecipientStatus.
+type RecipientAcceptor interface {
+	AcceptRecipient(ctx context.Context, leadID, specialistID uuid.UUID) error
+}
+
 type Service struct {
-	repo  *Repo
-	users UserDirectory
+	repo       *Repo
+	users      UserDirectory
+	reviews    ReviewWriter
+	recipients RecipientAcceptor
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -38,6 +47,13 @@ func NewService(repo *Repo) *Service { return &Service{repo: repo} }
 // в payload пустые строки, n8n не сможет роутить по email.
 func (s *Service) WithUserDirectory(d UserDirectory) *Service {
 	s.users = d
+	return s
+}
+
+// WithRecipientAcceptor подключает мост к leads-домену для
+// /admin/lead_recipients/.../accept. nil → endpoint вернёт 503.
+func (s *Service) WithRecipientAcceptor(r RecipientAcceptor) *Service {
+	s.recipients = r
 	return s
 }
 
@@ -130,6 +146,73 @@ func (s *Service) ListSpecialistProjects(ctx context.Context, userID uuid.UUID) 
 // GetSpecialistProject — карточка одного назначенного проекта.
 func (s *Service) GetSpecialistProject(ctx context.Context, projectID, userID uuid.UUID) (ProjectSpecialistView, error) {
 	return s.repo.GetSpecialistByID(ctx, projectID, userID)
+}
+
+// ─── Admin read ────────────────────────────────────────────────────
+
+func (s *Service) ListAdmin(ctx context.Context, f AdminListFilter) ([]ProjectAdminView, error) {
+	return s.repo.ListAdmin(ctx, f)
+}
+
+func (s *Service) GetAdmin(ctx context.Context, id uuid.UUID) (ProjectAdminView, error) {
+	return s.repo.GetAdminByID(ctx, id)
+}
+
+func (s *Service) ListEvents(ctx context.Context, projectID uuid.UUID, limit int) ([]StepEvent, error) {
+	return s.repo.ListEvents(ctx, projectID, limit)
+}
+
+// UpdateAdmin — PATCH whitelist-полей с optimistic-lock через
+// updated_at. ErrConflict при stale, ErrNotFound при отсутствии.
+// Сюда же входит изменение status; валидируем через
+// IsValidProjectStatusUpdate (запрещаем active→done вручную, это
+// должно идти через CompleteStep на последнем шаге).
+func (s *Service) UpdateAdmin(ctx context.Context, id uuid.UUID, in PatchAdminInput) (ProjectAdminView, error) {
+	if in.Title != nil {
+		t := strings.TrimSpace(*in.Title)
+		if t == "" || len(t) > 200 {
+			return ProjectAdminView{}, fmt.Errorf("%w: title 1..200", ErrInvalidInput)
+		}
+		in.Title = &t
+	}
+	if in.Notes != nil {
+		n := strings.TrimSpace(*in.Notes)
+		if len(n) > 5000 {
+			return ProjectAdminView{}, fmt.Errorf("%w: notes ≤5000", ErrInvalidInput)
+		}
+		in.Notes = &n
+	}
+
+	// Если меняется status — проверяем граф (требует чтения текущего).
+	if in.Status != nil {
+		cur, err := s.repo.GetAdminByID(ctx, id)
+		if err != nil {
+			return ProjectAdminView{}, err
+		}
+		if !IsValidProjectStatusUpdate(cur.Status, *in.Status) {
+			return ProjectAdminView{}, fmt.Errorf("%w: project status %s → %s", ErrInvalidTransition, cur.Status, *in.Status)
+		}
+	}
+
+	var result ProjectAdminView
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		p, err := s.repo.UpdateAdminInTx(ctx, tx, id, in)
+		if err != nil {
+			return err
+		}
+		result = p
+		return nil
+	})
+	return result, err
+}
+
+// AcceptRecipient — обёртка над leads-доменом для «менеджер апрувит
+// recipient'а за свой продакшен». Реализация в адаптере main.go.
+func (s *Service) AcceptRecipient(ctx context.Context, leadID, specialistID uuid.UUID) error {
+	if s.recipients == nil {
+		return fmt.Errorf("%w: recipient acceptor not configured", ErrInvalidInput)
+	}
+	return s.recipients.AcceptRecipient(ctx, leadID, specialistID)
 }
 
 // ─── Создание проекта (write) ───────────────────────────────────────
