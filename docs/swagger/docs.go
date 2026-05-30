@@ -1567,6 +1567,116 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/specialist/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Read-only выдача для блока «Назначенные проекты» во вкладке «Продакшен» в кабинете специалиста (Вариант А — никаких мутаций).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-specialist-projects"
+                ],
+                "summary": "Назначенные специалисту проекты",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.SpecialistProjectsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/specialist/projects/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-specialist-projects"
+                ],
+                "summary": "Карточка назначенного проекта",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ProjectSpecialistView"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/specialist/projects/{id}/funnel": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Из шаблона исключаются payment/escrow_hold/social_setup/revision_round/nps/review — то, что не относится к работе специалиста.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-specialist-projects"
+                ],
+                "summary": "Воронка назначенного проекта (только видимые специалисту шаги)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.FunnelView"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/uploads/image": {
             "post": {
                 "security": [
@@ -3277,6 +3387,41 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.ProjectSpecialistView": {
+            "type": "object",
+            "properties": {
+                "client_user_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "revisions_used": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_projects.ProjectStatus": {
             "type": "string",
             "enum": [
@@ -3295,6 +3440,17 @@ const docTemplate = `{
                 "StatusCancelled",
                 "StatusDispute"
             ]
+        },
+        "internal_projects.SpecialistProjectsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.ProjectSpecialistView"
+                    }
+                }
+            }
         },
         "internal_projects.StageView": {
             "type": "object",

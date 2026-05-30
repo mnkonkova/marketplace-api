@@ -805,6 +805,29 @@ definitions:
       updated_at:
         type: string
     type: object
+  internal_projects.ProjectSpecialistView:
+    properties:
+      client_user_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      revisions_included:
+        type: integer
+      revisions_used:
+        type: integer
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
   internal_projects.ProjectStatus:
     enum:
     - draft
@@ -821,6 +844,13 @@ definitions:
     - StatusDone
     - StatusCancelled
     - StatusDispute
+  internal_projects.SpecialistProjectsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.ProjectSpecialistView'
+        type: array
+    type: object
   internal_projects.StageView:
     properties:
       code:
@@ -2171,6 +2201,76 @@ paths:
       summary: Все проекты клиента по одному брифу (лиду)
       tags:
       - me-projects
+  /me/specialist/projects:
+    get:
+      description: Read-only выдача для блока «Назначенные проекты» во вкладке «Продакшен»
+        в кабинете специалиста (Вариант А — никаких мутаций).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.SpecialistProjectsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Назначенные специалисту проекты
+      tags:
+      - me-specialist-projects
+  /me/specialist/projects/{id}:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectSpecialistView'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Карточка назначенного проекта
+      tags:
+      - me-specialist-projects
+  /me/specialist/projects/{id}/funnel:
+    get:
+      description: Из шаблона исключаются payment/escrow_hold/social_setup/revision_round/nps/review
+        — то, что не относится к работе специалиста.
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.FunnelView'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Воронка назначенного проекта (только видимые специалисту шаги)
+      tags:
+      - me-specialist-projects
   /me/uploads/image:
     post:
       consumes:

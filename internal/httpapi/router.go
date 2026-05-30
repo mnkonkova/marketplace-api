@@ -161,7 +161,7 @@ func NewRouter(d Deps) http.Handler {
 
 		// /me/projects/* — ЛК клиента. RequireRoles("client") вместо
 		// обычного auth.Middleware: специалисты ходят в свой раздел
-		// /me/specialist/projects/*, у них своя выдача (Фаза 3).
+		// /me/specialist/projects/*, у них своя выдача.
 		if d.Projects != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "client"))
@@ -170,6 +170,18 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/projects/{id}", d.Projects.GetClient)
 				r.Get("/me/projects/{id}/funnel", d.Projects.GetClientFunnel)
 				r.Get("/me/projects/by_lead/{lead_id}", d.Projects.ListClientByLead)
+			})
+
+			// /me/specialist/projects/* — read-only выдача для назначенных
+			// специалистов (Вариант А: никаких мутаций). Шаги фильтруются
+			// по visible_to_specialist в SQL — payment/nps/review/прочее
+			// клиентское не возвращается.
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "specialist"))
+				r.Use(RateLimit(d.Limiter, "read", d.ReadWindows))
+				r.Get("/me/specialist/projects", d.Projects.ListSpecialist)
+				r.Get("/me/specialist/projects/{id}", d.Projects.GetSpecialist)
+				r.Get("/me/specialist/projects/{id}/funnel", d.Projects.GetSpecialistFunnelHandler)
 			})
 		}
 

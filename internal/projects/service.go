@@ -122,6 +122,16 @@ func (s *Service) ListClientProjectsByLead(ctx context.Context, userID, leadID u
 	return s.repo.ListByClientByLead(ctx, userID, leadID)
 }
 
+// ListSpecialistProjects — назначенные проекты для специалиста.
+func (s *Service) ListSpecialistProjects(ctx context.Context, userID uuid.UUID) ([]ProjectSpecialistView, error) {
+	return s.repo.ListBySpecialist(ctx, userID)
+}
+
+// GetSpecialistProject — карточка одного назначенного проекта.
+func (s *Service) GetSpecialistProject(ctx context.Context, projectID, userID uuid.UUID) (ProjectSpecialistView, error) {
+	return s.repo.GetSpecialistByID(ctx, projectID, userID)
+}
+
 // ─── Создание проекта (write) ───────────────────────────────────────
 
 // StartProjectManual создаёт проект «вручную» (source ∈ manual/referral/
