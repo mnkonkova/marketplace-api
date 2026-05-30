@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,14 +26,20 @@ func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 func (r *Repo) Pool() *pgxpool.Pool { return r.db }
 
 func (r *Repo) Get(ctx context.Context, userID uuid.UUID) (Profile, error) {
+	// LEFT JOIN productions: pr.name пуст, если production_id NULL ИЛИ
+	// продакшен был деактивирован после привязки (мы не чистим production_id
+	// при is_active=false — для архивности; но в публичной выдаче пустое имя
+	// = выводить не надо).
 	const q = `
 SELECT p.user_id, p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
        p.is_published, p.rating_avg, p.reviews_count,
        COALESCE(p.contact_email, ''), COALESCE(p.contact_phone, ''),
+       p.production_id, COALESCE(pr.name, ''), p.is_freelance,
        p.updated_at
 FROM specialist_profiles p
+LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1`
 	var p Profile
 	err := r.db.QueryRow(ctx, q, userID).Scan(
@@ -41,6 +48,7 @@ WHERE p.user_id = $1`
 		&p.RateMin, &p.RateMax, &p.Currency,
 		&p.IsPublished, &p.RatingAvg, &p.ReviewsCount,
 		&p.ContactEmail, &p.ContactPhone,
+		&p.ProductionID, &p.ProductionName, &p.IsFreelance,
 		&p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -132,9 +140,15 @@ UPDATE specialist_profiles SET
   currency      = COALESCE($10, currency),
   contact_email = COALESCE($11, contact_email),
   contact_phone = COALESCE($12, contact_phone),
+  production_id = CASE WHEN $14::boolean THEN $15 ELSE production_id END,
+  is_freelance  = COALESCE($16, is_freelance),
   updated_at    = now()
 WHERE user_id = $1
   AND ($13::timestamptz IS NULL OR updated_at = $13)`
+	// production_id tri-state: Present=true → касаемся (Value=nil = clear,
+	// Value=&uuid = set).
+	prodTouched := in.ProductionID.Present
+	prodVal := in.ProductionID.Value
 	tag, err := tx.Exec(ctx, q,
 		userID,
 		in.DisplayName,
@@ -147,8 +161,16 @@ WHERE user_id = $1
 		in.ContactEmail,
 		in.ContactPhone,
 		in.UpdatedAt,
+		prodTouched, prodVal,
+		in.IsFreelance,
 	)
 	if err != nil {
+		// CHECK specialist_profiles_freelance_xor_production падает 23514,
+		// если service пропустил XOR-нормализацию (защита от багов слоя
+		// валидации). Возвращаем ErrInvalidInput, чтобы хендлер дал 400.
+		if isCheckViolation(err, "specialist_profiles_freelance_xor_production") {
+			return ErrInvalidInput
+		}
 		return fmt.Errorf("update profile: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
@@ -281,13 +303,16 @@ func (r *Repo) GetPublic(ctx context.Context, userID uuid.UUID) (PublicProfile, 
 SELECT p.user_id, p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
-       p.rating_avg, p.reviews_count
+       p.rating_avg, p.reviews_count,
+       COALESCE(pr.name, ''), p.is_freelance
 FROM specialist_profiles p
+LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1 AND p.is_published = TRUE`
 	var p PublicProfile
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&p.UserID, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
 		&p.RateMin, &p.RateMax, &p.Currency, &p.RatingAvg, &p.ReviewsCount,
+		&p.ProductionName, &p.IsFreelance,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublicProfile{}, ErrNotFound
@@ -549,4 +574,15 @@ func (r *Repo) ValidSkillIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID,
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// isCheckViolation — SQLSTATE 23514 (check_violation) с привязкой к имени
+// constraint'а. Используется в PatchInTx чтобы отличить XOR-нарушение от
+// общих DB-ошибок.
+func isCheckViolation(err error, constraintName string) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		return false
+	}
+	return pgErr.ConstraintName == constraintName
 }

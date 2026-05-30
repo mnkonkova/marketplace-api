@@ -182,6 +182,8 @@ func main() {
 	productionsRepo := productions.NewRepo(pool)
 	productionsSvc := productions.NewService(productionsRepo)
 	productionsHandler := productions.NewHandler(productionsSvc)
+	// Профиль валидирует production_id через справочник.
+	profilesSvc.WithProductionRegistry(productionsSvc)
 
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter

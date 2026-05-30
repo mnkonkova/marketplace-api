@@ -64,11 +64,22 @@ type MediaStorage interface {
 	PublicURL(key string) string
 }
 
+// ProductionRegistry — узкий интерфейс к справочнику продакшенов.
+// Используется только для валидации production_id в PATCH /me/profile:
+// мы должны проверить, что выбранный продакшен существует и активен.
+// Реализация в проде — productions.Service. nil-safe: без подключения
+// production_id всё равно валидируется через FK + CHECK на уровне БД
+// (но без понятного 400).
+type ProductionRegistry interface {
+	ExistsActive(ctx context.Context, id uuid.UUID) (bool, error)
+}
+
 type Service struct {
-	repo     *Repo
-	checker  ProfileChecker
-	media    MediaStorage
-	verifier EmailVerifier
+	repo        *Repo
+	checker     ProfileChecker
+	media       MediaStorage
+	verifier    EmailVerifier
+	productions ProductionRegistry
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -87,6 +98,13 @@ func (s *Service) WithMediaStorage(m MediaStorage) *Service {
 // почты). nil-safe: без вызова publish проходит без проверки.
 func (s *Service) WithEmailVerifier(v EmailVerifier) *Service {
 	s.verifier = v
+	return s
+}
+
+// WithProductionRegistry подключает справочник продакшенов для валидации
+// production_id. nil-safe.
+func (s *Service) WithProductionRegistry(p ProductionRegistry) *Service {
+	s.productions = p
 	return s
 }
 
@@ -152,6 +170,20 @@ func (s *Service) PatchFull(ctx context.Context, userID uuid.UUID, in PatchFullI
 			return Profile{}, fmt.Errorf("%w: contact_phone too long", ErrInvalidInput)
 		}
 		patch.ContactPhone = &v
+	}
+
+	// 1a. Production/freelance: XOR-нормализация перед записью + проверка
+	// активности продакшена. Реальное правило взаимоисключения на стороне БД
+	// (CHECK specialist_profiles_freelance_xor_production) — последний рубеж.
+	patch = normalizeProductionPatch(patch)
+	if patch.ProductionID.Present && patch.ProductionID.Value != nil && s.productions != nil {
+		ok, err := s.productions.ExistsActive(ctx, *patch.ProductionID.Value)
+		if err != nil {
+			return Profile{}, fmt.Errorf("check production: %w", err)
+		}
+		if !ok {
+			return Profile{}, fmt.Errorf("%w: production not found or inactive", ErrInvalidInput)
+		}
 	}
 
 	// 2. Валидация categories (если переданы). Те же правила, что в SetCategories.
@@ -593,4 +625,28 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// normalizeProductionPatch применяет XOR между production_id и is_freelance:
+//
+//   - is_freelance=true побеждает: production_id принудительно clear (даже
+//     если в том же PATCH был указан конкретный uuid — баг фронта).
+//   - production_id устанавливается в конкретный uuid → is_freelance
+//     принудительно false (юзер уже не фрилансер).
+//   - production_id=clear без is_freelance — оба поля могут стать null/false,
+//     это валидное состояние «не выбрал».
+//
+// Возвращает копию с обновлёнными ProductionID / IsFreelance. Остальные поля
+// не трогаем.
+func normalizeProductionPatch(in PatchInput) PatchInput {
+	out := in
+	if out.IsFreelance != nil && *out.IsFreelance {
+		out.ProductionID = OptionalUUID{Present: true, Value: nil}
+		return out
+	}
+	if out.ProductionID.Present && out.ProductionID.Value != nil {
+		f := false
+		out.IsFreelance = &f
+	}
+	return out
 }

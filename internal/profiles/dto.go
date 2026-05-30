@@ -1,10 +1,52 @@
 package profiles
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// OptionalUUID — tri-state JSON-поле для PATCH: отличаем «не задано» от
+// «явно null» от «значение». Используется для production_id в PatchFullInput:
+// фронт-виджет (см. cabinet) присылает null когда юзер снимает выбор. Простой
+// *uuid.UUID не разделяет nil-«не трогать» и nil-«сбросить», а **uuid.UUID
+// не работает с encoding/json — null рушит outer pointer.
+//
+//	Present=false, Value=nil  → поле отсутствовало в JSON → не трогать.
+//	Present=true,  Value=nil  → было null → SET column = NULL.
+//	Present=true,  Value=&id  → было "<uuid>" → SET column = <uuid>.
+type OptionalUUID struct {
+	Present bool
+	Value   *uuid.UUID
+}
+
+func (o *OptionalUUID) UnmarshalJSON(data []byte) error {
+	o.Present = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		o.Value = nil
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("production_id must be uuid string or null: %w", err)
+	}
+	u, err := uuid.Parse(s)
+	if err != nil {
+		return fmt.Errorf("production_id not a valid uuid: %w", err)
+	}
+	o.Value = &u
+	return nil
+}
+
+func (o OptionalUUID) MarshalJSON() ([]byte, error) {
+	if !o.Present || o.Value == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(o.Value.String())
+}
 
 type CategoryRef struct {
 	Code      string `json:"code"`
@@ -41,20 +83,26 @@ type PortfolioItem struct {
 }
 
 type PublicProfile struct {
-	UserID       uuid.UUID       `json:"user_id"`
-	DisplayName  string          `json:"display_name"`
-	Bio          string          `json:"bio"`
-	AvatarURL    string          `json:"avatar_url,omitempty"`
-	City         string          `json:"city,omitempty"`
-	RateMin      *int            `json:"rate_min,omitempty"`
-	RateMax      *int            `json:"rate_max,omitempty"`
-	Currency     string          `json:"currency"`
-	RatingAvg    float64         `json:"rating_avg"`
-	ReviewsCount int             `json:"reviews_count"`
-	Categories   []CategoryRef   `json:"categories"`
-	Skills       []SkillRef      `json:"skills"`
-	Portfolio    []PortfolioItem `json:"portfolio"`
-	Reviews      []Review        `json:"reviews"`
+	UserID       uuid.UUID `json:"user_id"`
+	DisplayName  string    `json:"display_name"`
+	Bio          string    `json:"bio"`
+	AvatarURL    string    `json:"avatar_url,omitempty"`
+	City         string    `json:"city,omitempty"`
+	RateMin      *int      `json:"rate_min,omitempty"`
+	RateMax      *int      `json:"rate_max,omitempty"`
+	Currency     string    `json:"currency"`
+	RatingAvg    float64   `json:"rating_avg"`
+	ReviewsCount int       `json:"reviews_count"`
+	// ProductionName — денормализация из productions для шапки публичного
+	// профиля. Пусто, если production_id NULL или продакшен деактивирован.
+	ProductionName string `json:"production_name,omitempty"`
+	// IsFreelance — отдельное семантическое состояние «фрилансер». В UI на
+	// публичной странице рендерится как «Фрилансер» рядом с городом.
+	IsFreelance bool            `json:"is_freelance"`
+	Categories  []CategoryRef   `json:"categories"`
+	Skills      []SkillRef      `json:"skills"`
+	Portfolio   []PortfolioItem `json:"portfolio"`
+	Reviews     []Review        `json:"reviews"`
 }
 
 type Profile struct {
@@ -72,6 +120,17 @@ type Profile struct {
 	Categories      []string  `json:"categories"`
 	PrimaryCategory string    `json:"primary_category,omitempty"`
 	SkillIDs        []string  `json:"skill_ids"`
+	// ProductionID — выбранный специалистом продакшен из справочника.
+	// nil = не выбран. Взаимоисключающее с IsFreelance (CHECK + service).
+	ProductionID *uuid.UUID `json:"production_id,omitempty"`
+	// ProductionName — денормализация name из productions через LEFT JOIN,
+	// для удобства фронта (один запрос вместо двух). Пусто, если ProductionID
+	// nil или соответствующий продакшен был деактивирован после привязки.
+	ProductionName string `json:"production_name,omitempty"`
+	// IsFreelance — отдельное семантическое состояние «фрилансер».
+	// false по умолчанию; всегда сериализуется, чтобы фронт мог однозначно
+	// определить, что выбрано в выпадающем списке.
+	IsFreelance bool `json:"is_freelance"`
 	// UpdatedAt — версия профиля для optimistic locking.
 	// Клиент должен прислать это значение обратно в PatchInput.UpdatedAt,
 	// чтобы защититься от lost-update при параллельных PATCH'ах.
@@ -94,6 +153,11 @@ type PatchInput struct {
 	Currency     *string `json:"currency"`
 	ContactEmail *string `json:"contact_email"`
 	ContactPhone *string `json:"contact_phone"`
+	// ProductionID — tri-state (см. OptionalUUID). Фронт-виджет в кабинете
+	// присылает null когда юзер снимает выбор.
+	ProductionID OptionalUUID `json:"production_id"`
+	// IsFreelance: nil = не трогать; non-nil = SET.
+	IsFreelance *bool `json:"is_freelance,omitempty"`
 	// UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.
 	// Несовпадение → 409 conflict (кто-то параллельно отредактировал).
 	// Без поля — старый небезопасный поведение для обратной совместимости.
@@ -132,6 +196,15 @@ type PatchFullInput struct {
 	Currency     *string `json:"currency"`
 	ContactEmail *string `json:"contact_email"`
 	ContactPhone *string `json:"contact_phone"`
+	// ProductionID — tri-state (см. OptionalUUID). null = clear, "<uuid>" = set.
+	ProductionID OptionalUUID `json:"production_id"`
+	// IsFreelance — nil не трогать, non-nil SET. Бизнес-правило XOR с
+	// ProductionID применяется в service.PatchFull до записи: если оба
+	// заданы и оба активны — IsFreelance=true побеждает (production_id
+	// форсируется в NULL); если ProductionID задаётся в значение, а
+	// IsFreelance не передан — IsFreelance принудительно сбрасывается
+	// в false. CHECK-constraint в БД — последний рубеж.
+	IsFreelance *bool `json:"is_freelance,omitempty"`
 
 	Categories *CategoriesPart `json:"categories,omitempty"`
 	Skills     *SkillsPart     `json:"skills,omitempty"`
@@ -145,7 +218,8 @@ type PatchFullInput struct {
 func (in PatchFullInput) hasProfileFields() bool {
 	return in.DisplayName != nil || in.Bio != nil || in.AvatarURL != nil ||
 		in.City != nil || in.RateMin != nil || in.RateMax != nil ||
-		in.Currency != nil || in.ContactEmail != nil || in.ContactPhone != nil
+		in.Currency != nil || in.ContactEmail != nil || in.ContactPhone != nil ||
+		in.ProductionID.Present || in.IsFreelance != nil
 }
 
 // toPatchInput — переиспользуем PatchInTx, который уже умеет COALESCE
@@ -161,6 +235,8 @@ func (in PatchFullInput) toPatchInput() PatchInput {
 		Currency:     in.Currency,
 		ContactEmail: in.ContactEmail,
 		ContactPhone: in.ContactPhone,
+		ProductionID: in.ProductionID,
+		IsFreelance:  in.IsFreelance,
 		UpdatedAt:    in.UpdatedAt,
 	}
 }

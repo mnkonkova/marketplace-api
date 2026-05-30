@@ -466,6 +466,13 @@ definitions:
       size_bytes:
         type: integer
     type: object
+  internal_profiles.OptionalUUID:
+    properties:
+      present:
+        type: boolean
+      value:
+        type: string
+    type: object
   internal_profiles.PatchFullInput:
     properties:
       avatar_url:
@@ -484,6 +491,20 @@ definitions:
         type: string
       display_name:
         type: string
+      is_freelance:
+        description: |-
+          IsFreelance — nil не трогать, non-nil SET. Бизнес-правило XOR с
+          ProductionID применяется в service.PatchFull до записи: если оба
+          заданы и оба активны — IsFreelance=true побеждает (production_id
+          форсируется в NULL); если ProductionID задаётся в значение, а
+          IsFreelance не передан — IsFreelance принудительно сбрасывается
+          в false. CHECK-constraint в БД — последний рубеж.
+        type: boolean
+      production_id:
+        allOf:
+        - $ref: '#/definitions/internal_profiles.OptionalUUID'
+        description: ProductionID — tri-state (см. OptionalUUID). null = clear, "<uuid>"
+          = set.
       rate_max:
         type: integer
       rate_min:
@@ -595,9 +616,26 @@ definitions:
         type: string
       display_name:
         type: string
+      is_freelance:
+        description: |-
+          IsFreelance — отдельное семантическое состояние «фрилансер».
+          false по умолчанию; всегда сериализуется, чтобы фронт мог однозначно
+          определить, что выбрано в выпадающем списке.
+        type: boolean
       is_published:
         type: boolean
       primary_category:
+        type: string
+      production_id:
+        description: |-
+          ProductionID — выбранный специалистом продакшен из справочника.
+          nil = не выбран. Взаимоисключающее с IsFreelance (CHECK + service).
+        type: string
+      production_name:
+        description: |-
+          ProductionName — денормализация name из productions через LEFT JOIN,
+          для удобства фронта (один запрос вместо двух). Пусто, если ProductionID
+          nil или соответствующий продакшен был деактивирован после привязки.
         type: string
       rate_max:
         type: integer
@@ -636,10 +674,20 @@ definitions:
         type: string
       display_name:
         type: string
+      is_freelance:
+        description: |-
+          IsFreelance — отдельное семантическое состояние «фрилансер». В UI на
+          публичной странице рендерится как «Фрилансер» рядом с городом.
+        type: boolean
       portfolio:
         items:
           $ref: '#/definitions/internal_profiles.PortfolioItem'
         type: array
+      production_name:
+        description: |-
+          ProductionName — денормализация из productions для шапки публичного
+          профиля. Пусто, если production_id NULL или продакшен деактивирован.
+        type: string
       rate_max:
         type: integer
       rate_min:

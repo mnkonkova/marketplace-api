@@ -2666,6 +2666,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_profiles.OptionalUUID": {
+            "type": "object",
+            "properties": {
+                "present": {
+                    "type": "boolean"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_profiles.PatchFullInput": {
             "type": "object",
             "properties": {
@@ -2692,6 +2703,18 @@ const docTemplate = `{
                 },
                 "display_name": {
                     "type": "string"
+                },
+                "is_freelance": {
+                    "description": "IsFreelance — nil не трогать, non-nil SET. Бизнес-правило XOR с\nProductionID применяется в service.PatchFull до записи: если оба\nзаданы и оба активны — IsFreelance=true побеждает (production_id\nфорсируется в NULL); если ProductionID задаётся в значение, а\nIsFreelance не передан — IsFreelance принудительно сбрасывается\nв false. CHECK-constraint в БД — последний рубеж.",
+                    "type": "boolean"
+                },
+                "production_id": {
+                    "description": "ProductionID — tri-state (см. OptionalUUID). null = clear, \"\u003cuuid\u003e\" = set.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_profiles.OptionalUUID"
+                        }
+                    ]
                 },
                 "rate_max": {
                     "type": "integer"
@@ -2852,10 +2875,22 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "description": "IsFreelance — отдельное семантическое состояние «фрилансер».\nfalse по умолчанию; всегда сериализуется, чтобы фронт мог однозначно\nопределить, что выбрано в выпадающем списке.",
+                    "type": "boolean"
+                },
                 "is_published": {
                     "type": "boolean"
                 },
                 "primary_category": {
+                    "type": "string"
+                },
+                "production_id": {
+                    "description": "ProductionID — выбранный специалистом продакшен из справочника.\nnil = не выбран. Взаимоисключающее с IsFreelance (CHECK + service).",
+                    "type": "string"
+                },
+                "production_name": {
+                    "description": "ProductionName — денормализация name из productions через LEFT JOIN,\nдля удобства фронта (один запрос вместо двух). Пусто, если ProductionID\nnil или соответствующий продакшен был деактивирован после привязки.",
                     "type": "string"
                 },
                 "rate_max": {
@@ -2909,11 +2944,19 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "description": "IsFreelance — отдельное семантическое состояние «фрилансер». В UI на\nпубличной странице рендерится как «Фрилансер» рядом с городом.",
+                    "type": "boolean"
+                },
                 "portfolio": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_profiles.PortfolioItem"
                     }
+                },
+                "production_name": {
+                    "description": "ProductionName — денормализация из productions для шапки публичного\nпрофиля. Пусто, если production_id NULL или продакшен деактивирован.",
+                    "type": "string"
                 },
                 "rate_max": {
                     "type": "integer"
