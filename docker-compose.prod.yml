@@ -90,6 +90,43 @@ services:
     command: ["worker"]
     mem_limit: 128m
 
+  # Directus — админ-панель платформы. Наружу проксируется через caddy
+  # под admin.{DOMAIN} (см. marketplace-web/Caddyfile, блок admin.).
+  # Метаданные Directus (коллекции, роли, пользователи) живут в той же
+  # postgres в таблицах directus_* — бэкап БД их покрывает.
+  # Volume directus-uploads нужно бэкапить отдельно если будут аплоады.
+  directus:
+    image: directus/directus:11
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      KEY: ${DIRECTUS_KEY:?DIRECTUS_KEY is required}
+      SECRET: ${DIRECTUS_SECRET:?DIRECTUS_SECRET is required}
+      ADMIN_EMAIL: ${DIRECTUS_ADMIN_EMAIL:?DIRECTUS_ADMIN_EMAIL is required}
+      ADMIN_PASSWORD: ${DIRECTUS_ADMIN_PASSWORD:?DIRECTUS_ADMIN_PASSWORD is required}
+      DB_CLIENT: pg
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: ${POSTGRES_DB:-marketpclce}
+      DB_USER: ${POSTGRES_USER:-marketpclce}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      CACHE_ENABLED: "true"
+      CACHE_STORE: redis
+      REDIS: redis://redis:6379
+      PUBLIC_URL: https://admin.${DOMAIN}
+      CORS_ENABLED: "true"
+      CORS_ORIGIN: https://admin.${DOMAIN}
+    volumes:
+      - directus-uploads:/directus/uploads
+      - directus-extensions:/directus/extensions
+    expose:
+      - "8055"
+    mem_limit: 512m
+
   # Фронт + reverse-proxy. Образ собирается из соседнего клона
   # marketplace-web (../web). На VDS оба репо живут рядом:
   #   /opt/marketpclce/api  (этот репо)
@@ -172,3 +209,5 @@ volumes:
   caddydata:
   caddyconfig:
   alloy-data:
+  directus-uploads:
+  directus-extensions:

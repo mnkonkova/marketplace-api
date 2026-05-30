@@ -47,6 +47,45 @@ services:
       timeout: 3s
       retries: 10
 
+  # Directus — админ-панель для управления справочниками (productions и
+  # будущие CRM-сущности). Локально торчит на http://localhost:8055.
+  # KEY/SECRET — фиксированные dev-значения, ротации не требуют (БД
+  # пересоздавать всё равно проще, чем волноваться о dev-секретах).
+  # Админ при первом запуске — admin@example.com / Admin12345.
+  # (Directus 11 email-валидатор требует «настоящий» TLD; .local не годится.)
+  # При первом старте Directus создаёт свои служебные таблицы (directus_*)
+  # в той же БД marketpclce и предлагает импортировать существующие
+  # таблицы как коллекции (см. docs/ADMIN_DIRECTUS.md).
+  directus:
+    image: directus/directus:11
+    ports:
+      - "8055:8055"
+    environment:
+      KEY: dev-directus-key-please-rotate-in-prod-1234567890abcdef
+      SECRET: dev-directus-secret-please-rotate-in-prod-abcdef0987654321
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: Admin12345
+      DB_CLIENT: pg
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: marketpclce
+      DB_USER: marketpclce
+      DB_PASSWORD: marketpclce
+      CACHE_ENABLED: "true"
+      CACHE_STORE: redis
+      REDIS: redis://redis:6379
+      PUBLIC_URL: http://localhost:8055
+      CORS_ENABLED: "true"
+      CORS_ORIGIN: "*"
+    volumes:
+      - directus-uploads:/directus/uploads
+      - directus-extensions:/directus/extensions
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
 # Медиа — Yandex Object Storage (S3) для всех окружений. Локальный MinIO
 # больше не запускаем: без ключей API стартует, upload-ручка
 # /me/portfolio/upload-url вернёт 503 storage_disabled (см. cmd/api/main.go).
@@ -54,3 +93,5 @@ services:
 volumes:
   pgdata:
   osdata:
+  directus-uploads:
+  directus-extensions:

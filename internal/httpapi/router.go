@@ -157,15 +157,19 @@ func NewRouter(d Deps) http.Handler {
 			r.Delete("/reviews/{id}", d.Reviews.Delete)
 		})
 
-		// /admin/* — admin/moderator или service-токен (см. RequireRoles).
-		// Сюда ходит Directus (через server-to-server) и потенциально другие
-		// внутренние инструменты. Rate-limit здесь не вешаем намеренно: вызовы
-		// служебные, объёмы малы.
+		// /admin/* — разделён по уровню действия:
+		//   GET           → admin + moderator (read для наблюдения/аудита)
+		//   POST/PATCH/DELETE → только admin (writes по дизайну
+		//     single-editor, чтобы исключить lost-update через Directus UI).
+		// Rate-limit здесь не вешаем: вызовы служебные, объёмы малы.
 		if d.Productions != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "admin", "moderator"))
 				r.Get("/admin/productions", d.Productions.AdminList)
 				r.Get("/admin/productions/{id}", d.Productions.AdminGet)
+			})
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "admin"))
 				r.Post("/admin/productions", d.Productions.AdminCreate)
 				r.Patch("/admin/productions/{id}", d.Productions.AdminUpdate)
 				r.Delete("/admin/productions/{id}", d.Productions.AdminDeactivate)
