@@ -284,9 +284,9 @@ WHERE 1=1`
 type VisibilityFilter int
 
 const (
-	VisibilityNoFilter        VisibilityFilter = iota
-	VisibilityForClient                            // visible_to_client = TRUE
-	VisibilityForSpecialist                        // visible_to_specialist = TRUE
+	VisibilityNoFilter      VisibilityFilter = iota
+	VisibilityForClient                      // visible_to_client = TRUE
+	VisibilityForSpecialist                  // visible_to_specialist = TRUE
 )
 
 // ListStages — стадии проекта в порядке sort_order. Шаги здесь НЕ

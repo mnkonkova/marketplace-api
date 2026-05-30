@@ -64,13 +64,13 @@ func TestLoadActiveTemplate_VideoProductionV1(t *testing.T) {
 
 	// Точечная проверка визибилити-флагов по таблице брифа §3.
 	type expected struct {
-		stage      string
-		step       string
-		owner      StepOwner
-		visClient  bool
-		visSpec    bool
-		duration   int
-		weight     int
+		stage     string
+		step      string
+		owner     StepOwner
+		visClient bool
+		visSpec   bool
+		duration  int
+		weight    int
 	}
 	checks := []expected{
 		{"start", "payment", OwnerClient, true, false, 1, 1},

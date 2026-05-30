@@ -19,6 +19,7 @@ import (
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
@@ -40,6 +41,7 @@ type Deps struct {
 	Leads        *leads.Handler
 	Reviews      *reviews.Handler
 	Productions  *productions.Handler
+	Projects     *projects.Handler
 
 	// RoleLookup читает users.role для access-токенов в /admin/*.
 	// nil → /admin/* недоступны (middleware вернёт 500 role_lookup_unavailable).
@@ -156,6 +158,20 @@ func NewRouter(d Deps) http.Handler {
 			r.Patch("/reviews/{id}", d.Reviews.Update)
 			r.Delete("/reviews/{id}", d.Reviews.Delete)
 		})
+
+		// /me/projects/* — ЛК клиента. RequireRoles("client") вместо
+		// обычного auth.Middleware: специалисты ходят в свой раздел
+		// /me/specialist/projects/*, у них своя выдача (Фаза 3).
+		if d.Projects != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "client"))
+				r.Use(RateLimit(d.Limiter, "read", d.ReadWindows))
+				r.Get("/me/projects", d.Projects.ListClient)
+				r.Get("/me/projects/{id}", d.Projects.GetClient)
+				r.Get("/me/projects/{id}/funnel", d.Projects.GetClientFunnel)
+				r.Get("/me/projects/by_lead/{lead_id}", d.Projects.ListClientByLead)
+			})
+		}
 
 		// /admin/* — разделён по уровню действия:
 		//   GET           → admin + moderator (read для наблюдения/аудита)

@@ -750,6 +750,159 @@ definitions:
           $ref: '#/definitions/internal_profiles.PortfolioItem'
         type: array
     type: object
+  internal_projects.ClientProjectsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.ProjectClientView'
+        type: array
+    type: object
+  internal_projects.FunnelView:
+    properties:
+      progress:
+        $ref: '#/definitions/internal_projects.ProgressView'
+      stages:
+        items:
+          $ref: '#/definitions/internal_projects.StageView'
+        type: array
+    type: object
+  internal_projects.ProgressView:
+    properties:
+      completed_weight:
+        type: integer
+      current_step_id:
+        description: |-
+          CurrentStepID — первый незавершённый шаг по sort_order.
+          nil если все done/skipped (проект в финале).
+        type: string
+      percent:
+        type: integer
+      total_weight:
+        type: integer
+    type: object
+  internal_projects.ProjectClientView:
+    properties:
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      lead_id:
+        type: string
+      revisions_included:
+        type: integer
+      revisions_used:
+        type: integer
+      specialist_user_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.ProjectStatus:
+    enum:
+    - draft
+    - active
+    - on_hold
+    - done
+    - cancelled
+    - dispute
+    type: string
+    x-enum-varnames:
+    - StatusDraft
+    - StatusActive
+    - StatusOnHold
+    - StatusDone
+    - StatusCancelled
+    - StatusDispute
+  internal_projects.StageView:
+    properties:
+      code:
+        type: string
+      completed_at:
+        type: string
+      id:
+        type: string
+      sort_order:
+        type: integer
+      started_at:
+        type: string
+      steps:
+        items:
+          $ref: '#/definitions/internal_projects.StepView'
+        type: array
+      title:
+        type: string
+    type: object
+  internal_projects.StepOwner:
+    enum:
+    - client
+    - team
+    - system
+    type: string
+    x-enum-varnames:
+    - OwnerClient
+    - OwnerTeam
+    - OwnerSystem
+  internal_projects.StepStatus:
+    enum:
+    - pending
+    - in_progress
+    - waiting_client
+    - done
+    - rejected
+    - skipped
+    type: string
+    x-enum-varnames:
+    - StepPending
+    - StepInProgress
+    - StepWaitingClient
+    - StepDone
+    - StepRejected
+    - StepSkipped
+  internal_projects.StepView:
+    properties:
+      code:
+        type: string
+      completed_at:
+        type: string
+      cta_payload:
+        description: raw JSON
+        items:
+          type: integer
+        type: array
+      duration_days:
+        type: integer
+      eta_date:
+        type: string
+      id:
+        type: string
+      owner:
+        $ref: '#/definitions/internal_projects.StepOwner'
+      sort_order:
+        type: integer
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+      title:
+        type: string
+      updated_at:
+        type: string
+      weight:
+        type: integer
+    type: object
+  internal_projects.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
   internal_reviews.Review:
     properties:
       author_name:
@@ -1929,6 +2082,95 @@ paths:
       summary: Снять профиль с публикации
       tags:
       - profile
+  /me/projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ClientProjectsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Список проектов клиента
+      tags:
+      - me-projects
+  /me/projects/{id}:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectClientView'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Карточка проекта клиента
+      tags:
+      - me-projects
+  /me/projects/{id}/funnel:
+    get:
+      parameters:
+      - description: Project ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.FunnelView'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Воронка проекта клиента (стадии и видимые шаги)
+      tags:
+      - me-projects
+  /me/projects/by_lead/{lead_id}:
+    get:
+      description: Используется фронтом для группировки проектов под одной шапкой
+        «Бриф от X». Для marketplace-source проектов; для своих лида нет → пустой
+        массив.
+      parameters:
+      - description: Lead ID
+        in: path
+        name: lead_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ClientProjectsResponse'
+      security:
+      - BearerAuth: []
+      summary: Все проекты клиента по одному брифу (лиду)
+      tags:
+      - me-projects
   /me/uploads/image:
     post:
       consumes:

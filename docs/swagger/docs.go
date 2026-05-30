@@ -1425,6 +1425,148 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-projects"
+                ],
+                "summary": "Список проектов клиента",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ClientProjectsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/by_lead/{lead_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Используется фронтом для группировки проектов под одной шапкой «Бриф от X». Для marketplace-source проектов; для своих лида нет → пустой массив.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-projects"
+                ],
+                "summary": "Все проекты клиента по одному брифу (лиду)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Lead ID",
+                        "name": "lead_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ClientProjectsResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-projects"
+                ],
+                "summary": "Карточка проекта клиента",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ProjectClientView"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/funnel": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-projects"
+                ],
+                "summary": "Воронка проекта клиента (стадии и видимые шаги)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.FunnelView"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/uploads/image": {
             "post": {
                 "security": [
@@ -3051,6 +3193,223 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_profiles.PortfolioItem"
                     }
+                }
+            }
+        },
+        "internal_projects.ClientProjectsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.ProjectClientView"
+                    }
+                }
+            }
+        },
+        "internal_projects.FunnelView": {
+            "type": "object",
+            "properties": {
+                "progress": {
+                    "$ref": "#/definitions/internal_projects.ProgressView"
+                },
+                "stages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.StageView"
+                    }
+                }
+            }
+        },
+        "internal_projects.ProgressView": {
+            "type": "object",
+            "properties": {
+                "completed_weight": {
+                    "type": "integer"
+                },
+                "current_step_id": {
+                    "description": "CurrentStepID — первый незавершённый шаг по sort_order.\nnil если все done/skipped (проект в финале).",
+                    "type": "string"
+                },
+                "percent": {
+                    "type": "integer"
+                },
+                "total_weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_projects.ProjectClientView": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "revisions_used": {
+                    "type": "integer"
+                },
+                "specialist_user_id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.ProjectStatus": {
+            "type": "string",
+            "enum": [
+                "draft",
+                "active",
+                "on_hold",
+                "done",
+                "cancelled",
+                "dispute"
+            ],
+            "x-enum-varnames": [
+                "StatusDraft",
+                "StatusActive",
+                "StatusOnHold",
+                "StatusDone",
+                "StatusCancelled",
+                "StatusDispute"
+            ]
+        },
+        "internal_projects.StageView": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.StepView"
+                    }
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.StepOwner": {
+            "type": "string",
+            "enum": [
+                "client",
+                "team",
+                "system"
+            ],
+            "x-enum-varnames": [
+                "OwnerClient",
+                "OwnerTeam",
+                "OwnerSystem"
+            ]
+        },
+        "internal_projects.StepStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "in_progress",
+                "waiting_client",
+                "done",
+                "rejected",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "StepPending",
+                "StepInProgress",
+                "StepWaitingClient",
+                "StepDone",
+                "StepRejected",
+                "StepSkipped"
+            ]
+        },
+        "internal_projects.StepView": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "cta_payload": {
+                    "description": "raw JSON",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "duration_days": {
+                    "type": "integer"
+                },
+                "eta_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "owner": {
+                    "$ref": "#/definitions/internal_projects.StepOwner"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.StepStatus"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_projects.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
                 }
             }
         },

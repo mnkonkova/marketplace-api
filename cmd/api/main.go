@@ -28,6 +28,7 @@ import (
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
@@ -185,6 +186,11 @@ func main() {
 	// Профиль валидирует production_id через справочник.
 	profilesSvc.WithProductionRegistry(productionsSvc)
 
+	projectsRepo := projects.NewRepo(pool)
+	projectsSvc := projects.NewService(projectsRepo).
+		WithUserDirectory(projectsUserDirectory{authRepo: authRepo})
+	projectsHandler := projects.NewHandler(projectsSvc)
+
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter
 	if rdb != nil {
@@ -211,6 +217,7 @@ func main() {
 		Leads:        leadsHandler,
 		Reviews:      reviewsHandler,
 		Productions:  productionsHandler,
+		Projects:     projectsHandler,
 		RoleLookup:   authRepo,
 		CORSOrigins:  cfg.CORSOrigins,
 		Limiter:      limiter,
@@ -368,6 +375,28 @@ func (l primaryCategoryLookup) PrimaryCategory(ctx context.Context, userID uuid.
 	}
 	title, _ := l.repo.CategoryTitle(ctx, p.PrimaryCategory)
 	return p.PrimaryCategory, title, nil
+}
+
+// projectsUserDirectory — мост от projects.UserDirectory к auth.Repo.
+// Возвращает email + display_name (или email вместо имени, если профиля
+// нет — для kind=client без specialist_profile). Используется для
+// денормализации в outbox payload (см. projects/events.go).
+type projectsUserDirectory struct{ authRepo *auth.Repo }
+
+func (p projectsUserDirectory) GetEmailAndName(ctx context.Context, userID uuid.UUID) (string, string, error) {
+	u, err := p.authRepo.FindByID(ctx, userID)
+	if err != nil {
+		return "", "", err
+	}
+	email := ""
+	if u.Email != nil {
+		email = *u.Email
+	}
+	name, _ := p.authRepo.GetDisplayName(ctx, userID)
+	if name == "" {
+		name = email
+	}
+	return email, name, nil
 }
 
 func newLogger(level string) *slog.Logger {

@@ -37,10 +37,10 @@ const (
 type ProjectSource string
 
 const (
-	SourceMarketplace      ProjectSource = "marketplace"
-	SourceManual           ProjectSource = "manual"
-	SourceReferral         ProjectSource = "referral"
-	SourceReturningClient  ProjectSource = "returning_client"
+	SourceMarketplace     ProjectSource = "marketplace"
+	SourceManual          ProjectSource = "manual"
+	SourceReferral        ProjectSource = "referral"
+	SourceReturningClient ProjectSource = "returning_client"
 )
 
 // StepOwner — кто отвечает за шаг в воронке. Используется как фильтр
@@ -56,23 +56,23 @@ const (
 // ProjectAdminView — полная форма для admin/Directus. Все поля включая
 // budget, notes и assigned_to_user_id.
 type ProjectAdminView struct {
-	ID                uuid.UUID      `json:"id"`
-	LeadID            *uuid.UUID     `json:"lead_id,omitempty"`
-	ClientUserID      uuid.UUID      `json:"client_user_id"`
-	SpecialistUserID  *uuid.UUID     `json:"specialist_user_id,omitempty"`
-	AssignedToUserID  *uuid.UUID     `json:"assigned_to_user_id,omitempty"`
-	TemplateID        uuid.UUID      `json:"template_id"`
-	Title             string         `json:"title"`
-	Source            ProjectSource  `json:"source"`
-	Status            ProjectStatus  `json:"status"`
-	RevisionsIncluded int            `json:"revisions_included"`
-	RevisionsUsed     int            `json:"revisions_used"`
-	Budget            *int           `json:"budget,omitempty"`
-	Notes             string         `json:"notes,omitempty"`
-	StartedAt         *time.Time     `json:"started_at,omitempty"`
-	CompletedAt       *time.Time     `json:"completed_at,omitempty"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	ID                uuid.UUID     `json:"id"`
+	LeadID            *uuid.UUID    `json:"lead_id,omitempty"`
+	ClientUserID      uuid.UUID     `json:"client_user_id"`
+	SpecialistUserID  *uuid.UUID    `json:"specialist_user_id,omitempty"`
+	AssignedToUserID  *uuid.UUID    `json:"assigned_to_user_id,omitempty"`
+	TemplateID        uuid.UUID     `json:"template_id"`
+	Title             string        `json:"title"`
+	Source            ProjectSource `json:"source"`
+	Status            ProjectStatus `json:"status"`
+	RevisionsIncluded int           `json:"revisions_included"`
+	RevisionsUsed     int           `json:"revisions_used"`
+	Budget            *int          `json:"budget,omitempty"`
+	Notes             string        `json:"notes,omitempty"`
+	StartedAt         *time.Time    `json:"started_at,omitempty"`
+	CompletedAt       *time.Time    `json:"completed_at,omitempty"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // ProjectClientView — то, что видит сам клиент в /me/projects/{id}.
@@ -80,17 +80,17 @@ type ProjectAdminView struct {
 // заметки менеджера), минус assigned_to (клиент не видит «своего»
 // менеджера по имени, чтобы не персонифицировать управление).
 type ProjectClientView struct {
-	ID                uuid.UUID      `json:"id"`
-	LeadID            *uuid.UUID     `json:"lead_id,omitempty"`
-	SpecialistUserID  *uuid.UUID     `json:"specialist_user_id,omitempty"`
-	Title             string         `json:"title"`
-	Status            ProjectStatus  `json:"status"`
-	RevisionsIncluded int            `json:"revisions_included"`
-	RevisionsUsed     int            `json:"revisions_used"`
-	StartedAt         *time.Time     `json:"started_at,omitempty"`
-	CompletedAt       *time.Time     `json:"completed_at,omitempty"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	ID                uuid.UUID     `json:"id"`
+	LeadID            *uuid.UUID    `json:"lead_id,omitempty"`
+	SpecialistUserID  *uuid.UUID    `json:"specialist_user_id,omitempty"`
+	Title             string        `json:"title"`
+	Status            ProjectStatus `json:"status"`
+	RevisionsIncluded int           `json:"revisions_included"`
+	RevisionsUsed     int           `json:"revisions_used"`
+	StartedAt         *time.Time    `json:"started_at,omitempty"`
+	CompletedAt       *time.Time    `json:"completed_at,omitempty"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // ProjectSpecialistView — то, что видит назначенный специалист.
@@ -98,16 +98,16 @@ type ProjectClientView struct {
 // (договорённость между продакшеном и клиентом — не специалиста);
 // revisions_used виден, чтобы понимать «сколько раз клиент уже правил».
 type ProjectSpecialistView struct {
-	ID                uuid.UUID      `json:"id"`
-	ClientUserID      uuid.UUID      `json:"client_user_id"`
-	Title             string         `json:"title"`
-	Status            ProjectStatus  `json:"status"`
-	RevisionsIncluded int            `json:"revisions_included"`
-	RevisionsUsed     int            `json:"revisions_used"`
-	StartedAt         *time.Time     `json:"started_at,omitempty"`
-	CompletedAt       *time.Time     `json:"completed_at,omitempty"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	ID                uuid.UUID     `json:"id"`
+	ClientUserID      uuid.UUID     `json:"client_user_id"`
+	Title             string        `json:"title"`
+	Status            ProjectStatus `json:"status"`
+	RevisionsIncluded int           `json:"revisions_included"`
+	RevisionsUsed     int           `json:"revisions_used"`
+	StartedAt         *time.Time    `json:"started_at,omitempty"`
+	CompletedAt       *time.Time    `json:"completed_at,omitempty"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // StageView — общий формат стадии. Используется и в client-, и в
@@ -145,38 +145,38 @@ type StepView struct {
 // returning_client). lead_id всегда NULL — для маркетплейс-проектов
 // есть отдельный CreateFromRecipientInput.
 type CreateManualInput struct {
-	ClientUserID     uuid.UUID      `json:"client_user_id"`
-	SpecialistUserID *uuid.UUID     `json:"specialist_user_id,omitempty"`
-	AssignedToUserID *uuid.UUID     `json:"assigned_to_user_id,omitempty"`
-	TemplateCode     string         `json:"template_code"`    // "video_production"
-	TemplateVersion  int            `json:"template_version"` // 1
-	Title            string         `json:"title"`
-	Source           ProjectSource  `json:"source"`           // manual|referral|returning_client
-	Budget           *int           `json:"budget,omitempty"`
-	Notes            string         `json:"notes,omitempty"`
+	ClientUserID     uuid.UUID     `json:"client_user_id"`
+	SpecialistUserID *uuid.UUID    `json:"specialist_user_id,omitempty"`
+	AssignedToUserID *uuid.UUID    `json:"assigned_to_user_id,omitempty"`
+	TemplateCode     string        `json:"template_code"`    // "video_production"
+	TemplateVersion  int           `json:"template_version"` // 1
+	Title            string        `json:"title"`
+	Source           ProjectSource `json:"source"` // manual|referral|returning_client
+	Budget           *int          `json:"budget,omitempty"`
+	Notes            string        `json:"notes,omitempty"`
 }
 
 // CreateFromRecipientInput — POST /admin/projects/from_recipient/...
 // Source принудительно marketplace; recipient мапится 1-к-1.
 type CreateFromRecipientInput struct {
-	LeadID           uuid.UUID      `json:"lead_id"`
-	SpecialistUserID uuid.UUID      `json:"specialist_user_id"`
-	AssignedToUserID *uuid.UUID     `json:"assigned_to_user_id,omitempty"`
-	TemplateCode     string         `json:"template_code"`
-	TemplateVersion  int            `json:"template_version"`
-	Title            string         `json:"title"`
-	Budget           *int           `json:"budget,omitempty"`
-	Notes            string         `json:"notes,omitempty"`
+	LeadID           uuid.UUID  `json:"lead_id"`
+	SpecialistUserID uuid.UUID  `json:"specialist_user_id"`
+	AssignedToUserID *uuid.UUID `json:"assigned_to_user_id,omitempty"`
+	TemplateCode     string     `json:"template_code"`
+	TemplateVersion  int        `json:"template_version"`
+	Title            string     `json:"title"`
+	Budget           *int       `json:"budget,omitempty"`
+	Notes            string     `json:"notes,omitempty"`
 }
 
 // PatchAdminInput — PATCH /admin/projects/{id} (optimistic lock через
 // UpdatedAt). Поддерживает изменение whitelist-полей: title, budget,
 // notes, assigned_to_user_id, status.
 type PatchAdminInput struct {
-	Title             *string        `json:"title,omitempty"`
-	Budget            *int           `json:"budget,omitempty"`
-	Notes             *string        `json:"notes,omitempty"`
-	AssignedToUserID  *uuid.UUID     `json:"assigned_to_user_id,omitempty"`
-	Status            *ProjectStatus `json:"status,omitempty"`
-	UpdatedAt         time.Time      `json:"updated_at"` // обязателен — защита от lost-update
+	Title            *string        `json:"title,omitempty"`
+	Budget           *int           `json:"budget,omitempty"`
+	Notes            *string        `json:"notes,omitempty"`
+	AssignedToUserID *uuid.UUID     `json:"assigned_to_user_id,omitempty"`
+	Status           *ProjectStatus `json:"status,omitempty"`
+	UpdatedAt        time.Time      `json:"updated_at"` // обязателен — защита от lost-update
 }
