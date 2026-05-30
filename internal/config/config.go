@@ -91,6 +91,13 @@ type Config struct {
 	OutboxCleanupInterval time.Duration `env:"OUTBOX_CLEANUP_INTERVAL" envDefault:"1h"`
 	WorkerMetricsAddr     string        `env:"WORKER_METRICS_ADDR" envDefault:":9090"`
 
+	// N8nWebhookBaseURL — endpoint в n8n, на который worker шлёт
+	// outbox-события project.*/client_invite.*. Пустой = диспатчер
+	// отключён (события остаются в outbox без обработки и через MaxAttempts
+	// уезжают в DLQ — для локалки норм, для прода обязательно задать).
+	N8nWebhookBaseURL string        `env:"N8N_WEBHOOK_BASE_URL"`
+	N8nHTTPTimeout    time.Duration `env:"N8N_HTTP_TIMEOUT" envDefault:"10s"`
+
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 
 	// CORSOrigins — список разрешённых origin'ов через запятую

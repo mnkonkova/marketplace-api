@@ -17,10 +17,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"marketpclce/internal/config"
+	"marketpclce/internal/invites"
 	"marketpclce/internal/mailer"
+	"marketpclce/internal/notifications"
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/search"
 )
 
@@ -161,11 +164,31 @@ func main() {
 		}
 	}
 
-	worker := outbox.NewWorker(pool, logger,
-		map[string]outbox.Handler{
-			outbox.AggregateSpecialist: specialistHandler,
-			outbox.AggregateEmail:      emailHandler,
-		},
+	handlers := map[string]outbox.Handler{
+		outbox.AggregateSpecialist: specialistHandler,
+		outbox.AggregateEmail:      emailHandler,
+	}
+
+	// n8n-диспатчер: один HTTP-клиент шлёт project.* и client_invite.*
+	// на общий webhook. n8n внутри workflow роутит Switch-нодой по
+	// event_type. Если N8N_WEBHOOK_BASE_URL пуст — диспатчер отключён
+	// (события остаются в outbox и через MaxAttempts уйдут в DLQ).
+	if cfg.N8nWebhookBaseURL != "" {
+		dispatcher := notifications.NewDispatcher(notifications.Config{
+			WebhookBaseURL: cfg.N8nWebhookBaseURL,
+			HTTPTimeout:    cfg.N8nHTTPTimeout,
+		}, logger)
+		handlers[projects.AggregateProject] = dispatcher.Handle(projects.AggregateProject)
+		handlers[invites.AggregateClientInvite] = dispatcher.Handle(invites.AggregateClientInvite)
+		slog.Info("n8n dispatcher ready",
+			"webhook", cfg.N8nWebhookBaseURL,
+			"timeout", cfg.N8nHTTPTimeout,
+		)
+	} else {
+		slog.Warn("n8n dispatcher disabled (N8N_WEBHOOK_BASE_URL empty) — project/client_invite events will DLQ after retries")
+	}
+
+	worker := outbox.NewWorker(pool, logger, handlers,
 		outbox.Config{
 			MaxAttempts:     cfg.OutboxMaxAttempts,
 			BackoffCap:      cfg.OutboxBackoffCap,
