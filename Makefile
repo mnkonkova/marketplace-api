@@ -112,3 +112,16 @@ prod-seed:
 # напишет в БД ссылки на эти объекты, и фид заработает.
 prod-seed-videos:
 	$(PROD_DC) run --rm api seed-videos
+
+# n8n workflows: экспорт и импорт через REST API. Требует переменные
+# N8N_URL (default http://localhost:5678) и N8N_API_KEY в env.
+# Импорт идемпотентен через scripts/n8n-import.sh — обновляет существующий
+# workflow по имени или создаёт новый.
+N8N_URL ?= http://localhost:5678
+export-n8n:
+	@if [ -z "$$N8N_API_KEY" ]; then echo "set N8N_API_KEY=<key from n8n Settings → API>"; exit 1; fi
+	./scripts/n8n-export.sh "$(N8N_URL)" ops/n8n/workflows
+
+import-n8n:
+	@if [ -z "$$N8N_API_KEY" ]; then echo "set N8N_API_KEY=<key from n8n Settings → API>"; exit 1; fi
+	./scripts/n8n-import.sh "$(N8N_URL)" ops/n8n/workflows

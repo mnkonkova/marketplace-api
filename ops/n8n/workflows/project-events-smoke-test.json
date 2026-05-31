@@ -1,0 +1,122 @@
+{
+  "name": "project-events (smoke test)",
+  "description": null,
+  "nodes": [
+    {
+      "id": "f8e5d3f1-1111-2222-3333-444455556666",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "project-events",
+        "responseMode": "responseNode"
+      },
+      "webhookId": "44d51926-825d-4b33-bab2-2b8f151ec75f"
+    },
+    {
+      "id": "f8e5d3f1-2222-3333-4444-555566667777",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        500,
+        200
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "ok"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": null,
+  "activeVersionId": "f27a3c2a-098d-45c9-b8b8-411d27102573",
+  "versionCounter": 1,
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-05-31T07:14:43.464Z",
+    "createdAt": "2026-05-31T07:14:43.464Z",
+    "versionId": "f27a3c2a-098d-45c9-b8b8-411d27102573",
+    "workflowId": "hcGGYsgKBnRwv676",
+    "nodes": [
+      {
+        "id": "f8e5d3f1-1111-2222-3333-444455556666",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          200,
+          200
+        ],
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "project-events",
+          "responseMode": "responseNode"
+        },
+        "webhookId": "44d51926-825d-4b33-bab2-2b8f151ec75f"
+      },
+      {
+        "id": "f8e5d3f1-2222-3333-4444-555566667777",
+        "name": "Respond 200",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          500,
+          200
+        ],
+        "parameters": {
+          "respondWith": "text",
+          "responseBody": "ok"
+        }
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Respond 200",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "admin admin",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-05-31T07:14:43.550Z",
+        "id": 1,
+        "workflowId": "hcGGYsgKBnRwv676",
+        "versionId": "f27a3c2a-098d-45c9-b8b8-411d27102573",
+        "event": "activated",
+        "userId": "1c47908c-db9f-4d37-8081-bd40c29cb139"
+      }
+    ]
+  }
+}

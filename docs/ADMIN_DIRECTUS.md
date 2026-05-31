@@ -164,12 +164,24 @@ docker compose -f docker-compose.prod.yml exec api /usr/local/bin/api  # ...
 ## Развёртывание на прод
 
 1. В кабинете DNS → A-запись `admin.{DOMAIN}` → IP VDS.
-2. В `marketplace-web/Caddyfile` добавить блок:
+   Если планируешь поднимать n8n (CRM-нотификации) — добавь ещё
+   `automation.{DOMAIN}` → тот же IP.
+2. В `marketplace-web/Caddyfile` добавить блоки:
 
    ```caddy
    admin.{$DOMAIN} {
        encode zstd gzip
        reverse_proxy directus:8055 {
+           lb_try_duration 15s
+           lb_try_interval 250ms
+           fail_duration   1s
+       }
+   }
+
+   # n8n (опционально, если поднят CRM-стек)
+   automation.{$DOMAIN} {
+       encode zstd gzip
+       reverse_proxy n8n:5678 {
            lb_try_duration 15s
            lb_try_interval 250ms
            fail_duration   1s

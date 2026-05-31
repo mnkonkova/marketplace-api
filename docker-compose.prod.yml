@@ -127,6 +127,38 @@ services:
       - "8055"
     mem_limit: 512m
 
+  # n8n — оркестратор CRM-нотификаций. Worker шлёт сюда POST на
+  # /webhook/project-events; workflows внутри n8n маршрутизируют событие
+  # в email/Telegram. Наружу проксируется через caddy под automation.{DOMAIN}.
+  # ENCRYPTION_KEY обязателен и должен быть случайным (openssl rand -hex 32);
+  # сменишь его — workflows c шифрованными credentials перестанут расшифровываться.
+  # Метаданные хранит в SQLite в volume n8n-data — бэкапить отдельно от postgres.
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:?N8N_BASIC_AUTH_USER is required}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:?N8N_BASIC_AUTH_PASSWORD is required}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY is required}
+      N8N_HOST: automation.${DOMAIN}
+      N8N_PROTOCOL: https
+      N8N_PORT: "5678"
+      WEBHOOK_URL: https://automation.${DOMAIN}/
+      GENERIC_TIMEZONE: Europe/Moscow
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+    volumes:
+      - n8n-data:/home/node/.n8n
+    expose:
+      - "5678"
+    mem_limit: 512m
+
   # Фронт + reverse-proxy. Образ собирается из соседнего клона
   # marketplace-web (../web). На VDS оба репо живут рядом:
   #   /opt/marketpclce/api  (этот репо)
@@ -211,3 +243,4 @@ volumes:
   alloy-data:
   directus-uploads:
   directus-extensions:
+  n8n-data:

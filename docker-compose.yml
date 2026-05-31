@@ -86,6 +86,35 @@ services:
       redis:
         condition: service_started
 
+  # n8n — оркестратор CRM-нотификаций. Worker шлёт сюда POST на
+  # /webhook/project-events; n8n внутри workflow Switch-нодой роутит по
+  # event_type. Локально на :5678 с basic-auth admin/Admin12345.
+  # ENCRYPTION_KEY фиксированный — не для прода (там должен быть случайный).
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: admin
+      N8N_BASIC_AUTH_PASSWORD: Admin12345
+      N8N_ENCRYPTION_KEY: dev-n8n-encryption-key-please-rotate-in-prod
+      N8N_HOST: localhost
+      N8N_PROTOCOL: http
+      N8N_PORT: "5678"
+      WEBHOOK_URL: http://localhost:5678/
+      # Локально ходим по HTTP с другой машины (192.168.64.2:5678 из
+      # хост-браузера), secure-cookie блокирует логин — выключаем.
+      # На проде Caddy даёт TLS и эта переменная не нужна.
+      N8N_SECURE_COOKIE: "false"
+      GENERIC_TIMEZONE: Europe/Moscow
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      # n8n внутренние таблицы кладём в SQLite (volume); если хочется
+      # делить postgres с другими — добавить DB_TYPE=postgresdb и DB_POSTGRESDB_*.
+    volumes:
+      - n8n-data:/home/node/.n8n
+
 # Медиа — Yandex Object Storage (S3) для всех окружений. Локальный MinIO
 # больше не запускаем: без ключей API стартует, upload-ручка
 # /me/portfolio/upload-url вернёт 503 storage_disabled (см. cmd/api/main.go).
@@ -95,3 +124,4 @@ volumes:
   osdata:
   directus-uploads:
   directus-extensions:
+  n8n-data:
