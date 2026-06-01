@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -97,16 +98,22 @@ func (r *Repo) CreateClient(ctx context.Context, in CreateClientInput) (uuid.UUI
 	if email == "" {
 		return uuid.Nil, errors.New("email required")
 	}
-	// генерим случайный пароль — юзер не знает, зайдёт через magic-link
-	// или восстановит. Никогда не возвращаем raw в API.
+	// Генерим случайный пароль (юзер не знает — заходит magic-link'ом или
+	// сбрасывает). Кладём bcrypt-хеш в users.password_hash, чтобы если
+	// password-flow когда-то заработает на этих юзерах, никто не залезет.
 	var rnd [32]byte
 	if _, err := rand.Read(rnd[:]); err != nil {
 		return uuid.Nil, fmt.Errorf("rand: %w", err)
 	}
-	passwordHash := base64.StdEncoding.EncodeToString(rnd[:])
+	rawPwd := base64.StdEncoding.EncodeToString(rnd[:])
+	hash, err := bcrypt.GenerateFromPassword([]byte(rawPwd), bcrypt.DefaultCost)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("bcrypt: %w", err)
+	}
+	passwordHash := string(hash)
 
 	var userID uuid.UUID
-	err := r.db.QueryRow(ctx, `
+	err = r.db.QueryRow(ctx, `
 INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
 VALUES ($1, $2, 'client', 'client', TRUE, now())
 RETURNING id`, email, passwordHash).Scan(&userID)

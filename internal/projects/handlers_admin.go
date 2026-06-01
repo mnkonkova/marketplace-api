@@ -133,6 +133,42 @@ func (h *Handler) AdminCreateProject(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, p)
 }
 
+// AdminMoveStage godoc
+// @Summary  Админ-канбан: перенести проект на любую стадию
+// @Tags     admin-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path  string       true "project id"
+// @Param    body body  moveStageReq true "target_stage_id"
+// @Success  200  {object} Project
+// @Failure  409  {object} errorResponse "stage_blocked"
+// @Router   /admin/projects/{id}/move_stage [post]
+func (h *Handler) AdminMoveStage(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := auth.UserIDFrom(r.Context())
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	var in moveStageReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	target, err := uuid.Parse(in.TargetStageID)
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_stage_id", "target_stage_id должен быть UUID.")
+		return
+	}
+	p, err := h.svc.MoveProjectToStage(r.Context(), pid, target, actorID)
+	if err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, p)
+}
+
 // AdminAdvanceStage godoc
 // @Summary  Админ-канбан: продвинуть стадию любого проекта
 // @Tags     admin-projects

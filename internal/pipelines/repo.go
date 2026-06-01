@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -200,21 +201,18 @@ func (r *Repo) DeletePipeline(ctx context.Context, id uuid.UUID) error {
 }
 
 // HardDeletePipeline — физическое удаление из БД (DELETE FROM pipelines).
-// stages/steps уходят каскадом (FK ON DELETE CASCADE). Доступно только если
-// в БД нет НИ ОДНОГО проекта с этим pipeline_id (даже completed/cancelled —
-// иначе теряем историю). Если есть — ErrHasActiveProjects.
+// stages/steps уходят каскадом (FK ON DELETE CASCADE). projects.pipeline_id
+// имеет FK без CASCADE (NO ACTION = RESTRICT), поэтому если есть хоть один
+// проект с этим pipeline_id — Postgres вернёт 23503 foreign_key_violation,
+// которую мы перехватываем и мапим в ErrHasActiveProjects. Атомарно: race
+// с одновременным INSERT-ом проекта закрывается constraint'ом БД.
 func (r *Repo) HardDeletePipeline(ctx context.Context, id uuid.UUID) error {
-	var hasAny bool
-	if err := r.db.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM projects WHERE pipeline_id = $1)`,
-		id).Scan(&hasAny); err != nil {
-		return fmt.Errorf("check projects: %w", err)
-	}
-	if hasAny {
-		return ErrHasActiveProjects
-	}
 	tag, err := r.db.Exec(ctx, `DELETE FROM pipelines WHERE id = $1`, id)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrHasActiveProjects
+		}
 		return fmt.Errorf("hard delete pipeline: %w", err)
 	}
 	if tag.RowsAffected() == 0 {

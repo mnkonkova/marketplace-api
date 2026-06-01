@@ -21,6 +21,17 @@ func managerFrom(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return uid, true
 }
 
+// effectiveOwnerID — для менеджера возвращает его user_id (assigned_to фильтр
+// применяется), для админа — uuid.Nil (без фильтра, доступ ко всем проектам).
+// Используется в handler-ах /manager/projects/* чтобы админу не выдавать 404
+// на проекты, где он не assigned_to.
+func effectiveOwnerID(r *http.Request, uid uuid.UUID) uuid.UUID {
+	if role, _ := auth.RoleFrom(r.Context()); role == auth.RoleAdmin {
+		return uuid.Nil
+	}
+	return uid
+}
+
 func writeManagerErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
@@ -128,12 +139,59 @@ func (h *Handler) ManagerGetFull(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	view, err := h.svc.GetFull(r.Context(), pid, uid)
+	view, err := h.svc.GetFull(r.Context(), pid, effectiveOwnerID(r, uid))
 	if err != nil {
 		writeManagerErr(w, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, view)
+}
+
+type moveStageReq struct {
+	TargetStageID string `json:"target_stage_id"`
+}
+
+// ManagerMoveStage godoc
+// @Summary  Перенести проект на произвольную стадию (любую)
+// @Tags     manager-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path  string         true "project id"
+// @Param    body body  moveStageReq   true "target_stage_id"
+// @Success  200  {object} Project
+// @Failure  409  {object} errorResponse "stage_blocked | not_found"
+// @Router   /manager/projects/{id}/move_stage [post]
+func (h *Handler) ManagerMoveStage(w http.ResponseWriter, r *http.Request) {
+	uid, ok := managerFrom(w, r)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	var in moveStageReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	target, err := uuid.Parse(in.TargetStageID)
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_stage_id", "target_stage_id должен быть UUID.")
+		return
+	}
+	p, err := h.svc.MoveProjectToStage(r.Context(), pid, target, uid)
+	if err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, p)
 }
 
 // ManagerAdvanceStage godoc
@@ -158,7 +216,7 @@ func (h *Handler) ManagerAdvanceStage(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}
@@ -189,7 +247,7 @@ func (h *Handler) ManagerStartStep(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}
@@ -219,7 +277,7 @@ func (h *Handler) ManagerCompleteStep(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}
@@ -255,7 +313,7 @@ func (h *Handler) ManagerSkipStep(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}
@@ -293,7 +351,7 @@ func (h *Handler) ManagerPatch(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}

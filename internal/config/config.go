@@ -81,6 +81,13 @@ type Config struct {
 	RateAuthPerMin       int           `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
 	RateAuthPerHour      int           `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
 
+	// CRM endpoints (/me/projects, /me/specialist, /manager, /admin).
+	// Лимит per user+ip — менеджеры/админы пишут плотно, но не должно быть
+	// возможности устроить шторм action-endpoint-ов (start/skip/approve в
+	// бесконечном цикле, например).
+	RateCRMPerMin  int `env:"RATE_CRM_PER_MIN" envDefault:"120"`
+	RateCRMPerHour int `env:"RATE_CRM_PER_HOUR" envDefault:"3000"`
+
 	// Outbox-воркер. MaxAttempts/BackoffCap определяют поведение ретраев и
 	// порог для DLQ (dead_at). Retention/CleanupInterval — TTL на обработанные
 	// записи (dead-записи cleanup не трогает). WorkerMetricsAddr — отдельный

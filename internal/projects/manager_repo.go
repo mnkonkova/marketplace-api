@@ -457,6 +457,9 @@ func (r *Repo) GetByIDForManager(ctx context.Context, projectID, managerID uuid.
 	return r.getByID(ctx, projectID, &managerID, "assigned_to_user_id")
 }
 
+// MoveProjectToStage — фактическая реализация лежит в move_stage.go ради
+// читаемости (отдельная история, отличная от advance_stage).
+
 // LoadClientDisplayNames — батч display_name для списка projects (для карточек
 // канбана). Возвращает map client_user_id → display_name. Где нет имени —
 // пустая строка.

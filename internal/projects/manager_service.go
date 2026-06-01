@@ -2,7 +2,6 @@ package projects
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -261,13 +260,20 @@ func (s *Service) PatchProject(ctx context.Context, projectID uuid.UUID, in Mana
 }
 
 // AssertManagerHasAccess — проверяет, что переданный пользователь является
-// ответственным менеджером проекта. Используется как первичная проверка
-// в каждом handler-action (чтобы не возиться с RequireRoles на каждом
-// конкретном проекте). Админ — отдельный путь через GetFull(uuid.Nil).
+// ответственным менеджером проекта. managerID=uuid.Nil интерпретируется
+// как «от админа» — assigned_to-фильтр пропускается, только верифицируем
+// что проект существует.
 func (s *Service) AssertManagerHasAccess(ctx context.Context, projectID, managerID uuid.UUID) error {
-	if managerID == uuid.Nil {
-		return errors.New("manager id required")
-	}
 	_, err := s.repo.GetByIDForManager(ctx, projectID, managerID)
 	return err
+}
+
+// MoveProjectToStage — переставить проект на произвольную стадию (любую,
+// не только следующую). Защита: если в текущей стадии есть незавершённый
+// клиентский шаг — отказ. Для движения «вперёд» промежуточные team-шаги
+// делаются done. Для движения «назад» — целевая и последующие стадии
+// сбрасываются в pending, активируется первый шаг целевой стадии.
+// Эмитит project.stage_moved для outbox (хук под будущие n8n-колбэки).
+func (s *Service) MoveProjectToStage(ctx context.Context, projectID, targetStageID, actorID uuid.UUID) (Project, error) {
+	return s.repo.MoveProjectToStage(ctx, projectID, targetStageID, actorID, s.reviewDeadline())
 }

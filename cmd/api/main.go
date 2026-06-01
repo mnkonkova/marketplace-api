@@ -257,6 +257,10 @@ func main() {
 			{Limit: cfg.RateSummarizePerMin, Period: time.Minute},
 			{Limit: cfg.RateSummarizePerHour, Period: time.Hour},
 		},
+		CRMWindows: []ratelimit.Window{
+			{Limit: cfg.RateCRMPerMin, Period: time.Minute},
+			{Limit: cfg.RateCRMPerHour, Period: time.Hour},
+		},
 	})
 
 	srv := &http.Server{

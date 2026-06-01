@@ -56,6 +56,7 @@ type Deps struct {
 	ClarifyWindows   []ratelimit.Window
 	AuthWindows      []ratelimit.Window
 	SummarizeWindows []ratelimit.Window
+	CRMWindows       []ratelimit.Window
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -130,13 +131,23 @@ func NewRouter(d Deps) http.Handler {
 		})
 
 		// Публичный redeem_invite — magic-link обмен на JWT.
+		// Под rate-limit "auth" группой: тот же лимит что register/login
+		// (10/мин per IP) — защита от брутфорса token-ов.
 		if d.Admin != nil {
-			r.Post("/auth/redeem_invite/{token}", d.Admin.RedeemInvite)
+			r.Group(func(r chi.Router) {
+				r.Use(RateLimit(d.Limiter, "auth", d.AuthWindows))
+				r.Post("/auth/redeem_invite/{token}", d.Admin.RedeemInvite)
+			})
 		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(d.TokenIssuer))
 			r.Get("/me", d.Auth.Me)
+			// Pipelines читаются всеми залогиненными — нужен и менеджеру (для
+			// канбана), и админу. Запись по-прежнему только под admin.
+			if d.Pipelines != nil {
+				r.Get("/pipelines/{id}", d.Pipelines.AdminGetPipeline)
+			}
 			r.Post("/auth/resend-verification", d.Auth.ResendVerification)
 			r.Get("/me/profile", d.Profiles.Get)
 			r.Patch("/me/profile", d.Profiles.PatchFull)
@@ -186,7 +197,10 @@ func NewRouter(d Deps) http.Handler {
 		if d.AuthRepo != nil && d.Projects != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(auth.Middleware(d.TokenIssuer))
-				r.Use(auth.RequireRoles(d.AuthRepo, auth.RoleManager))
+				// Admin может ходить через manager-URL — effectiveOwnerID()
+				// пропускает assigned_to-фильтр для роли admin.
+				r.Use(auth.RequireRoles(d.AuthRepo, auth.RoleManager, auth.RoleAdmin))
+				r.Use(RateLimit(d.Limiter, "crm", d.CRMWindows))
 
 				r.Get("/manager/projects/inbox", d.Projects.ManagerInbox)
 				r.Get("/manager/projects", d.Projects.ManagerListAssigned)
@@ -194,6 +208,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Patch("/manager/projects/{id}", d.Projects.ManagerPatch)
 				r.Post("/manager/projects/{id}/claim", d.Projects.ManagerClaim)
 				r.Post("/manager/projects/{id}/advance_stage", d.Projects.ManagerAdvanceStage)
+				r.Post("/manager/projects/{id}/move_stage", d.Projects.ManagerMoveStage)
 				r.Post("/manager/projects/{id}/steps/{step_id}/start", d.Projects.ManagerStartStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/complete", d.Projects.ManagerCompleteStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/skip", d.Projects.ManagerSkipStep)
@@ -209,6 +224,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(auth.Middleware(d.TokenIssuer))
 				r.Use(auth.RequireRoles(d.AuthRepo, auth.RoleAdmin))
+				r.Use(RateLimit(d.Limiter, "crm", d.CRMWindows))
 
 				if d.Productions != nil {
 					r.Get("/admin/productions", d.Productions.AdminList)
@@ -242,6 +258,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/projects", d.Projects.AdminCreateProject)
 					r.Get("/admin/projects/{id}", d.Projects.AdminGetProject)
 					r.Post("/admin/projects/{id}/advance_stage", d.Projects.AdminAdvanceStage)
+					r.Post("/admin/projects/{id}/move_stage", d.Projects.AdminMoveStage)
 					r.Get("/admin/projects/{id}/events", d.Projects.AdminListProjectEvents)
 					r.Get("/admin/projects/{id}/comments", d.Projects.AdminListProjectComments)
 					r.Post("/admin/projects/{id}/comments", d.Projects.AdminCreateProjectComment)

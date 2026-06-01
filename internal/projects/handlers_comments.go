@@ -65,7 +65,7 @@ func (h *Handler) ManagerListComments(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}
@@ -101,7 +101,7 @@ func (h *Handler) ManagerCreateComment(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}
@@ -138,7 +138,7 @@ func (h *Handler) ManagerListEvents(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, uid); err != nil {
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
 		writeManagerErr(w, err)
 		return
 	}
