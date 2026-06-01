@@ -11,6 +11,10 @@ import (
 const (
 	AggregateSpecialist = "specialist"
 	AggregateEmail      = "email"
+	// CRM v5: события проектов (создан, шаг изменился, стадия продвинута,
+	// взят менеджером, в диспуте, завершён, нужны правки). Воркер диспатчит
+	// их в n8n webhook (см. cmd/worker/main.go).
+	AggregateProject = "project"
 
 	EventSpecialistUpserted  = "specialist.upserted"
 	EventSpecialistPublished = "specialist.published"
@@ -24,6 +28,15 @@ const (
 	// EventEmailPasswordResetSend — payload: {to, to_name, token, base_url}.
 	// Письмо со ссылкой на сброс пароля (BaseURL + /auth/reset?token=).
 	EventEmailPasswordResetSend = "email.password_reset_send"
+
+	// CRM v5: project.* — пробрасываются как есть в n8n. n8n сам решает
+	// что слать (email/telegram/...) по event_type'у.
+	EventProjectCreated          = "project.created"
+	EventProjectStepTransitioned = "project.step_transitioned"
+	EventProjectStageAdvanced    = "project.stage_advanced"
+	EventProjectAssigned         = "project.assigned"
+	EventProjectDisputed         = "project.disputed"
+	EventProjectCompleted        = "project.completed"
 )
 
 // EmailVerifyPayload — структура payload для EventEmailVerifySend.

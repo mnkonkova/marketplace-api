@@ -18,6 +18,7 @@ import (
 
 	"marketpclce/internal/config"
 	"marketpclce/internal/mailer"
+	"marketpclce/internal/notifications"
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
@@ -162,10 +163,36 @@ func main() {
 		}
 	}
 
+	// n8n-диспатчер для CRM-событий project.*. nil = выключен (события
+	// квитируются как no-op, чтобы не зависать в outbox-ретраях).
+	n8nDispatcher := notifications.NewWebhookDispatcher(cfg.N8nWebhookURL, cfg.N8nWebhookToken)
+	if n8nDispatcher == nil {
+		slog.Info("n8n webhook disabled (N8N_WEBHOOK_URL empty) — project.* events будут no-op")
+	} else {
+		slog.Info("n8n webhook ready", "url", cfg.N8nWebhookURL)
+	}
+
+	projectHandler := func(ctx context.Context, aggregateID, eventType string, payload []byte) error {
+		// no-op если диспатчер не сконфигурирован — событие считается
+		// обработанным, чтобы не копить ретраи на проде без webhook.
+		if n8nDispatcher == nil {
+			return nil
+		}
+		return n8nDispatcher.Send(ctx, notifications.Payload{
+			EventID:     aggregateID + "/" + eventType,
+			Aggregate:   outbox.AggregateProject,
+			AggregateID: aggregateID,
+			EventType:   eventType,
+			Data:        payload,
+			OccurredAt:  time.Now().UTC(),
+		})
+	}
+
 	worker := outbox.NewWorker(pool, logger,
 		map[string]outbox.Handler{
 			outbox.AggregateSpecialist: specialistHandler,
 			outbox.AggregateEmail:      emailHandler,
+			outbox.AggregateProject:    projectHandler,
 		},
 		outbox.Config{
 			MaxAttempts:     cfg.OutboxMaxAttempts,

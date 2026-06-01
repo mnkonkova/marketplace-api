@@ -96,6 +96,13 @@ type Config struct {
 	ReviewDeadline      time.Duration `env:"REVIEW_DEADLINE" envDefault:"168h"`
 	ReviewCheckInterval time.Duration `env:"REVIEW_CHECK_INTERVAL" envDefault:"1h"`
 
+	// CRM v5: n8n webhook для нотификаций по project.* событиям. Пусто →
+	// диспатч выключен (события успешно обрабатываются как no-op, не
+	// зависают в outbox). N8nWebhookToken — опциональный bearer для
+	// authentication в n8n; рекомендуется в проде.
+	N8nWebhookURL   string `env:"N8N_WEBHOOK_URL"`
+	N8nWebhookToken string `env:"N8N_WEBHOOK_TOKEN"`
+
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 
 	// CORSOrigins — список разрешённых origin'ов через запятую
