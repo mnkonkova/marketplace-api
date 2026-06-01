@@ -75,7 +75,7 @@ INSERT INTO project_step_events
   (project_id, step_id, actor_user_id, actor_type, event_kind, comment, payload)
 VALUES ($1, NULL, $2, 'human', 'comment', $3, $4)`,
 		projectID, authorID, body,
-		fmt.Sprintf(`{"comment_id":"%s"}`, c.ID.String())); err != nil {
+		mustJSON(map[string]string{"comment_id": c.ID.String()})); err != nil {
 		return Comment{}, fmt.Errorf("insert comment event: %w", err)
 	}
 

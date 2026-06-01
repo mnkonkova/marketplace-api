@@ -161,7 +161,7 @@ func (h *Handler) AdminMoveStage(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_stage_id", "target_stage_id должен быть UUID.")
 		return
 	}
-	p, err := h.svc.MoveProjectToStage(r.Context(), pid, target, actorID)
+	p, err := h.svc.MoveProjectToStage(r.Context(), pid, target, actorID, in.UpdatedAt)
 	if err != nil {
 		writeManagerErr(w, err)
 		return
@@ -185,7 +185,9 @@ func (h *Handler) AdminAdvanceStage(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	p, err := h.svc.AdvanceStage(r.Context(), pid, actorID)
+	var advIn advanceStageReq
+	_ = json.NewDecoder(r.Body).Decode(&advIn)
+	p, err := h.svc.AdvanceStage(r.Context(), pid, actorID, advIn.UpdatedAt)
 	if err != nil {
 		writeManagerErr(w, err)
 		return

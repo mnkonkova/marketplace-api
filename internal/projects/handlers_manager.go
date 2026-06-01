@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -148,7 +149,12 @@ func (h *Handler) ManagerGetFull(w http.ResponseWriter, r *http.Request) {
 }
 
 type moveStageReq struct {
-	TargetStageID string `json:"target_stage_id"`
+	TargetStageID string     `json:"target_stage_id"`
+	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+}
+
+type advanceStageReq struct {
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // ManagerMoveStage godoc
@@ -186,7 +192,7 @@ func (h *Handler) ManagerMoveStage(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_stage_id", "target_stage_id должен быть UUID.")
 		return
 	}
-	p, err := h.svc.MoveProjectToStage(r.Context(), pid, target, uid)
+	p, err := h.svc.MoveProjectToStage(r.Context(), pid, target, uid, in.UpdatedAt)
 	if err != nil {
 		writeManagerErr(w, err)
 		return
@@ -220,7 +226,10 @@ func (h *Handler) ManagerAdvanceStage(w http.ResponseWriter, r *http.Request) {
 		writeManagerErr(w, err)
 		return
 	}
-	p, err := h.svc.AdvanceStage(r.Context(), pid, uid)
+	var in advanceStageReq
+	// Тело опциональное — optimistic-lock через updated_at тоже опционально.
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	p, err := h.svc.AdvanceStage(r.Context(), pid, uid, in.UpdatedAt)
 	if err != nil {
 		writeManagerErr(w, err)
 		return

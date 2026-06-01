@@ -157,7 +157,7 @@ INSERT INTO project_step_events
   (project_id, step_id, actor_user_id, actor_type, event_kind, payload)
 VALUES ($1, NULL, $2, 'human', 'assigned', $3)`,
 		projectID, managerID,
-		fmt.Sprintf(`{"manager_user_id":"%s"}`, managerID.String())); err != nil {
+		mustJSON(map[string]string{"manager_user_id": managerID.String()})); err != nil {
 		return fmt.Errorf("insert assigned event: %w", err)
 	}
 	if err := emit(ctx, tx, projectID, nil, managerID, "project.assigned",
@@ -289,7 +289,10 @@ ORDER BY st.sort_order`, projectID)
 //
 // reviewDeadline — длительность дедлайна для review-шага (передаётся
 // сервисом, см. Service.reviewDeadline). 0 = не ставить.
-func (r *Repo) AdvanceStage(ctx context.Context, projectID, actorID uuid.UUID, reviewDeadline time.Duration) (Project, error) {
+// expectedUpdatedAt — optimistic-lock версии projects.updated_at; nil = без
+// проверки. Если задан и не совпадает — ErrConflict (защищает от двух
+// менеджеров двигающих стадию одного проекта одновременно).
+func (r *Repo) AdvanceStage(ctx context.Context, projectID, actorID uuid.UUID, reviewDeadline time.Duration, expectedUpdatedAt *time.Time) (Project, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Project{}, fmt.Errorf("begin tx: %w", err)
@@ -419,17 +422,25 @@ WHERE id = $1 AND status = 'pending'`, firstStepID, string(newStatus), deadline)
 		return Project{}, fmt.Errorf("start next stage: %w", err)
 	}
 
-	// 7. Бамп projects.updated_at + событие в ленте + outbox.
-	if _, err := tx.Exec(ctx,
-		`UPDATE projects SET updated_at = now() WHERE id = $1`, projectID); err != nil {
+	// 7. Бамп projects.updated_at с optimistic-lock-проверкой.
+	tag, err := tx.Exec(ctx,
+		`UPDATE projects SET updated_at = now() WHERE id = $1
+		   AND ($2::timestamptz IS NULL OR updated_at = $2)`,
+		projectID, expectedUpdatedAt)
+	if err != nil {
 		return Project{}, fmt.Errorf("bump project: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Либо проект исчез (вряд ли — он был в FOR UPDATE через stages),
+		// либо updated_at не совпал с ожидаемым.
+		return Project{}, ErrConflict
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_step_events
   (project_id, step_id, actor_user_id, actor_type, event_kind, payload)
 VALUES ($1, NULL, $2, 'human', 'stage_advance', $3)`,
 		projectID, actorID,
-		fmt.Sprintf(`{"from_stage_id":"%s","to_stage_id":"%s"}`, current.ID, next.ID)); err != nil {
+		mustJSON(map[string]string{"from_stage_id": current.ID.String(), "to_stage_id": next.ID.String()})); err != nil {
 		return Project{}, fmt.Errorf("insert stage_advance event: %w", err)
 	}
 	if err := emit(ctx, tx, projectID, nil, actorID, "project.stage_advanced",

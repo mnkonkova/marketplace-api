@@ -152,8 +152,11 @@ func (s *Service) Claim(ctx context.Context, projectID, managerID uuid.UUID) err
 	return s.repo.Claim(ctx, projectID, managerID)
 }
 
-func (s *Service) AdvanceStage(ctx context.Context, projectID, actorID uuid.UUID) (Project, error) {
-	return s.repo.AdvanceStage(ctx, projectID, actorID, s.reviewDeadline())
+// AdvanceStage / MoveProjectToStage принимают optional expectedUpdatedAt
+// для optimistic-lock — фронт шлёт значение из последнего GET. Без него
+// (nil) лок не активируется (back-compat).
+func (s *Service) AdvanceStage(ctx context.Context, projectID, actorID uuid.UUID, expectedUpdatedAt *time.Time) (Project, error) {
+	return s.repo.AdvanceStage(ctx, projectID, actorID, s.reviewDeadline(), expectedUpdatedAt)
 }
 
 // StartStep — менеджер активирует pending-шаг. owner=client → waiting_client
@@ -274,6 +277,6 @@ func (s *Service) AssertManagerHasAccess(ctx context.Context, projectID, manager
 // делаются done. Для движения «назад» — целевая и последующие стадии
 // сбрасываются в pending, активируется первый шаг целевой стадии.
 // Эмитит project.stage_moved для outbox (хук под будущие n8n-колбэки).
-func (s *Service) MoveProjectToStage(ctx context.Context, projectID, targetStageID, actorID uuid.UUID) (Project, error) {
-	return s.repo.MoveProjectToStage(ctx, projectID, targetStageID, actorID, s.reviewDeadline())
+func (s *Service) MoveProjectToStage(ctx context.Context, projectID, targetStageID, actorID uuid.UUID, expectedUpdatedAt *time.Time) (Project, error) {
+	return s.repo.MoveProjectToStage(ctx, projectID, targetStageID, actorID, s.reviewDeadline(), expectedUpdatedAt)
 }

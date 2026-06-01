@@ -54,6 +54,22 @@ func (r *Repo) AutoSkipReviewStep(ctx context.Context, projectID, stepID uuid.UU
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Advisory-lock на project_id — если два worker-инстанса попали на
+	// один проект, второй отпадёт сразу и не будет ждать первого. Лок
+	// держится только до commit/rollback (xact_lock). int64-ключ берём из
+	// первых 8 байт UUID — коллизии редки, цена коллизии — лишний skip
+	// другого проекта откатится корректно.
+	key := int64FromUUID(projectID)
+	var locked bool
+	if err := tx.QueryRow(ctx,
+		`SELECT pg_try_advisory_xact_lock($1)`, key).Scan(&locked); err != nil {
+		return fmt.Errorf("advisory lock: %w", err)
+	}
+	if !locked {
+		// другой worker уже взял этот проект — отпускаем без ошибки
+		return nil
+	}
+
 	now := time.Now()
 	tag, err := tx.Exec(ctx, `
 UPDATE project_steps

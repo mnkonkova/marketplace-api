@@ -17,7 +17,9 @@ import (
 // `project.stage_moved` в outbox — hook под будущие n8n-колбэки.
 //
 // reviewDeadline — длительность дедлайна для is_review+client шага.
-func (r *Repo) MoveProjectToStage(ctx context.Context, projectID, targetStageID, actorID uuid.UUID, reviewDeadline time.Duration) (Project, error) {
+// expectedUpdatedAt — optimistic-lock версии projects.updated_at; nil = без
+// проверки. Защита от двух менеджеров двигающих один проект параллельно.
+func (r *Repo) MoveProjectToStage(ctx context.Context, projectID, targetStageID, actorID uuid.UUID, reviewDeadline time.Duration, expectedUpdatedAt *time.Time) (Project, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Project{}, fmt.Errorf("begin tx: %w", err)
@@ -202,17 +204,25 @@ WHERE id = $1 AND status = 'pending'`,
 		return Project{}, fmt.Errorf("start target stage: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx,
-		`UPDATE projects SET updated_at = now() WHERE id = $1`, projectID); err != nil {
+	tag, err := tx.Exec(ctx,
+		`UPDATE projects SET updated_at = now() WHERE id = $1
+		   AND ($2::timestamptz IS NULL OR updated_at = $2)`,
+		projectID, expectedUpdatedAt)
+	if err != nil {
 		return Project{}, fmt.Errorf("bump project: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Project{}, ErrConflict
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_step_events
   (project_id, step_id, actor_user_id, actor_type, event_kind, payload)
 VALUES ($1, NULL, $2, 'human', 'stage_moved', $3)`,
 		projectID, actorID,
-		fmt.Sprintf(`{"from_stage_id":"%s","to_stage_id":"%s"}`,
-			stages[curIdx].ID, stages[targetIdx].ID)); err != nil {
+		mustJSON(map[string]string{
+			"from_stage_id": stages[curIdx].ID.String(),
+			"to_stage_id":   stages[targetIdx].ID.String(),
+		})); err != nil {
 		return Project{}, fmt.Errorf("insert stage_moved event: %w", err)
 	}
 	if err := emit(ctx, tx, projectID, nil, actorID, "project.stage_moved",
