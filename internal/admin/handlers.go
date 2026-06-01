@@ -140,6 +140,13 @@ func (h *Handler) AdminCreateClient(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, res)
 }
 
+// ManagerGenerateInvite — то же что AdminGenerateInvite, но для роли manager.
+// Менеджеру нужно перевыпускать magic-link клиентам своих проектов.
+// Доступ контролируется RequireRoles(RoleManager, RoleAdmin) в router.
+func (h *Handler) ManagerGenerateInvite(w http.ResponseWriter, r *http.Request) {
+	h.AdminGenerateInvite(w, r)
+}
+
 // AdminGenerateInvite godoc
 // @Summary  Сгенерировать инвайт для существующего юзера
 // @Tags     admin-users

@@ -52,6 +52,16 @@ func (s *Service) DeletePipeline(ctx context.Context, id uuid.UUID) error {
 	return s.repo.DeletePipeline(ctx, id)
 }
 
+func (s *Service) MakeDefault(ctx context.Context, id uuid.UUID) error {
+	return s.repo.MakeDefault(ctx, id)
+}
+
+// GetDefaultPipelineID — узкий публичный метод для интеграций (leads).
+// Реализует projects.DefaultPipelineProvider (см. projects/intake.go).
+func (s *Service) GetDefaultPipelineID(ctx context.Context) (uuid.UUID, error) {
+	return s.repo.GetDefaultPipelineID(ctx)
+}
+
 func (s *Service) HardDeletePipeline(ctx context.Context, id uuid.UUID) error {
 	return s.repo.HardDeletePipeline(ctx, id)
 }

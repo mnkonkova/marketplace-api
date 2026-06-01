@@ -148,6 +148,26 @@ func (h *Handler) AdminPatchPipeline(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, p)
 }
 
+// AdminMakeDefault godoc
+// @Summary Сделать воронку дефолтной (для брифов)
+// @Tags    admin-pipelines
+// @Produce json
+// @Security BearerAuth
+// @Param   id path string true "pipeline id"
+// @Success 204
+// @Router  /admin/pipelines/{id}/make_default [post]
+func (h *Handler) AdminMakeDefault(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.svc.MakeDefault(r.Context(), id); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // AdminDeletePipeline godoc
 // @Summary Soft- или hard-delete воронки (admin)
 // @Description hard=true → физическое удаление из БД (cascade на stages/steps).

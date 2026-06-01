@@ -211,6 +211,9 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/manager/projects/{id}/advance_stage", d.Projects.ManagerAdvanceStage)
 				r.Post("/manager/projects/{id}/move_stage", d.Projects.ManagerMoveStage)
 				r.Post("/manager/projects/{id}/move_step", d.Projects.ManagerMoveStep)
+				if d.Admin != nil {
+					r.Post("/manager/users/{id}/generate_invite", d.Admin.ManagerGenerateInvite)
+				}
 				r.Post("/manager/projects/{id}/steps/{step_id}/start", d.Projects.ManagerStartStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/complete", d.Projects.ManagerCompleteStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/skip", d.Projects.ManagerSkipStep)
@@ -247,6 +250,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Patch("/admin/pipelines/steps/{id}", d.Pipelines.AdminPatchStep)
 					r.Delete("/admin/pipelines/steps/{id}", d.Pipelines.AdminDeleteStep)
 					r.Put("/admin/pipelines/{id}/reorder", d.Pipelines.AdminReorder)
+					r.Post("/admin/pipelines/{id}/make_default", d.Pipelines.AdminMakeDefault)
 				}
 				if d.Admin != nil {
 					r.Get("/admin/managers", d.Admin.AdminListManagers)

@@ -21,6 +21,7 @@ type Pipeline struct {
 	Description       string    `json:"description"`
 	Version           int       `json:"version"`
 	IsActive          bool      `json:"is_active"`
+	IsDefault         bool      `json:"is_default"`
 	RevisionsIncluded int       `json:"revisions_included"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`

@@ -28,9 +28,9 @@ func (r *Repo) CreatePipeline(ctx context.Context, in CreatePipelineInput) (Pipe
 	err := r.db.QueryRow(ctx,
 		`INSERT INTO pipelines (name, description, revisions_included)
 		 VALUES ($1, $2, $3)
-		 RETURNING id, name, description, version, is_active, revisions_included, created_at, updated_at`,
+		 RETURNING id, name, description, version, is_active, is_default, revisions_included, created_at, updated_at`,
 		strings.TrimSpace(in.Name), strings.TrimSpace(in.Description), in.RevisionsIncluded).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.IsDefault, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return Pipeline{}, fmt.Errorf("insert pipeline: %w", err)
 	}
@@ -40,7 +40,7 @@ func (r *Repo) CreatePipeline(ctx context.Context, in CreatePipelineInput) (Pipe
 // ListPipelines — для админ-обзора. Возвращает все, в т.ч. неактивные.
 func (r *Repo) ListPipelines(ctx context.Context) ([]Pipeline, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, name, description, version, is_active, revisions_included, created_at, updated_at
+		`SELECT id, name, description, version, is_active, is_default, revisions_included, created_at, updated_at
 		 FROM pipelines ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list pipelines: %w", err)
@@ -49,7 +49,7 @@ func (r *Repo) ListPipelines(ctx context.Context) ([]Pipeline, error) {
 	out := make([]Pipeline, 0)
 	for rows.Next() {
 		var p Pipeline
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.IsDefault, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan pipeline: %w", err)
 		}
 		out = append(out, p)
@@ -60,9 +60,9 @@ func (r *Repo) ListPipelines(ctx context.Context) ([]Pipeline, error) {
 func (r *Repo) GetPipeline(ctx context.Context, id uuid.UUID) (Pipeline, error) {
 	var p Pipeline
 	err := r.db.QueryRow(ctx,
-		`SELECT id, name, description, version, is_active, revisions_included, created_at, updated_at
+		`SELECT id, name, description, version, is_active, is_default, revisions_included, created_at, updated_at
 		 FROM pipelines WHERE id = $1`, id).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.IsDefault, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Pipeline{}, ErrNotFound
 	}
@@ -162,11 +162,11 @@ func (r *Repo) PatchPipeline(ctx context.Context, id uuid.UUID, in PatchPipeline
 	}
 	q := fmt.Sprintf(
 		`UPDATE pipelines SET %s, updated_at = now() WHERE id = $1
-		 RETURNING id, name, description, version, is_active, revisions_included, created_at, updated_at`,
+		 RETURNING id, name, description, version, is_active, is_default, revisions_included, created_at, updated_at`,
 		strings.Join(sets, ", "))
 	var p Pipeline
 	err := r.db.QueryRow(ctx, q, args...).
-		Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.IsDefault, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Pipeline{}, ErrNotFound
 	}
@@ -174,6 +174,46 @@ func (r *Repo) PatchPipeline(ctx context.Context, id uuid.UUID, in PatchPipeline
 		return Pipeline{}, fmt.Errorf("patch pipeline: %w", err)
 	}
 	return p, nil
+}
+
+// MakeDefault — пометить воронку как дефолтную, сняв default с других.
+// Атомарно одной транзакцией. Если воронка не is_active — ошибка.
+func (r *Repo) MakeDefault(ctx context.Context, id uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE pipelines SET is_default = FALSE, updated_at = now() WHERE is_default = TRUE`); err != nil {
+		return fmt.Errorf("unset previous default: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE pipelines SET is_default = TRUE, updated_at = now()
+		 WHERE id = $1 AND is_active = TRUE`, id)
+	if err != nil {
+		return fmt.Errorf("set default: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
+// GetDefaultPipelineID — id текущей default-воронки. Используется при
+// создании проекта из брифа. Если default нет — ErrNotFound.
+func (r *Repo) GetDefaultPipelineID(ctx context.Context) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT id FROM pipelines WHERE is_default = TRUE AND is_active = TRUE`).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("get default pipeline: %w", err)
+	}
+	return id, nil
 }
 
 // DeletePipeline — мягко: is_active=false. Жёстко не удаляем из-за FK
