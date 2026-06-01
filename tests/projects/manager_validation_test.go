@@ -29,11 +29,7 @@ func TestSkipRequiresComment(t *testing.T) {
 	}
 }
 
-// TestAssertManagerHasAccessRequiresID — без id мы не пытаемся идти в БД
-// (защита от случайного вызова с uuid.Nil).
-func TestAssertManagerHasAccessRequiresID(t *testing.T) {
-	s := projects.NewService(nil)
-	if err := s.AssertManagerHasAccess(context.Background(), uuid.New(), uuid.Nil); err == nil {
-		t.Fatalf("want error when manager id is nil")
-	}
-}
+// AssertManagerHasAccess после фикса аудита принимает uuid.Nil как маркер
+// «вызов от админа» — обращается в репо без assigned_to-фильтра. Логика
+// проверки нужна на integration-уровне (с реальной БД); юнит-тесту
+// проверять нечего.
