@@ -14,6 +14,44 @@ import (
 
 // ---- Client: чтение комментариев своего проекта ----
 
+// ClientCreateComment godoc
+// @Summary  Клиент добавляет комментарий к своему проекту
+// @Tags     client-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path string     true "project id"
+// @Param    body body commentReq true "body"
+// @Success  201  {object} Comment
+// @Router   /me/projects/{id}/comments [post]
+func (h *Handler) ClientCreateComment(w http.ResponseWriter, r *http.Request) {
+	uid, ok := clientFrom(w, r)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	// Владение — через GetClientProject (фильтр client_user_id).
+	if _, err := h.svc.GetClientProject(r.Context(), pid, uid); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	var in commentReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	c, err := h.svc.CreateComment(r.Context(), pid, uid, in.Body)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, c)
+}
+
 // ClientListComments godoc
 // @Summary  Комментарии моего проекта (клиент)
 // @Tags     client-projects

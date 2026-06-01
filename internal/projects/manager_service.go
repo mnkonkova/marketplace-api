@@ -280,3 +280,9 @@ func (s *Service) AssertManagerHasAccess(ctx context.Context, projectID, manager
 func (s *Service) MoveProjectToStage(ctx context.Context, projectID, targetStageID, actorID uuid.UUID, expectedUpdatedAt *time.Time) (Project, error) {
 	return s.repo.MoveProjectToStage(ctx, projectID, targetStageID, actorID, s.reviewDeadline(), expectedUpdatedAt)
 }
+
+// MoveProjectToStep — точечный перенос проекта на конкретный шаг (для
+// канбана по шагам). См. repo.MoveProjectToStep.
+func (s *Service) MoveProjectToStep(ctx context.Context, projectID, targetStepID, actorID uuid.UUID, expectedUpdatedAt *time.Time) (Project, error) {
+	return s.repo.MoveProjectToStep(ctx, projectID, targetStepID, actorID, s.reviewDeadline(), expectedUpdatedAt)
+}

@@ -169,6 +169,41 @@ func (h *Handler) AdminMoveStage(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, p)
 }
 
+// AdminMoveStep godoc
+// @Summary  Админ-канбан: перенести проект на конкретный шаг
+// @Tags     admin-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path  string      true "project id"
+// @Param    body body  moveStepReq true "target_step_id"
+// @Success  200  {object} Project
+// @Router   /admin/projects/{id}/move_step [post]
+func (h *Handler) AdminMoveStep(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := auth.UserIDFrom(r.Context())
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	var in moveStepReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	target, err := uuid.Parse(in.TargetStepID)
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_step_id", "target_step_id должен быть UUID.")
+		return
+	}
+	p, err := h.svc.MoveProjectToStep(r.Context(), pid, target, actorID, in.UpdatedAt)
+	if err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, p)
+}
+
 // AdminAdvanceStage godoc
 // @Summary  Админ-канбан: продвинуть стадию любого проекта
 // @Tags     admin-projects
