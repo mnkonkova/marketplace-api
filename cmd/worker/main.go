@@ -21,6 +21,7 @@ import (
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/search"
 )
 
@@ -173,6 +174,14 @@ func main() {
 			CleanupInterval: cfg.OutboxCleanupInterval,
 		})
 
+	// CRM v5 Ф5: периодический таск авто-skip просроченных review-шагов.
+	// Длительность дедлайна берётся из cfg.ReviewDeadline (по умолчанию 7
+	// дней); интервал сканирования — cfg.ReviewCheckInterval (1 час).
+	projectsRepo := projects.NewRepo(pool)
+	projectsSvc := projects.NewService(projectsRepo).
+		WithReviewDeadline(cfg.ReviewDeadline)
+	go runReviewAutoSkipTicker(rootCtx, projectsSvc, cfg.ReviewCheckInterval, logger)
+
 	// /metrics для alloy. Отдельный listener, чтобы не путать с api:8080 и
 	// чтобы worker оставался без бизнес-API. /healthz нужен compose'у — без
 	// него health-check'и не зацепятся.
@@ -244,6 +253,40 @@ func renderPasswordResetEmail(p outbox.EmailPasswordResetPayload) (subject, plai
 		"Если это не вы — просто проигнорируйте письмо, пароль не изменится.\n\n" +
 		"— marketpclce"
 	return subject, plain
+}
+
+// runReviewAutoSkipTicker — периодически (interval) скипает просроченные
+// review-шаги. На пустой выборке — no-op (запрос дешёвый через частичный
+// индекс). При ошибке сканирования логируем и идём дальше; per-шаговые
+// ошибки уже учтены внутри Service.RunReviewAutoSkip (failed-счётчик).
+func runReviewAutoSkipTicker(ctx context.Context, svc *projects.Service, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	// первый прогон сразу, чтобы при рестарте worker'а не ждать interval.
+	if skipped, failed, err := svc.RunReviewAutoSkip(ctx); err != nil {
+		logger.Warn("review auto-skip initial run failed", "err", err)
+	} else if skipped > 0 || failed > 0 {
+		logger.Info("review auto-skip", "skipped", skipped, "failed", failed)
+	}
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			skipped, failed, err := svc.RunReviewAutoSkip(ctx)
+			if err != nil {
+				logger.Warn("review auto-skip failed", "err", err)
+				continue
+			}
+			if skipped > 0 || failed > 0 {
+				logger.Info("review auto-skip", "skipped", skipped, "failed", failed)
+			}
+		}
+	}
 }
 
 // ensureIndexWithRetry — EnsureIndex с экспоненциальным ожиданием.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -22,9 +23,28 @@ var (
 	ErrNotReviewStep = errors.New("step is not a review step")
 )
 
-type Service struct{ repo *Repo }
+type Service struct {
+	repo                    *Repo
+	reviewDeadlineDuration  time.Duration
+}
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
+
+// WithReviewDeadline — длительность дедлайна на review-шаг (по умолчанию 7 дней
+// если не задано). Используется при переходе review-шага в waiting_client.
+func (s *Service) WithReviewDeadline(d time.Duration) *Service {
+	s.reviewDeadlineDuration = d
+	return s
+}
+
+// reviewDeadline — длина дедлайна для review-шагов. Default 7 дней — чтобы
+// сервис не падал, если WithReviewDeadline не вызван (в тестах удобно).
+func (s *Service) reviewDeadline() time.Duration {
+	if s.reviewDeadlineDuration > 0 {
+		return s.reviewDeadlineDuration
+	}
+	return 7 * 24 * time.Hour
+}
 
 // StartProject — публичная обёртка над repo.StartProject с валидацией DTO.
 func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUID, error) {

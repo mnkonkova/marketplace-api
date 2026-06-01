@@ -193,7 +193,8 @@ func main() {
 	pipelinesHandler := pipelines.NewHandler(pipelinesSvc)
 
 	projectsRepo := projects.NewRepo(pool)
-	projectsSvc := projects.NewService(projectsRepo)
+	projectsSvc := projects.NewService(projectsRepo).
+		WithReviewDeadline(cfg.ReviewDeadline)
 	projectsHandler := projects.NewHandler(projectsSvc)
 
 	var summarizeCache *summarize.Cache

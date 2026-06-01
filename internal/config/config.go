@@ -91,6 +91,11 @@ type Config struct {
 	OutboxCleanupInterval time.Duration `env:"OUTBOX_CLEANUP_INTERVAL" envDefault:"1h"`
 	WorkerMetricsAddr     string        `env:"WORKER_METRICS_ADDR" envDefault:":9090"`
 
+	// CRM v5: review-шаг ставится в waiting_client с deadline=now+ReviewDeadline.
+	// По истечении worker переводит шаг в skipped. Дефолт 7 дней.
+	ReviewDeadline      time.Duration `env:"REVIEW_DEADLINE" envDefault:"168h"`
+	ReviewCheckInterval time.Duration `env:"REVIEW_CHECK_INTERVAL" envDefault:"1h"`
+
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 
 	// CORSOrigins — список разрешённых origin'ов через запятую

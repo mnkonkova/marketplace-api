@@ -264,10 +264,14 @@ ORDER BY st.sort_order`, projectID)
 //   3. Текущая стадия completed_at = now.
 //   4. Первый шаг следующей стадии активируется:
 //      owner=team/system → in_progress; owner=client → waiting_client.
+//      Для is_review+client дополнительно ставится review_deadline.
 //   5. Следующая стадия started_at = now.
 //   6. Event stage_advance + outbox.
 // Если следующей стадии нет — ErrLastStage.
-func (r *Repo) AdvanceStage(ctx context.Context, projectID, actorID uuid.UUID) (Project, error) {
+//
+// reviewDeadline — длительность дедлайна для review-шага (передаётся
+// сервисом, см. Service.reviewDeadline). 0 = не ставить.
+func (r *Repo) AdvanceStage(ctx context.Context, projectID, actorID uuid.UUID, reviewDeadline time.Duration) (Project, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Project{}, fmt.Errorf("begin tx: %w", err)
@@ -362,9 +366,10 @@ WHERE stage_id = $1 AND owner IN ('team','system')
 	// 5. Активация первого шага следующей стадии (по sort_order).
 	var firstStepID uuid.UUID
 	var firstStepOwner string
+	var firstStepIsReview bool
 	err = tx.QueryRow(ctx, `
-SELECT id, owner FROM project_steps
-WHERE stage_id = $1 ORDER BY sort_order LIMIT 1`, next.ID).Scan(&firstStepID, &firstStepOwner)
+SELECT id, owner, is_review FROM project_steps
+WHERE stage_id = $1 ORDER BY sort_order LIMIT 1`, next.ID).Scan(&firstStepID, &firstStepOwner, &firstStepIsReview)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Project{}, fmt.Errorf("first step of next stage: %w", err)
 	}
@@ -373,9 +378,18 @@ WHERE stage_id = $1 ORDER BY sort_order LIMIT 1`, next.ID).Scan(&firstStepID, &f
 		if firstStepOwner == OwnerClient {
 			newStatus = StepStatusWaitingClient
 		}
+		var deadline *time.Time
+		if firstStepIsReview && newStatus == StepStatusWaitingClient && reviewDeadline > 0 {
+			d := time.Now().Add(reviewDeadline)
+			deadline = &d
+		}
 		if _, err := tx.Exec(ctx, `
-UPDATE project_steps SET status = $2, started_at = COALESCE(started_at, now()), updated_at = now()
-WHERE id = $1 AND status = 'pending'`, firstStepID, string(newStatus)); err != nil {
+UPDATE project_steps
+SET status = $2,
+    started_at = COALESCE(started_at, now()),
+    review_deadline = COALESCE($3, review_deadline),
+    updated_at = now()
+WHERE id = $1 AND status = 'pending'`, firstStepID, string(newStatus), deadline); err != nil {
 			return Project{}, fmt.Errorf("activate next step: %w", err)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -143,11 +144,12 @@ func (s *Service) Claim(ctx context.Context, projectID, managerID uuid.UUID) err
 }
 
 func (s *Service) AdvanceStage(ctx context.Context, projectID, actorID uuid.UUID) (Project, error) {
-	return s.repo.AdvanceStage(ctx, projectID, actorID)
+	return s.repo.AdvanceStage(ctx, projectID, actorID, s.reviewDeadline())
 }
 
 // StartStep — менеджер активирует pending-шаг. owner=client → waiting_client
-// (мяч у клиента); team/system → in_progress.
+// (мяч у клиента); team/system → in_progress. Для review-шага ставит
+// deadline = now + reviewDeadline (worker auto-skip-нет по истечении).
 func (s *Service) StartStep(ctx context.Context, projectID, stepID, actorID uuid.UUID) (Step, error) {
 	step, err := s.repo.GetStep(ctx, projectID, stepID)
 	if err != nil {
@@ -160,14 +162,19 @@ func (s *Service) StartStep(ctx context.Context, projectID, stepID, actorID uuid
 	if step.Owner == OwnerClient {
 		to = StepStatusWaitingClient
 	}
-	res, err := s.repo.TransitionStep(ctx, TransitionInput{
+	in := TransitionInput{
 		ProjectID:   projectID,
 		StepID:      stepID,
 		From:        StepStatusPending,
 		To:          to,
 		ActorUserID: actorID,
 		ActorType:   "human",
-	})
+	}
+	if step.IsReview && to == StepStatusWaitingClient {
+		deadline := time.Now().Add(s.reviewDeadline())
+		in.SetReviewDeadline = &deadline
+	}
+	res, err := s.repo.TransitionStep(ctx, in)
 	if err != nil {
 		return Step{}, err
 	}
