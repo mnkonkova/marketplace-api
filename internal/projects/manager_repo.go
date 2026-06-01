@@ -51,6 +51,24 @@ ORDER BY updated_at DESC`, managerID)
 	return scanProjects(rows)
 }
 
+// ListBySpecialist — проекты, в которых данный пользователь — назначенный
+// специалист (read-only вкладка в специалистском кабинете). Не зависит от
+// assigned_to (менеджер) — это контракт «кому делаешь работу».
+func (r *Repo) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) ([]Project, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+       pipeline_id, title, source, status, revisions_included, revisions_used, budget,
+       COALESCE(notes,''), started_at, completed_at, created_at, updated_at
+FROM projects
+WHERE specialist_user_id = $1
+ORDER BY updated_at DESC`, specialistID)
+	if err != nil {
+		return nil, fmt.Errorf("list specialist projects: %w", err)
+	}
+	defer rows.Close()
+	return scanProjects(rows)
+}
+
 // ListAll — все проекты (для админского обзора + канбана). Можно
 // расширить фильтрами через params, пока — простой список.
 func (r *Repo) ListAll(ctx context.Context, statusFilter string) ([]Project, error) {

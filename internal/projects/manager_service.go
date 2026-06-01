@@ -40,6 +40,16 @@ func (s *Service) ListAll(ctx context.Context, statusFilter string) ([]ProjectMa
 	return s.enrichManagerViews(ctx, projects)
 }
 
+// ListBySpecialist — проекты специалиста (read-only вкладка кабинета).
+// Enrich тот же что и у менеджера — display_status/progress/current_*.
+func (s *Service) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) ([]ProjectManagerView, error) {
+	projects, err := s.repo.ListBySpecialist(ctx, specialistID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichManagerViews(ctx, projects)
+}
+
 func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([]ProjectManagerView, error) {
 	views := make([]ProjectManagerView, 0, len(projects))
 	clientIDs := make([]uuid.UUID, 0, len(projects))
