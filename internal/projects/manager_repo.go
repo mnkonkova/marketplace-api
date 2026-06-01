@@ -37,7 +37,7 @@ func (r *Repo) ListInbox(ctx context.Context) ([]Project, error) {
 // в канбане не нужны.
 func (r *Repo) ListAssignedTo(ctx context.Context, managerID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
@@ -56,7 +56,7 @@ ORDER BY updated_at DESC`, managerID)
 // assigned_to (менеджер) — это контракт «кому делаешь работу».
 func (r *Repo) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
@@ -73,7 +73,7 @@ ORDER BY updated_at DESC`, specialistID)
 // расширить фильтрами через params, пока — простой список.
 func (r *Repo) ListAll(ctx context.Context, statusFilter string) ([]Project, error) {
 	q := `
-SELECT id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects`
@@ -93,7 +93,7 @@ FROM projects`
 
 func (r *Repo) listAssignedFilter(ctx context.Context, suffix string) ([]Project, error) {
 	q := `
-SELECT id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects ` + suffix
@@ -110,7 +110,7 @@ func scanProjects(rows pgx.Rows) ([]Project, error) {
 	for rows.Next() {
 		var p Project
 		if err := rows.Scan(
-			&p.ID, &p.LeadID, &p.LeadRecipientID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
+			&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
 			&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 			&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
@@ -178,7 +178,7 @@ UPDATE projects SET
   notes      = COALESCE($5, notes),
   updated_at = now()
 WHERE id = $1 AND ($6::timestamptz IS NULL OR updated_at = $6)
-RETURNING id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+RETURNING id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
           pipeline_id, title, source, status, revisions_included, revisions_used, budget,
           COALESCE(notes,''), started_at, completed_at, created_at, updated_at`
 	var trimmedTitle, trimmedNotes *string
@@ -198,7 +198,7 @@ RETURNING id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, as
 		trimmedNotes,
 		in.UpdatedAt,
 	).Scan(
-		&p.ID, &p.LeadID, &p.LeadRecipientID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
+		&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
 		&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 		&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)

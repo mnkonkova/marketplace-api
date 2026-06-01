@@ -80,7 +80,7 @@ const (
 type Project struct {
 	ID                uuid.UUID  `json:"id"`
 	LeadID            *uuid.UUID `json:"lead_id,omitempty"`
-	LeadRecipientID   *uuid.UUID `json:"lead_recipient_id,omitempty"`
+	LeadRecipientSpecialistID   *uuid.UUID `json:"lead_recipient_specialist_id,omitempty"`
 	ClientUserID      uuid.UUID  `json:"client_user_id"`
 	SpecialistUserID  *uuid.UUID `json:"specialist_user_id,omitempty"`
 	AssignedToUserID  *uuid.UUID `json:"assigned_to_user_id,omitempty"`
@@ -152,6 +152,9 @@ type StageView struct {
 // шаг (для главного блока «что сейчас») и таймлайн стадий.
 type ProjectClientView struct {
 	Project
+	// SpecialistDisplayName — имя исполнителя (если назначен). Пусто если
+	// specialist_user_id=nil или у юзера нет specialist_profile.
+	SpecialistDisplayName string `json:"specialist_display_name,omitempty"`
 	DisplayStatus ProjectDisplayStatus `json:"display_status"`
 	// Progress — взвешенный % выполнения по видимым клиенту шагам.
 	Progress float64 `json:"progress"`
@@ -175,7 +178,7 @@ type StartProjectInput struct {
 	SpecialistUserID *uuid.UUID
 	AssignedToUserID *uuid.UUID
 	LeadID           *uuid.UUID
-	LeadRecipientID  *uuid.UUID
+	LeadRecipientSpecialistID  *uuid.UUID
 	PipelineID       uuid.UUID
 	Title            string
 	Source           ProjectSource

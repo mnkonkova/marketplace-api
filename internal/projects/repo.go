@@ -54,11 +54,11 @@ func (r *Repo) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUI
 	var projectID uuid.UUID
 	if err := tx.QueryRow(ctx, `
 INSERT INTO projects
-  (lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+  (lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
    pipeline_id, title, source, status, revisions_included, budget, notes, started_at)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10,$11,$12)
 RETURNING id`,
-		in.LeadID, in.LeadRecipientID, in.ClientUserID, in.SpecialistUserID, in.AssignedToUserID,
+		in.LeadID, in.LeadRecipientSpecialistID, in.ClientUserID, in.SpecialistUserID, in.AssignedToUserID,
 		in.PipelineID, in.Title, string(in.Source), revs, in.Budget, in.Notes, startedAt,
 	).Scan(&projectID); err != nil {
 		return uuid.Nil, fmt.Errorf("insert project: %w", err)
@@ -226,7 +226,7 @@ func (r *Repo) GetByID(ctx context.Context, projectID uuid.UUID) (Project, error
 
 func (r *Repo) getByID(ctx context.Context, projectID uuid.UUID, userIDFilter *uuid.UUID, col string) (Project, error) {
 	q := `
-SELECT id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects WHERE id = $1`
@@ -237,7 +237,7 @@ FROM projects WHERE id = $1`
 	}
 	var p Project
 	err := r.db.QueryRow(ctx, q, args...).Scan(
-		&p.ID, &p.LeadID, &p.LeadRecipientID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
+		&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
 		&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 		&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
@@ -258,7 +258,7 @@ FROM projects WHERE id = $1`
 // ListForClient — проекты клиента, отсортированные по дате создания.
 func (r *Repo) ListForClient(ctx context.Context, clientID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT id, lead_id, lead_recipient_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects WHERE client_user_id = $1 ORDER BY created_at DESC`, clientID)
@@ -270,7 +270,7 @@ FROM projects WHERE client_user_id = $1 ORDER BY created_at DESC`, clientID)
 	for rows.Next() {
 		var p Project
 		if err := rows.Scan(
-			&p.ID, &p.LeadID, &p.LeadRecipientID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
+			&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
 			&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 			&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {

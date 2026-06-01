@@ -52,6 +52,10 @@ func (s *Service) DeletePipeline(ctx context.Context, id uuid.UUID) error {
 	return s.repo.DeletePipeline(ctx, id)
 }
 
+func (s *Service) HardDeletePipeline(ctx context.Context, id uuid.UUID) error {
+	return s.repo.HardDeletePipeline(ctx, id)
+}
+
 // ---- Stage ----
 
 func (s *Service) CreateStage(ctx context.Context, pipelineID uuid.UUID, in CreateStageInput) (Stage, error) {

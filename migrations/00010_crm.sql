@@ -96,7 +96,10 @@ CREATE TYPE project_source AS ENUM (
 CREATE TABLE projects (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     lead_id             UUID REFERENCES leads(id),
-    lead_recipient_id   UUID REFERENCES lead_recipients(id),
+    -- lead_recipient_specialist_id — кто был получателем-исполнителем для
+    -- этого лида. lead_recipients имеет composite PK (lead_id, specialist),
+    -- поэтому отдельной FK тут нет; уникальность защищаем индексом ниже.
+    lead_recipient_specialist_id UUID REFERENCES users(id),
     client_user_id      UUID NOT NULL REFERENCES users(id),
     specialist_user_id  UUID REFERENCES users(id),
     assigned_to_user_id UUID REFERENCES users(id),
@@ -111,11 +114,13 @@ CREATE TABLE projects (
     started_at          TIMESTAMPTZ,
     completed_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- Один lead_recipient = ровно один проект (стартовали — больше не
-    -- стартуем; защита от двойного клика при создании из принятой заявки).
-    UNIQUE (lead_recipient_id)
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Один lead+specialist = ровно один проект (защита от двойного клика на
+-- создании из принятого получателя лида). Уникальный индекс по обоим полям.
+CREATE UNIQUE INDEX projects_lead_recipient_uniq
+    ON projects(lead_id, lead_recipient_specialist_id)
+    WHERE lead_id IS NOT NULL AND lead_recipient_specialist_id IS NOT NULL;
 CREATE INDEX projects_client_idx     ON projects(client_user_id);
 CREATE INDEX projects_assigned_idx   ON projects(assigned_to_user_id);
 -- Inbox менеджера — частичный индекс по NULL assigned_to.

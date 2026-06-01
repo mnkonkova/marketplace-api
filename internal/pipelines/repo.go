@@ -199,6 +199,30 @@ func (r *Repo) DeletePipeline(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// HardDeletePipeline — физическое удаление из БД (DELETE FROM pipelines).
+// stages/steps уходят каскадом (FK ON DELETE CASCADE). Доступно только если
+// в БД нет НИ ОДНОГО проекта с этим pipeline_id (даже completed/cancelled —
+// иначе теряем историю). Если есть — ErrHasActiveProjects.
+func (r *Repo) HardDeletePipeline(ctx context.Context, id uuid.UUID) error {
+	var hasAny bool
+	if err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM projects WHERE pipeline_id = $1)`,
+		id).Scan(&hasAny); err != nil {
+		return fmt.Errorf("check projects: %w", err)
+	}
+	if hasAny {
+		return ErrHasActiveProjects
+	}
+	tag, err := r.db.Exec(ctx, `DELETE FROM pipelines WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("hard delete pipeline: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ---- Stage ----
 
 func (r *Repo) CreateStage(ctx context.Context, pipelineID uuid.UUID, in CreateStageInput) (Stage, error) {

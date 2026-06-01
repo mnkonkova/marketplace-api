@@ -151,6 +151,12 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 		view.CurrentStepOwner = current.Owner
 		view.CurrentStepStatus = current.Status
 	}
+	if p.SpecialistUserID != nil {
+		// best-effort: имя specialist'а из specialist_profiles
+		if names, err := s.repo.LoadClientDisplayNames(ctx, []uuid.UUID{*p.SpecialistUserID}); err == nil {
+			view.SpecialistDisplayName = names[*p.SpecialistUserID]
+		}
+	}
 	return view, nil
 }
 

@@ -149,20 +149,32 @@ func (h *Handler) AdminPatchPipeline(w http.ResponseWriter, r *http.Request) {
 }
 
 // AdminDeletePipeline godoc
-// @Summary Soft-delete pipeline (admin)
+// @Summary Soft- или hard-delete воронки (admin)
+// @Description hard=true → физическое удаление из БД (cascade на stages/steps).
+// @Description Запрещено если есть любые проекты с этим pipeline_id.
+// @Description Без флага — soft-delete (is_active=false), запрет только при
+// @Description активных проектах (draft/active/on_hold/dispute).
 // @Tags    admin-pipelines
 // @Produce json
 // @Security BearerAuth
-// @Param   id path string true "pipeline id"
+// @Param   id   path  string true "pipeline id"
+// @Param   hard query bool   false "true для hard-delete"
 // @Success 204
-// @Failure 409 {object} errorResponse "has_active_projects"
+// @Failure 409 {object} errorResponse "has_active_projects | has_projects"
 // @Router  /admin/pipelines/{id} [delete]
 func (h *Handler) AdminDeletePipeline(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r, "id")
 	if !ok {
 		return
 	}
-	if err := h.svc.DeletePipeline(r.Context(), id); err != nil {
+	hard := r.URL.Query().Get("hard") == "true"
+	var err error
+	if hard {
+		err = h.svc.HardDeletePipeline(r.Context(), id)
+	} else {
+		err = h.svc.DeletePipeline(r.Context(), id)
+	}
+	if err != nil {
 		writeServiceErr(w, err)
 		return
 	}
