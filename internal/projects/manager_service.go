@@ -158,6 +158,9 @@ func (s *Service) GetFull(ctx context.Context, projectID, managerID uuid.UUID) (
 	if p.SpecialistUserID != nil {
 		ids = append(ids, *p.SpecialistUserID)
 	}
+	if p.LeadRecipientSpecialistID != nil && p.SpecialistUserID == nil {
+		ids = append(ids, *p.LeadRecipientSpecialistID)
+	}
 	if contacts, cerr := s.repo.LoadPartyContacts(ctx, ids); cerr == nil {
 		if c, ok := contacts[p.ClientUserID]; ok {
 			cc := c
@@ -167,6 +170,11 @@ func (s *Service) GetFull(ctx context.Context, projectID, managerID uuid.UUID) (
 			if c, ok := contacts[*p.SpecialistUserID]; ok {
 				cc := c
 				out.Specialist = &cc
+			}
+		} else if p.LeadRecipientSpecialistID != nil {
+			if c, ok := contacts[*p.LeadRecipientSpecialistID]; ok {
+				cc := c
+				out.ProposedSpecialist = &cc
 			}
 		}
 	}
@@ -183,6 +191,22 @@ func (s *Service) GetFull(ctx context.Context, projectID, managerID uuid.UUID) (
 
 func (s *Service) Claim(ctx context.Context, projectID, managerID uuid.UUID) error {
 	return s.repo.Claim(ctx, projectID, managerID)
+}
+
+// ApproveProposedSpecialist — менеджер/админ подтверждает выбор клиента.
+func (s *Service) ApproveProposedSpecialist(ctx context.Context, projectID, actorID uuid.UUID) (uuid.UUID, error) {
+	return s.repo.ApproveProposedSpecialist(ctx, projectID, actorID)
+}
+
+// RejectProposedSpecialist — менеджер/админ отклоняет предложенного клиентом.
+func (s *Service) RejectProposedSpecialist(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
+	return s.repo.RejectProposedSpecialist(ctx, projectID, actorID, reason)
+}
+
+// CancelProject — админская «удалить проект»: soft-delete с retention 30д
+// до физического удаления (см. CleanupOldCompletedProjects в воркере).
+func (s *Service) CancelProject(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
+	return s.repo.CancelProject(ctx, projectID, actorID, reason)
 }
 
 // AssignManager — админская операция (POST /admin/projects/{id}/assign).

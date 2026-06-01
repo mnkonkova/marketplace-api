@@ -46,6 +46,10 @@ type ProjectFullView struct {
 	Project
 	Client            *PartyContact        `json:"client,omitempty"`
 	Specialist        *PartyContact        `json:"specialist,omitempty"`
+	// ProposedSpecialist — кого клиент выбрал в брифе (lead_recipient_specialist_id);
+	// пока не подтверждён менеджером (Specialist=nil). Фронт показывает блок
+	// «Клиент выбрал …» c кнопками Approve/Reject.
+	ProposedSpecialist *PartyContact        `json:"proposed_specialist,omitempty"`
 	DisplayStatus     ProjectDisplayStatus `json:"display_status"`
 	Progress          float64              `json:"progress"`
 	CurrentStepID     *uuid.UUID           `json:"current_step_id,omitempty"`

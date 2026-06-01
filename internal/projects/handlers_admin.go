@@ -32,6 +32,37 @@ type assignReq struct {
 // @Param    body body assignReq true "manager_user_id (uuid или null)"
 // @Success  204
 // @Router   /admin/projects/{id}/assign [post]
+type cancelReq struct {
+	Reason string `json:"reason"`
+}
+
+// AdminCancelProject godoc
+// @Summary  Удалить проект (soft-delete, физически чистится через 30д)
+// @Tags     admin-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path string     true  "project id"
+// @Param    body body cancelReq  false "причина"
+// @Success  204
+// @Failure  404  {object}  errorResponse
+// @Router   /admin/projects/{id} [delete]
+func (h *Handler) AdminCancelProject(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := auth.UserIDFrom(r.Context())
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	var in cancelReq
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if err := h.svc.CancelProject(r.Context(), pid, actorID, in.Reason); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
 	actorID, _ := auth.UserIDFrom(r.Context())
 	pid, err := uuid.Parse(chi.URLParam(r, "id"))

@@ -28,7 +28,11 @@ func (s *Service) WithDefaultPipeline(p DefaultPipelineProvider) *Service {
 // default-воронкой, client_user_id=clientID, assigned_to_user_id=NULL
 // (в inbox менеджеров). lead_id связывается с leads.id для возможности
 // потом отправить контакты обратно. title подтягивается из брифа.
-func (s *Service) StartFromLead(ctx context.Context, clientID uuid.UUID, leadID uuid.UUID, title, brief string) (uuid.UUID, error) {
+// proposedSpecialistID — если клиент в брифе выбрал ровно одного спеца,
+// мы кладём его в lead_recipient_specialist_id как «предложенного»; менеджер
+// аппрувит через POST /manager/projects/{id}/approve_specialist.
+// Если получателей несколько/ноль — оставляем NULL.
+func (s *Service) StartFromLead(ctx context.Context, clientID uuid.UUID, leadID uuid.UUID, title, brief string, proposedSpecialistID *uuid.UUID) (uuid.UUID, error) {
 	if s.defaultPipelineProvider == nil {
 		return uuid.Nil, ErrDefaultPipelineMissing
 	}
@@ -38,11 +42,12 @@ func (s *Service) StartFromLead(ctx context.Context, clientID uuid.UUID, leadID 
 	}
 	notes := brief // полный бриф попадает в notes, чтобы менеджер сразу видел
 	return s.StartProject(ctx, StartProjectInput{
-		ClientUserID: clientID,
-		LeadID:       &leadID,
-		PipelineID:   pipelineID,
-		Title:        title,
-		Source:       SourceMarketplace,
-		Notes:        notes,
+		ClientUserID:               clientID,
+		LeadID:                     &leadID,
+		LeadRecipientSpecialistID:  proposedSpecialistID,
+		PipelineID:                 pipelineID,
+		Title:                      title,
+		Source:                     SourceMarketplace,
+		Notes:                      notes,
 	})
 }

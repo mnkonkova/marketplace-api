@@ -54,9 +54,84 @@ func writeManagerErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrInvalidTransition):
 		httpx.WriteErrMsg(w, http.StatusConflict, "invalid_transition",
 			"Шаг уже в другом статусе.")
+	case errors.Is(err, ErrNoProposedSpecialist):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "no_proposed_specialist",
+			"Клиент не выбрал исполнителя — нечего подтверждать.")
 	default:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	}
+}
+
+// ManagerApproveSpecialist godoc
+// @Summary  Подтвердить выбранного клиентом исполнителя
+// @Tags     manager-projects
+// @Produce  json
+// @Security BearerAuth
+// @Param    id  path  string  true  "project id"
+// @Success  200  {object}  approveResp
+// @Failure  400  {object}  errorResponse "no_proposed_specialist"
+// @Router   /manager/projects/{id}/approve_specialist [post]
+func (h *Handler) ManagerApproveSpecialist(w http.ResponseWriter, r *http.Request) {
+	uid, ok := managerFrom(w, r)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	specID, err := h.svc.ApproveProposedSpecialist(r.Context(), pid, uid)
+	if err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, approveResp{SpecialistUserID: specID})
+}
+
+type approveResp struct {
+	SpecialistUserID uuid.UUID `json:"specialist_user_id"`
+}
+
+type rejectSpecReq struct {
+	Reason string `json:"reason"`
+}
+
+// ManagerRejectSpecialist godoc
+// @Summary  Отклонить предложенного клиентом исполнителя
+// @Tags     manager-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id  path  string  true  "project id"
+// @Param    body body rejectSpecReq false "причина"
+// @Success  204
+// @Router   /manager/projects/{id}/reject_specialist [post]
+func (h *Handler) ManagerRejectSpecialist(w http.ResponseWriter, r *http.Request) {
+	uid, ok := managerFrom(w, r)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	var in rejectSpecReq
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if err := h.svc.RejectProposedSpecialist(r.Context(), pid, uid, in.Reason); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ManagerInbox godoc

@@ -69,8 +69,10 @@ ORDER BY updated_at DESC`, specialistID)
 	return scanProjects(rows)
 }
 
-// ListAll — все проекты (для админского обзора + канбана). Можно
-// расширить фильтрами через params, пока — простой список.
+// ListAll — все проекты (для админского обзора + канбана). По умолчанию
+// прячем cancelled — у них своя retention 30 дней до физического удаления,
+// в админке они только засоряют список. Чтобы посмотреть скрытые —
+// явно указать statusFilter='cancelled'.
 func (r *Repo) ListAll(ctx context.Context, statusFilter string) ([]Project, error) {
 	q := `
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
@@ -81,6 +83,8 @@ FROM projects`
 	if statusFilter != "" {
 		q += " WHERE status = $1"
 		args = append(args, statusFilter)
+	} else {
+		q += " WHERE status <> 'cancelled'"
 	}
 	q += " ORDER BY updated_at DESC"
 	rows, err := r.db.Query(ctx, q, args...)
@@ -163,6 +167,151 @@ VALUES ($1, NULL, $2, 'human', $3, $4)`,
 		outboxPayload["manager_user_id"] = managerID.String()
 	}
 	if err := emit(ctx, tx, projectID, nil, actorID, "project."+eventKind, outboxPayload); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ErrNoProposedSpecialist — попытка аппрувнуть/реджектнуть, когда у проекта
+// нет lead_recipient_specialist_id (клиент не выбирал или менеджер уже снял).
+var ErrNoProposedSpecialist = errors.New("no proposed specialist on project")
+
+// CancelProject — soft-delete: status='cancelled'. Из админского списка
+// сразу исчезает (ListAll фильтрует), но запись физически удалится только
+// через retention (по умолчанию 30 дней, см. CleanupOldCompletedProjects).
+// Идемпотентно: если проект уже cancelled — возвращаем nil.
+func (r *Repo) CancelProject(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var currentStatus ProjectStatus
+	if err := tx.QueryRow(ctx,
+		`SELECT status FROM projects WHERE id=$1 FOR UPDATE`, projectID).Scan(&currentStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load status: %w", err)
+	}
+	if currentStatus == ProjectStatusCancelled {
+		return nil
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE projects SET status='cancelled', updated_at=now() WHERE id=$1`,
+		projectID); err != nil {
+		return fmt.Errorf("cancel: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO project_step_events
+  (project_id, step_id, actor_user_id, actor_type, event_kind, from_status, to_status, comment, payload)
+VALUES ($1, NULL, $2, 'human', 'project_cancelled', $3, 'cancelled', $4, $5)`,
+		projectID, actorID, string(currentStatus), reason,
+		mustJSON(map[string]string{"reason": reason})); err != nil {
+		return fmt.Errorf("event: %w", err)
+	}
+	if err := emit(ctx, tx, projectID, nil, actorID, "project.cancelled",
+		map[string]string{
+			"project_id":   projectID.String(),
+			"from_status":  string(currentStatus),
+			"reason":       reason,
+		}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ApproveProposedSpecialist — копирует lead_recipient_specialist_id в
+// specialist_user_id (фиксирует выбор клиента). После этого специалист
+// показывается в блоке «Контакты» и получает доступ к проекту через
+// `/me/specialist/projects`. Idempotent если specialist уже совпадает.
+func (r *Repo) ApproveProposedSpecialist(ctx context.Context, projectID, actorID uuid.UUID) (uuid.UUID, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var proposed *uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT lead_recipient_specialist_id FROM projects WHERE id=$1 FOR UPDATE`,
+		projectID).Scan(&proposed); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrNotFound
+		}
+		return uuid.Nil, fmt.Errorf("load project: %w", err)
+	}
+	if proposed == nil {
+		return uuid.Nil, ErrNoProposedSpecialist
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE projects SET specialist_user_id=$2, updated_at=now() WHERE id=$1`,
+		projectID, *proposed); err != nil {
+		return uuid.Nil, fmt.Errorf("set specialist: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO project_step_events
+  (project_id, step_id, actor_user_id, actor_type, event_kind, payload)
+VALUES ($1, NULL, $2, 'human', 'specialist_approved', $3)`,
+		projectID, actorID,
+		mustJSON(map[string]string{"specialist_user_id": proposed.String()})); err != nil {
+		return uuid.Nil, fmt.Errorf("event: %w", err)
+	}
+	if err := emit(ctx, tx, projectID, nil, actorID, "project.specialist_approved",
+		map[string]string{
+			"project_id":         projectID.String(),
+			"specialist_user_id": proposed.String(),
+		}); err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("commit: %w", err)
+	}
+	return *proposed, nil
+}
+
+// RejectProposedSpecialist — снимает «предложение». specialist_user_id не
+// трогаем (он и так NULL — иначе спец был бы уже подтверждён). Менеджер
+// после реджекта подберёт другого спеца сам (TODO: пока ручкой через
+// admin/assign-style endpoint, в MVP — через SQL).
+func (r *Repo) RejectProposedSpecialist(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var proposed *uuid.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT lead_recipient_specialist_id FROM projects WHERE id=$1 FOR UPDATE`,
+		projectID).Scan(&proposed); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load: %w", err)
+	}
+	if proposed == nil {
+		return ErrNoProposedSpecialist
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE projects SET lead_recipient_specialist_id=NULL, updated_at=now() WHERE id=$1`,
+		projectID); err != nil {
+		return fmt.Errorf("clear proposed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO project_step_events
+  (project_id, step_id, actor_user_id, actor_type, event_kind, comment, payload)
+VALUES ($1, NULL, $2, 'human', 'specialist_rejected', $3, $4)`,
+		projectID, actorID, reason,
+		mustJSON(map[string]string{"specialist_user_id": proposed.String()})); err != nil {
+		return fmt.Errorf("event: %w", err)
+	}
+	if err := emit(ctx, tx, projectID, nil, actorID, "project.specialist_rejected",
+		map[string]string{
+			"project_id":         projectID.String(),
+			"specialist_user_id": proposed.String(),
+		}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

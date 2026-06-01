@@ -46,7 +46,7 @@ INSERT INTO leads (client_user_id, client_name, client_contact, brief)
 VALUES ($1, 'Test', '+7', 'тестовый бриф длиннее 10') RETURNING id`,
 		clientID).Scan(&leadID)
 	defer pool.Exec(ctx, `DELETE FROM leads WHERE id=$1`, leadID)
-	pid, err := prSvc.StartFromLead(ctx, clientID, leadID, "Промо-ролик", "Нужно видео для соцсетей")
+	pid, err := prSvc.StartFromLead(ctx, clientID, leadID, "Промо-ролик", "Нужно видео для соцсетей", nil)
 	if err != nil {
 		t.Fatalf("start from lead: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestStartFromLeadNoDefault(t *testing.T) {
 	prSvc := projects.NewService(projects.NewRepo(pool)).
 		WithDefaultPipeline(pipelines.NewService(pipelines.NewRepo(pool)))
 
-	_, err := prSvc.StartFromLead(ctx, uuid.New(), uuid.New(), "x", "y")
+	_, err := prSvc.StartFromLead(ctx, uuid.New(), uuid.New(), "x", "y", nil)
 	if err == nil {
 		t.Errorf("ожидалась ошибка без default-воронки")
 	}
@@ -144,7 +144,7 @@ VALUES ($1, 'T', '+7', 'тестовый бриф длиннее 10') RETURNING 
 
 	// Бриф многострочный — title должен быть только первой строкой.
 	pid, err := prSvc.StartFromLead(ctx, clientID, leadID,
-		"Первая строка о ролике", "Первая строка о ролике\nВторая строка с деталями")
+		"Первая строка о ролике", "Первая строка о ролике\nВторая строка с деталями", nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

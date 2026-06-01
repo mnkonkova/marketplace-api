@@ -34,8 +34,10 @@ type EmailVerifier interface {
 // ProjectStarter — узкий интерфейс для создания проекта в CRM сразу после
 // брифа авторизованного клиента. Реализуется projects.Service. nil-safe:
 // без подключения проект не создаётся, только бриф (back-compat).
+// proposedSpecialistID — выбранный клиентом спец (ровно один в брифе);
+// сохраняется как «предложение», менеджер аппрувит через approve_specialist.
 type ProjectStarter interface {
-	StartFromLead(ctx context.Context, clientID uuid.UUID, leadID uuid.UUID, title, brief string) (uuid.UUID, error)
+	StartFromLead(ctx context.Context, clientID uuid.UUID, leadID uuid.UUID, title, brief string, proposedSpecialistID *uuid.UUID) (uuid.UUID, error)
 }
 
 type Service struct {
@@ -132,7 +134,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	// (в inbox менеджеров). Best-effort: ошибка не валит ответ /leads.
 	if in.ClientUserID != nil && s.projectStarter != nil {
 		title := briefTitle(in.Brief)
-		if _, perr := s.projectStarter.StartFromLead(ctx, *in.ClientUserID, id, title, in.Brief); perr != nil {
+		// Если выбрали ровно одного спеца — передадим его как proposed.
+		// Несколько = в проекте оставим NULL: менеджер сам выберет, когда
+		// кто-то из них примет.
+		var proposed *uuid.UUID
+		if len(valid) == 1 {
+			id0 := valid[0]
+			proposed = &id0
+		}
+		if _, perr := s.projectStarter.StartFromLead(ctx, *in.ClientUserID, id, title, in.Brief, proposed); perr != nil {
 			// логично залогировать на стороне сервера, но лид важнее —
 			// клиент уже видит «бриф отправлен», молча проглатываем.
 			_ = perr
