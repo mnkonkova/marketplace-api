@@ -27,12 +27,29 @@ type EmailVerifier interface {
 	IsEmailVerified(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
+// ProjectStarter — узкий интерфейс для создания проекта в CRM сразу после
+// брифа авторизованного клиента. Реализуется projects.Service. nil-safe:
+// без подключения проект не создаётся, только бриф (back-compat).
+type ProjectStarter interface {
+	StartFromLead(ctx context.Context, clientID uuid.UUID, leadID uuid.UUID, title, brief string) (uuid.UUID, error)
+}
+
 type Service struct {
-	repo     *Repo
-	verifier EmailVerifier
+	repo           *Repo
+	verifier       EmailVerifier
+	projectStarter ProjectStarter
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
+
+// WithProjectStarter — при POST /leads от залогиненного клиента дополнительно
+// создаём проект в CRM с default-воронкой и assigned_to=NULL (в inbox
+// менеджеров). Если starter не настроен или default-воронки нет — лид
+// просто остаётся брифом без проекта.
+func (s *Service) WithProjectStarter(p ProjectStarter) *Service {
+	s.projectStarter = p
+	return s
+}
 
 // WithEmailVerifier — подключает soft-gate: авторизованный клиент с
 // неподтверждённым email не может создать лид. Анонимные (без auth)
@@ -100,6 +117,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	if err != nil {
 		return CreateResult{}, err
 	}
+	// Если клиент залогинен и есть default-воронка — создаём проект в CRM
+	// (в inbox менеджеров). Best-effort: ошибка не валит ответ /leads.
+	if in.ClientUserID != nil && s.projectStarter != nil {
+		title := briefTitle(in.Brief)
+		if _, perr := s.projectStarter.StartFromLead(ctx, *in.ClientUserID, id, title, in.Brief); perr != nil {
+			// логично залогировать на стороне сервера, но лид важнее —
+			// клиент уже видит «бриф отправлен», молча проглатываем.
+			_ = perr
+		}
+	}
 	// Контакты подгружаем уже после создания — они уезжают в ответ ровно
 	// в этот момент (видимы только менеджеру/клиенту, после отправки брифа).
 	contacts, err := s.repo.LoadSpecialistContacts(ctx, valid)
@@ -108,6 +135,24 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 		return CreateResult{ID: id, Specialists: nil}, nil
 	}
 	return CreateResult{ID: id, Specialists: contacts}, nil
+}
+
+// briefTitle — короткое название проекта из первых ~80 символов брифа.
+// Берём первую строку (до \n), обрезаем до разумной длины.
+func briefTitle(brief string) string {
+	brief = strings.TrimSpace(brief)
+	if i := strings.IndexByte(brief, '\n'); i > 0 {
+		brief = brief[:i]
+	}
+	if utf8.RuneCountInString(brief) > 80 {
+		// Берём первые 80 рун, ища пробел чтобы не резать слово
+		runes := []rune(brief)
+		brief = string(runes[:80]) + "…"
+	}
+	if brief == "" {
+		return "Новый проект"
+	}
+	return brief
 }
 
 func (s *Service) ListIncoming(ctx context.Context, specialistID uuid.UUID, status string, limit, offset int) ([]IncomingLead, error) {

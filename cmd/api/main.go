@@ -195,8 +195,12 @@ func main() {
 
 	projectsRepo := projects.NewRepo(pool)
 	projectsSvc := projects.NewService(projectsRepo).
-		WithReviewDeadline(cfg.ReviewDeadline)
+		WithReviewDeadline(cfg.ReviewDeadline).
+		WithDefaultPipeline(pipelinesSvc)
 	projectsHandler := projects.NewHandler(projectsSvc)
+	// Замыкаем кольцо: leads → projects. Залогиненный клиент при отправке
+	// брифа автоматически порождает проект в inbox менеджеров.
+	leadsSvc.WithProjectStarter(projectsSvc)
 
 	// Admin domain — менеджеры, клиенты вручную, magic-link инвайты.
 	// TTL инвайта возьмём от EmailVerifyTokenTTL — те же 24h по умолчанию,

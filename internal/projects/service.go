@@ -24,8 +24,9 @@ var (
 )
 
 type Service struct {
-	repo                    *Repo
-	reviewDeadlineDuration  time.Duration
+	repo                     *Repo
+	reviewDeadlineDuration   time.Duration
+	defaultPipelineProvider  DefaultPipelineProvider
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
