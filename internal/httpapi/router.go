@@ -165,6 +165,7 @@ func NewRouter(d Deps) http.Handler {
 			if d.Projects != nil {
 				r.Get("/me/projects", d.Projects.ClientList)
 				r.Get("/me/projects/{id}/funnel", d.Projects.ClientGetFunnel)
+				r.Get("/me/projects/{id}/comments", d.Projects.ClientListComments)
 				r.Post("/me/projects/{id}/steps/{step_id}/approve", d.Projects.ClientApprove)
 				r.Post("/me/projects/{id}/steps/{step_id}/request_revision", d.Projects.ClientRequestRevision)
 				r.Post("/me/projects/{id}/steps/{step_id}/submit_review", d.Projects.ClientSubmitReview)
@@ -194,6 +195,9 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/manager/projects/{id}/steps/{step_id}/start", d.Projects.ManagerStartStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/complete", d.Projects.ManagerCompleteStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/skip", d.Projects.ManagerSkipStep)
+				r.Get("/manager/projects/{id}/events", d.Projects.ManagerListEvents)
+				r.Get("/manager/projects/{id}/comments", d.Projects.ManagerListComments)
+				r.Post("/manager/projects/{id}/comments", d.Projects.ManagerCreateComment)
 			})
 		}
 
@@ -236,6 +240,9 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/projects", d.Projects.AdminCreateProject)
 					r.Get("/admin/projects/{id}", d.Projects.AdminGetProject)
 					r.Post("/admin/projects/{id}/advance_stage", d.Projects.AdminAdvanceStage)
+					r.Get("/admin/projects/{id}/events", d.Projects.AdminListProjectEvents)
+					r.Get("/admin/projects/{id}/comments", d.Projects.AdminListProjectComments)
+					r.Post("/admin/projects/{id}/comments", d.Projects.AdminCreateProjectComment)
 				}
 			})
 		}
