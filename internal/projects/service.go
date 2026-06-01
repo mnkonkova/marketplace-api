@@ -267,6 +267,12 @@ func (s *Service) ListEvents(ctx context.Context, projectID uuid.UUID, limit int
 	return s.repo.ListEvents(ctx, projectID, limit)
 }
 
+// ListFunnelTemplates — список активных воронок для Directus-дропдауна
+// при создании проекта. Возвращает облегчённую сводку (см. repo).
+func (s *Service) ListFunnelTemplates(ctx context.Context) ([]FunnelTemplateSummary, error) {
+	return s.repo.ListActiveTemplates(ctx)
+}
+
 // UpdateAdmin — PATCH whitelist-полей с optimistic-lock через
 // updated_at. ErrConflict при stale, ErrNotFound при отсутствии.
 // Сюда же входит изменение status; валидируем через

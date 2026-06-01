@@ -15,6 +15,28 @@ import (
 	"marketpclce/internal/httpx"
 )
 
+// AdminListFunnelTemplates godoc
+// @Summary      Список активных воронок (для дропдауна выбора при создании проекта)
+// @Description  Используется Directus Flow «Create manual project» для выпадающего списка. Содержит код+версию (фронту/Flow нужны они в POST /admin/projects).
+// @Tags         admin-funnel-templates
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200  {object}  FunnelTemplatesResponse
+// @Router       /admin/funnel-templates [get]
+func (h *Handler) AdminListFunnelTemplates(w http.ResponseWriter, r *http.Request) {
+	items, err := h.svc.ListFunnelTemplates(r.Context())
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить воронки")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// FunnelTemplatesResponse — обёртка для swagger типизации.
+type FunnelTemplatesResponse struct {
+	Items []FunnelTemplateSummary `json:"items"`
+}
+
 // AdminList godoc
 // @Summary      Список проектов (admin/moderator)
 // @Tags         admin-projects

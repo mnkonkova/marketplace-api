@@ -877,6 +877,30 @@ definitions:
       title:
         type: string
     type: object
+  internal_projects.FunnelTemplateSummary:
+    properties:
+      code:
+        type: string
+      revisions_included:
+        type: integer
+      stages_count:
+        type: integer
+      steps_count:
+        type: integer
+      template_id:
+        type: string
+      title:
+        type: string
+      version:
+        type: integer
+    type: object
+  internal_projects.FunnelTemplatesResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.FunnelTemplateSummary'
+        type: array
+    type: object
   internal_projects.FunnelView:
     properties:
       progress:
@@ -1505,6 +1529,22 @@ info:
   title: marketpclce API
   version: "1.0"
 paths:
+  /admin/funnel-templates:
+    get:
+      description: Используется Directus Flow «Create manual project» для выпадающего
+        списка. Содержит код+версию (фронту/Flow нужны они в POST /admin/projects).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.FunnelTemplatesResponse'
+      security:
+      - BearerAuth: []
+      summary: Список активных воронок (для дропдауна выбора при создании проекта)
+      tags:
+      - admin-funnel-templates
   /admin/lead_recipients/{lead_id}/{specialist_id}/accept:
     post:
       description: Используется когда специалист не успел сам — менеджер выставляет

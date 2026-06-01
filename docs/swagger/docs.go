@@ -15,6 +15,31 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/funnel-templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Используется Directus Flow «Create manual project» для выпадающего списка. Содержит код+версию (фронту/Flow нужны они в POST /admin/projects).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-funnel-templates"
+                ],
+                "summary": "Список активных воронок (для дропдауна выбора при создании проекта)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.FunnelTemplatesResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/lead_recipients/{lead_id}/{specialist_id}/accept": {
             "post": {
                 "security": [
@@ -4360,6 +4385,43 @@ const docTemplate = `{
                 },
                 "title": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_projects.FunnelTemplateSummary": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "stages_count": {
+                    "type": "integer"
+                },
+                "steps_count": {
+                    "type": "integer"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_projects.FunnelTemplatesResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.FunnelTemplateSummary"
+                    }
                 }
             }
         },

@@ -51,6 +51,59 @@ type TemplateLoader interface {
 	LoadActiveTemplate(ctx context.Context, code string, version int) (SnapshotTemplate, error)
 }
 
+// FunnelTemplateSummary — облегчённая сводка для GET /admin/funnel-templates.
+// Используется Directus Flow «Create manual project» для дропдауна выбора
+// воронки. Полный snapshot (со стадиями и шагами) даёт LoadActiveTemplate.
+type FunnelTemplateSummary struct {
+	TemplateID        uuid.UUID `json:"template_id"`
+	Code              string    `json:"code"`
+	Version           int       `json:"version"`
+	Title             string    `json:"title"`
+	RevisionsIncluded int       `json:"revisions_included"`
+	StagesCount       int       `json:"stages_count"`
+	StepsCount        int       `json:"steps_count"`
+}
+
+// ListActiveTemplates — для админ-эндпоинта выбора воронки при создании
+// проекта. Возвращает только is_active=TRUE, отсортировано по code+version.
+// Со счётчиками — менеджеру удобно видеть «маленькая воронка / большая».
+func (r *Repo) ListActiveTemplates(ctx context.Context) ([]FunnelTemplateSummary, error) {
+	const q = `
+SELECT t.id, t.code, t.version, t.title, t.revisions_included,
+       COALESCE(stages.cnt, 0) AS stages_count,
+       COALESCE(steps.cnt, 0) AS steps_count
+FROM service_templates t
+LEFT JOIN (
+    SELECT template_id, COUNT(*) AS cnt
+    FROM service_template_stages GROUP BY template_id
+) stages ON stages.template_id = t.id
+LEFT JOIN (
+    SELECT st.template_id, COUNT(*) AS cnt
+    FROM service_template_steps stp
+    JOIN service_template_stages st ON st.id = stp.stage_id
+    GROUP BY st.template_id
+) steps ON steps.template_id = t.id
+WHERE t.is_active = TRUE
+ORDER BY t.code, t.version DESC`
+	rows, err := r.db.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("query funnel templates: %w", err)
+	}
+	defer rows.Close()
+	out := make([]FunnelTemplateSummary, 0, 4)
+	for rows.Next() {
+		var s FunnelTemplateSummary
+		if err := rows.Scan(
+			&s.TemplateID, &s.Code, &s.Version, &s.Title, &s.RevisionsIncluded,
+			&s.StagesCount, &s.StepsCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan funnel template: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // LoadActiveTemplate (метод на Repo) — читает шаблон + стадии + шаги
 // в один проход (3 запроса), собирает дерево. Сортировка по sort_order
 // сохраняется. Если шаблон is_active=false — ошибка ErrTemplateNotFound:

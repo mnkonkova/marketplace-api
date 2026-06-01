@@ -204,6 +204,8 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/admin/projects/{id}", d.Projects.AdminGet)
 				r.Get("/admin/projects/{id}/funnel", d.Projects.AdminFunnel)
 				r.Get("/admin/projects/{id}/events", d.Projects.AdminEvents)
+				// Список воронок для дропдауна в Directus при создании проекта.
+				r.Get("/admin/funnel-templates", d.Projects.AdminListFunnelTemplates)
 			})
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireRoles(d.TokenIssuer, d.RoleLookup, "admin"))
