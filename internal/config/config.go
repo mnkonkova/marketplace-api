@@ -103,6 +103,13 @@ type Config struct {
 	ReviewDeadline      time.Duration `env:"REVIEW_DEADLINE" envDefault:"168h"`
 	ReviewCheckInterval time.Duration `env:"REVIEW_CHECK_INTERVAL" envDefault:"1h"`
 
+	// ProjectRetention — через сколько после completed_at done-проект
+	// физически удаляется из БД (вместе со снэпшотом стадий/шагов,
+	// событиями, комментариями — все каскады). По умолчанию 7 дней:
+	// клиент ещё может вернуться, скачать что-то, потом убираем.
+	ProjectRetention       time.Duration `env:"PROJECT_RETENTION" envDefault:"168h"`
+	ProjectCleanupInterval time.Duration `env:"PROJECT_CLEANUP_INTERVAL" envDefault:"1h"`
+
 	// CRM v5: n8n webhook для нотификаций по project.* событиям. Пусто →
 	// диспатч выключен (события успешно обрабатываются как no-op, не
 	// зависают в outbox). N8nWebhookToken — опциональный bearer для
