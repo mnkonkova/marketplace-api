@@ -210,6 +210,7 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/manager/projects/{id}/claim", d.Projects.ManagerClaim)
 				r.Post("/manager/projects/{id}/advance_stage", d.Projects.ManagerAdvanceStage)
 				r.Post("/manager/projects/{id}/move_stage", d.Projects.ManagerMoveStage)
+				r.Post("/manager/projects/{id}/move_step", d.Projects.ManagerMoveStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/start", d.Projects.ManagerStartStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/complete", d.Projects.ManagerCompleteStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/skip", d.Projects.ManagerSkipStep)

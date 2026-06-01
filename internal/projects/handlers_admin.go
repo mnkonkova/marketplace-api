@@ -16,6 +16,54 @@ import (
 // похож на менеджерский (одинаковые view-структуры), отдельный struct
 // принёс бы только дублирование.
 
+type assignReq struct {
+	// ManagerUserID может быть пустой строкой или null → unassign.
+	// Не uuid.UUID напрямую, чтобы клиент мог явно прислать "" для снятия.
+	ManagerUserID *string `json:"manager_user_id"`
+}
+
+// AdminAssignManager godoc
+// @Summary  Назначить менеджера на проект (или снять)
+// @Tags     admin-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path string    true "project id"
+// @Param    body body assignReq true "manager_user_id (uuid или null)"
+// @Success  204
+// @Router   /admin/projects/{id}/assign [post]
+func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := auth.UserIDFrom(r.Context())
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	var in assignReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	var mgrID *uuid.UUID
+	if in.ManagerUserID != nil {
+		v := strings.TrimSpace(*in.ManagerUserID)
+		if v != "" {
+			id, err := uuid.Parse(v)
+			if err != nil {
+				httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_manager_id",
+					"manager_user_id должен быть UUID или null.")
+				return
+			}
+			mgrID = &id
+		}
+	}
+	if err := h.svc.AssignManager(r.Context(), pid, mgrID, actorID); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // AdminListProjects godoc
 // @Summary  Все проекты (админ — таблица и канбан)
 // @Tags     admin-projects

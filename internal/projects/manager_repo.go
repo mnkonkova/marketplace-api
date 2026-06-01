@@ -123,6 +123,51 @@ func scanProjects(rows pgx.Rows) ([]Project, error) {
 
 // Claim — атомарно присвоить assigned_to_user_id, если ещё NULL. Иначе
 // ErrAlreadyClaimed. Idempotent для самого менеджера (если уже его — ОК).
+// AssignManager — присвоить проекту менеджера или снять (managerID=nil).
+// Без проверки is-claimed (в отличие от Claim) — это админская операция.
+// Эмитит event 'assigned' либо 'unassigned' для ленты активности.
+func (r *Repo) AssignManager(ctx context.Context, projectID uuid.UUID, managerID *uuid.UUID, actorID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE projects SET assigned_to_user_id = $2, updated_at = now() WHERE id = $1`,
+		projectID, managerID)
+	if err != nil {
+		return fmt.Errorf("assign: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	eventKind := "assigned"
+	payload := map[string]string{}
+	if managerID != nil {
+		payload["manager_user_id"] = managerID.String()
+	} else {
+		eventKind = "unassigned"
+	}
+
+	if _, err := tx.Exec(ctx, `
+INSERT INTO project_step_events
+  (project_id, step_id, actor_user_id, actor_type, event_kind, payload)
+VALUES ($1, NULL, $2, 'human', $3, $4)`,
+		projectID, actorID, eventKind, mustJSON(payload)); err != nil {
+		return fmt.Errorf("insert event: %w", err)
+	}
+	outboxPayload := map[string]string{"project_id": projectID.String()}
+	if managerID != nil {
+		outboxPayload["manager_user_id"] = managerID.String()
+	}
+	if err := emit(ctx, tx, projectID, nil, actorID, "project."+eventKind, outboxPayload); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (r *Repo) Claim(ctx context.Context, projectID, managerID uuid.UUID) error {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

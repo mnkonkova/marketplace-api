@@ -152,6 +152,12 @@ func (s *Service) Claim(ctx context.Context, projectID, managerID uuid.UUID) err
 	return s.repo.Claim(ctx, projectID, managerID)
 }
 
+// AssignManager — админская операция (POST /admin/projects/{id}/assign).
+// managerID=nil → unassign.
+func (s *Service) AssignManager(ctx context.Context, projectID uuid.UUID, managerID *uuid.UUID, actorID uuid.UUID) error {
+	return s.repo.AssignManager(ctx, projectID, managerID, actorID)
+}
+
 // AdvanceStage / MoveProjectToStage принимают optional expectedUpdatedAt
 // для optimistic-lock — фронт шлёт значение из последнего GET. Без него
 // (nil) лок не активируется (back-compat).
