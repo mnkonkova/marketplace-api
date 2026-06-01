@@ -13,13 +13,14 @@ const commentMaxLen = 5000
 
 // ListComments — общий доступ к комментариям. Право видеть проверяется в
 // handler-слое (manager/admin: GetByIDForManager; client: GetByIDForClient).
-func (s *Service) ListComments(ctx context.Context, projectID uuid.UUID) ([]Comment, error) {
-	return s.repo.ListComments(ctx, projectID)
+// includeInternal=false скрывает внутренние комментарии (клиентская выдача).
+func (s *Service) ListComments(ctx context.Context, projectID uuid.UUID, includeInternal bool) ([]Comment, error) {
+	return s.repo.ListComments(ctx, projectID, includeInternal)
 }
 
-// CreateComment — пока только manager/admin (роль проверяется на роутере).
-// Клиент в MVP комментарии не пишет (по брифу § 5.1 — только GET).
-func (s *Service) CreateComment(ctx context.Context, projectID, authorID uuid.UUID, body string) (Comment, error) {
+// CreateComment — manager/admin могут пометить isInternal=true (не видно клиенту).
+// Клиентский handler всегда передаёт isInternal=false.
+func (s *Service) CreateComment(ctx context.Context, projectID, authorID uuid.UUID, body string, isInternal bool) (Comment, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return Comment{}, ErrCommentEmpty
@@ -27,7 +28,7 @@ func (s *Service) CreateComment(ctx context.Context, projectID, authorID uuid.UU
 	if len(body) > commentMaxLen {
 		return Comment{}, fmt.Errorf("%w: body too long (max %d)", ErrInvalidInput, commentMaxLen)
 	}
-	return s.repo.CreateComment(ctx, projectID, authorID, body, "plain")
+	return s.repo.CreateComment(ctx, projectID, authorID, body, "plain", isInternal)
 }
 
 // ListEvents — лента активности. Авторизация — в handler.

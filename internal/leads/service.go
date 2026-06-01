@@ -14,6 +14,10 @@ import (
 var (
 	ErrInvalidInput    = errors.New("invalid input")
 	ErrNoSpecialists   = errors.New("no valid specialists in recipients")
+	// ErrSpecialistUnpublished — хотя бы один из выбранных специалистов
+	// не опубликован (или удалён). Брифу не даём отправиться — иначе
+	// клиент думает, что отправил пятерым, а реально дошло двоим.
+	ErrSpecialistUnpublished = errors.New("some recipients are not published")
 	// ErrEmailUnverified — soft-gate: для авторизованного клиента почта
 	// должна быть подтверждена. Хендлер мапит в 403 email_unverified.
 	ErrEmailUnverified = errors.New("email is not verified")
@@ -110,6 +114,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	}
 	if len(valid) == 0 {
 		return CreateResult{}, ErrNoSpecialists
+	}
+	// Строгая проверка: бриф отправится ровно тем, кого клиент выбрал.
+	// Если каталог отдал устаревшие/несуществующие id (например, спеца сняли
+	// с публикации после того как клиент положил его в корзину) — лучше
+	// сказать «обнови корзину», чем тихо удалить часть получателей.
+	if len(valid) < len(in.SpecialistIDs) {
+		return CreateResult{}, ErrSpecialistUnpublished
 	}
 	in.SpecialistIDs = valid
 

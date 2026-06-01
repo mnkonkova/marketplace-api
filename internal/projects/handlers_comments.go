@@ -44,7 +44,8 @@ func (h *Handler) ClientCreateComment(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
 		return
 	}
-	c, err := h.svc.CreateComment(r.Context(), pid, uid, in.Body)
+	// Клиент не может создавать внутренние комментарии — игнорируем поле.
+	c, err := h.svc.CreateComment(r.Context(), pid, uid, in.Body, false)
 	if err != nil {
 		writeServiceErr(w, err)
 		return
@@ -75,7 +76,8 @@ func (h *Handler) ClientListComments(w http.ResponseWriter, r *http.Request) {
 		writeServiceErr(w, err)
 		return
 	}
-	items, err := h.svc.ListComments(r.Context(), pid)
+	// Клиенту не показываем is_internal=true.
+	items, err := h.svc.ListComments(r.Context(), pid, false)
 	if err != nil {
 		writeServiceErr(w, err)
 		return
@@ -107,7 +109,7 @@ func (h *Handler) ManagerListComments(w http.ResponseWriter, r *http.Request) {
 		writeManagerErr(w, err)
 		return
 	}
-	items, err := h.svc.ListComments(r.Context(), pid)
+	items, err := h.svc.ListComments(r.Context(), pid, true)
 	if err != nil {
 		writeManagerErr(w, err)
 		return
@@ -116,7 +118,8 @@ func (h *Handler) ManagerListComments(w http.ResponseWriter, r *http.Request) {
 }
 
 type commentReq struct {
-	Body string `json:"body"`
+	Body       string `json:"body"`
+	IsInternal bool   `json:"is_internal"`
 }
 
 // ManagerCreateComment godoc
@@ -148,7 +151,7 @@ func (h *Handler) ManagerCreateComment(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
 		return
 	}
-	c, err := h.svc.CreateComment(r.Context(), pid, uid, in.Body)
+	c, err := h.svc.CreateComment(r.Context(), pid, uid, in.Body, in.IsInternal)
 	if err != nil {
 		writeManagerErr(w, err)
 		return
@@ -230,7 +233,7 @@ func (h *Handler) AdminListProjectComments(w http.ResponseWriter, r *http.Reques
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	items, err := h.svc.ListComments(r.Context(), pid)
+	items, err := h.svc.ListComments(r.Context(), pid, true)
 	if err != nil {
 		writeManagerErr(w, err)
 		return
@@ -260,7 +263,7 @@ func (h *Handler) AdminCreateProjectComment(w http.ResponseWriter, r *http.Reque
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
 		return
 	}
-	c, err := h.svc.CreateComment(r.Context(), pid, actorID, in.Body)
+	c, err := h.svc.CreateComment(r.Context(), pid, actorID, in.Body, in.IsInternal)
 	if err != nil {
 		writeManagerErr(w, err)
 		return

@@ -180,8 +180,6 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/projects/{id}/funnel", d.Projects.ClientGetFunnel)
 				r.Get("/me/projects/{id}/comments", d.Projects.ClientListComments)
 				r.Post("/me/projects/{id}/comments", d.Projects.ClientCreateComment)
-				r.Post("/me/projects/{id}/steps/{step_id}/approve", d.Projects.ClientApprove)
-				r.Post("/me/projects/{id}/steps/{step_id}/request_revision", d.Projects.ClientRequestRevision)
 				r.Post("/me/projects/{id}/steps/{step_id}/submit_review", d.Projects.ClientSubmitReview)
 				r.Get("/me/specialist/projects", d.Projects.SpecialistList)
 				r.Get("/me/specialist/projects/{id}/funnel", d.Projects.SpecialistGetFunnel)

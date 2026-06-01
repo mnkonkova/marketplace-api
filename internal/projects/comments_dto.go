@@ -16,6 +16,7 @@ type Comment struct {
 	AuthorName string     `json:"author_name,omitempty"`
 	Body       string     `json:"body"`
 	BodyFormat string     `json:"body_format"`
+	IsInternal bool       `json:"is_internal"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	DeletedAt  *time.Time `json:"deleted_at,omitempty"`

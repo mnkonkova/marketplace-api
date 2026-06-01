@@ -51,19 +51,35 @@ func (s *Service) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) 
 
 func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([]ProjectManagerView, error) {
 	views := make([]ProjectManagerView, 0, len(projects))
-	clientIDs := make([]uuid.UUID, 0, len(projects))
+	// Собираем уникальные user_id всех участников — для одного батч-запроса.
+	idSet := make(map[uuid.UUID]struct{}, 2*len(projects))
 	for _, p := range projects {
-		clientIDs = append(clientIDs, p.ClientUserID)
+		idSet[p.ClientUserID] = struct{}{}
+		if p.SpecialistUserID != nil {
+			idSet[*p.SpecialistUserID] = struct{}{}
+		}
 	}
-	names, err := s.repo.LoadClientDisplayNames(ctx, clientIDs)
+	ids := make([]uuid.UUID, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	contacts, err := s.repo.LoadPartyContacts(ctx, ids)
 	if err != nil {
-		// best-effort: имена клиентов не критичны
-		names = map[uuid.UUID]string{}
+		// best-effort: контакты не критичны для канбана
+		contacts = map[uuid.UUID]PartyContact{}
 	}
 	for _, p := range projects {
-		view := ProjectManagerView{
-			Project:           p,
-			ClientDisplayName: names[p.ClientUserID],
+		view := ProjectManagerView{Project: p}
+		if c, ok := contacts[p.ClientUserID]; ok {
+			cc := c
+			view.Client = &cc
+			view.ClientDisplayName = cc.DisplayName
+		}
+		if p.SpecialistUserID != nil {
+			if c, ok := contacts[*p.SpecialistUserID]; ok {
+				cc := c
+				view.Specialist = &cc
+			}
 		}
 		// все шаги (включая скрытые) — менеджер видит всё.
 		steps, err := s.repo.LoadSteps(ctx, p.ID, false)
@@ -136,6 +152,23 @@ func (s *Service) GetFull(ctx context.Context, projectID, managerID uuid.UUID) (
 		DisplayStatus: DeriveProjectDisplayStatus(p.Status, flat),
 		Progress:      DeriveProgress(flat),
 		Stages:        stageViews,
+	}
+	// Контакты обеих сторон — для блока «Связаться» на странице проекта.
+	ids := []uuid.UUID{p.ClientUserID}
+	if p.SpecialistUserID != nil {
+		ids = append(ids, *p.SpecialistUserID)
+	}
+	if contacts, cerr := s.repo.LoadPartyContacts(ctx, ids); cerr == nil {
+		if c, ok := contacts[p.ClientUserID]; ok {
+			cc := c
+			out.Client = &cc
+		}
+		if p.SpecialistUserID != nil {
+			if c, ok := contacts[*p.SpecialistUserID]; ok {
+				cc := c
+				out.Specialist = &cc
+			}
+		}
 	}
 	if current != nil {
 		out.CurrentStepID = &current.ID

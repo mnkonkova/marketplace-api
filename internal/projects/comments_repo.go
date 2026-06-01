@@ -12,17 +12,26 @@ import (
 
 var ErrCommentEmpty = errors.New("comment body is empty")
 
-// ListComments — список не-удалённых комментариев проекта с display_name автора
-// (best-effort: левый join на specialist_profiles; для клиентов без профиля
-// поле останется пустым).
-func (r *Repo) ListComments(ctx context.Context, projectID uuid.UUID) ([]Comment, error) {
+// ListComments — список не-удалённых комментариев проекта с display_name автора.
+// Имя ищем последовательно: specialist_profile → client_profile → префикс email
+// (до '@'). includeInternal=false скрывает is_internal=true (клиентская выдача).
+func (r *Repo) ListComments(ctx context.Context, projectID uuid.UUID, includeInternal bool) ([]Comment, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT pc.id, pc.project_id, pc.author_id, COALESCE(sp.display_name, ''),
-       pc.body, pc.body_format, pc.created_at, pc.updated_at
+SELECT pc.id, pc.project_id, pc.author_id,
+       COALESCE(
+         NULLIF(sp.display_name, ''),
+         NULLIF(cp.display_name, ''),
+         split_part(u.email, '@', 1),
+         ''
+       ) AS author_name,
+       pc.body, pc.body_format, pc.is_internal, pc.created_at, pc.updated_at
 FROM project_comments pc
+LEFT JOIN users u ON u.id = pc.author_id
 LEFT JOIN specialist_profiles sp ON sp.user_id = pc.author_id
+LEFT JOIN client_profiles cp ON cp.user_id = pc.author_id
 WHERE pc.project_id = $1 AND pc.deleted_at IS NULL
-ORDER BY pc.created_at ASC`, projectID)
+  AND ($2::bool OR pc.is_internal = FALSE)
+ORDER BY pc.created_at ASC`, projectID, includeInternal)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)
 	}
@@ -31,7 +40,7 @@ ORDER BY pc.created_at ASC`, projectID)
 	for rows.Next() {
 		var c Comment
 		if err := rows.Scan(&c.ID, &c.ProjectID, &c.AuthorID, &c.AuthorName,
-			&c.Body, &c.BodyFormat, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			&c.Body, &c.BodyFormat, &c.IsInternal, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan comment: %w", err)
 		}
 		out = append(out, c)
@@ -42,7 +51,8 @@ ORDER BY pc.created_at ASC`, projectID)
 // CreateComment — атомарно: вставка в project_comments + событие
 // event_kind='comment' в project_step_events (для ленты активности
 // в одном запросе с другими событиями) + бамп projects.updated_at.
-func (r *Repo) CreateComment(ctx context.Context, projectID, authorID uuid.UUID, body, bodyFormat string) (Comment, error) {
+// isInternal=true: комментарий не видит клиент (только manager/admin).
+func (r *Repo) CreateComment(ctx context.Context, projectID, authorID uuid.UUID, body, bodyFormat string, isInternal bool) (Comment, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return Comment{}, ErrCommentEmpty
@@ -62,21 +72,26 @@ func (r *Repo) CreateComment(ctx context.Context, projectID, authorID uuid.UUID,
 	c.AuthorID = authorID
 	c.Body = body
 	c.BodyFormat = bodyFormat
+	c.IsInternal = isInternal
 	if err := tx.QueryRow(ctx, `
-INSERT INTO project_comments (project_id, author_id, body, body_format)
-VALUES ($1, $2, $3, $4)
+INSERT INTO project_comments (project_id, author_id, body, body_format, is_internal)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, created_at, updated_at`,
-		projectID, authorID, body, bodyFormat).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		projectID, authorID, body, bodyFormat, isInternal).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Comment{}, fmt.Errorf("insert comment: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
+	// Внутренние комментарии не пишем в ленту — иначе клиент увидит их в
+	// activity-фиде, даже если /comments отфильтрован.
+	if !isInternal {
+		if _, err := tx.Exec(ctx, `
 INSERT INTO project_step_events
   (project_id, step_id, actor_user_id, actor_type, event_kind, comment, payload)
 VALUES ($1, NULL, $2, 'human', 'comment', $3, $4)`,
-		projectID, authorID, body,
-		mustJSON(map[string]string{"comment_id": c.ID.String()})); err != nil {
-		return Comment{}, fmt.Errorf("insert comment event: %w", err)
+			projectID, authorID, body,
+			mustJSON(map[string]string{"comment_id": c.ID.String()})); err != nil {
+			return Comment{}, fmt.Errorf("insert comment event: %w", err)
+		}
 	}
 
 	if _, err := tx.Exec(ctx,
@@ -89,10 +104,18 @@ VALUES ($1, NULL, $2, 'human', 'comment', $3, $4)`,
 		return Comment{}, fmt.Errorf("commit: %w", err)
 	}
 
-	if err := r.db.QueryRow(ctx,
-		`SELECT COALESCE(display_name, '') FROM specialist_profiles WHERE user_id = $1`,
-		authorID).Scan(&c.AuthorName); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		// не критично — оставим пустым
+	// display_name автора: тот же фолбэк, что и в ListComments.
+	if err := r.db.QueryRow(ctx, `
+SELECT COALESCE(
+  NULLIF(sp.display_name, ''),
+  NULLIF(cp.display_name, ''),
+  split_part(u.email, '@', 1),
+  ''
+)
+FROM users u
+LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
+LEFT JOIN client_profiles cp ON cp.user_id = u.id
+WHERE u.id = $1`, authorID).Scan(&c.AuthorName); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		c.AuthorName = ""
 	}
 	return c, nil
@@ -108,11 +131,19 @@ func (r *Repo) ListEvents(ctx context.Context, projectID uuid.UUID, limit, offse
 		offset = 0
 	}
 	rows, err := r.db.Query(ctx, `
-SELECT e.id, e.project_id, e.step_id, e.actor_user_id, COALESCE(sp.display_name, ''),
+SELECT e.id, e.project_id, e.step_id, e.actor_user_id,
+       COALESCE(
+         NULLIF(sp.display_name, ''),
+         NULLIF(cp.display_name, ''),
+         split_part(u.email, '@', 1),
+         ''
+       ) AS actor_display_name,
        e.actor_type, e.event_kind, e.from_status, e.to_status,
        COALESCE(e.comment, ''), e.payload, e.created_at
 FROM project_step_events e
+LEFT JOIN users u ON u.id = e.actor_user_id
 LEFT JOIN specialist_profiles sp ON sp.user_id = e.actor_user_id
+LEFT JOIN client_profiles cp ON cp.user_id = e.actor_user_id
 WHERE e.project_id = $1
 ORDER BY e.created_at DESC, e.id DESC
 LIMIT $2 OFFSET $3`, projectID, limit, offset)

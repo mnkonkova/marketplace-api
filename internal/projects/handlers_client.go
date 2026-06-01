@@ -1,7 +1,6 @@
 package projects
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -109,77 +108,6 @@ func (h *Handler) ClientGetFunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, view)
-}
-
-// ClientApprove godoc
-// @Summary      Принять шаг (клиент)
-// @Tags         client-projects
-// @Produce      json
-// @Security     BearerAuth
-// @Param        id       path      string  true  "project id"
-// @Param        step_id  path      string  true  "step id"
-// @Success      200      {object}  Step
-// @Router       /me/projects/{id}/steps/{step_id}/approve [post]
-func (h *Handler) ClientApprove(w http.ResponseWriter, r *http.Request) {
-	uid, ok := clientFrom(w, r)
-	if !ok {
-		return
-	}
-	pid, sid, ok := parseProjectStep(w, r)
-	if !ok {
-		return
-	}
-	// Проверка владения через GetClientProject — иначе любой клиент мог бы
-	// двигать чужой шаг по id. Один лишний select, но безопаснее.
-	if _, err := h.svc.GetClientProject(r.Context(), pid, uid); err != nil {
-		writeServiceErr(w, err)
-		return
-	}
-	step, err := h.svc.Approve(r.Context(), pid, sid, uid)
-	if err != nil {
-		writeServiceErr(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, step)
-}
-
-type revisionReq struct {
-	Comment string `json:"comment"`
-}
-
-// ClientRequestRevision godoc
-// @Summary      Запросить правки (клиент)
-// @Tags         client-projects
-// @Accept       json
-// @Produce      json
-// @Security     BearerAuth
-// @Param        id       path      string       true  "project id"
-// @Param        step_id  path      string       true  "step id"
-// @Param        body     body      revisionReq  false "комментарий"
-// @Success      200      {object}  Step
-// @Failure      409      {object}  errorResponse "revisions_exhausted"
-// @Router       /me/projects/{id}/steps/{step_id}/request_revision [post]
-func (h *Handler) ClientRequestRevision(w http.ResponseWriter, r *http.Request) {
-	uid, ok := clientFrom(w, r)
-	if !ok {
-		return
-	}
-	pid, sid, ok := parseProjectStep(w, r)
-	if !ok {
-		return
-	}
-	if _, err := h.svc.GetClientProject(r.Context(), pid, uid); err != nil {
-		writeServiceErr(w, err)
-		return
-	}
-	var in revisionReq
-	_ = json.NewDecoder(r.Body).Decode(&in) // тело опциональное
-	step, err := h.svc.RequestRevision(r.Context(), pid, sid, uid, in.Comment)
-	if err != nil {
-		writeServiceErr(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, step)
 }
 
 // ClientSubmitReview godoc

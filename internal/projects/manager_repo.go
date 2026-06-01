@@ -516,21 +516,30 @@ func (r *Repo) GetByIDForManager(ctx context.Context, projectID, managerID uuid.
 // MoveProjectToStage — фактическая реализация лежит в move_stage.go ради
 // читаемости (отдельная история, отличная от advance_stage).
 
-// LoadClientDisplayNames — батч display_name для списка projects (для карточек
-// канбана). Возвращает map client_user_id → display_name. Где нет имени —
-// пустая строка.
-func (r *Repo) LoadClientDisplayNames(ctx context.Context, clientIDs []uuid.UUID) (map[uuid.UUID]string, error) {
-	if len(clientIDs) == 0 {
+// LoadClientDisplayNames — батч display_name для списка projects. Возвращает
+// map user_id → display_name с тем же фолбэк-ладдером, что и в комментариях:
+// specialist_profiles → client_profiles → префикс email. Где никаких источников
+// нет — пустая строка.
+func (r *Repo) LoadClientDisplayNames(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	if len(ids) == 0 {
 		return map[uuid.UUID]string{}, nil
 	}
-	rows, err := r.db.Query(ctx,
-		`SELECT user_id, display_name FROM specialist_profiles WHERE user_id = ANY($1)`,
-		clientIDs)
+	rows, err := r.db.Query(ctx, `
+SELECT u.id, COALESCE(
+  NULLIF(sp.display_name, ''),
+  NULLIF(cp.display_name, ''),
+  split_part(u.email, '@', 1),
+  ''
+)
+FROM users u
+LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
+LEFT JOIN client_profiles cp ON cp.user_id = u.id
+WHERE u.id = ANY($1)`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("load client names: %w", err)
+		return nil, fmt.Errorf("load display names: %w", err)
 	}
 	defer rows.Close()
-	out := make(map[uuid.UUID]string, len(clientIDs))
+	out := make(map[uuid.UUID]string, len(ids))
 	for rows.Next() {
 		var id uuid.UUID
 		var name string
@@ -538,6 +547,50 @@ func (r *Repo) LoadClientDisplayNames(ctx context.Context, clientIDs []uuid.UUID
 			return nil, err
 		}
 		out[id] = name
+	}
+	return out, rows.Err()
+}
+
+// LoadPartyContacts — батч контактов (display_name + email + phone + telegram)
+// для участников проектов. Возвращает map user_id → PartyContact. Контакты
+// клиента берутся из client_profiles, специалиста — из specialist_profiles
+// (contact_email/contact_phone — заполняется самим спецом в кабинете).
+func (r *Repo) LoadPartyContacts(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]PartyContact, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]PartyContact{}, nil
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT u.id,
+       COALESCE(
+         NULLIF(sp.display_name, ''),
+         NULLIF(cp.display_name, ''),
+         split_part(u.email, '@', 1),
+         ''
+       ) AS display_name,
+       COALESCE(u.email, '')        AS email,
+       COALESCE(
+         NULLIF(sp.contact_phone, ''),
+         NULLIF(cp.phone, ''),
+         COALESCE(u.phone, ''),
+         ''
+       ) AS phone,
+       COALESCE(NULLIF(cp.telegram, ''), '') AS telegram
+FROM users u
+LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
+LEFT JOIN client_profiles cp ON cp.user_id = u.id
+WHERE u.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load party contacts: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]PartyContact, len(ids))
+	for rows.Next() {
+		var id uuid.UUID
+		var c PartyContact
+		if err := rows.Scan(&id, &c.DisplayName, &c.Email, &c.Phone, &c.Telegram); err != nil {
+			return nil, err
+		}
+		out[id] = c
 	}
 	return out, rows.Err()
 }

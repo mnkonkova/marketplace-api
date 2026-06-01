@@ -109,6 +109,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNoSpecialists):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "no_valid_specialists",
 			"Среди выбранных специалистов нет ни одного валидного получателя.")
+	case errors.Is(err, ErrSpecialistUnpublished):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "specialist_unpublished",
+			"Один из выбранных специалистов больше недоступен. Обновите корзину и попробуйте снова.")
 	case errors.Is(err, ErrEmailUnverified):
 		httpx.WriteErrMsg(w, http.StatusForbidden, "email_unverified",
 			"Подтвердите email — на него отправлено письмо.")

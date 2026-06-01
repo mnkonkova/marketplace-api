@@ -23,11 +23,11 @@ import (
 //      соответствующего pipeline_step.
 //   3. Находим текущую позицию — первый шаг не в (done|skipped).
 //   4. target == current → no-op.
-//   5. target > current (вперёд): для каждого промежуточного шага — если
-//      owner=client + статус ∈ (pending|in_progress|waiting_client|rejected),
-//      возвращаем ErrStageBlocked (пропускать клиента нельзя). Иначе team/
-//      system → done. Стадии, у которых после этого все шаги в done|skipped,
-//      помечаются completed_at.
+//   5. target > current (вперёд): промежуточные team/system → done,
+//      промежуточные client → skipped (менеджер/админ имеют право обойти
+//      клиентский шаг; клиентский кабинет этот endpoint не вызывает).
+//      Стадии, у которых после этого все шаги в done|skipped, помечаются
+//      completed_at.
 //   6. target < current (назад): шаги target..current сбрасываются в pending,
 //      review_deadline NULL'ится. Завершённости стадий обнуляются.
 //   7. Активируем целевой шаг: owner=client → waiting_client (+ review_deadline
@@ -136,25 +136,36 @@ WHERE ps.id = $1`, targetStepID).Scan(&pipelineStageOrd, &pipelineStepOrd)
 	toStageID := steps[targetIdx].StageID
 
 	if targetIdx > curIdx {
-		// 5a. Проверка: client шаги нельзя пропустить.
+		// 5. Промежуточные шаги закрываем: team/system → done, client → skipped.
+		// Endpoint вызывается только менеджером/админом; они вправе обойти
+		// клиентский шаг (например, если согласовали по почте), оставив след в
+		// step_transition.
 		for i := curIdx; i < targetIdx; i++ {
-			if steps[i].Owner == OwnerClient {
-				switch steps[i].Status {
-				case StepStatusPending, StepStatusInProgress,
-					StepStatusWaitingClient, StepStatusRejected:
-					return Project{}, ErrStageBlocked
-				}
-			}
-		}
-		// 5b. Промежуточные team/system → done.
-		for i := curIdx; i < targetIdx; i++ {
-			if steps[i].Owner == OwnerTeam || steps[i].Owner == OwnerSystem {
+			switch steps[i].Owner {
+			case OwnerTeam, OwnerSystem:
 				if _, err := tx.Exec(ctx, `
 UPDATE project_steps
 SET status='done', completed_at=COALESCE(completed_at,$2), updated_at=now()
 WHERE id=$1 AND status IN ('pending','in_progress','rejected')`,
 					steps[i].ID, now); err != nil {
 					return Project{}, fmt.Errorf("close team step: %w", err)
+				}
+			case OwnerClient:
+				if _, err := tx.Exec(ctx, `
+UPDATE project_steps
+SET status='skipped', completed_at=COALESCE(completed_at,$2), updated_at=now()
+WHERE id=$1 AND status IN ('pending','in_progress','waiting_client','rejected')`,
+					steps[i].ID, now); err != nil {
+					return Project{}, fmt.Errorf("skip client step: %w", err)
+				}
+				// Лог-событие, чтобы было видно в фиде «менеджер пропустил клиента».
+				if _, err := tx.Exec(ctx, `
+INSERT INTO project_step_events
+  (project_id, step_id, actor_user_id, actor_type, event_kind, to_status, payload)
+VALUES ($1, $2, $3, 'human', 'step_skipped_by_staff', 'skipped', $4)`,
+					projectID, steps[i].ID, actorID,
+					mustJSON(map[string]string{"reason": "manager_move"})); err != nil {
+					return Project{}, fmt.Errorf("insert skip event: %w", err)
 				}
 			}
 		}
