@@ -151,6 +151,8 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/auth/resend-verification", d.Auth.ResendVerification)
 			r.Get("/me/profile", d.Profiles.Get)
 			r.Patch("/me/profile", d.Profiles.PatchFull)
+			r.Get("/me/client-profile", d.Profiles.GetClient)
+			r.Patch("/me/client-profile", d.Profiles.PatchClient)
 			r.Post("/me/profile/publish", d.Profiles.Publish)
 			r.Post("/me/profile/unpublish", d.Profiles.Unpublish)
 			if d.ProfileCheck != nil {
