@@ -53,6 +53,34 @@ const (
 	OwnerSystem StepOwner = "system"
 )
 
+// ProjectDisplayStatus — вычисленный (computed) статус проекта для UI.
+// Зеркало raw `project.status`, но проще: терминальные состояния
+// (done/cancelled/on_hold/dispute) маппятся напрямую, активные проекты
+// получают статус из агрегированного состояния шагов.
+//
+// Фронт ТОЛЬКО рендерит этот enum по labels/colors — никакой собственной
+// derive-логики не должен.
+type ProjectDisplayStatus string
+
+const (
+	DisplayStatusNotStarted    ProjectDisplayStatus = "not_started"
+	DisplayStatusInProgress    ProjectDisplayStatus = "in_progress"
+	DisplayStatusWaitingAction ProjectDisplayStatus = "waiting_action"
+	DisplayStatusCompleted     ProjectDisplayStatus = "completed"
+	DisplayStatusOnHold        ProjectDisplayStatus = "on_hold"
+	DisplayStatusDispute       ProjectDisplayStatus = "dispute"
+	DisplayStatusCancelled     ProjectDisplayStatus = "cancelled"
+)
+
+// StageDisplayStatus — вычисленный статус одной стадии.
+type StageDisplayStatus string
+
+const (
+	StageNotStarted StageDisplayStatus = "not_started"
+	StageActive     StageDisplayStatus = "active"
+	StageCompleted  StageDisplayStatus = "completed"
+)
+
 // ProjectAdminView — полная форма для admin/Directus. Все поля включая
 // budget, notes и assigned_to_user_id.
 type ProjectAdminView struct {
@@ -80,17 +108,35 @@ type ProjectAdminView struct {
 // заметки менеджера), минус assigned_to (клиент не видит «своего»
 // менеджера по имени, чтобы не персонифицировать управление).
 type ProjectClientView struct {
-	ID                uuid.UUID     `json:"id"`
-	LeadID            *uuid.UUID    `json:"lead_id,omitempty"`
-	SpecialistUserID  *uuid.UUID    `json:"specialist_user_id,omitempty"`
-	Title             string        `json:"title"`
-	Status            ProjectStatus `json:"status"`
-	RevisionsIncluded int           `json:"revisions_included"`
-	RevisionsUsed     int           `json:"revisions_used"`
-	StartedAt         *time.Time    `json:"started_at,omitempty"`
-	CompletedAt       *time.Time    `json:"completed_at,omitempty"`
-	CreatedAt         time.Time     `json:"created_at"`
-	UpdatedAt         time.Time     `json:"updated_at"`
+	ID               uuid.UUID            `json:"id"`
+	LeadID           *uuid.UUID           `json:"lead_id,omitempty"`
+	SpecialistUserID *uuid.UUID           `json:"specialist_user_id,omitempty"`
+	Title            string               `json:"title"`
+	Status           ProjectStatus        `json:"status"`
+	DisplayStatus    ProjectDisplayStatus `json:"display_status"`
+	// Progress — % по весам видимых шагов (см. progress.go).
+	Progress         float64    `json:"progress"`
+	CurrentStepID    *uuid.UUID `json:"current_step_id,omitempty"`
+	CurrentStepTitle *string    `json:"current_step_title,omitempty"`
+	// CurrentStepCode — нужен фронту для step-descriptions[code].
+	CurrentStepCode *string `json:"current_step_code,omitempty"`
+	// CurrentStepOwner — чтобы фронт понимал «ждём вас» vs «команда работает».
+	CurrentStepOwner *StepOwner `json:"current_step_owner,omitempty"`
+	// CurrentStepStatus — чтобы решать показывать ли кнопки в шаге.
+	CurrentStepStatus *StepStatus `json:"current_step_status,omitempty"`
+	// RevisionsIncluded — сырое значение из БД (бэк-compat).
+	RevisionsIncluded int `json:"revisions_included"`
+	RevisionsUsed     int `json:"revisions_used"`
+	// RevisionsTotal — синоним RevisionsIncluded по новой конвенции FE
+	// (фикс §3.1 брифа). FE на новых компонентах использует именно его.
+	RevisionsTotal int        `json:"revisions_total"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	// Stages — funnel-дерево, встроенное в выдачу. На list и detail
+	// отдаём одинаковую форму. Payload растёт, но убирает N+1 на фронте.
+	Stages []StageView `json:"stages,omitempty"`
 }
 
 // ProjectSpecialistView — то, что видит назначенный специалист.
@@ -113,13 +159,16 @@ type ProjectSpecialistView struct {
 // StageView — общий формат стадии. Используется и в client-, и в
 // specialist-, и в admin-выдаче. Различие только в наборе шагов.
 type StageView struct {
-	ID          uuid.UUID  `json:"id"`
-	Code        string     `json:"code"`
-	Title       string     `json:"title"`
-	SortOrder   int        `json:"sort_order"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Steps       []StepView `json:"steps"`
+	ID            uuid.UUID          `json:"id"`
+	Code          string             `json:"code"`
+	Title         string             `json:"title"`
+	SortOrder     int                `json:"sort_order"`
+	DisplayStatus StageDisplayStatus `json:"display_status"`
+	StepsTotal    int                `json:"steps_total"`
+	StepsDone     int                `json:"steps_done"`
+	StartedAt     *time.Time         `json:"started_at,omitempty"`
+	CompletedAt   *time.Time         `json:"completed_at,omitempty"`
+	Steps         []StepView         `json:"steps"`
 }
 
 // StepView — общий формат шага. Поля visible_to_client / visible_to_specialist
@@ -134,11 +183,14 @@ type StepView struct {
 	DurationDays int        `json:"duration_days"`
 	Weight       int        `json:"weight"`
 	SortOrder    int        `json:"sort_order"`
-	ETADate      *time.Time `json:"eta_date,omitempty"`
-	CTAPayload   []byte     `json:"cta_payload,omitempty"` // raw JSON
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// IsCurrent — этот шаг сейчас считается «активным» по правилу
+	// DeriveCurrentStep. Ровно один шаг в проекте может быть current=true.
+	IsCurrent   bool       `json:"is_current"`
+	ETADate     *time.Time `json:"eta_date,omitempty"`
+	CTAPayload  []byte     `json:"cta_payload,omitempty"` // raw JSON
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // CreateManualInput — POST /admin/projects (source = manual|referral|

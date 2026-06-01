@@ -126,16 +126,121 @@ func (s *Service) buildFunnel(ctx context.Context, projectID uuid.UUID, vis Visi
 }
 
 // ListClientProjects — обёртка для красоты HTTP-handler'а.
+// Каждый проект обогащается стадиями и computed-полями (бриф §3.1).
+// N+1 запросов SQL приемлем для MVP-объёмов клиентского ЛК (<10 проектов).
 func (s *Service) ListClientProjects(ctx context.Context, userID uuid.UUID) ([]ProjectClientView, error) {
-	return s.repo.ListByClient(ctx, userID)
+	bases, err := s.repo.ListByClient(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProjectClientView, 0, len(bases))
+	for _, base := range bases {
+		enriched, err := s.enrichClientView(ctx, base)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, enriched)
+	}
+	return out, nil
 }
 
+// GetClientProject возвращает ProjectClientView с уже встроенными
+// стадиями, шагами и всеми computed-полями (display_status, progress,
+// current_step_*, is_current на шаге). Бриф §2.4: фронт ТОЛЬКО рендерит.
 func (s *Service) GetClientProject(ctx context.Context, projectID, userID uuid.UUID) (ProjectClientView, error) {
-	return s.repo.GetClientByID(ctx, projectID, userID)
+	base, err := s.repo.GetClientByID(ctx, projectID, userID)
+	if err != nil {
+		return ProjectClientView{}, err
+	}
+	return s.enrichClientView(ctx, base)
 }
 
 func (s *Service) ListClientProjectsByLead(ctx context.Context, userID, leadID uuid.UUID) ([]ProjectClientView, error) {
-	return s.repo.ListByClientByLead(ctx, userID, leadID)
+	bases, err := s.repo.ListByClientByLead(ctx, userID, leadID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProjectClientView, 0, len(bases))
+	for _, base := range bases {
+		enriched, err := s.enrichClientView(ctx, base)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, enriched)
+	}
+	return out, nil
+}
+
+// enrichClientView — добавляет к базовой ProjectClientView стадии, шаги
+// и computed-поля (display_status, progress, current_step_*, is_current).
+// 2 SQL-запроса (ListStages + ListStepsWithStage). Идемпотентен.
+//
+// Маркирует `IsCurrent=true` на выбранном шаге. Заполняет
+// CurrentStepID/Title/Code/Owner/Status, чтобы фронт мог без углублённого
+// прохода по stages показать «Сейчас: X» и принять решение по кнопкам.
+func (s *Service) enrichClientView(ctx context.Context, base ProjectClientView) (ProjectClientView, error) {
+	stages, err := s.repo.ListStages(ctx, base.ID)
+	if err != nil {
+		return ProjectClientView{}, err
+	}
+	withStage, err := s.repo.ListStepsWithStage(ctx, base.ID, VisibilityForClient)
+	if err != nil {
+		return ProjectClientView{}, err
+	}
+
+	// Раскидываем шаги по стадиям через stage_id → index.
+	stageIdx := make(map[uuid.UUID]int, len(stages))
+	for i := range stages {
+		stageIdx[stages[i].ID] = i
+		stages[i].Steps = make([]StepView, 0, 4)
+	}
+	flat := make([]StepView, 0, len(withStage))
+	for _, w := range withStage {
+		idx, ok := stageIdx[w.StageID]
+		if !ok {
+			continue // безопасный фолбэк на data-bug
+		}
+		stages[idx].Steps = append(stages[idx].Steps, w.StepView)
+		flat = append(flat, w.StepView)
+	}
+
+	// Заполняем per-stage display_status и счётчики.
+	for i := range stages {
+		st, done, total := DeriveStageDisplayStatus(stages[i].Steps)
+		stages[i].DisplayStatus = st
+		stages[i].StepsDone = done
+		stages[i].StepsTotal = total
+	}
+
+	// Project-level display_status и current step. После выбора current —
+	// помечаем его IsCurrent=true в той копии, что лежит в stages[].Steps.
+	base.DisplayStatus = DeriveProjectDisplayStatus(base.Status, flat)
+	base.Progress = float64(CalcProgress(flat).Percent)
+	base.RevisionsTotal = base.RevisionsIncluded
+
+	if current := DeriveCurrentStep(flat); current != nil {
+		// Найти и пометить в stages — flat — это копия, фронт читает stages.
+		for i := range stages {
+			for j := range stages[i].Steps {
+				if stages[i].Steps[j].ID == current.ID {
+					stages[i].Steps[j].IsCurrent = true
+					stepCopy := stages[i].Steps[j]
+					base.CurrentStepID = &stepCopy.ID
+					title := stepCopy.Title
+					base.CurrentStepTitle = &title
+					code := stepCopy.Code
+					base.CurrentStepCode = &code
+					owner := stepCopy.Owner
+					base.CurrentStepOwner = &owner
+					status := stepCopy.Status
+					base.CurrentStepStatus = &status
+				}
+			}
+		}
+	}
+
+	base.Stages = stages
+	return base, nil
 }
 
 // ListSpecialistProjects — назначенные проекты для специалиста.

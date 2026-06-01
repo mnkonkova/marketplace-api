@@ -4484,13 +4484,51 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "current_step_code": {
+                    "description": "CurrentStepCode — нужен фронту для step-descriptions[code].",
+                    "type": "string"
+                },
+                "current_step_id": {
+                    "type": "string"
+                },
+                "current_step_owner": {
+                    "description": "CurrentStepOwner — чтобы фронт понимал «ждём вас» vs «команда работает».",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_projects.StepOwner"
+                        }
+                    ]
+                },
+                "current_step_status": {
+                    "description": "CurrentStepStatus — чтобы решать показывать ли кнопки в шаге.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_projects.StepStatus"
+                        }
+                    ]
+                },
+                "current_step_title": {
+                    "type": "string"
+                },
+                "display_status": {
+                    "$ref": "#/definitions/internal_projects.ProjectDisplayStatus"
+                },
                 "id": {
                     "type": "string"
                 },
                 "lead_id": {
                     "type": "string"
                 },
+                "progress": {
+                    "description": "Progress — % по весам видимых шагов (см. progress.go).",
+                    "type": "number"
+                },
                 "revisions_included": {
+                    "description": "RevisionsIncluded — сырое значение из БД (бэк-compat).",
+                    "type": "integer"
+                },
+                "revisions_total": {
+                    "description": "RevisionsTotal — синоним RevisionsIncluded по новой конвенции FE\n(фикс §3.1 брифа). FE на новых компонентах использует именно его.",
                     "type": "integer"
                 },
                 "revisions_used": {
@@ -4498,6 +4536,13 @@ const docTemplate = `{
                 },
                 "specialist_user_id": {
                     "type": "string"
+                },
+                "stages": {
+                    "description": "Stages — funnel-дерево, встроенное в выдачу. На list и detail\nотдаём одинаковую форму. Payload растёт, но убирает N+1 на фронте.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.StageView"
+                    }
                 },
                 "started_at": {
                     "type": "string"
@@ -4512,6 +4557,27 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "internal_projects.ProjectDisplayStatus": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "in_progress",
+                "waiting_action",
+                "completed",
+                "on_hold",
+                "dispute",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "DisplayStatusNotStarted",
+                "DisplayStatusInProgress",
+                "DisplayStatusWaitingAction",
+                "DisplayStatusCompleted",
+                "DisplayStatusOnHold",
+                "DisplayStatusDispute",
+                "DisplayStatusCancelled"
+            ]
         },
         "internal_projects.ProjectSource": {
             "type": "string",
@@ -4593,6 +4659,19 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.StageDisplayStatus": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "active",
+                "completed"
+            ],
+            "x-enum-varnames": [
+                "StageNotStarted",
+                "StageActive",
+                "StageCompleted"
+            ]
+        },
         "internal_projects.StageView": {
             "type": "object",
             "properties": {
@@ -4601,6 +4680,9 @@ const docTemplate = `{
                 },
                 "completed_at": {
                     "type": "string"
+                },
+                "display_status": {
+                    "$ref": "#/definitions/internal_projects.StageDisplayStatus"
                 },
                 "id": {
                     "type": "string"
@@ -4616,6 +4698,12 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_projects.StepView"
                     }
+                },
+                "steps_done": {
+                    "type": "integer"
+                },
+                "steps_total": {
+                    "type": "integer"
                 },
                 "title": {
                     "type": "string"
@@ -4718,6 +4806,10 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "is_current": {
+                    "description": "IsCurrent — этот шаг сейчас считается «активным» по правилу\nDeriveCurrentStep. Ровно один шаг в проекте может быть current=true.",
+                    "type": "boolean"
                 },
                 "owner": {
                     "$ref": "#/definitions/internal_projects.StepOwner"

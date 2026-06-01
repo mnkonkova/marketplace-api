@@ -959,16 +959,50 @@ definitions:
         type: string
       created_at:
         type: string
+      current_step_code:
+        description: CurrentStepCode — нужен фронту для step-descriptions[code].
+        type: string
+      current_step_id:
+        type: string
+      current_step_owner:
+        allOf:
+        - $ref: '#/definitions/internal_projects.StepOwner'
+        description: CurrentStepOwner — чтобы фронт понимал «ждём вас» vs «команда
+          работает».
+      current_step_status:
+        allOf:
+        - $ref: '#/definitions/internal_projects.StepStatus'
+        description: CurrentStepStatus — чтобы решать показывать ли кнопки в шаге.
+      current_step_title:
+        type: string
+      display_status:
+        $ref: '#/definitions/internal_projects.ProjectDisplayStatus'
       id:
         type: string
       lead_id:
         type: string
+      progress:
+        description: Progress — % по весам видимых шагов (см. progress.go).
+        type: number
       revisions_included:
+        description: RevisionsIncluded — сырое значение из БД (бэк-compat).
+        type: integer
+      revisions_total:
+        description: |-
+          RevisionsTotal — синоним RevisionsIncluded по новой конвенции FE
+          (фикс §3.1 брифа). FE на новых компонентах использует именно его.
         type: integer
       revisions_used:
         type: integer
       specialist_user_id:
         type: string
+      stages:
+        description: |-
+          Stages — funnel-дерево, встроенное в выдачу. На list и detail
+          отдаём одинаковую форму. Payload растёт, но убирает N+1 на фронте.
+        items:
+          $ref: '#/definitions/internal_projects.StageView'
+        type: array
       started_at:
         type: string
       status:
@@ -978,6 +1012,24 @@ definitions:
       updated_at:
         type: string
     type: object
+  internal_projects.ProjectDisplayStatus:
+    enum:
+    - not_started
+    - in_progress
+    - waiting_action
+    - completed
+    - on_hold
+    - dispute
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - DisplayStatusNotStarted
+    - DisplayStatusInProgress
+    - DisplayStatusWaitingAction
+    - DisplayStatusCompleted
+    - DisplayStatusOnHold
+    - DisplayStatusDispute
+    - DisplayStatusCancelled
   internal_projects.ProjectSource:
     enum:
     - marketplace
@@ -1036,12 +1088,24 @@ definitions:
           $ref: '#/definitions/internal_projects.ProjectSpecialistView'
         type: array
     type: object
+  internal_projects.StageDisplayStatus:
+    enum:
+    - not_started
+    - active
+    - completed
+    type: string
+    x-enum-varnames:
+    - StageNotStarted
+    - StageActive
+    - StageCompleted
   internal_projects.StageView:
     properties:
       code:
         type: string
       completed_at:
         type: string
+      display_status:
+        $ref: '#/definitions/internal_projects.StageDisplayStatus'
       id:
         type: string
       sort_order:
@@ -1052,6 +1116,10 @@ definitions:
         items:
           $ref: '#/definitions/internal_projects.StepView'
         type: array
+      steps_done:
+        type: integer
+      steps_total:
+        type: integer
       title:
         type: string
     type: object
@@ -1124,6 +1192,11 @@ definitions:
         type: string
       id:
         type: string
+      is_current:
+        description: |-
+          IsCurrent — этот шаг сейчас считается «активным» по правилу
+          DeriveCurrentStep. Ровно один шаг в проекте может быть current=true.
+        type: boolean
       owner:
         $ref: '#/definitions/internal_projects.StepOwner'
       sort_order:
