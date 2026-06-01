@@ -172,6 +172,24 @@ func NewRouter(d Deps) http.Handler {
 			r.Delete("/reviews/{id}", d.Reviews.Delete)
 		})
 
+		// /manager/* — только role=manager AND is_approved.
+		if d.AuthRepo != nil && d.Projects != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.Middleware(d.TokenIssuer))
+				r.Use(auth.RequireRoles(d.AuthRepo, auth.RoleManager))
+
+				r.Get("/manager/projects/inbox", d.Projects.ManagerInbox)
+				r.Get("/manager/projects", d.Projects.ManagerListAssigned)
+				r.Get("/manager/projects/{id}", d.Projects.ManagerGetFull)
+				r.Patch("/manager/projects/{id}", d.Projects.ManagerPatch)
+				r.Post("/manager/projects/{id}/claim", d.Projects.ManagerClaim)
+				r.Post("/manager/projects/{id}/advance_stage", d.Projects.ManagerAdvanceStage)
+				r.Post("/manager/projects/{id}/steps/{step_id}/start", d.Projects.ManagerStartStep)
+				r.Post("/manager/projects/{id}/steps/{step_id}/complete", d.Projects.ManagerCompleteStep)
+				r.Post("/manager/projects/{id}/steps/{step_id}/skip", d.Projects.ManagerSkipStep)
+			})
+		}
+
 		// /admin/* — только role=admin. AuthRepo обязателен (если не передан,
 		// группа не маунтится — невозможно проверить роль).
 		if d.AuthRepo != nil {
