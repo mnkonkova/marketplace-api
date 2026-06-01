@@ -107,8 +107,11 @@ type Config struct {
 	// физически удаляется из БД (вместе со снэпшотом стадий/шагов,
 	// событиями, комментариями — все каскады). По умолчанию 7 дней:
 	// клиент ещё может вернуться, скачать что-то, потом убираем.
-	ProjectRetention       time.Duration `env:"PROJECT_RETENTION" envDefault:"168h"`
-	ProjectCleanupInterval time.Duration `env:"PROJECT_CLEANUP_INTERVAL" envDefault:"1h"`
+	ProjectRetention time.Duration `env:"PROJECT_RETENTION" envDefault:"168h"`
+	// ProjectCancelledRetention — для cancelled больше: история диспа может
+	// понадобиться разобраться с клиентом, поэтому 30 дней по умолчанию.
+	ProjectCancelledRetention time.Duration `env:"PROJECT_CANCELLED_RETENTION" envDefault:"720h"`
+	ProjectCleanupInterval    time.Duration `env:"PROJECT_CLEANUP_INTERVAL" envDefault:"1h"`
 
 	// CRM v5: n8n webhook для нотификаций по project.* событиям. Пусто →
 	// диспатч выключен (события успешно обрабатываются как no-op, не

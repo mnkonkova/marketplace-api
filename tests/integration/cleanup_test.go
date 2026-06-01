@@ -37,7 +37,7 @@ func TestCleanupOldCompletedProjects(t *testing.T) {
 		pidActive)
 
 	repo := projects.NewRepo(pool)
-	n, err := repo.CleanupOldCompletedProjects(ctx, 7*24*time.Hour)
+	n, err := repo.CleanupOldCompletedProjects(ctx, 7*24*time.Hour, 30*24*time.Hour)
 	if err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
@@ -70,12 +70,47 @@ func TestCleanupOldCompletedProjects(t *testing.T) {
 	_ = uuid.Nil // sil linter
 }
 
+// ---- ТЕСТ: cancelled удаляется только если старше cancelledRetention ----
+
+func TestCleanupCancelledRespectsRetention(t *testing.T) {
+	pool := integration.Pool(t)
+	_, _, pidOld, cleanupOld := setupPipelineAndProject(t, pool)
+	defer cleanupOld()
+	_, _, pidRecent, cleanupRecent := setupPipelineAndProject(t, pool)
+	defer cleanupRecent()
+
+	ctx := context.Background()
+	// pidOld: cancelled, updated_at 40 дней назад — должен удалиться
+	_, _ = pool.Exec(ctx,
+		`UPDATE projects SET status='cancelled', updated_at=now()-interval '40 days' WHERE id=$1`,
+		pidOld)
+	// pidRecent: cancelled, updated_at 10 дней назад — жив (порог 30)
+	_, _ = pool.Exec(ctx,
+		`UPDATE projects SET status='cancelled', updated_at=now()-interval '10 days' WHERE id=$1`,
+		pidRecent)
+
+	repo := projects.NewRepo(pool)
+	if _, err := repo.CleanupOldCompletedProjects(ctx, 0, 30*24*time.Hour); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+
+	var aliveOld, aliveRecent bool
+	_ = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)`, pidOld).Scan(&aliveOld)
+	_ = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)`, pidRecent).Scan(&aliveRecent)
+	if aliveOld {
+		t.Errorf("cancelled 40d должен быть удалён")
+	}
+	if !aliveRecent {
+		t.Errorf("cancelled 10d должен быть жив")
+	}
+}
+
 // ---- ТЕСТ: retention=0 → ничего не удаляет ----
 
 func TestCleanupNoOp(t *testing.T) {
 	pool := integration.Pool(t)
 	repo := projects.NewRepo(pool)
-	n, err := repo.CleanupOldCompletedProjects(context.Background(), 0)
+	n, err := repo.CleanupOldCompletedProjects(context.Background(), 0, 0)
 	if err != nil {
 		t.Fatalf("cleanup with retention=0: %v", err)
 	}

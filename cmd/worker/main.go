@@ -208,8 +208,10 @@ func main() {
 	projectsSvc := projects.NewService(projectsRepo).
 		WithReviewDeadline(cfg.ReviewDeadline)
 	go runReviewAutoSkipTicker(rootCtx, projectsSvc, cfg.ReviewCheckInterval, logger)
-	// CRM v5: периодическая чистка done-проектов старше cfg.ProjectRetention.
-	go runOldProjectsCleanupTicker(rootCtx, projectsSvc, cfg.ProjectRetention, cfg.ProjectCleanupInterval, logger)
+	// CRM v5: периодическая чистка done (через ProjectRetention) и cancelled
+	// (через ProjectCancelledRetention) проектов.
+	go runOldProjectsCleanupTicker(rootCtx, projectsSvc,
+		cfg.ProjectRetention, cfg.ProjectCancelledRetention, cfg.ProjectCleanupInterval, logger)
 
 	// /metrics для alloy. Отдельный listener, чтобы не путать с api:8080 и
 	// чтобы worker оставался без бизнес-API. /healthz нужен compose'у — без
@@ -284,14 +286,13 @@ func renderPasswordResetEmail(p outbox.EmailPasswordResetPayload) (subject, plai
 	return subject, plain
 }
 
-// runOldProjectsCleanupTicker — периодически (interval) удаляет done-проекты
-// старше retention. На пустой выборке — no-op (один UPDATE). При ошибке
-// логируем и продолжаем — следующая попытка через interval.
-func runOldProjectsCleanupTicker(ctx context.Context, svc *projects.Service, retention, interval time.Duration, logger *slog.Logger) {
-	if retention <= 0 || interval <= 0 {
+// runOldProjectsCleanupTicker — периодически удаляет done-проекты старше
+// doneRetention и cancelled-проекты старше cancelledRetention.
+func runOldProjectsCleanupTicker(ctx context.Context, svc *projects.Service, doneRetention, cancelledRetention, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 || (doneRetention <= 0 && cancelledRetention <= 0) {
 		return
 	}
-	if n, err := svc.RunOldProjectsCleanup(ctx, retention); err != nil {
+	if n, err := svc.RunOldProjectsCleanup(ctx, doneRetention, cancelledRetention); err != nil {
 		logger.Warn("old projects cleanup initial run failed", "err", err)
 	} else if n > 0 {
 		logger.Info("old projects cleaned up", "count", n)
@@ -304,7 +305,7 @@ func runOldProjectsCleanupTicker(ctx context.Context, svc *projects.Service, ret
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			n, err := svc.RunOldProjectsCleanup(ctx, retention)
+			n, err := svc.RunOldProjectsCleanup(ctx, doneRetention, cancelledRetention)
 			if err != nil {
 				logger.Warn("old projects cleanup failed", "err", err)
 				continue
