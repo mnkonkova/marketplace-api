@@ -15,6 +15,1106 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/managers": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Список менеджеров (с фильтром is_approved)",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "true|false",
+                        "name": "is_approved",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.managersListResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/managers/{id}/approve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Аппрувить менеджера",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/admin/managers/{id}/revoke": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Снять аппрув с менеджера",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/admin/pipelines": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "List pipelines (admin)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.pipelineListResp"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Create pipeline (admin)",
+                "parameters": [
+                    {
+                        "description": "pipeline",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.createPipelineReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.Pipeline"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/pipelines/stages/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Delete stage (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "stage id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Patch stage (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "stage id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "patch",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.patchStageReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.Stage"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/pipelines/stages/{id}/steps": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Create step under stage (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "stage id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "step",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.createStepReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/pipelines/steps/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Delete step (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "step id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Patch step (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "step id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "patch",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.patchStepReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/pipelines/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Get pipeline with stages and steps (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "pipeline id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.PipelineFull"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "hard=true → физическое удаление из БД (cascade на stages/steps).\nЗапрещено если есть любые проекты с этим pipeline_id.\nБез флага — soft-delete (is_active=false), запрет только при\nактивных проектах (draft/active/on_hold/dispute).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Soft- или hard-delete воронки (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "pipeline id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "true для hard-delete",
+                        "name": "hard",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "409": {
+                        "description": "has_active_projects | has_projects",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.errorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Patch pipeline (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "pipeline id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "patch fields",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.patchPipelineReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.Pipeline"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/pipelines/{id}/reorder": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Bulk reorder stages and steps within pipeline (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "pipeline id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "reorder payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.ReorderInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/admin/pipelines/{id}/stages": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Create stage under pipeline (admin)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "pipeline id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "stage",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.createStageReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_pipelines.Stage"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/productions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Список всех продакшенов (включая деактивированные)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.listResp"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Создать продакшен",
+                "parameters": [
+                    {
+                        "description": "name + description",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.createReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.Production"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "name_taken: уже есть активный с таким именем",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/productions/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Мягкое удаление: is_active=false. У живых спецов выбор сохраняется.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Деактивировать продакшен",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "production id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-productions"
+                ],
+                "summary": "Обновить продакшен",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "production id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "patch fields",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.patchReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.Production"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Все проекты (админ — таблица и канбан)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "filter by status",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.managerListResp"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Создать проект вручную (админ)",
+                "parameters": [
+                    {
+                        "description": "project",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.adminCreateProjectReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Полный вид любого проекта (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ProjectFullView"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}/advance_stage": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Админ-канбан: продвинуть стадию любого проекта",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "409": {
+                        "description": "stage_blocked | last_stage",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}/comments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Комментарии любого проекта (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentsResp"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Комментировать любой проект (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Comment"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}/events": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Лента активности любого проекта (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.eventsResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}/move_stage": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Админ-канбан: перенести проект на любую стадию",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "target_stage_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.moveStageReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "409": {
+                        "description": "stage_blocked",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/users": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Создать клиента вручную (опц. сгенерить инвайт)",
+                "parameters": [
+                    {
+                        "description": "client data",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.createClientReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.CreateClientResult"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/users/{id}/generate_invite": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Сгенерировать инвайт для существующего юзера",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.InviteGenerateResult"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "consumes": [
@@ -55,6 +1155,122 @@ const docTemplate = `{
                         "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/password-reset/confirm": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Применить новый пароль по токену из письма",
+                "parameters": [
+                    {
+                        "description": "token + новый пароль",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.passwordResetConfirmReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "свежая пара tokens — фронт может авто-логинить",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.TokenPair"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "token_invalid: токен неизвестен, использован или просрочен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/password-reset/request": {
+            "post": {
+                "description": "Всегда 204 (anti-enumeration). Если email зарегистрирован,\nна него уйдёт письмо со ссылкой DOMAIN/auth/reset?token=...",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Запросить ссылку сброса пароля",
+                "parameters": [
+                    {
+                        "description": "email",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.passwordResetRequestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/redeem_invite/{token}": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Обменять magic-link на JWT (публичный)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "raw invite token",
+                        "name": "token",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.redeemResp"
+                        }
+                    },
+                    "410": {
+                        "description": "invite_invalid",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
                         }
                     }
                 }
@@ -101,6 +1317,7 @@ const docTemplate = `{
         },
         "/auth/register": {
             "post": {
+                "description": "При невалидном вводе или занятом email отвечает 400 invalid_input\n(разные причины не различаются — anti-enumeration).",
                 "consumes": [
                     "application/json"
                 ],
@@ -131,12 +1348,6 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_auth.errorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.errorResponse"
                         }
@@ -447,6 +1658,523 @@ const docTemplate = `{
                         "description": "email_unverified — для авторизованного клиента email должен быть подтверждён",
                         "schema": {
                             "$ref": "#/definitions/internal_leads.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Мои проекты (assigned_to=me) — для канбана",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.managerListResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/inbox": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Входящие проекты без ответственного",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.managerListResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Полный вид моего проекта (все стадии и шаги)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ProjectFullView"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Inline-редактирование title/budget/notes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "patch",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ManagerPatchInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "409": {
+                        "description": "stale_updated_at",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/advance_stage": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Канбан-drag: завершает оставшиеся team-шаги текущей стадии,\nактивирует первый шаг следующей. 409 если есть незавершённый\nclient-шаг.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Продвинуть проект на следующую стадию",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "409": {
+                        "description": "stage_blocked | last_stage",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/claim": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Взять проект на себя",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "already_claimed",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/comments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Комментарии проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentsResp"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Добавить комментарий (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Comment"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/events": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Лента активности проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "default 50, max 200",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "default 0",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.eventsResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/move_stage": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Перенести проект на произвольную стадию (любую)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "target_stage_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.moveStageReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "409": {
+                        "description": "stage_blocked | not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/steps/{step_id}/complete": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Завершить team-шаг",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "step id",
+                        "name": "step_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/steps/{step_id}/skip": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Пропустить шаг (с комментарием)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "step id",
+                        "name": "step_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "comment (required)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.skipReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/steps/{step_id}/start": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "owner=team/system → in_progress; owner=client → waiting_client.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Стартовать pending-шаг (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "step id",
+                        "name": "step_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Step"
                         }
                     }
                 }
@@ -899,6 +2627,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Одной транзакцией под одной optimistic-lock версией:\nполя профиля + (опционально) categories + (опционально) skills.\nЛюбая секция, оставленная nil/неуказанной, не трогается.",
                 "consumes": [
                     "application/json"
                 ],
@@ -908,77 +2637,15 @@ const docTemplate = `{
                 "tags": [
                     "profile"
                 ],
-                "summary": "Частично обновить свой профиль",
+                "summary": "Обновить свой профиль (атомарно)",
                 "parameters": [
                     {
-                        "description": "поля для апдейта",
+                        "description": "профиль + categories + skills + updated_at",
                         "name": "body",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/internal_profiles.PatchInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.Profile"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/me/profile/categories": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "profile"
-                ],
-                "summary": "Заменить список категорий специалиста",
-                "parameters": [
-                    {
-                        "description": "categories",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.SetCategoriesInput"
+                            "$ref": "#/definitions/internal_profiles.PatchFullInput"
                         }
                     }
                 ],
@@ -1128,68 +2795,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/me/profile/skills": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "profile"
-                ],
-                "summary": "Заменить список навыков",
-                "parameters": [
-                    {
-                        "description": "skills",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.SetSkillsInput"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.Profile"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/internal_profiles.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/me/profile/unpublish": {
             "post": {
                 "security": [
@@ -1221,6 +2826,296 @@ const docTemplate = `{
                         "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Мои проекты (для клиента)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.clientListResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/comments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Комментарии моего проекта (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentsResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/funnel": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Воронка моего проекта (стадии + видимые шаги)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ProjectClientView"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/steps/{step_id}/approve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Принять шаг (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "step id",
+                        "name": "step_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/steps/{step_id}/request_revision": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Запросить правки (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "step id",
+                        "name": "step_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "комментарий",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.revisionReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Step"
+                        }
+                    },
+                    "409": {
+                        "description": "revisions_exhausted",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/steps/{step_id}/submit_review": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Закрыть review-шаг (после оставления отзыва)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "step id (is_review=true)",
+                        "name": "step_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/specialist/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "specialist-projects"
+                ],
+                "summary": "Назначенные мне проекты (специалист)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.managerListResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/specialist/projects/{id}/funnel": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "specialist-projects"
+                ],
+                "summary": "Воронка моего проекта (специалист, read-only)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.ProjectFullView"
                         }
                     }
                 }
@@ -1277,6 +3172,25 @@ const docTemplate = `{
                         "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/productions": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "productions"
+                ],
+                "summary": "Список продакшенов (для выбора в профиле спеца)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_productions.listResp"
                         }
                     }
                 }
@@ -1610,8 +3524,14 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "tool|platform|genre",
+                        "description": "tool|platform|genre|skill",
                         "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Код категории из /categories — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы при фильтре по категории не возвращаются.",
+                        "name": "category",
                         "in": "query"
                     }
                 ],
@@ -1720,6 +3640,107 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "internal_admin.CreateClientResult": {
+            "type": "object",
+            "properties": {
+                "invite_token": {
+                    "type": "string"
+                },
+                "invite_url": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.InviteGenerateResult": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.ManagerInfo": {
+            "type": "object",
+            "properties": {
+                "assigned_projects": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "email_verified": {
+                    "type": "boolean"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_approved": {
+                    "type": "boolean"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.createClientReq": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "generate_invite": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_admin.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.managersListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.ManagerInfo"
+                    }
+                }
+            }
+        },
+        "internal_admin.redeemResp": {
+            "type": "object",
+            "properties": {
+                "tokens": {
+                    "$ref": "#/definitions/marketpclce_internal_auth.TokenPair"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_auth.TokenPair": {
             "type": "object",
             "properties": {
@@ -1759,13 +3780,40 @@ const docTemplate = `{
                 "email_verified": {
                     "type": "boolean"
                 },
+                "is_approved": {
+                    "description": "IsApproved — для manager обязательный аппрув; фронт показывает\n«ждёт аппрува» вместо кабинета.",
+                    "type": "boolean"
+                },
                 "kind": {
                     "type": "string"
                 },
                 "phone": {
                     "type": "string"
                 },
+                "role": {
+                    "description": "Role — CRM-роль для разграничения кабинетов на фронте. Без неё фронт\nне знает, куда отправлять юзера после логина.",
+                    "type": "string"
+                },
                 "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.passwordResetConfirmReq": {
+            "type": "object",
+            "properties": {
+                "password": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.passwordResetRequestReq": {
+            "type": "object",
+            "properties": {
+                "email": {
                     "type": "string"
                 }
             }
@@ -1791,6 +3839,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "password": {
+                    "type": "string"
+                },
+                "role": {
+                    "description": "Role — опциональная CRM-роль. Допустимы: client | specialist | manager.\nПусто/опущено → client. admin через register нельзя.",
                     "type": "string"
                 }
             }
@@ -2229,6 +4281,390 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_pipelines.Pipeline": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.PipelineFull": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "stages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_pipelines.StageFull"
+                    }
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.ReorderInput": {
+            "type": "object",
+            "properties": {
+                "stages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_pipelines.ReorderStage"
+                    }
+                }
+            }
+        },
+        "internal_pipelines.ReorderStage": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_pipelines.ReorderStep"
+                    }
+                }
+            }
+        },
+        "internal_pipelines.ReorderStep": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.Stage": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.StageFull": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_pipelines.Step"
+                    }
+                }
+            }
+        },
+        "internal_pipelines.Step": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "duration_days": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_review": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "stage_id": {
+                    "type": "string"
+                },
+                "visible_to_client": {
+                    "type": "boolean"
+                },
+                "visible_to_specialist": {
+                    "type": "boolean"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.createPipelineReq": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.createStageReq": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.createStepReq": {
+            "type": "object",
+            "properties": {
+                "duration_days": {
+                    "type": "integer"
+                },
+                "is_review": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "visible_to_client": {
+                    "type": "boolean"
+                },
+                "visible_to_specialist": {
+                    "type": "boolean"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_pipelines.patchPipelineReq": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.patchStageReq": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.patchStepReq": {
+            "type": "object",
+            "properties": {
+                "duration_days": {
+                    "type": "integer"
+                },
+                "is_review": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "visible_to_client": {
+                    "type": "boolean"
+                },
+                "visible_to_specialist": {
+                    "type": "boolean"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.pipelineListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_pipelines.Pipeline"
+                    }
+                }
+            }
+        },
+        "internal_productions.Production": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.createReq": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.listResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_productions.Production"
+                    }
+                }
+            }
+        },
+        "internal_productions.patchReq": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_profilecheck.PartResult": {
             "type": "object",
             "properties": {
@@ -2282,6 +4718,20 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_profiles.CategoriesPart": {
+            "type": "object",
+            "properties": {
+                "codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "primary": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_profiles.CategoryRef": {
             "type": "object",
             "properties": {
@@ -2310,7 +4760,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_profiles.PatchInput": {
+        "internal_profiles.PatchFullInput": {
             "type": "object",
             "properties": {
                 "avatar_url": {
@@ -2318,6 +4768,9 @@ const docTemplate = `{
                 },
                 "bio": {
                     "type": "string"
+                },
+                "categories": {
+                    "$ref": "#/definitions/internal_profiles.CategoriesPart"
                 },
                 "city": {
                     "type": "string"
@@ -2334,14 +4787,23 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "type": "boolean"
+                },
+                "production_id": {
+                    "description": "Выбор работодателя специалиста (XOR). См. ProductionID/IsFreelance\nв Profile. Семантика поля:\n  ProductionID = *string —  \"uuid\" → выбрать; \"\" → снять (SET NULL);\n                             nil/опущено → не трогать\n  IsFreelance  = *bool   —  true → стать фрилансером; false → выключить\n                             фриланс; nil → не трогать.\nСервис нормализует: при IsFreelance=true автоматически снимает\nproduction_id, при выборе production_id — снимает is_freelance.\nКонфликт (production_id=valid AND is_freelance=true) → ErrInvalidInput.",
+                    "type": "string"
+                },
                 "rate_max": {
                     "type": "integer"
                 },
                 "rate_min": {
                     "type": "integer"
                 },
+                "skills": {
+                    "$ref": "#/definitions/internal_profiles.SkillsPart"
+                },
                 "updated_at": {
-                    "description": "UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.\nНесовпадение → 409 conflict (кто-то параллельно отредактировал).\nБез поля — старый небезопасный поведение для обратной совместимости.",
                     "type": "string"
                 }
             }
@@ -2491,10 +4953,17 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "type": "boolean"
+                },
                 "is_published": {
                     "type": "boolean"
                 },
                 "primary_category": {
+                    "type": "string"
+                },
+                "production_id": {
+                    "description": "ProductionID / IsFreelance — выбор работодателя специалиста.\nXOR на уровне CHECK constraint (см. 00010_crm.sql). Оба NULL/false =\nвыбор ещё не сделан (фронт показывает приглашение выбрать).",
                     "type": "string"
                 },
                 "rate_max": {
@@ -2603,39 +5072,6 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_profiles.SetCategoriesInput": {
-            "type": "object",
-            "properties": {
-                "codes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "primary": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "description": "UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.\nЕсли задан — несовпадение → 409. Без поля — старое поведение.",
-                    "type": "string"
-                }
-            }
-        },
-        "internal_profiles.SetSkillsInput": {
-            "type": "object",
-            "properties": {
-                "skill_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "updated_at": {
-                    "description": "UpdatedAt — см. SetCategoriesInput.",
-                    "type": "string"
-                }
-            }
-        },
         "internal_profiles.SkillRef": {
             "type": "object",
             "properties": {
@@ -2650,6 +5086,17 @@ const docTemplate = `{
                 },
                 "title": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_profiles.SkillsPart": {
+            "type": "object",
+            "properties": {
+                "skill_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2669,6 +5116,784 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_profiles.PortfolioItem"
                     }
+                }
+            }
+        },
+        "internal_projects.Comment": {
+            "type": "object",
+            "properties": {
+                "author_id": {
+                    "type": "string"
+                },
+                "author_name": {
+                    "type": "string"
+                },
+                "body": {
+                    "type": "string"
+                },
+                "body_format": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.Event": {
+            "type": "object",
+            "properties": {
+                "actor_display_name": {
+                    "type": "string"
+                },
+                "actor_type": {
+                    "type": "string"
+                },
+                "actor_user_id": {
+                    "type": "string"
+                },
+                "comment": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "event_kind": {
+                    "type": "string"
+                },
+                "from_status": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "payload": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "step_id": {
+                    "type": "string"
+                },
+                "to_status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.ManagerPatchInput": {
+            "type": "object",
+            "properties": {
+                "budget": {
+                    "type": "integer"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.Project": {
+            "type": "object",
+            "properties": {
+                "assigned_to_user_id": {
+                    "type": "string"
+                },
+                "budget": {
+                    "type": "integer"
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "lead_recipient_specialist_id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "revisions_used": {
+                    "type": "integer"
+                },
+                "source": {
+                    "$ref": "#/definitions/internal_projects.ProjectSource"
+                },
+                "specialist_user_id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.ProjectClientView": {
+            "type": "object",
+            "properties": {
+                "assigned_to_user_id": {
+                    "type": "string"
+                },
+                "budget": {
+                    "type": "integer"
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "current_step_id": {
+                    "description": "CurrentStep* — пришедший на «передовую» шаг (см. DeriveCurrentStep).\nНа UI идёт в hero-блок «Что сейчас». Может быть пустым (проект завершён).",
+                    "type": "string"
+                },
+                "current_step_owner": {
+                    "type": "string"
+                },
+                "current_step_status": {
+                    "$ref": "#/definitions/internal_projects.StepStatus"
+                },
+                "current_step_title": {
+                    "type": "string"
+                },
+                "display_status": {
+                    "$ref": "#/definitions/internal_projects.ProjectDisplayStatus"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "lead_recipient_specialist_id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "progress": {
+                    "description": "Progress — взвешенный % выполнения по видимым клиенту шагам.",
+                    "type": "number"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "revisions_total": {
+                    "description": "RevisionsTotal — алиас на RevisionsIncluded для UI («осталось X из Y»).",
+                    "type": "integer"
+                },
+                "revisions_used": {
+                    "type": "integer"
+                },
+                "source": {
+                    "$ref": "#/definitions/internal_projects.ProjectSource"
+                },
+                "specialist_display_name": {
+                    "description": "SpecialistDisplayName — имя исполнителя (если назначен). Пусто если\nspecialist_user_id=nil или у юзера нет specialist_profile.",
+                    "type": "string"
+                },
+                "specialist_user_id": {
+                    "type": "string"
+                },
+                "stages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.StageView"
+                    }
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.ProjectDisplayStatus": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "in_progress",
+                "waiting_action",
+                "completed",
+                "on_hold",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "ProjectDisplayNotStarted",
+                "ProjectDisplayInProgress",
+                "ProjectDisplayWaitingAction",
+                "ProjectDisplayCompleted",
+                "ProjectDisplayOnHold",
+                "ProjectDisplayCancelled"
+            ]
+        },
+        "internal_projects.ProjectFullView": {
+            "type": "object",
+            "properties": {
+                "assigned_to_user_id": {
+                    "type": "string"
+                },
+                "budget": {
+                    "type": "integer"
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "current_step_id": {
+                    "type": "string"
+                },
+                "current_step_owner": {
+                    "type": "string"
+                },
+                "current_step_status": {
+                    "$ref": "#/definitions/internal_projects.StepStatus"
+                },
+                "current_step_title": {
+                    "type": "string"
+                },
+                "display_status": {
+                    "$ref": "#/definitions/internal_projects.ProjectDisplayStatus"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "lead_recipient_specialist_id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "progress": {
+                    "type": "number"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "revisions_used": {
+                    "type": "integer"
+                },
+                "source": {
+                    "$ref": "#/definitions/internal_projects.ProjectSource"
+                },
+                "specialist_user_id": {
+                    "type": "string"
+                },
+                "stages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.StageView"
+                    }
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.ProjectManagerView": {
+            "type": "object",
+            "properties": {
+                "assigned_to_user_id": {
+                    "type": "string"
+                },
+                "budget": {
+                    "type": "integer"
+                },
+                "client_display_name": {
+                    "type": "string"
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "current_stage_id": {
+                    "description": "CurrentStageID/Title — куда положить карточку в канбане.",
+                    "type": "string"
+                },
+                "current_stage_name": {
+                    "type": "string"
+                },
+                "current_stage_order": {
+                    "type": "integer"
+                },
+                "current_step_id": {
+                    "type": "string"
+                },
+                "current_step_owner": {
+                    "type": "string"
+                },
+                "current_step_status": {
+                    "$ref": "#/definitions/internal_projects.StepStatus"
+                },
+                "current_step_title": {
+                    "type": "string"
+                },
+                "display_status": {
+                    "$ref": "#/definitions/internal_projects.ProjectDisplayStatus"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lead_id": {
+                    "type": "string"
+                },
+                "lead_recipient_specialist_id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "progress": {
+                    "type": "number"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "revisions_used": {
+                    "type": "integer"
+                },
+                "source": {
+                    "$ref": "#/definitions/internal_projects.ProjectSource"
+                },
+                "specialist_user_id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.ProjectSource": {
+            "type": "string",
+            "enum": [
+                "marketplace",
+                "manual",
+                "referral",
+                "returning_client"
+            ],
+            "x-enum-varnames": [
+                "SourceMarketplace",
+                "SourceManual",
+                "SourceReferral",
+                "SourceReturningClient"
+            ]
+        },
+        "internal_projects.ProjectStatus": {
+            "type": "string",
+            "enum": [
+                "draft",
+                "active",
+                "on_hold",
+                "done",
+                "cancelled",
+                "dispute"
+            ],
+            "x-enum-varnames": [
+                "ProjectStatusDraft",
+                "ProjectStatusActive",
+                "ProjectStatusOnHold",
+                "ProjectStatusDone",
+                "ProjectStatusCancelled",
+                "ProjectStatusDispute"
+            ]
+        },
+        "internal_projects.StageDisplayStatus": {
+            "type": "string",
+            "enum": [
+                "not_started",
+                "active",
+                "completed"
+            ],
+            "x-enum-varnames": [
+                "StageDisplayNotStarted",
+                "StageDisplayActive",
+                "StageDisplayCompleted"
+            ]
+        },
+        "internal_projects.StageView": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "display_status": {
+                    "$ref": "#/definitions/internal_projects.StageDisplayStatus"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.StepView"
+                    }
+                },
+                "steps_done": {
+                    "type": "integer"
+                },
+                "steps_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_projects.Step": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "duration_days": {
+                    "type": "integer"
+                },
+                "eta_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_review": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "review_deadline": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "stage_id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.StepStatus"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "visible_to_client": {
+                    "type": "boolean"
+                },
+                "visible_to_specialist": {
+                    "type": "boolean"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_projects.StepStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "in_progress",
+                "waiting_client",
+                "done",
+                "rejected",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "StepStatusPending",
+                "StepStatusInProgress",
+                "StepStatusWaitingClient",
+                "StepStatusDone",
+                "StepStatusRejected",
+                "StepStatusSkipped"
+            ]
+        },
+        "internal_projects.StepView": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "duration_days": {
+                    "type": "integer"
+                },
+                "eta_date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_current": {
+                    "type": "boolean"
+                },
+                "is_review": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "review_deadline": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "stage_id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_projects.StepStatus"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "visible_to_client": {
+                    "type": "boolean"
+                },
+                "visible_to_specialist": {
+                    "type": "boolean"
+                },
+                "weight": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_projects.adminCreateProjectReq": {
+            "type": "object",
+            "properties": {
+                "assigned_to_user_id": {
+                    "type": "string"
+                },
+                "budget": {
+                    "type": "integer"
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "specialist_user_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.clientListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.ProjectClientView"
+                    }
+                }
+            }
+        },
+        "internal_projects.commentReq": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.commentsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.Comment"
+                    }
+                }
+            }
+        },
+        "internal_projects.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.eventsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.Event"
+                    }
+                }
+            }
+        },
+        "internal_projects.managerListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.ProjectManagerView"
+                    }
+                }
+            }
+        },
+        "internal_projects.moveStageReq": {
+            "type": "object",
+            "properties": {
+                "target_stage_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.revisionReq": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.skipReq": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "type": "string"
                 }
             }
         },
@@ -2995,6 +6220,17 @@ const docTemplate = `{
                     }
                 },
                 "target_category": {
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_auth.TokenPair": {
+            "type": "object",
+            "properties": {
+                "access_token": {
+                    "type": "string"
+                },
+                "refresh_token": {
                     "type": "string"
                 }
             }

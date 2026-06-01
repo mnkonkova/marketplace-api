@@ -1,5 +1,70 @@
 basePath: /api/v1
 definitions:
+  internal_admin.CreateClientResult:
+    properties:
+      invite_token:
+        type: string
+      invite_url:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_admin.InviteGenerateResult:
+    properties:
+      expires_at:
+        type: string
+      token:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_admin.ManagerInfo:
+    properties:
+      assigned_projects:
+        type: integer
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      email_verified:
+        type: boolean
+      is_active:
+        type: boolean
+      is_approved:
+        type: boolean
+      user_id:
+        type: string
+    type: object
+  internal_admin.createClientReq:
+    properties:
+      display_name:
+        type: string
+      email:
+        type: string
+      generate_invite:
+        type: boolean
+    type: object
+  internal_admin.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_admin.managersListResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_admin.ManagerInfo'
+        type: array
+    type: object
+  internal_admin.redeemResp:
+    properties:
+      tokens:
+        $ref: '#/definitions/marketpclce_internal_auth.TokenPair'
+      user_id:
+        type: string
+    type: object
   internal_auth.TokenPair:
     properties:
       access_token:
@@ -25,11 +90,33 @@ definitions:
         type: string
       email_verified:
         type: boolean
+      is_approved:
+        description: |-
+          IsApproved — для manager обязательный аппрув; фронт показывает
+          «ждёт аппрува» вместо кабинета.
+        type: boolean
       kind:
         type: string
       phone:
         type: string
+      role:
+        description: |-
+          Role — CRM-роль для разграничения кабинетов на фронте. Без неё фронт
+          не знает, куда отправлять юзера после логина.
+        type: string
       user_id:
+        type: string
+    type: object
+  internal_auth.passwordResetConfirmReq:
+    properties:
+      password:
+        type: string
+      token:
+        type: string
+    type: object
+  internal_auth.passwordResetRequestReq:
+    properties:
+      email:
         type: string
     type: object
   internal_auth.refreshReq:
@@ -46,6 +133,11 @@ definitions:
       kind:
         type: string
       password:
+        type: string
+      role:
+        description: |-
+          Role — опциональная CRM-роль. Допустимы: client | specialist | manager.
+          Пусто/опущено → client. admin через register нельзя.
         type: string
     type: object
   internal_auth.registerResp:
@@ -334,6 +426,255 @@ definitions:
       status:
         type: string
     type: object
+  internal_pipelines.Pipeline:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+      revisions_included:
+        type: integer
+      updated_at:
+        type: string
+      version:
+        type: integer
+    type: object
+  internal_pipelines.PipelineFull:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+      revisions_included:
+        type: integer
+      stages:
+        items:
+          $ref: '#/definitions/internal_pipelines.StageFull'
+        type: array
+      updated_at:
+        type: string
+      version:
+        type: integer
+    type: object
+  internal_pipelines.ReorderInput:
+    properties:
+      stages:
+        items:
+          $ref: '#/definitions/internal_pipelines.ReorderStage'
+        type: array
+    type: object
+  internal_pipelines.ReorderStage:
+    properties:
+      id:
+        type: string
+      sort_order:
+        type: integer
+      steps:
+        items:
+          $ref: '#/definitions/internal_pipelines.ReorderStep'
+        type: array
+    type: object
+  internal_pipelines.ReorderStep:
+    properties:
+      id:
+        type: string
+      sort_order:
+        type: integer
+    type: object
+  internal_pipelines.Stage:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      pipeline_id:
+        type: string
+      sort_order:
+        type: integer
+    type: object
+  internal_pipelines.StageFull:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      pipeline_id:
+        type: string
+      sort_order:
+        type: integer
+      steps:
+        items:
+          $ref: '#/definitions/internal_pipelines.Step'
+        type: array
+    type: object
+  internal_pipelines.Step:
+    properties:
+      created_at:
+        type: string
+      duration_days:
+        type: integer
+      id:
+        type: string
+      is_review:
+        type: boolean
+      name:
+        type: string
+      owner:
+        type: string
+      sort_order:
+        type: integer
+      stage_id:
+        type: string
+      visible_to_client:
+        type: boolean
+      visible_to_specialist:
+        type: boolean
+      weight:
+        type: integer
+    type: object
+  internal_pipelines.createPipelineReq:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      revisions_included:
+        type: integer
+    type: object
+  internal_pipelines.createStageReq:
+    properties:
+      name:
+        type: string
+      sort_order:
+        type: integer
+    type: object
+  internal_pipelines.createStepReq:
+    properties:
+      duration_days:
+        type: integer
+      is_review:
+        type: boolean
+      name:
+        type: string
+      owner:
+        type: string
+      sort_order:
+        type: integer
+      visible_to_client:
+        type: boolean
+      visible_to_specialist:
+        type: boolean
+      weight:
+        type: integer
+    type: object
+  internal_pipelines.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_pipelines.patchPipelineReq:
+    properties:
+      description:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+      revisions_included:
+        type: integer
+    type: object
+  internal_pipelines.patchStageReq:
+    properties:
+      name:
+        type: string
+      sort_order:
+        type: integer
+    type: object
+  internal_pipelines.patchStepReq:
+    properties:
+      duration_days:
+        type: integer
+      is_review:
+        type: boolean
+      name:
+        type: string
+      owner:
+        type: string
+      sort_order:
+        type: integer
+      visible_to_client:
+        type: boolean
+      visible_to_specialist:
+        type: boolean
+      weight:
+        type: integer
+    type: object
+  internal_pipelines.pipelineListResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_pipelines.Pipeline'
+        type: array
+    type: object
+  internal_productions.Production:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_productions.createReq:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+    type: object
+  internal_productions.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_productions.listResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_productions.Production'
+        type: array
+    type: object
+  internal_productions.patchReq:
+    properties:
+      description:
+        type: string
+      is_active:
+        type: boolean
+      name:
+        type: string
+    type: object
   internal_profilecheck.PartResult:
     properties:
       ok:
@@ -368,6 +709,15 @@ definitions:
       error:
         type: string
     type: object
+  internal_profiles.CategoriesPart:
+    properties:
+      codes:
+        items:
+          type: string
+        type: array
+      primary:
+        type: string
+    type: object
   internal_profiles.CategoryRef:
     properties:
       code:
@@ -386,12 +736,14 @@ definitions:
       size_bytes:
         type: integer
     type: object
-  internal_profiles.PatchInput:
+  internal_profiles.PatchFullInput:
     properties:
       avatar_url:
         type: string
       bio:
         type: string
+      categories:
+        $ref: '#/definitions/internal_profiles.CategoriesPart'
       city:
         type: string
       contact_email:
@@ -402,15 +754,27 @@ definitions:
         type: string
       display_name:
         type: string
+      is_freelance:
+        type: boolean
+      production_id:
+        description: |-
+          Выбор работодателя специалиста (XOR). См. ProductionID/IsFreelance
+          в Profile. Семантика поля:
+            ProductionID = *string —  "uuid" → выбрать; "" → снять (SET NULL);
+                                       nil/опущено → не трогать
+            IsFreelance  = *bool   —  true → стать фрилансером; false → выключить
+                                       фриланс; nil → не трогать.
+          Сервис нормализует: при IsFreelance=true автоматически снимает
+          production_id, при выборе production_id — снимает is_freelance.
+          Конфликт (production_id=valid AND is_freelance=true) → ErrInvalidInput.
+        type: string
       rate_max:
         type: integer
       rate_min:
         type: integer
+      skills:
+        $ref: '#/definitions/internal_profiles.SkillsPart'
       updated_at:
-        description: |-
-          UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.
-          Несовпадение → 409 conflict (кто-то параллельно отредактировал).
-          Без поля — старый небезопасный поведение для обратной совместимости.
         type: string
     type: object
   internal_profiles.PortfolioCreateInput:
@@ -515,9 +879,17 @@ definitions:
         type: string
       display_name:
         type: string
+      is_freelance:
+        type: boolean
       is_published:
         type: boolean
       primary_category:
+        type: string
+      production_id:
+        description: |-
+          ProductionID / IsFreelance — выбор работодателя специалиста.
+          XOR на уровне CHECK constraint (см. 00010_crm.sql). Оба NULL/false =
+          выбор ещё не сделан (фронт показывает приглашение выбрать).
         type: string
       rate_max:
         type: integer
@@ -592,30 +964,6 @@ definitions:
       text:
         type: string
     type: object
-  internal_profiles.SetCategoriesInput:
-    properties:
-      codes:
-        items:
-          type: string
-        type: array
-      primary:
-        type: string
-      updated_at:
-        description: |-
-          UpdatedAt — optimistic-lock parent specialist_profiles.updated_at.
-          Если задан — несовпадение → 409. Без поля — старое поведение.
-        type: string
-    type: object
-  internal_profiles.SetSkillsInput:
-    properties:
-      skill_ids:
-        items:
-          type: string
-        type: array
-      updated_at:
-        description: UpdatedAt — см. SetCategoriesInput.
-        type: string
-    type: object
   internal_profiles.SkillRef:
     properties:
       id:
@@ -626,6 +974,13 @@ definitions:
         type: string
       title:
         type: string
+    type: object
+  internal_profiles.SkillsPart:
+    properties:
+      skill_ids:
+        items:
+          type: string
+        type: array
     type: object
   internal_profiles.errorResponse:
     properties:
@@ -638,6 +993,538 @@ definitions:
         items:
           $ref: '#/definitions/internal_profiles.PortfolioItem'
         type: array
+    type: object
+  internal_projects.Comment:
+    properties:
+      author_id:
+        type: string
+      author_name:
+        type: string
+      body:
+        type: string
+      body_format:
+        type: string
+      created_at:
+        type: string
+      deleted_at:
+        type: string
+      id:
+        type: string
+      project_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.Event:
+    properties:
+      actor_display_name:
+        type: string
+      actor_type:
+        type: string
+      actor_user_id:
+        type: string
+      comment:
+        type: string
+      created_at:
+        type: string
+      event_kind:
+        type: string
+      from_status:
+        type: string
+      id:
+        type: integer
+      payload:
+        items:
+          type: integer
+        type: array
+      project_id:
+        type: string
+      step_id:
+        type: string
+      to_status:
+        type: string
+    type: object
+  internal_projects.ManagerPatchInput:
+    properties:
+      budget:
+        type: integer
+      notes:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.Project:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      client_user_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      lead_id:
+        type: string
+      lead_recipient_specialist_id:
+        type: string
+      notes:
+        type: string
+      pipeline_id:
+        type: string
+      revisions_included:
+        type: integer
+      revisions_used:
+        type: integer
+      source:
+        $ref: '#/definitions/internal_projects.ProjectSource'
+      specialist_user_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.ProjectClientView:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      client_user_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      current_step_id:
+        description: |-
+          CurrentStep* — пришедший на «передовую» шаг (см. DeriveCurrentStep).
+          На UI идёт в hero-блок «Что сейчас». Может быть пустым (проект завершён).
+        type: string
+      current_step_owner:
+        type: string
+      current_step_status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+      current_step_title:
+        type: string
+      display_status:
+        $ref: '#/definitions/internal_projects.ProjectDisplayStatus'
+      id:
+        type: string
+      lead_id:
+        type: string
+      lead_recipient_specialist_id:
+        type: string
+      notes:
+        type: string
+      pipeline_id:
+        type: string
+      progress:
+        description: Progress — взвешенный % выполнения по видимым клиенту шагам.
+        type: number
+      revisions_included:
+        type: integer
+      revisions_total:
+        description: RevisionsTotal — алиас на RevisionsIncluded для UI («осталось
+          X из Y»).
+        type: integer
+      revisions_used:
+        type: integer
+      source:
+        $ref: '#/definitions/internal_projects.ProjectSource'
+      specialist_display_name:
+        description: |-
+          SpecialistDisplayName — имя исполнителя (если назначен). Пусто если
+          specialist_user_id=nil или у юзера нет specialist_profile.
+        type: string
+      specialist_user_id:
+        type: string
+      stages:
+        items:
+          $ref: '#/definitions/internal_projects.StageView'
+        type: array
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.ProjectDisplayStatus:
+    enum:
+    - not_started
+    - in_progress
+    - waiting_action
+    - completed
+    - on_hold
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - ProjectDisplayNotStarted
+    - ProjectDisplayInProgress
+    - ProjectDisplayWaitingAction
+    - ProjectDisplayCompleted
+    - ProjectDisplayOnHold
+    - ProjectDisplayCancelled
+  internal_projects.ProjectFullView:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      client_user_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      current_step_id:
+        type: string
+      current_step_owner:
+        type: string
+      current_step_status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+      current_step_title:
+        type: string
+      display_status:
+        $ref: '#/definitions/internal_projects.ProjectDisplayStatus'
+      id:
+        type: string
+      lead_id:
+        type: string
+      lead_recipient_specialist_id:
+        type: string
+      notes:
+        type: string
+      pipeline_id:
+        type: string
+      progress:
+        type: number
+      revisions_included:
+        type: integer
+      revisions_used:
+        type: integer
+      source:
+        $ref: '#/definitions/internal_projects.ProjectSource'
+      specialist_user_id:
+        type: string
+      stages:
+        items:
+          $ref: '#/definitions/internal_projects.StageView'
+        type: array
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.ProjectManagerView:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      client_display_name:
+        type: string
+      client_user_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      current_stage_id:
+        description: CurrentStageID/Title — куда положить карточку в канбане.
+        type: string
+      current_stage_name:
+        type: string
+      current_stage_order:
+        type: integer
+      current_step_id:
+        type: string
+      current_step_owner:
+        type: string
+      current_step_status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+      current_step_title:
+        type: string
+      display_status:
+        $ref: '#/definitions/internal_projects.ProjectDisplayStatus'
+      id:
+        type: string
+      lead_id:
+        type: string
+      lead_recipient_specialist_id:
+        type: string
+      notes:
+        type: string
+      pipeline_id:
+        type: string
+      progress:
+        type: number
+      revisions_included:
+        type: integer
+      revisions_used:
+        type: integer
+      source:
+        $ref: '#/definitions/internal_projects.ProjectSource'
+      specialist_user_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.ProjectSource:
+    enum:
+    - marketplace
+    - manual
+    - referral
+    - returning_client
+    type: string
+    x-enum-varnames:
+    - SourceMarketplace
+    - SourceManual
+    - SourceReferral
+    - SourceReturningClient
+  internal_projects.ProjectStatus:
+    enum:
+    - draft
+    - active
+    - on_hold
+    - done
+    - cancelled
+    - dispute
+    type: string
+    x-enum-varnames:
+    - ProjectStatusDraft
+    - ProjectStatusActive
+    - ProjectStatusOnHold
+    - ProjectStatusDone
+    - ProjectStatusCancelled
+    - ProjectStatusDispute
+  internal_projects.StageDisplayStatus:
+    enum:
+    - not_started
+    - active
+    - completed
+    type: string
+    x-enum-varnames:
+    - StageDisplayNotStarted
+    - StageDisplayActive
+    - StageDisplayCompleted
+  internal_projects.StageView:
+    properties:
+      completed_at:
+        type: string
+      display_status:
+        $ref: '#/definitions/internal_projects.StageDisplayStatus'
+      id:
+        type: string
+      name:
+        type: string
+      project_id:
+        type: string
+      sort_order:
+        type: integer
+      started_at:
+        type: string
+      steps:
+        items:
+          $ref: '#/definitions/internal_projects.StepView'
+        type: array
+      steps_done:
+        type: integer
+      steps_total:
+        type: integer
+    type: object
+  internal_projects.Step:
+    properties:
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      duration_days:
+        type: integer
+      eta_date:
+        type: string
+      id:
+        type: string
+      is_review:
+        type: boolean
+      name:
+        type: string
+      owner:
+        type: string
+      project_id:
+        type: string
+      review_deadline:
+        type: string
+      sort_order:
+        type: integer
+      stage_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+      updated_at:
+        type: string
+      visible_to_client:
+        type: boolean
+      visible_to_specialist:
+        type: boolean
+      weight:
+        type: integer
+    type: object
+  internal_projects.StepStatus:
+    enum:
+    - pending
+    - in_progress
+    - waiting_client
+    - done
+    - rejected
+    - skipped
+    type: string
+    x-enum-varnames:
+    - StepStatusPending
+    - StepStatusInProgress
+    - StepStatusWaitingClient
+    - StepStatusDone
+    - StepStatusRejected
+    - StepStatusSkipped
+  internal_projects.StepView:
+    properties:
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      duration_days:
+        type: integer
+      eta_date:
+        type: string
+      id:
+        type: string
+      is_current:
+        type: boolean
+      is_review:
+        type: boolean
+      name:
+        type: string
+      owner:
+        type: string
+      project_id:
+        type: string
+      review_deadline:
+        type: string
+      sort_order:
+        type: integer
+      stage_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_projects.StepStatus'
+      updated_at:
+        type: string
+      visible_to_client:
+        type: boolean
+      visible_to_specialist:
+        type: boolean
+      weight:
+        type: integer
+    type: object
+  internal_projects.adminCreateProjectReq:
+    properties:
+      assigned_to_user_id:
+        type: string
+      budget:
+        type: integer
+      client_user_id:
+        type: string
+      notes:
+        type: string
+      pipeline_id:
+        type: string
+      source:
+        type: string
+      specialist_user_id:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_projects.clientListResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.ProjectClientView'
+        type: array
+    type: object
+  internal_projects.commentReq:
+    properties:
+      body:
+        type: string
+    type: object
+  internal_projects.commentsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.Comment'
+        type: array
+    type: object
+  internal_projects.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_projects.eventsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.Event'
+        type: array
+    type: object
+  internal_projects.managerListResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.ProjectManagerView'
+        type: array
+    type: object
+  internal_projects.moveStageReq:
+    properties:
+      target_stage_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_projects.revisionReq:
+    properties:
+      comment:
+        type: string
+    type: object
+  internal_projects.skipReq:
+    properties:
+      comment:
+        type: string
     type: object
   internal_reviews.Review:
     properties:
@@ -854,6 +1741,13 @@ definitions:
       target_category:
         type: string
     type: object
+  marketpclce_internal_auth.TokenPair:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+    type: object
   marketpclce_internal_search.IndexDoc:
     properties:
       avatar_url:
@@ -904,6 +1798,687 @@ info:
   title: marketpclce API
   version: "1.0"
 paths:
+  /admin/managers:
+    get:
+      parameters:
+      - description: true|false
+        in: query
+        name: is_approved
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.managersListResp'
+      security:
+      - BearerAuth: []
+      summary: Список менеджеров (с фильтром is_approved)
+      tags:
+      - admin-users
+  /admin/managers/{id}/approve:
+    post:
+      parameters:
+      - description: user id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Аппрувить менеджера
+      tags:
+      - admin-users
+  /admin/managers/{id}/revoke:
+    post:
+      parameters:
+      - description: user id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Снять аппрув с менеджера
+      tags:
+      - admin-users
+  /admin/pipelines:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_pipelines.pipelineListResp'
+      security:
+      - BearerAuth: []
+      summary: List pipelines (admin)
+      tags:
+      - admin-pipelines
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: pipeline
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_pipelines.createPipelineReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_pipelines.Pipeline'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_pipelines.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create pipeline (admin)
+      tags:
+      - admin-pipelines
+  /admin/pipelines/{id}:
+    delete:
+      description: |-
+        hard=true → физическое удаление из БД (cascade на stages/steps).
+        Запрещено если есть любые проекты с этим pipeline_id.
+        Без флага — soft-delete (is_active=false), запрет только при
+        активных проектах (draft/active/on_hold/dispute).
+      parameters:
+      - description: pipeline id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: true для hard-delete
+        in: query
+        name: hard
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "409":
+          description: has_active_projects | has_projects
+          schema:
+            $ref: '#/definitions/internal_pipelines.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Soft- или hard-delete воронки (admin)
+      tags:
+      - admin-pipelines
+    get:
+      parameters:
+      - description: pipeline id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_pipelines.PipelineFull'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_pipelines.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get pipeline with stages and steps (admin)
+      tags:
+      - admin-pipelines
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: pipeline id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: patch fields
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_pipelines.patchPipelineReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_pipelines.Pipeline'
+      security:
+      - BearerAuth: []
+      summary: Patch pipeline (admin)
+      tags:
+      - admin-pipelines
+  /admin/pipelines/{id}/reorder:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: pipeline id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: reorder payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_pipelines.ReorderInput'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Bulk reorder stages and steps within pipeline (admin)
+      tags:
+      - admin-pipelines
+  /admin/pipelines/{id}/stages:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: pipeline id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: stage
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_pipelines.createStageReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_pipelines.Stage'
+      security:
+      - BearerAuth: []
+      summary: Create stage under pipeline (admin)
+      tags:
+      - admin-pipelines
+  /admin/pipelines/stages/{id}:
+    delete:
+      parameters:
+      - description: stage id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Delete stage (admin)
+      tags:
+      - admin-pipelines
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: stage id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: patch
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_pipelines.patchStageReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_pipelines.Stage'
+      security:
+      - BearerAuth: []
+      summary: Patch stage (admin)
+      tags:
+      - admin-pipelines
+  /admin/pipelines/stages/{id}/steps:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: stage id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: step
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_pipelines.createStepReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_pipelines.Step'
+      security:
+      - BearerAuth: []
+      summary: Create step under stage (admin)
+      tags:
+      - admin-pipelines
+  /admin/pipelines/steps/{id}:
+    delete:
+      parameters:
+      - description: step id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Delete step (admin)
+      tags:
+      - admin-pipelines
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: step id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: patch
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_pipelines.patchStepReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_pipelines.Step'
+      security:
+      - BearerAuth: []
+      summary: Patch step (admin)
+      tags:
+      - admin-pipelines
+  /admin/productions:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.listResp'
+      security:
+      - BearerAuth: []
+      summary: Список всех продакшенов (включая деактивированные)
+      tags:
+      - admin-productions
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: name + description
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_productions.createReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_productions.Production'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "409":
+          description: 'name_taken: уже есть активный с таким именем'
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать продакшен
+      tags:
+      - admin-productions
+  /admin/productions/{id}:
+    delete:
+      description: 'Мягкое удаление: is_active=false. У живых спецов выбор сохраняется.'
+      parameters:
+      - description: production id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Деактивировать продакшен
+      tags:
+      - admin-productions
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: production id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: patch fields
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_productions.patchReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.Production'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/internal_productions.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Обновить продакшен
+      tags:
+      - admin-productions
+  /admin/projects:
+    get:
+      parameters:
+      - description: filter by status
+        in: query
+        name: status
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.managerListResp'
+      security:
+      - BearerAuth: []
+      summary: Все проекты (админ — таблица и канбан)
+      tags:
+      - admin-projects
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.adminCreateProjectReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.Project'
+      security:
+      - BearerAuth: []
+      summary: Создать проект вручную (админ)
+      tags:
+      - admin-projects
+  /admin/projects/{id}:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectFullView'
+      security:
+      - BearerAuth: []
+      summary: Полный вид любого проекта (админ)
+      tags:
+      - admin-projects
+  /admin/projects/{id}/advance_stage:
+    post:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Project'
+        "409":
+          description: stage_blocked | last_stage
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Админ-канбан: продвинуть стадию любого проекта'
+      tags:
+      - admin-projects
+  /admin/projects/{id}/comments:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.commentsResp'
+      security:
+      - BearerAuth: []
+      summary: Комментарии любого проекта (админ)
+      tags:
+      - admin-projects
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.commentReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.Comment'
+      security:
+      - BearerAuth: []
+      summary: Комментировать любой проект (админ)
+      tags:
+      - admin-projects
+  /admin/projects/{id}/events:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.eventsResp'
+      security:
+      - BearerAuth: []
+      summary: Лента активности любого проекта (админ)
+      tags:
+      - admin-projects
+  /admin/projects/{id}/move_stage:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: target_stage_id
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.moveStageReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Project'
+        "409":
+          description: stage_blocked
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Админ-канбан: перенести проект на любую стадию'
+      tags:
+      - admin-projects
+  /admin/users:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: client data
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_admin.createClientReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_admin.CreateClientResult'
+      security:
+      - BearerAuth: []
+      summary: Создать клиента вручную (опц. сгенерить инвайт)
+      tags:
+      - admin-users
+  /admin/users/{id}/generate_invite:
+    post:
+      parameters:
+      - description: user id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.InviteGenerateResult'
+      security:
+      - BearerAuth: []
+      summary: Сгенерировать инвайт для существующего юзера
+      tags:
+      - admin-users
   /auth/login:
     post:
       consumes:
@@ -931,6 +2506,83 @@ paths:
           schema:
             $ref: '#/definitions/internal_auth.errorResponse'
       summary: Логин по email/телефону и паролю
+      tags:
+      - auth
+  /auth/password-reset/confirm:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: token + новый пароль
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.passwordResetConfirmReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: свежая пара tokens — фронт может авто-логинить
+          schema:
+            $ref: '#/definitions/internal_auth.TokenPair'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "410":
+          description: 'token_invalid: токен неизвестен, использован или просрочен'
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Применить новый пароль по токену из письма
+      tags:
+      - auth
+  /auth/password-reset/request:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Всегда 204 (anti-enumeration). Если email зарегистрирован,
+        на него уйдёт письмо со ссылкой DOMAIN/auth/reset?token=...
+      parameters:
+      - description: email
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.passwordResetRequestReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Запросить ссылку сброса пароля
+      tags:
+      - auth
+  /auth/redeem_invite/{token}:
+    post:
+      parameters:
+      - description: raw invite token
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.redeemResp'
+        "410":
+          description: invite_invalid
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+      summary: Обменять magic-link на JWT (публичный)
       tags:
       - auth
   /auth/refresh:
@@ -962,6 +2614,9 @@ paths:
     post:
       consumes:
       - application/json
+      description: |-
+        При невалидном вводе или занятом email отвечает 400 invalid_input
+        (разные причины не различаются — anti-enumeration).
       parameters:
       - description: регистрационные данные
         in: body
@@ -978,10 +2633,6 @@ paths:
             $ref: '#/definitions/internal_auth.registerResp'
         "400":
           description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_auth.errorResponse'
-        "409":
-          description: Conflict
           schema:
             $ref: '#/definitions/internal_auth.errorResponse'
       summary: Регистрация пользователя
@@ -1191,6 +2842,330 @@ paths:
       summary: Создать заявку (lead)
       tags:
       - leads
+  /manager/projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.managerListResp'
+      security:
+      - BearerAuth: []
+      summary: Мои проекты (assigned_to=me) — для канбана
+      tags:
+      - manager-projects
+  /manager/projects/{id}:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectFullView'
+      security:
+      - BearerAuth: []
+      summary: Полный вид моего проекта (все стадии и шаги)
+      tags:
+      - manager-projects
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: patch
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.ManagerPatchInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Project'
+        "409":
+          description: stale_updated_at
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Inline-редактирование title/budget/notes
+      tags:
+      - manager-projects
+  /manager/projects/{id}/advance_stage:
+    post:
+      description: |-
+        Канбан-drag: завершает оставшиеся team-шаги текущей стадии,
+        активирует первый шаг следующей. 409 если есть незавершённый
+        client-шаг.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Project'
+        "409":
+          description: stage_blocked | last_stage
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Продвинуть проект на следующую стадию
+      tags:
+      - manager-projects
+  /manager/projects/{id}/claim:
+    post:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "409":
+          description: already_claimed
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Взять проект на себя
+      tags:
+      - manager-projects
+  /manager/projects/{id}/comments:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.commentsResp'
+      security:
+      - BearerAuth: []
+      summary: Комментарии проекта (менеджер)
+      tags:
+      - manager-projects
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.commentReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.Comment'
+      security:
+      - BearerAuth: []
+      summary: Добавить комментарий (менеджер)
+      tags:
+      - manager-projects
+  /manager/projects/{id}/events:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: default 50, max 200
+        in: query
+        name: limit
+        type: integer
+      - description: default 0
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.eventsResp'
+      security:
+      - BearerAuth: []
+      summary: Лента активности проекта (менеджер)
+      tags:
+      - manager-projects
+  /manager/projects/{id}/move_stage:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: target_stage_id
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.moveStageReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Project'
+        "409":
+          description: stage_blocked | not_found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Перенести проект на произвольную стадию (любую)
+      tags:
+      - manager-projects
+  /manager/projects/{id}/steps/{step_id}/complete:
+    post:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: step id
+        in: path
+        name: step_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Step'
+      security:
+      - BearerAuth: []
+      summary: Завершить team-шаг
+      tags:
+      - manager-projects
+  /manager/projects/{id}/steps/{step_id}/skip:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: step id
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: comment (required)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.skipReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Step'
+      security:
+      - BearerAuth: []
+      summary: Пропустить шаг (с комментарием)
+      tags:
+      - manager-projects
+  /manager/projects/{id}/steps/{step_id}/start:
+    post:
+      description: owner=team/system → in_progress; owner=client → waiting_client.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: step id
+        in: path
+        name: step_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Step'
+      security:
+      - BearerAuth: []
+      summary: Стартовать pending-шаг (менеджер)
+      tags:
+      - manager-projects
+  /manager/projects/inbox:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.managerListResp'
+      security:
+      - BearerAuth: []
+      summary: Входящие проекты без ответственного
+      tags:
+      - manager-projects
   /me:
     get:
       produces:
@@ -1470,13 +3445,17 @@ paths:
     patch:
       consumes:
       - application/json
+      description: |-
+        Одной транзакцией под одной optimistic-lock версией:
+        поля профиля + (опционально) categories + (опционально) skills.
+        Любая секция, оставленная nil/неуказанной, не трогается.
       parameters:
-      - description: поля для апдейта
+      - description: профиль + categories + skills + updated_at
         in: body
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_profiles.PatchInput'
+          $ref: '#/definitions/internal_profiles.PatchFullInput'
       produces:
       - application/json
       responses:
@@ -1502,46 +3481,7 @@ paths:
             $ref: '#/definitions/internal_profiles.errorResponse'
       security:
       - BearerAuth: []
-      summary: Частично обновить свой профиль
-      tags:
-      - profile
-  /me/profile/categories:
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: categories
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/internal_profiles.SetCategoriesInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_profiles.Profile'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Заменить список категорий специалиста
+      summary: Обновить свой профиль (атомарно)
       tags:
       - profile
   /me/profile/check:
@@ -1618,45 +3558,6 @@ paths:
       summary: Опубликовать профиль
       tags:
       - profile
-  /me/profile/skills:
-    put:
-      consumes:
-      - application/json
-      parameters:
-      - description: skills
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/internal_profiles.SetSkillsInput'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_profiles.Profile'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/internal_profiles.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Заменить список навыков
-      tags:
-      - profile
   /me/profile/unpublish:
     post:
       produces:
@@ -1679,6 +3580,184 @@ paths:
       summary: Снять профиль с публикации
       tags:
       - profile
+  /me/projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.clientListResp'
+      security:
+      - BearerAuth: []
+      summary: Мои проекты (для клиента)
+      tags:
+      - client-projects
+  /me/projects/{id}/comments:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.commentsResp'
+      security:
+      - BearerAuth: []
+      summary: Комментарии моего проекта (клиент)
+      tags:
+      - client-projects
+  /me/projects/{id}/funnel:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectClientView'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Воронка моего проекта (стадии + видимые шаги)
+      tags:
+      - client-projects
+  /me/projects/{id}/steps/{step_id}/approve:
+    post:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: step id
+        in: path
+        name: step_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Step'
+      security:
+      - BearerAuth: []
+      summary: Принять шаг (клиент)
+      tags:
+      - client-projects
+  /me/projects/{id}/steps/{step_id}/request_revision:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: step id
+        in: path
+        name: step_id
+        required: true
+        type: string
+      - description: комментарий
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_projects.revisionReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Step'
+        "409":
+          description: revisions_exhausted
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Запросить правки (клиент)
+      tags:
+      - client-projects
+  /me/projects/{id}/steps/{step_id}/submit_review:
+    post:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: step id (is_review=true)
+        in: path
+        name: step_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.Step'
+      security:
+      - BearerAuth: []
+      summary: Закрыть review-шаг (после оставления отзыва)
+      tags:
+      - client-projects
+  /me/specialist/projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.managerListResp'
+      security:
+      - BearerAuth: []
+      summary: Назначенные мне проекты (специалист)
+      tags:
+      - specialist-projects
+  /me/specialist/projects/{id}/funnel:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.ProjectFullView'
+      security:
+      - BearerAuth: []
+      summary: Воронка моего проекта (специалист, read-only)
+      tags:
+      - specialist-projects
   /me/uploads/image:
     post:
       consumes:
@@ -1714,6 +3793,18 @@ paths:
       summary: Presigned PUT URL для аплоада картинки (аватар / превью)
       tags:
       - portfolio
+  /productions:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_productions.listResp'
+      summary: Список продакшенов (для выбора в профиле спеца)
+      tags:
+      - productions
   /reviews:
     post:
       consumes:
@@ -1923,9 +4014,15 @@ paths:
   /skills:
     get:
       parameters:
-      - description: tool|platform|genre
+      - description: tool|platform|genre|skill
         in: query
         name: kind
+        type: string
+      - description: Код категории из /categories — отфильтровать навыки, релевантные
+          категории (см. skill_categories). Платформы при фильтре по категории не
+          возвращаются.
+        in: query
+        name: category
         type: string
       produces:
       - application/json
