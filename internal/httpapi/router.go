@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 
+	"marketpclce/internal/admin"
 	"marketpclce/internal/auth"
 	"marketpclce/internal/catalog"
 	"marketpclce/internal/clarify"
@@ -45,6 +46,7 @@ type Deps struct {
 	Productions *productions.Handler
 	Pipelines   *pipelines.Handler
 	Projects    *projects.Handler
+	Admin       *admin.Handler
 
 	CORSOrigins []string
 
@@ -126,6 +128,11 @@ func NewRouter(d Deps) http.Handler {
 			r.Use(RateLimit(d.Limiter, "leads", d.LeadsWindows))
 			r.Post("/leads", d.Leads.Create)
 		})
+
+		// Публичный redeem_invite — magic-link обмен на JWT.
+		if d.Admin != nil {
+			r.Post("/auth/redeem_invite/{token}", d.Admin.RedeemInvite)
+		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(d.TokenIssuer))
@@ -216,6 +223,19 @@ func NewRouter(d Deps) http.Handler {
 					r.Patch("/admin/pipelines/steps/{id}", d.Pipelines.AdminPatchStep)
 					r.Delete("/admin/pipelines/steps/{id}", d.Pipelines.AdminDeleteStep)
 					r.Put("/admin/pipelines/{id}/reorder", d.Pipelines.AdminReorder)
+				}
+				if d.Admin != nil {
+					r.Get("/admin/managers", d.Admin.AdminListManagers)
+					r.Post("/admin/managers/{id}/approve", d.Admin.AdminApproveManager)
+					r.Post("/admin/managers/{id}/revoke", d.Admin.AdminRevokeManager)
+					r.Post("/admin/users", d.Admin.AdminCreateClient)
+					r.Post("/admin/users/{id}/generate_invite", d.Admin.AdminGenerateInvite)
+				}
+				if d.Projects != nil {
+					r.Get("/admin/projects", d.Projects.AdminListProjects)
+					r.Post("/admin/projects", d.Projects.AdminCreateProject)
+					r.Get("/admin/projects/{id}", d.Projects.AdminGetProject)
+					r.Post("/admin/projects/{id}/advance_stage", d.Projects.AdminAdvanceStage)
 				}
 			})
 		}

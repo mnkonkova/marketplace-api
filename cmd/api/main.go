@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
+	"marketpclce/internal/admin"
 	"marketpclce/internal/auth"
 	"marketpclce/internal/catalog"
 	"marketpclce/internal/clarify"
@@ -197,6 +198,13 @@ func main() {
 		WithReviewDeadline(cfg.ReviewDeadline)
 	projectsHandler := projects.NewHandler(projectsSvc)
 
+	// Admin domain — менеджеры, клиенты вручную, magic-link инвайты.
+	// TTL инвайта возьмём от EmailVerifyTokenTTL — те же 24h по умолчанию,
+	// для длинных временно поднимем в env.
+	adminRepo := admin.NewRepo(pool)
+	adminSvc := admin.NewService(adminRepo, tokenIssuer, cfg.AppBaseURL, cfg.EmailVerifyTokenTTL)
+	adminHandler := admin.NewHandler(adminSvc)
+
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter
 	if rdb != nil {
@@ -226,6 +234,7 @@ func main() {
 		Productions:  productionsHandler,
 		Pipelines:    pipelinesHandler,
 		Projects:     projectsHandler,
+		Admin:        adminHandler,
 		CORSOrigins:  cfg.CORSOrigins,
 		Limiter:     limiter,
 		ReadWindows: []ratelimit.Window{

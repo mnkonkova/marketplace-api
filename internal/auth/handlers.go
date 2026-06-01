@@ -17,6 +17,9 @@ type registerReq struct {
 	Password    string `json:"password"`
 	Kind        string `json:"kind"`
 	DisplayName string `json:"display_name"`
+	// Role — опциональная CRM-роль. Допустимы: client | specialist | manager.
+	// Пусто/опущено → client. admin через register нельзя.
+	Role string `json:"role,omitempty"`
 }
 
 type registerResp struct {
@@ -46,6 +49,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		Password:    in.Password,
 		Kind:        in.Kind,
 		DisplayName: in.DisplayName,
+		Role:        in.Role,
 	})
 	switch {
 	// ErrAlreadyExists и ErrInvalidInput возвращаем одним статусом и кодом,
