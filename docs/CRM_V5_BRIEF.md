@@ -407,8 +407,9 @@ GET  /api/v1/admin/managers
 POST /api/v1/admin/managers/{id}/approve
 POST /api/v1/admin/managers/{id}/revoke
 # Пайплайны (раздел 3)
-# Проекты (обзор всех)
-GET  /api/v1/admin/projects
+# Проекты (обзор всех — включая канбан)
+GET  /api/v1/admin/projects                    — все проекты + status/assigned_to фильтры, для канбана и таблицы
+POST /api/v1/admin/projects/{id}/advance_stage — админ может двигать любой проект (та же стейт-машина)
 POST /api/v1/admin/projects
 POST /api/v1/admin/projects/from_recipient/{id}
 POST /api/v1/admin/projects/from_lead/{id}/bulk
@@ -476,7 +477,13 @@ Layout `/admin/*` с sidebar.
 - `pages/admin/productions/` — CRUD.
 - `pages/admin/managers/` — список + аппрув/отозвать.
 - `pages/admin/pipelines/` — список + редактор (CDK reorder).
-- `pages/admin/projects/` — обзор всех.
+- `pages/admin/board/` — **канбан со ВСЕМИ проектами** (а не только своими).
+  Колонки те же, что у менеджера (по стадиям активного пайплайна), но
+  фильтра `assigned_to=me` нет. На карточке — имя ответственного менеджера
+  (или «без ответственного»). Drag-drop тоже двигает `advance_stage` с тем
+  же правилом 409 (нельзя пропустить клиента). Карточки могут вестись из
+  inbox: админ видит всё, включая ничейные.
+- `pages/admin/projects/` — табличный обзор всех с фильтрами (доп. view).
 
 ### 6.5 Guards, роутинг и разграничение
 
