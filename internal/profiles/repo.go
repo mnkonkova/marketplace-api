@@ -31,7 +31,8 @@ SELECT p.user_id, p.display_name, p.bio,
        p.rate_min, p.rate_max, p.currency,
        p.is_published, p.rating_avg, p.reviews_count,
        COALESCE(p.contact_email, ''), COALESCE(p.contact_phone, ''),
-       p.updated_at
+       p.updated_at,
+       p.production_id, p.is_freelance
 FROM specialist_profiles p
 WHERE p.user_id = $1`
 	var p Profile
@@ -42,6 +43,7 @@ WHERE p.user_id = $1`
 		&p.IsPublished, &p.RatingAvg, &p.ReviewsCount,
 		&p.ContactEmail, &p.ContactPhone,
 		&p.UpdatedAt,
+		&p.ProductionID, &p.IsFreelance,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{}, ErrNotFound
@@ -132,6 +134,8 @@ UPDATE specialist_profiles SET
   currency      = COALESCE($10, currency),
   contact_email = COALESCE($11, contact_email),
   contact_phone = COALESCE($12, contact_phone),
+  production_id = CASE WHEN $14::boolean THEN $15 ELSE production_id END,
+  is_freelance  = CASE WHEN $16::boolean THEN $17 ELSE is_freelance END,
   updated_at    = now()
 WHERE user_id = $1
   AND ($13::timestamptz IS NULL OR updated_at = $13)`
@@ -147,6 +151,8 @@ WHERE user_id = $1
 		in.ContactEmail,
 		in.ContactPhone,
 		in.UpdatedAt,
+		in.SetProduction, in.ProductionID,
+		in.SetIsFreelance, in.IsFreelance,
 	)
 	if err != nil {
 		return fmt.Errorf("update profile: %w", err)

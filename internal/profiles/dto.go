@@ -82,6 +82,11 @@ type Profile struct {
 	// попадают — это видимость не для feed'а.
 	ContactEmail string `json:"contact_email,omitempty"`
 	ContactPhone string `json:"contact_phone,omitempty"`
+	// ProductionID / IsFreelance — выбор работодателя специалиста.
+	// XOR на уровне CHECK constraint (см. 00010_crm.sql). Оба NULL/false =
+	// выбор ещё не сделан (фронт показывает приглашение выбрать).
+	ProductionID *uuid.UUID `json:"production_id,omitempty"`
+	IsFreelance  bool       `json:"is_freelance"`
 }
 
 type PatchInput struct {
@@ -98,6 +103,16 @@ type PatchInput struct {
 	// Несовпадение → 409 conflict (кто-то параллельно отредактировал).
 	// Без поля — старый небезопасный поведение для обратной совместимости.
 	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
+
+	// SetProduction / ProductionID — пара bool+value для возможности
+	// явно выставить production_id в NULL. Если SetProduction=true и
+	// ProductionID=nil → SET NULL. Если SetProduction=false → COALESCE
+	// (не трогать). Аналогично для SetIsFreelance.
+	// (Этих полей НЕТ в JSON — они заполняются сервисом по PatchFullInput.)
+	SetProduction  bool       `json:"-"`
+	ProductionID   *uuid.UUID `json:"-"`
+	SetIsFreelance bool       `json:"-"`
+	IsFreelance    bool       `json:"-"`
 }
 
 // CategoriesPart — секция категорий внутри PatchFullInput. Указатель в
@@ -133,6 +148,18 @@ type PatchFullInput struct {
 	ContactEmail *string `json:"contact_email"`
 	ContactPhone *string `json:"contact_phone"`
 
+	// Выбор работодателя специалиста (XOR). См. ProductionID/IsFreelance
+	// в Profile. Семантика поля:
+	//   ProductionID = *string —  "uuid" → выбрать; "" → снять (SET NULL);
+	//                              nil/опущено → не трогать
+	//   IsFreelance  = *bool   —  true → стать фрилансером; false → выключить
+	//                              фриланс; nil → не трогать.
+	// Сервис нормализует: при IsFreelance=true автоматически снимает
+	// production_id, при выборе production_id — снимает is_freelance.
+	// Конфликт (production_id=valid AND is_freelance=true) → ErrInvalidInput.
+	ProductionID *string `json:"production_id,omitempty"`
+	IsFreelance  *bool   `json:"is_freelance,omitempty"`
+
 	Categories *CategoriesPart `json:"categories,omitempty"`
 	Skills     *SkillsPart     `json:"skills,omitempty"`
 
@@ -145,11 +172,13 @@ type PatchFullInput struct {
 func (in PatchFullInput) hasProfileFields() bool {
 	return in.DisplayName != nil || in.Bio != nil || in.AvatarURL != nil ||
 		in.City != nil || in.RateMin != nil || in.RateMax != nil ||
-		in.Currency != nil || in.ContactEmail != nil || in.ContactPhone != nil
+		in.Currency != nil || in.ContactEmail != nil || in.ContactPhone != nil ||
+		in.ProductionID != nil || in.IsFreelance != nil
 }
 
 // toPatchInput — переиспользуем PatchInTx, который уже умеет COALESCE
 // по nil-полям. UpdatedAt передаём чтобы он сам проверил optimistic-lock.
+// production/freelance заполняет сервис после XOR-нормализации.
 func (in PatchFullInput) toPatchInput() PatchInput {
 	return PatchInput{
 		DisplayName:  in.DisplayName,

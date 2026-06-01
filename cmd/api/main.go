@@ -184,6 +184,9 @@ func main() {
 	productionsSvc := productions.NewService(productionsRepo)
 	productionsHandler := productions.NewHandler(productionsSvc)
 
+	// profilesSvc валидирует production_id через productions.Service.
+	profilesSvc.WithProductionLookup(productionsSvc)
+
 	pipelinesRepo := pipelines.NewRepo(pool)
 	pipelinesSvc := pipelines.NewService(pipelinesRepo)
 	pipelinesHandler := pipelines.NewHandler(pipelinesSvc)

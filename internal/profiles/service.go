@@ -31,6 +31,15 @@ type EmailVerifier interface {
 	IsEmailVerified(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
+// ProductionLookup — узкий интерфейс для валидации production_id при
+// PatchFull: при выборе продакшена убедиться, что он существует и активен.
+// Реализуется productions.Service.IsActiveProduction. nil-safe: без
+// подключения сервис не валидирует — FK в БД всё равно отловит несуществующий
+// id, но не отличит от деактивированного (захардкоженной строки нет).
+type ProductionLookup interface {
+	IsActiveProduction(ctx context.Context, id uuid.UUID) (bool, error)
+}
+
 type ProfileChecker interface {
 	Available() bool
 	Check(ctx context.Context, in CheckInput) (CheckResult, error)
@@ -65,10 +74,11 @@ type MediaStorage interface {
 }
 
 type Service struct {
-	repo     *Repo
-	checker  ProfileChecker
-	media    MediaStorage
-	verifier EmailVerifier
+	repo       *Repo
+	checker    ProfileChecker
+	media      MediaStorage
+	verifier   EmailVerifier
+	production ProductionLookup
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -87,6 +97,14 @@ func (s *Service) WithMediaStorage(m MediaStorage) *Service {
 // почты). nil-safe: без вызова publish проходит без проверки.
 func (s *Service) WithEmailVerifier(v EmailVerifier) *Service {
 	s.verifier = v
+	return s
+}
+
+// WithProductionLookup подключает валидацию production_id при PatchFull.
+// Без неё неактивный/несуществующий id даст 23503 (FK) — но активность
+// без lookup'а не проверим.
+func (s *Service) WithProductionLookup(p ProductionLookup) *Service {
+	s.production = p
 	return s
 }
 
@@ -112,6 +130,18 @@ func (s *Service) GetPublic(ctx context.Context, userID uuid.UUID) (PublicProfil
 // Семантика nil: каждое поле/секция, оставленные nil во входе, не трогаются.
 func (s *Service) PatchFull(ctx context.Context, userID uuid.UUID, in PatchFullInput) (Profile, error) {
 	patch := in.toPatchInput()
+
+	// 0. XOR-нормализация production_id / is_freelance.
+	if in.ProductionID != nil || in.IsFreelance != nil {
+		got, err := NormalizeProduction(ctx, in.ProductionID, in.IsFreelance, s.production)
+		if err != nil {
+			return Profile{}, err
+		}
+		patch.SetProduction = got.SetProduction
+		patch.ProductionID = got.ProductionID
+		patch.SetIsFreelance = got.SetIsFreelance
+		patch.IsFreelance = got.IsFreelance
+	}
 
 	// 1. Валидация profile-полей (если есть). Дублирует логику из Patch,
 	// но вынести её в общий хелпер сейчас — больше шума чем пользы:
@@ -567,6 +597,64 @@ type ProfileRejectedError struct {
 func (e *ProfileRejectedError) Error() string { return "profile rejected by llm check" }
 func (e *ProfileRejectedError) Is(target error) bool {
 	return target == ErrProfileRejected
+}
+
+// NormalizedProduction — результат XOR-нормализации production/freelance.
+// Используется и сервисом (заполняет одноимённые поля PatchInput), и тестами.
+type NormalizedProduction struct {
+	SetProduction  bool
+	ProductionID   *uuid.UUID
+	SetIsFreelance bool
+	IsFreelance    bool
+}
+
+// NormalizeProduction — XOR между production_id и is_freelance.
+// Семантика:
+//   productionID = "uuid" → выбрать (авто-снимает freelance);
+//   productionID = ""    → снять продакшен (SET NULL);
+//   productionID = nil   → не трогать.
+//   isFreelance  = &true → стать фрилансером (авто-снимает production);
+//   isFreelance  = &false → выключить freelance;
+//   isFreelance  = nil   → не трогать.
+// Конфликт productionID=valid + isFreelance=true → ErrInvalidInput.
+// lookup может быть nil — тогда активность не проверяется, и FK ловит
+// только несуществующий id.
+func NormalizeProduction(ctx context.Context, productionID *string, isFreelance *bool, lookup ProductionLookup) (NormalizedProduction, error) {
+	var out NormalizedProduction
+	if productionID != nil {
+		out.SetProduction = true
+		raw := strings.TrimSpace(*productionID)
+		if raw != "" {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return NormalizedProduction{}, fmt.Errorf("%w: production_id is not a uuid", ErrInvalidInput)
+			}
+			if lookup != nil {
+				ok, err := lookup.IsActiveProduction(ctx, id)
+				if err != nil {
+					return NormalizedProduction{}, fmt.Errorf("lookup production: %w", err)
+				}
+				if !ok {
+					return NormalizedProduction{}, fmt.Errorf("%w: production not found or inactive", ErrInvalidInput)
+				}
+			}
+			out.ProductionID = &id
+			out.SetIsFreelance = true
+			out.IsFreelance = false
+		}
+	}
+	if isFreelance != nil {
+		if *isFreelance && out.ProductionID != nil {
+			return NormalizedProduction{}, fmt.Errorf("%w: production_id and is_freelance=true are mutually exclusive", ErrInvalidInput)
+		}
+		out.SetIsFreelance = true
+		out.IsFreelance = *isFreelance
+		if *isFreelance {
+			out.SetProduction = true
+			out.ProductionID = nil
+		}
+	}
+	return out, nil
 }
 
 func DedupStrings(in []string) []string {

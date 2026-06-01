@@ -36,6 +36,20 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (Production, error) {
 	return s.repo.Get(ctx, id)
 }
 
+// IsActiveProduction — реализация profiles.ProductionLookup. Возвращает
+// (false, nil) если объекта нет (а не ошибку) — это валидное состояние
+// «id невалиден», и сервису profiles удобнее одной булкой ветвиться.
+func (s *Service) IsActiveProduction(ctx context.Context, id uuid.UUID) (bool, error) {
+	p, err := s.repo.Get(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return p.IsActive, nil
+}
+
 func (s *Service) Patch(ctx context.Context, id uuid.UUID, in PatchInput) (Production, error) {
 	if in.Name != nil {
 		if err := validateName(*in.Name); err != nil {
