@@ -28,6 +28,7 @@ import (
 	"marketpclce/internal/platform/s3"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
@@ -191,6 +192,10 @@ func main() {
 	pipelinesSvc := pipelines.NewService(pipelinesRepo)
 	pipelinesHandler := pipelines.NewHandler(pipelinesSvc)
 
+	projectsRepo := projects.NewRepo(pool)
+	projectsSvc := projects.NewService(projectsRepo)
+	projectsHandler := projects.NewHandler(projectsSvc)
+
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter
 	if rdb != nil {
@@ -219,6 +224,7 @@ func main() {
 		Reviews:      reviewsHandler,
 		Productions:  productionsHandler,
 		Pipelines:    pipelinesHandler,
+		Projects:     projectsHandler,
 		CORSOrigins:  cfg.CORSOrigins,
 		Limiter:     limiter,
 		ReadWindows: []ratelimit.Window{

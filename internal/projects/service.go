@@ -1,0 +1,260 @@
+package projects
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+)
+
+var (
+	ErrInvalidInput = errors.New("invalid input")
+	// ErrRevisionsExhausted — клиент запросил правку, но лимит исчерпан.
+	// Сервис всё равно переводит проект в dispute (см. TransitionStep) и
+	// возвращает эту ошибку — фронт показывает соответствующее сообщение.
+	ErrRevisionsExhausted = errors.New("revisions exhausted")
+	// ErrNotClientStep — действие требует owner=client (approve/revision/review).
+	ErrNotClientStep = errors.New("step is not assigned to client")
+	// ErrNotReviewStep — submit_review для is_review=false.
+	ErrNotReviewStep = errors.New("step is not a review step")
+)
+
+type Service struct{ repo *Repo }
+
+func NewService(repo *Repo) *Service { return &Service{repo: repo} }
+
+// StartProject — публичная обёртка над repo.StartProject с валидацией DTO.
+func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUID, error) {
+	in.Title = strings.TrimSpace(in.Title)
+	if in.Title == "" {
+		return uuid.Nil, fmt.Errorf("%w: title is required", ErrInvalidInput)
+	}
+	if utf8.RuneCountInString(in.Title) > 200 {
+		return uuid.Nil, fmt.Errorf("%w: title is too long", ErrInvalidInput)
+	}
+	if in.ClientUserID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%w: client_user_id is required", ErrInvalidInput)
+	}
+	if in.PipelineID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%w: pipeline_id is required", ErrInvalidInput)
+	}
+	if in.Source == "" {
+		in.Source = SourceManual
+	}
+	return s.repo.StartProject(ctx, in)
+}
+
+// ---- Клиентские чтения ----
+
+// ListClientProjects — список проектов клиента с enrich-ом display_status.
+func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([]ProjectClientView, error) {
+	projects, err := s.repo.ListForClient(ctx, clientID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]ProjectClientView, 0, len(projects))
+	for _, p := range projects {
+		view, err := s.enrichClientView(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
+// GetClientProject — полный проект клиента с воронкой.
+func (s *Service) GetClientProject(ctx context.Context, projectID, clientID uuid.UUID) (ProjectClientView, error) {
+	p, err := s.repo.GetByIDForClient(ctx, projectID, clientID)
+	if err != nil {
+		return ProjectClientView{}, err
+	}
+	return s.enrichClientView(ctx, p)
+}
+
+// enrichClientView — общая сборка ProjectClientView из Project: стадии и
+// шаги (только visible_to_client), потом считаем display_status / progress /
+// current_step. N+1 SQL per project — приемлемо для MVP объёма.
+func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClientView, error) {
+	stages, err := s.repo.LoadStages(ctx, p.ID)
+	if err != nil {
+		return ProjectClientView{}, err
+	}
+	steps, err := s.repo.LoadSteps(ctx, p.ID, true)
+	if err != nil {
+		return ProjectClientView{}, err
+	}
+
+	// Группируем шаги по stage_id, превращая Step в StepView.
+	byStage := map[uuid.UUID][]StepView{}
+	flat := make([]StepView, 0, len(steps))
+	for _, st := range steps {
+		v := StepView{Step: st}
+		byStage[st.StageID] = append(byStage[st.StageID], v)
+		flat = append(flat, v)
+	}
+
+	current := DeriveCurrentStep(flat)
+
+	stageViews := make([]StageView, 0, len(stages))
+	for _, st := range stages {
+		stepsInStage := byStage[st.ID]
+		// помечаем current
+		for i := range stepsInStage {
+			if current != nil && stepsInStage[i].ID == current.ID {
+				stepsInStage[i].IsCurrent = true
+			}
+		}
+		ds, done, total := DeriveStageDisplayStatus(stepsInStage)
+		stageViews = append(stageViews, StageView{
+			Stage:         st,
+			DisplayStatus: ds,
+			StepsTotal:    total,
+			StepsDone:     done,
+			Steps:         stepsInStage,
+		})
+	}
+
+	view := ProjectClientView{
+		Project:        p,
+		DisplayStatus:  DeriveProjectDisplayStatus(p.Status, flat),
+		Progress:       DeriveProgress(flat),
+		RevisionsTotal: p.RevisionsIncluded,
+		Stages:         stageViews,
+	}
+	if current != nil {
+		view.CurrentStepID = &current.ID
+		view.CurrentStepTitle = current.Name
+		view.CurrentStepOwner = current.Owner
+		view.CurrentStepStatus = current.Status
+	}
+	return view, nil
+}
+
+// ---- Клиентские действия ----
+
+// Approve — клиент апрувит шаг (owner=client, status=waiting_client → done).
+// Не активирует следующий шаг автоматически: следующий team-шаг стартует
+// менеджером (Ф4). Это даёт точку контроля: «клиент одобрил, можно делать».
+func (s *Service) Approve(ctx context.Context, projectID, stepID, actorID uuid.UUID) (Step, error) {
+	step, err := s.repo.GetStep(ctx, projectID, stepID)
+	if err != nil {
+		return Step{}, err
+	}
+	if step.Owner != OwnerClient {
+		return Step{}, ErrNotClientStep
+	}
+	if step.Status != StepStatusWaitingClient {
+		return Step{}, ErrInvalidTransition
+	}
+	res, err := s.repo.TransitionStep(ctx, TransitionInput{
+		ProjectID:   projectID,
+		StepID:      stepID,
+		From:        StepStatusWaitingClient,
+		To:          StepStatusDone,
+		ActorUserID: actorID,
+		ActorType:   "human",
+	})
+	if err != nil {
+		return Step{}, err
+	}
+	return res.Step, nil
+}
+
+// RequestRevision — клиент жмёт «правки» на client-шаге. Шаг → rejected,
+// возвращается предыдущий team-шаг (если он есть) в in_progress, проект
+// получает revisions_used+1. Если revisions_used превысит revisions_included →
+// status=dispute + ErrRevisionsExhausted (фронт показывает диалог менеджеру).
+func (s *Service) RequestRevision(ctx context.Context, projectID, stepID, actorID uuid.UUID, comment string) (Step, error) {
+	step, err := s.repo.GetStep(ctx, projectID, stepID)
+	if err != nil {
+		return Step{}, err
+	}
+	if step.Owner != OwnerClient {
+		return Step{}, ErrNotClientStep
+	}
+	if step.Status != StepStatusWaitingClient {
+		return Step{}, ErrInvalidTransition
+	}
+	if step.IsReview {
+		// На review-шаге правки не делаем — клиент должен либо submit_review
+		// либо проигнорировать (тогда worker через 7 дней авто-skip'нет).
+		return Step{}, fmt.Errorf("%w: request_revision on review step", ErrInvalidTransition)
+	}
+
+	// 1. Переводим клиентский шаг в rejected с инкрементом revisions_used.
+	res, err := s.repo.TransitionStep(ctx, TransitionInput{
+		ProjectID:          projectID,
+		StepID:             stepID,
+		From:               StepStatusWaitingClient,
+		To:                 StepStatusRejected,
+		ActorUserID:        actorID,
+		ActorType:          "human",
+		Comment:            strings.TrimSpace(comment),
+		IncrementRevisions: true,
+	})
+	if err != nil {
+		return Step{}, err
+	}
+
+	// 2. Возвращаем предыдущий team-шаг в работу (если есть).
+	prev, err := s.repo.FindPrevTeamStep(ctx, projectID, stepID)
+	if err != nil && !errors.Is(err, ErrStepNotFound) {
+		return Step{}, err
+	}
+	if err == nil {
+		// done → in_progress (правки)
+		if _, terr := s.repo.TransitionStep(ctx, TransitionInput{
+			ProjectID:   projectID,
+			StepID:      prev.ID,
+			From:        StepStatusDone,
+			To:          StepStatusInProgress,
+			ActorUserID: actorID,
+			ActorType:   "system",
+			Comment:     "Возврат на доработку",
+		}); terr != nil {
+			// возврат не сработал — оставляем rejected как есть; менеджер увидит в кабинете.
+			// не считаем критичной ошибкой.
+			_ = terr
+		}
+	}
+
+	if res.Disputed {
+		return res.Step, ErrRevisionsExhausted
+	}
+	return res.Step, nil
+}
+
+// SubmitReview — клиент оставил отзыв на review-шаге (waiting_client →
+// done). Сам объект reviews создаётся отдельным сервисом reviews; здесь
+// фиксируем только шаг.
+func (s *Service) SubmitReview(ctx context.Context, projectID, stepID, actorID uuid.UUID) (Step, error) {
+	step, err := s.repo.GetStep(ctx, projectID, stepID)
+	if err != nil {
+		return Step{}, err
+	}
+	if step.Owner != OwnerClient {
+		return Step{}, ErrNotClientStep
+	}
+	if !step.IsReview {
+		return Step{}, ErrNotReviewStep
+	}
+	if step.Status != StepStatusWaitingClient {
+		return Step{}, ErrInvalidTransition
+	}
+	res, err := s.repo.TransitionStep(ctx, TransitionInput{
+		ProjectID:   projectID,
+		StepID:      stepID,
+		From:        StepStatusWaitingClient,
+		To:          StepStatusDone,
+		ActorUserID: actorID,
+		ActorType:   "human",
+	})
+	if err != nil {
+		return Step{}, err
+	}
+	return res.Step, nil
+}

@@ -19,6 +19,7 @@ import (
 	"marketpclce/internal/pipelines"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
@@ -43,6 +44,7 @@ type Deps struct {
 	Reviews     *reviews.Handler
 	Productions *productions.Handler
 	Pipelines   *pipelines.Handler
+	Projects    *projects.Handler
 
 	CORSOrigins []string
 
@@ -148,6 +150,18 @@ func NewRouter(d Deps) http.Handler {
 
 			r.Get("/me/leads/incoming", d.Leads.ListIncoming)
 			r.Patch("/me/leads/{id}/recipient", d.Leads.UpdateRecipient)
+
+			// CRM v5: клиентский кабинет «Мои проекты». RequireRoles не нужен —
+			// эндпоинты сами фильтруют по client_user_id, доступ ограничен
+			// своими проектами. Запрашивать может любой авторизованный, но
+			// увидит только своё.
+			if d.Projects != nil {
+				r.Get("/me/projects", d.Projects.ClientList)
+				r.Get("/me/projects/{id}/funnel", d.Projects.ClientGetFunnel)
+				r.Post("/me/projects/{id}/steps/{step_id}/approve", d.Projects.ClientApprove)
+				r.Post("/me/projects/{id}/steps/{step_id}/request_revision", d.Projects.ClientRequestRevision)
+				r.Post("/me/projects/{id}/steps/{step_id}/submit_review", d.Projects.ClientSubmitReview)
+			}
 		})
 
 		r.Group(func(r chi.Router) {
