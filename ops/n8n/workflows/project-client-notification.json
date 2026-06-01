@@ -1,0 +1,96 @@
+{
+  "name": "project-client-notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-events",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.event_type }}",
+              "rightValue": "project.step_transitioned",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "leftValue": "={{ $json.data.to }}",
+              "rightValue": "waiting_client",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-1",
+      "name": "Is waiting_client",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.API_BASE_URL }}/admin/projects/{{ $json.aggregate_id }}",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "fetch-1",
+      "name": "Fetch project",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [440, -100],
+      "credentials": {
+        "headerAuth": { "id": "1", "name": "API admin token" }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@example.com",
+        "toEmail": "={{ $json.client_email }}",
+        "subject": "По вашему проекту нужно действие",
+        "text": "Здравствуйте! По проекту «{{ $json.title }}» нужно ваше действие.\n\nОткройте кабинет: {{ $env.APP_BASE_URL }}/me/projects/{{ $json.id }}"
+      },
+      "id": "email-1",
+      "name": "Send email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [660, -100]
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      },
+      "id": "resp-1",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [880, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Is waiting_client", "type": "main", "index": 0 }]] },
+    "Is waiting_client": {
+      "main": [
+        [{ "node": "Fetch project", "type": "main", "index": 0 }],
+        [{ "node": "Respond 200", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch project": { "main": [[{ "node": "Send email", "type": "main", "index": 0 }]] },
+    "Send email": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": {},
+  "staticData": null,
+  "pinData": {}
+}
