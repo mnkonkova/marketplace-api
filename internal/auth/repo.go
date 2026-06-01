@@ -30,6 +30,13 @@ type User struct {
 	Kind            string
 	IsActive        bool
 	EmailVerifiedAt *time.Time
+	// Role — CRM-роль (client/specialist/manager/admin). Отдельно от Kind:
+	// Kind определяет дихотомию маркетплейса (поиск / выдача каталога),
+	// Role — права в кабинетах. См. docs/CRM_V5_BRIEF.md §1.
+	Role string
+	// IsApproved — для manager обязательный аппрув админом до доступа в
+	// кабинет менеджера. Остальные роли по умолчанию TRUE.
+	IsApproved bool
 }
 
 func (r *Repo) CreateUser(ctx context.Context, tx pgx.Tx, u User) (uuid.UUID, error) {
@@ -50,12 +57,12 @@ RETURNING id`
 
 func (r *Repo) FindByLogin(ctx context.Context, login string) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active, email_verified_at
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, role, is_approved
 FROM users
 WHERE (email = $1 OR phone = $1) AND is_active = TRUE
 LIMIT 1`
 	var u User
-	err := r.db.QueryRow(ctx, q, login).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt)
+	err := r.db.QueryRow(ctx, q, login).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.Role, &u.IsApproved)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -67,10 +74,10 @@ LIMIT 1`
 
 func (r *Repo) FindByID(ctx context.Context, id uuid.UUID) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active, email_verified_at
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, role, is_approved
 FROM users WHERE id = $1`
 	var u User
-	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt)
+	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.Role, &u.IsApproved)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -78,6 +85,24 @@ FROM users WHERE id = $1`
 		return User{}, fmt.Errorf("find user: %w", err)
 	}
 	return u, nil
+}
+
+// LoadIdentity — лёгкий запрос ровно того, что нужно middleware:
+// role + is_approved + is_active. Не тащим Email/PasswordHash/верификацию.
+// Вызывается в RequireRoles на каждый защищённый запрос — поэтому узкий.
+func (r *Repo) LoadIdentity(ctx context.Context, id uuid.UUID) (string, bool, bool, error) {
+	var role string
+	var isApproved, isActive bool
+	err := r.db.QueryRow(ctx,
+		`SELECT role, is_approved, is_active FROM users WHERE id = $1`,
+		id).Scan(&role, &isApproved, &isActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, false, ErrNotFound
+	}
+	if err != nil {
+		return "", false, false, fmt.Errorf("load identity: %w", err)
+	}
+	return role, isApproved, isActive, nil
 }
 
 func (r *Repo) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
@@ -194,12 +219,12 @@ func (r *Repo) ConsumeVerification(ctx context.Context, tokenHash string) (uuid.
 // токен или нет.
 func (r *Repo) FindByEmail(ctx context.Context, email string) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active, email_verified_at
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, role, is_approved
 FROM users
 WHERE email = $1 AND is_active = TRUE
 LIMIT 1`
 	var u User
-	err := r.db.QueryRow(ctx, q, email).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt)
+	err := r.db.QueryRow(ctx, q, email).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.Role, &u.IsApproved)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}

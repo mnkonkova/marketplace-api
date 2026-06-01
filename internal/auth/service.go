@@ -39,6 +39,14 @@ const (
 	KindBoth       = "both"
 )
 
+// CRM-роли (users.role). Отдельно от Kind — см. docs/CRM_V5_BRIEF.md §1.
+const (
+	RoleClient     = "client"
+	RoleSpecialist = "specialist"
+	RoleManager    = "manager"
+	RoleAdmin      = "admin"
+)
+
 type Service struct {
 	repo                *Repo
 	tokens              *TokenIssuer

@@ -16,6 +16,8 @@ import (
 	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi/handlers"
 	"marketpclce/internal/leads"
+	"marketpclce/internal/pipelines"
+	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
@@ -29,6 +31,7 @@ type Deps struct {
 	HealthDB    handlers.HealthDB
 	TokenIssuer *auth.TokenIssuer
 	Auth        *auth.Handler
+	AuthRepo    auth.IdentityLoader
 	Catalog     *catalog.Handler
 	Profiles     *profiles.Handler
 	ProfileCheck *profilecheck.Handler
@@ -38,6 +41,8 @@ type Deps struct {
 	Clarify     *clarify.Handler
 	Leads       *leads.Handler
 	Reviews     *reviews.Handler
+	Productions *productions.Handler
+	Pipelines   *pipelines.Handler
 
 	CORSOrigins []string
 
@@ -86,6 +91,11 @@ func NewRouter(d Deps) http.Handler {
 
 		r.Get("/categories", d.Catalog.Categories)
 		r.Get("/skills", d.Catalog.Skills)
+		// Публичный список активных продакшенов — нужен на форме профиля
+		// специалиста (выбор production_id vs is_freelance). См. Ф2.
+		if d.Productions != nil {
+			r.Get("/productions", d.Productions.Public)
+		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(RateLimit(d.Limiter, "read", d.ReadWindows))
@@ -147,6 +157,36 @@ func NewRouter(d Deps) http.Handler {
 			r.Patch("/reviews/{id}", d.Reviews.Update)
 			r.Delete("/reviews/{id}", d.Reviews.Delete)
 		})
+
+		// /admin/* — только role=admin. AuthRepo обязателен (если не передан,
+		// группа не маунтится — невозможно проверить роль).
+		if d.AuthRepo != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.Middleware(d.TokenIssuer))
+				r.Use(auth.RequireRoles(d.AuthRepo, auth.RoleAdmin))
+
+				if d.Productions != nil {
+					r.Get("/admin/productions", d.Productions.AdminList)
+					r.Post("/admin/productions", d.Productions.AdminCreate)
+					r.Patch("/admin/productions/{id}", d.Productions.AdminPatch)
+					r.Delete("/admin/productions/{id}", d.Productions.AdminDelete)
+				}
+				if d.Pipelines != nil {
+					r.Get("/admin/pipelines", d.Pipelines.AdminListPipelines)
+					r.Post("/admin/pipelines", d.Pipelines.AdminCreatePipeline)
+					r.Get("/admin/pipelines/{id}", d.Pipelines.AdminGetPipeline)
+					r.Patch("/admin/pipelines/{id}", d.Pipelines.AdminPatchPipeline)
+					r.Delete("/admin/pipelines/{id}", d.Pipelines.AdminDeletePipeline)
+					r.Post("/admin/pipelines/{id}/stages", d.Pipelines.AdminCreateStage)
+					r.Patch("/admin/pipelines/stages/{id}", d.Pipelines.AdminPatchStage)
+					r.Delete("/admin/pipelines/stages/{id}", d.Pipelines.AdminDeleteStage)
+					r.Post("/admin/pipelines/stages/{id}/steps", d.Pipelines.AdminCreateStep)
+					r.Patch("/admin/pipelines/steps/{id}", d.Pipelines.AdminPatchStep)
+					r.Delete("/admin/pipelines/steps/{id}", d.Pipelines.AdminDeleteStep)
+					r.Put("/admin/pipelines/{id}/reorder", d.Pipelines.AdminReorder)
+				}
+			})
+		}
 	})
 
 	r.Get("/swagger/*", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))

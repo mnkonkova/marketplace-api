@@ -128,11 +128,17 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type meResp struct {
-	UserID         string  `json:"user_id"`
-	Email          *string `json:"email,omitempty"`
-	Phone          *string `json:"phone,omitempty"`
-	Kind           string  `json:"kind"`
-	EmailVerified  bool    `json:"email_verified"`
+	UserID        string  `json:"user_id"`
+	Email         *string `json:"email,omitempty"`
+	Phone         *string `json:"phone,omitempty"`
+	Kind          string  `json:"kind"`
+	EmailVerified bool    `json:"email_verified"`
+	// Role — CRM-роль для разграничения кабинетов на фронте. Без неё фронт
+	// не знает, куда отправлять юзера после логина.
+	Role string `json:"role"`
+	// IsApproved — для manager обязательный аппрув; фронт показывает
+	// «ждёт аппрува» вместо кабинета.
+	IsApproved bool `json:"is_approved"`
 }
 
 // Me godoc
@@ -161,6 +167,8 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		Phone:         u.Phone,
 		Kind:          u.Kind,
 		EmailVerified: u.EmailVerifiedAt != nil,
+		Role:          u.Role,
+		IsApproved:    u.IsApproved,
 	})
 }
 

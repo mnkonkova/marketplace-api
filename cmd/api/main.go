@@ -21,10 +21,12 @@ import (
 	"marketpclce/internal/httpapi"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/llm"
+	"marketpclce/internal/pipelines"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
 	"marketpclce/internal/platform/redisx"
 	"marketpclce/internal/platform/s3"
+	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
@@ -178,6 +180,14 @@ func main() {
 	reviewsSvc := reviews.NewService(reviewsRepo)
 	reviewsHandler := reviews.NewHandler(reviewsSvc)
 
+	productionsRepo := productions.NewRepo(pool)
+	productionsSvc := productions.NewService(productionsRepo)
+	productionsHandler := productions.NewHandler(productionsSvc)
+
+	pipelinesRepo := pipelines.NewRepo(pool)
+	pipelinesSvc := pipelines.NewService(pipelinesRepo)
+	pipelinesHandler := pipelines.NewHandler(pipelinesSvc)
+
 	var summarizeCache *summarize.Cache
 	var limiter *ratelimit.Limiter
 	if rdb != nil {
@@ -194,6 +204,7 @@ func main() {
 		HealthDB:     pool,
 		TokenIssuer:  tokenIssuer,
 		Auth:         authHandler,
+		AuthRepo:     authRepo,
 		Catalog:      catalogHandler,
 		Profiles:     profilesHandler,
 		ProfileCheck: profileCheckHandler,
@@ -203,6 +214,8 @@ func main() {
 		Clarify:      clarifyHandler,
 		Leads:        leadsHandler,
 		Reviews:      reviewsHandler,
+		Productions:  productionsHandler,
+		Pipelines:    pipelinesHandler,
 		CORSOrigins:  cfg.CORSOrigins,
 		Limiter:     limiter,
 		ReadWindows: []ratelimit.Window{
