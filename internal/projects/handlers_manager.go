@@ -3,6 +3,7 @@ package projects
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -58,6 +59,9 @@ func writeManagerErr(w http.ResponseWriter, err error) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "no_proposed_specialist",
 			"Клиент не выбрал исполнителя — нечего подтверждать.")
 	default:
+		// Логируем всё, что не маппится в доменную ошибку: иначе 500 уходит
+		// клиенту молча и его невозможно расследовать.
+		slog.Error("projects: unhandled error", "err", err)
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	}
 }

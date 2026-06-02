@@ -203,19 +203,26 @@ func (r *Repo) CancelProject(ctx context.Context, projectID, actorID uuid.UUID, 
 		projectID); err != nil {
 		return fmt.Errorf("cancel: %w", err)
 	}
+	// from_status/to_status — step_status enum, project_status туда не лезет
+	// (см. миграцию 00010). Статус-переход проекта кладём в payload, в самих
+	// колонках оставляем NULL.
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_step_events
-  (project_id, step_id, actor_user_id, actor_type, event_kind, from_status, to_status, comment, payload)
-VALUES ($1, NULL, $2, 'human', 'project_cancelled', $3, 'cancelled', $4, $5)`,
-		projectID, actorID, string(currentStatus), reason,
-		mustJSON(map[string]string{"reason": reason})); err != nil {
+  (project_id, step_id, actor_user_id, actor_type, event_kind, comment, payload)
+VALUES ($1, NULL, $2, 'human', 'project_cancelled', $3, $4)`,
+		projectID, actorID, reason,
+		mustJSON(map[string]string{
+			"reason":      reason,
+			"from_status": string(currentStatus),
+			"to_status":   "cancelled",
+		})); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}
 	if err := emit(ctx, tx, projectID, nil, actorID, "project.cancelled",
 		map[string]string{
-			"project_id":   projectID.String(),
-			"from_status":  string(currentStatus),
-			"reason":       reason,
+			"project_id":  projectID.String(),
+			"from_status": string(currentStatus),
+			"reason":      reason,
 		}); err != nil {
 		return err
 	}
