@@ -4,8 +4,20 @@
 #   make prod-logs     # логи всех сервисов
 # Все служебные сервисы только во внутренней сети compose; наружу торчит
 # лишь caddy (80/443). Медиа в Yandex Object Storage по S3_*.
+
+# Ограничиваем json-file логи docker'а: иначе /var/lib/docker/containers/*
+# растут неограниченно и забивают диск VDS. 10m × 5 = до 50MB на контейнер
+# до ротации. Alloy продолжает читать ротированные файлы через docker API.
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
 services:
   postgres:
+    <<: *default-logging
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -22,6 +34,7 @@ services:
     mem_limit: 512m
 
   opensearch:
+    <<: *default-logging
     image: opensearchproject/opensearch:2.15.0
     restart: unless-stopped
     environment:
@@ -44,6 +57,7 @@ services:
     mem_limit: 1g
 
   redis:
+    <<: *default-logging
     image: redis:7-alpine
     restart: unless-stopped
     healthcheck:
@@ -54,6 +68,7 @@ services:
     mem_limit: 128m
 
   api:
+    <<: *default-logging
     build:
       context: .
       dockerfile: Dockerfile
@@ -79,6 +94,7 @@ services:
   # worker делит образ с api (см. CMD в Dockerfile = api), переопределяем
   # на ./worker. Один и тот же конфиг через .env.prod.
   worker:
+    <<: *default-logging
     image: marketpclce/app:latest
     restart: unless-stopped
     env_file: .env.prod
@@ -97,6 +113,7 @@ services:
   # Caddyfile внутри образа уже знает: /api/* и /swagger/* → API_UPSTREAM,
   # всё остальное — статика + SPA fallback.
   web:
+    <<: *default-logging
     build:
       context: ../web
       dockerfile: Dockerfile
@@ -121,6 +138,7 @@ services:
   # Порт наружу не торчит — только внутри docker network, alloy скрейпит
   # его как node-exporter:9100.
   node-exporter:
+    <<: *default-logging
     image: prom/node-exporter:v1.8.2
     restart: unless-stopped
     pid: host
@@ -141,6 +159,7 @@ services:
   # это видно в `docker compose logs alloy`. Чтобы выключить полностью —
   # просто не запускай этот сервис: `--scale alloy=0`.
   alloy:
+    <<: *default-logging
     image: grafana/alloy:v1.4.2
     restart: unless-stopped
     volumes:
