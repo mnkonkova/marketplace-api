@@ -29,7 +29,7 @@ type Repo struct{ db *pgxpool.Pool }
 
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
-// ListManagers — все пользователи с role=manager, отсортированные:
+// ListManagers — все пользователи с is_manager=true, отсортированные:
 // сначала ожидающие аппрува, потом одобренные. Включает счётчик assigned.
 func (r *Repo) ListManagers(ctx context.Context, approved *bool) ([]ManagerInfo, error) {
 	q := `
@@ -42,7 +42,7 @@ SELECT u.id, COALESCE(u.email::text, ''), u.is_active, u.is_approved,
        u.created_at
 FROM users u
 LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
-WHERE u.role = 'manager'`
+WHERE u.is_manager = TRUE`
 	args := []any{}
 	if approved != nil {
 		q += " AND u.is_approved = $1"
@@ -71,28 +71,28 @@ WHERE u.role = 'manager'`
 func (r *Repo) SetApproved(ctx context.Context, userID uuid.UUID, approved bool) error {
 	tag, err := r.db.Exec(ctx,
 		`UPDATE users SET is_approved = $2, updated_at = now()
-		 WHERE id = $1 AND role = 'manager'`,
+		 WHERE id = $1 AND is_manager = TRUE`,
 		userID, approved)
 	if err != nil {
 		return fmt.Errorf("set approved: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		// либо юзер не существует, либо не manager — различим probe-запросом.
-		var role string
-		if perr := r.db.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, userID).Scan(&role); perr != nil {
+		var exists bool
+		if perr := r.db.QueryRow(ctx, `SELECT TRUE FROM users WHERE id = $1`, userID).Scan(&exists); perr != nil {
 			if errors.Is(perr, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
-			return fmt.Errorf("probe user role: %w", perr)
+			return fmt.Errorf("probe user: %w", perr)
 		}
 		return ErrNotManager
 	}
 	return nil
 }
 
-// CreateClient — заводит юзера (kind=client, role=client, password = случайные
-// 32 байта в base64; юзер всё равно зайдёт по magic-link). is_approved=TRUE,
-// email_verified_at=now (раз создаёт админ, верификации не нужно).
+// CreateClient — заводит юзера (kind=client, без manager/admin-флагов;
+// password = случайные 32 байта в base64; юзер всё равно зайдёт по magic-link).
+// is_approved=TRUE, email_verified_at=now (раз создаёт админ, верификации не нужно).
 func (r *Repo) CreateClient(ctx context.Context, in CreateClientInput) (uuid.UUID, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if email == "" {
@@ -114,8 +114,8 @@ func (r *Repo) CreateClient(ctx context.Context, in CreateClientInput) (uuid.UUI
 
 	var userID uuid.UUID
 	err = r.db.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, $2, 'client', 'client', TRUE, now())
+INSERT INTO users (email, password_hash, kind, is_approved, email_verified_at)
+VALUES ($1, $2, 'client', TRUE, now())
 RETURNING id`, email, passwordHash).Scan(&userID)
 	if isUniqueViolation(err) {
 		return uuid.Nil, ErrAlreadyExists
@@ -150,8 +150,8 @@ func (r *Repo) GenerateInvite(ctx context.Context, userID, createdBy uuid.UUID, 
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// существует ли юзер вообще
-	var role string
-	if e := tx.QueryRow(ctx, `SELECT role FROM users WHERE id = $1`, userID).Scan(&role); e != nil {
+	var exists bool
+	if e := tx.QueryRow(ctx, `SELECT TRUE FROM users WHERE id = $1`, userID).Scan(&exists); e != nil {
 		if errors.Is(e, pgx.ErrNoRows) {
 			return "", time.Time{}, ErrNotFound
 		}

@@ -109,10 +109,6 @@ type RegisterInput struct {
 	Password    string
 	Kind        string
 	DisplayName string
-	// Role — CRM-роль. Пустая → 'client' (дефолт БД). Допустимы только
-	// самостоятельные роли: client | specialist | manager. Admin создаётся
-	// только сидом/миграцией/через другой admin — самозаявкой нельзя.
-	Role string
 }
 
 type RegisterResult struct {
@@ -136,19 +132,9 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 	default:
 		return RegisterResult{}, fmt.Errorf("%w: kind must be client, specialist or both", ErrInvalidInput)
 	}
-	// Role: пусто → client; иначе проверяем что это самозаявочная роль.
-	// admin через register нельзя — иначе любой может объявить себя админом.
-	role := in.Role
-	if role == "" {
-		role = RoleClient
-	}
-	switch role {
-	case RoleClient, RoleSpecialist, RoleManager:
-	default:
-		return RegisterResult{}, fmt.Errorf("%w: role must be client, specialist or manager", ErrInvalidInput)
-	}
-	// is_approved: дефолт TRUE, для manager — FALSE (ждёт админ-аппрува).
-	approved := role != RoleManager
+	// CRM-роль теперь не приходит из регистрации: manager/admin промоутит
+	// только админ. Через /auth/register создаётся обычный юзер (kind задаёт
+	// маркетплейс-идентичность), is_manager/is_admin остаются FALSE.
 	needsProfile := in.Kind == KindSpecialist || in.Kind == KindBoth
 	if needsProfile && in.DisplayName == "" {
 		return RegisterResult{}, fmt.Errorf("%w: display_name is required for specialists", ErrInvalidInput)
@@ -172,16 +158,6 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 			return err
 		}
 		userID = id
-		// Проставляем role + is_approved на свежесозданном пользователе.
-		// CreateUser выставляет дефолты ('client', TRUE) — для не-client/manager
-		// надо обновить. Делаем в той же транзакции.
-		if role != RoleClient || !approved {
-			if _, err := tx.Exec(ctx,
-				`UPDATE users SET role = $2, is_approved = $3 WHERE id = $1`,
-				id, role, approved); err != nil {
-				return fmt.Errorf("set role: %w", err)
-			}
-		}
 		if needsProfile {
 			// Контакт для заявок предзаполняем email'ом из регистрации.
 			// Auth-поле users.email нужно для логина, contact_email — для

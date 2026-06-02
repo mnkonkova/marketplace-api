@@ -17,9 +17,6 @@ type registerReq struct {
 	Password    string `json:"password"`
 	Kind        string `json:"kind"`
 	DisplayName string `json:"display_name"`
-	// Role — опциональная CRM-роль. Допустимы: client | specialist | manager.
-	// Пусто/опущено → client. admin через register нельзя.
-	Role string `json:"role,omitempty"`
 }
 
 type registerResp struct {
@@ -49,7 +46,6 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		Password:    in.Password,
 		Kind:        in.Kind,
 		DisplayName: in.DisplayName,
-		Role:        in.Role,
 	})
 	switch {
 	// ErrAlreadyExists и ErrInvalidInput возвращаем одним статусом и кодом,
@@ -137,9 +133,11 @@ type meResp struct {
 	Phone         *string `json:"phone,omitempty"`
 	Kind          string  `json:"kind"`
 	EmailVerified bool    `json:"email_verified"`
-	// Role — CRM-роль для разграничения кабинетов на фронте. Без неё фронт
-	// не знает, куда отправлять юзера после логина.
-	Role string `json:"role"`
+	// IsManager / IsAdmin — флаги CRM-прав. Фронт по ним решает, какие
+	// кабинеты показывать в шапке. Кабинеты client/specialist выводятся
+	// из kind.
+	IsManager bool `json:"is_manager"`
+	IsAdmin   bool `json:"is_admin"`
 	// IsApproved — для manager обязательный аппрув; фронт показывает
 	// «ждёт аппрува» вместо кабинета.
 	IsApproved bool `json:"is_approved"`
@@ -171,7 +169,8 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		Phone:         u.Phone,
 		Kind:          u.Kind,
 		EmailVerified: u.EmailVerifiedAt != nil,
-		Role:          u.Role,
+		IsManager:     u.IsManager,
+		IsAdmin:       u.IsAdmin,
 		IsApproved:    u.IsApproved,
 	})
 }
