@@ -38,6 +38,10 @@ type User struct {
 	// IsApproved — для manager обязательный аппрув админом до доступа в
 	// кабинет менеджера. Остальные по умолчанию TRUE.
 	IsApproved bool
+	// PasswordChangedAt — момент последней смены пароля. Используется в Refresh:
+	// refresh, выпущенный до этой отметки, отзывается. Защита от ситуации
+	// «украли пароль → юзер сделал reset → атакующий продолжает жить на refresh».
+	PasswordChangedAt time.Time
 }
 
 // Role — derived CRM-роль для совместимости с фронтом и middleware.
@@ -74,12 +78,12 @@ RETURNING id`
 
 func (r *Repo) FindByLogin(ctx context.Context, login string) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved, password_changed_at
 FROM users
 WHERE (email = $1 OR phone = $1) AND is_active = TRUE
 LIMIT 1`
 	var u User
-	err := r.db.QueryRow(ctx, q, login).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved)
+	err := r.db.QueryRow(ctx, q, login).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved, &u.PasswordChangedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -91,10 +95,10 @@ LIMIT 1`
 
 func (r *Repo) FindByID(ctx context.Context, id uuid.UUID) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved, password_changed_at
 FROM users WHERE id = $1`
 	var u User
-	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved)
+	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved, &u.PasswordChangedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -237,12 +241,12 @@ func (r *Repo) ConsumeVerification(ctx context.Context, tokenHash string) (uuid.
 // токен или нет.
 func (r *Repo) FindByEmail(ctx context.Context, email string) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved, password_changed_at
 FROM users
 WHERE email = $1 AND is_active = TRUE
 LIMIT 1`
 	var u User
-	err := r.db.QueryRow(ctx, q, email).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved)
+	err := r.db.QueryRow(ctx, q, email).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved, &u.PasswordChangedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -308,7 +312,7 @@ func (r *Repo) ConsumePasswordResetTokenAndUpdate(ctx context.Context, tokenHash
 
 	tag, err := tx.Exec(ctx,
 		`UPDATE users
-		 SET password_hash = $2, updated_at = now()
+		 SET password_hash = $2, password_changed_at = now(), updated_at = now()
 		 WHERE id = $1 AND is_active = TRUE`,
 		userID, newPasswordHash)
 	if err != nil {

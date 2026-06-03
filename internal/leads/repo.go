@@ -42,12 +42,14 @@ RETURNING id`,
 		return uuid.Nil, fmt.Errorf("insert lead: %w", err)
 	}
 
-	for _, sid := range in.SpecialistIDs {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO lead_recipients (lead_id, specialist_user_id) VALUES ($1, $2)
-             ON CONFLICT DO NOTHING`,
-			id, sid); err != nil {
-			return uuid.Nil, fmt.Errorf("insert recipient: %w", err)
+	// Один INSERT через unnest вместо N round-trip'ов. На 5-10 спецах разница
+	// невелика, но row-lock'и и WAL делаются единым батчем.
+	if len(in.SpecialistIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO lead_recipients (lead_id, specialist_user_id)
+SELECT $1, s FROM unnest($2::uuid[]) AS s
+ON CONFLICT DO NOTHING`, id, in.SpecialistIDs); err != nil {
+			return uuid.Nil, fmt.Errorf("insert recipients: %w", err)
 		}
 	}
 

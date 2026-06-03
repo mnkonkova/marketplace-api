@@ -31,16 +31,6 @@ type createReq struct {
 	SpecialistIDs  []string `json:"specialist_ids"`
 }
 
-// invalidInputMessage — детали валидации без префикса "invalid input: ".
-func invalidInputMessage(err error) string {
-	const prefix = "invalid input: "
-	s := err.Error()
-	if strings.HasPrefix(s, prefix) {
-		return strings.TrimPrefix(s, prefix)
-	}
-	return s
-}
-
 // Create godoc
 // @Summary      Создать заявку (lead)
 // @Description  Менеджер/клиент создаёт лид и выбирает специалистов-получателей. В ответе — id и контакты выбранных спецов (видны только создателю).
@@ -105,7 +95,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNoSpecialists):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "no_valid_specialists",
 			"Среди выбранных специалистов нет ни одного валидного получателя.")
@@ -115,6 +105,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrEmailUnverified):
 		httpx.WriteErrMsg(w, http.StatusForbidden, "email_unverified",
 			"Подтвердите email — на него отправлено письмо.")
+	case errors.Is(err, ErrUserInactive):
+		httpx.WriteErrMsg(w, http.StatusForbidden, "inactive",
+			"Аккаунт деактивирован, обратитесь в поддержку.")
 	case err != nil:
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось создать заявку.")
 	default:
@@ -151,7 +144,7 @@ func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 	items, err := h.svc.ListIncoming(r.Context(), uid, status, limit, offset)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 		return
 	case err != nil:
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить входящие заявки.")
@@ -203,7 +196,7 @@ func (h *Handler) UpdateRecipient(w http.ResponseWriter, r *http.Request) {
 	err = h.svc.UpdateRecipientStatus(r.Context(), leadID, uid, in.Status, in.UpdatedAt)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrRecipientMissing):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "recipient_not_found",
 			"Вы не получатель этого лида.")

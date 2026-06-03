@@ -3,6 +3,7 @@ package httpx
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 func WriteJSON(w http.ResponseWriter, status int, body any) {
@@ -51,4 +52,18 @@ func WriteErrMsg(w http.ResponseWriter, status int, code, msg string) {
 //	{"error": code, "message": msg, "details": [{field, message}, ...]}.
 func WriteErrFields(w http.ResponseWriter, status int, code, msg string, fields ...FieldError) {
 	WriteJSON(w, status, errorBody{Error: code, Message: msg, Details: fields})
+}
+
+// InvalidInputMessage достаёт человекочитаемую деталь из обёрнутой
+// ErrInvalidInput. Сервисный слой обёртывает ошибки как
+// `fmt.Errorf("%w: <detail>", ErrInvalidInput)` — `err.Error()` выглядит как
+// "invalid input: <detail>", тут отрезаем префикс. Если префикса нет
+// (страховка), возвращаем текст целиком.
+func InvalidInputMessage(err error) string {
+	const prefix = "invalid input: "
+	s := err.Error()
+	if strings.HasPrefix(s, prefix) {
+		return strings.TrimPrefix(s, prefix)
+	}
+	return s
 }

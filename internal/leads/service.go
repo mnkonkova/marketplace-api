@@ -22,14 +22,17 @@ var (
 	// ErrEmailUnverified — soft-gate: для авторизованного клиента почта
 	// должна быть подтверждена. Хендлер мапит в 403 email_unverified.
 	ErrEmailUnverified = errors.New("email is not verified")
+	// ErrUserInactive — auth-юзер деактивирован (is_active=false). Middleware
+	// не реchecker'ит каждый запрос, поэтому JWT инактивированного юзера всё
+	// ещё валиден до своего TTL — ловим здесь, до рассылки.
+	ErrUserInactive = errors.New("user is inactive")
 )
 
 // EmailVerifier — узкий интерфейс soft-gate'а. Реализуется auth.Service.
-// (true, nil) = подтверждена; (false, nil) = НЕ подтверждена; (_, err) = ошибка.
-// nil-safe: без подключения gate не действует (анонимные лиды всегда
-// проходят без проверки).
+// Возвращает (active, verified, err). nil-safe: без подключения gate не
+// действует (анонимные лиды всегда проходят без проверки).
 type EmailVerifier interface {
-	IsEmailVerified(ctx context.Context, userID uuid.UUID) (bool, error)
+	CheckActiveVerified(ctx context.Context, userID uuid.UUID) (active, verified bool, err error)
 }
 
 // ProjectStarter — узкий интерфейс для создания проекта в CRM сразу после
@@ -97,14 +100,18 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 		return CreateResult{}, fmt.Errorf("%w: at least one specialist is required", ErrInvalidInput)
 	}
 
-	// Soft-gate: авторизованный клиент должен подтвердить email перед
-	// созданием лида. Анонимный путь (ClientUserID == nil) — без проверки.
+	// Soft-gate: авторизованный клиент должен быть активен + email подтверждён.
+	// Анонимный путь (ClientUserID == nil) — без проверки. Активность проверяем
+	// здесь же: JWT деактивированного юзера всё ещё валиден до TTL.
 	if in.ClientUserID != nil && s.verifier != nil {
-		ok, err := s.verifier.IsEmailVerified(ctx, *in.ClientUserID)
+		active, verified, err := s.verifier.CheckActiveVerified(ctx, *in.ClientUserID)
 		if err != nil {
-			return CreateResult{}, fmt.Errorf("verify email: %w", err)
+			return CreateResult{}, fmt.Errorf("verify user: %w", err)
 		}
-		if !ok {
+		if !active {
+			return CreateResult{}, ErrUserInactive
+		}
+		if !verified {
 			return CreateResult{}, ErrEmailUnverified
 		}
 	}
@@ -156,7 +163,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	// в этот момент (видимы только менеджеру/клиенту, после отправки брифа).
 	contacts, err := s.repo.LoadSpecialistContacts(ctx, valid)
 	if err != nil {
-		// Лид уже создан; контакты — best-effort. Не валим запрос.
+		// Лид уже создан; контакты — best-effort. Не валим запрос, но без
+		// лога такая ошибка невидима — фронт покажет пустые контакты и юзер
+		// не поймёт, почему. Симметрично логу StartFromLead выше.
+		slog.Error("leads: LoadSpecialistContacts failed",
+			"lead_id", id, "err", err)
 		return CreateResult{ID: id, Specialists: nil}, nil
 	}
 	return CreateResult{ID: id, Specialists: contacts}, nil

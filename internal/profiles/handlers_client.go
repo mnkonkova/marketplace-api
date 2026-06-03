@@ -54,6 +54,8 @@ func (h *Handler) PatchClient(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", err.Error())
+	case errors.Is(err, ErrConflict):
+		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	default:

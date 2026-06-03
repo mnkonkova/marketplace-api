@@ -195,11 +195,14 @@ func (r *Repo) ReplaceCategoriesInTx(ctx context.Context, tx pgx.Tx, userID uuid
 	if _, err := tx.Exec(ctx, `DELETE FROM specialist_categories WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("delete categories: %w", err)
 	}
-	for _, code := range codes {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO specialist_categories (user_id, category_code, is_primary) VALUES ($1, $2, $3)`,
-			userID, code, code == primary); err != nil {
-			return fmt.Errorf("insert category %s: %w", code, err)
+	// Один INSERT через unnest вместо N round-trip'ов. На 4-8 категориях
+	// разница невелика, но row-lock и WAL-запись делаются один раз.
+	if len(codes) > 0 {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO specialist_categories (user_id, category_code, is_primary)
+SELECT $1, c, c = $3 FROM unnest($2::text[]) AS c`,
+			userID, codes, primary); err != nil {
+			return fmt.Errorf("insert categories: %w", err)
 		}
 	}
 	// Каскад: если из профиля убрали категорию X, у его видео в
@@ -223,11 +226,12 @@ func (r *Repo) ReplaceSkillsInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUI
 	if _, err := tx.Exec(ctx, `DELETE FROM specialist_skills WHERE user_id = $1`, userID); err != nil {
 		return fmt.Errorf("delete skills: %w", err)
 	}
-	for _, sid := range skillIDs {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO specialist_skills (user_id, skill_id) VALUES ($1, $2)`,
-			userID, sid); err != nil {
-			return fmt.Errorf("insert skill: %w", err)
+	if len(skillIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO specialist_skills (user_id, skill_id)
+SELECT $1, s FROM unnest($2::uuid[]) AS s`,
+			userID, skillIDs); err != nil {
+			return fmt.Errorf("insert skills: %w", err)
 		}
 	}
 	return nil

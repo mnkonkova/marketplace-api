@@ -22,13 +22,16 @@ var (
 	// ErrEmailUnverified — soft-gate на publish: пока почта не подтверждена,
 	// профиль нельзя опубликовать. Хендлер мапит в 403 email_unverified.
 	ErrEmailUnverified = errors.New("email is not verified")
+	// ErrUserInactive — юзер деактивирован. Middleware JWT не реchecker'ит,
+	// поэтому ловим здесь, до публикации в поиск.
+	ErrUserInactive = errors.New("user is inactive")
 )
 
 // EmailVerifier — узкий интерфейс soft-gate'а. Реализуется auth.Service.
-// (true, nil) = подтверждена; (false, nil) = НЕ подтверждена; (_, err) = ошибка.
-// nil-safe: без подключения soft-gate не действует (для тестов).
+// Возвращает (active, verified, err). nil-safe: без подключения soft-gate не
+// действует (для тестов).
 type EmailVerifier interface {
-	IsEmailVerified(ctx context.Context, userID uuid.UUID) (bool, error)
+	CheckActiveVerified(ctx context.Context, userID uuid.UUID) (active, verified bool, err error)
 }
 
 // ProductionLookup — узкий интерфейс для валидации production_id при
@@ -271,14 +274,18 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 	if !published {
 		event = outbox.EventSpecialistRetracted
 	}
-	// Soft-gate: публиковать профиль можно только после подтверждения email.
-	// Снять с публикации — без ограничений (юзер может всегда «уйти»).
+	// Soft-gate: публиковать профиль можно только если юзер активен и email
+	// подтверждён. Снять с публикации — без ограничений (юзер может всегда
+	// «уйти», в т.ч. деактивированный — это очищает витрину).
 	if published && s.verifier != nil {
-		ok, err := s.verifier.IsEmailVerified(ctx, userID)
+		active, verified, err := s.verifier.CheckActiveVerified(ctx, userID)
 		if err != nil {
-			return Profile{}, fmt.Errorf("verify email: %w", err)
+			return Profile{}, fmt.Errorf("verify user: %w", err)
 		}
-		if !ok {
+		if !active {
+			return Profile{}, ErrUserInactive
+		}
+		if !verified {
 			return Profile{}, ErrEmailUnverified
 		}
 	}

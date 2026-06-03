@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -31,19 +30,6 @@ const (
 	msgEmailUnverif   = "Подтвердите email — на него отправлено письмо."
 	msgStorageOff     = "Хранилище медиа недоступно."
 )
-
-// invalidInputMessage достаёт человеческое сообщение из обёрнутой ErrInvalidInput.
-// Сервисный слой обёртывает ошибки как `fmt.Errorf("%w: <detail>", ErrInvalidInput)`,
-// поэтому err.Error() выглядит как "invalid input: <detail>". Возвращаем <detail>
-// для UI; если префикса нет (на всякий случай), вернётся текст ошибки целиком.
-func invalidInputMessage(err error) string {
-	const prefix = "invalid input: "
-	s := err.Error()
-	if strings.HasPrefix(s, prefix) {
-		return strings.TrimPrefix(s, prefix)
-	}
-	return s
-}
 
 // Public godoc
 // @Summary      Публичный профиль специалиста
@@ -129,7 +115,7 @@ func (h *Handler) PatchFull(w http.ResponseWriter, r *http.Request) {
 	p, err := h.svc.PatchFull(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 	case errors.Is(err, ErrConflict):
@@ -187,6 +173,9 @@ func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "publish_incomplete", msgPublishInc)
 	case errors.Is(err, ErrEmailUnverified):
 		httpx.WriteErrMsg(w, http.StatusForbidden, "email_unverified", msgEmailUnverif)
+	case errors.Is(err, ErrUserInactive):
+		httpx.WriteErrMsg(w, http.StatusForbidden, "inactive",
+			"Аккаунт деактивирован, обратитесь в поддержку.")
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 	case err != nil:
@@ -245,7 +234,7 @@ func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 	item, err := h.svc.AddPortfolioVideo(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case err != nil:
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
@@ -283,7 +272,7 @@ func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.CreatePortfolioUploadURL(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case err != nil:
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
@@ -326,7 +315,7 @@ func (h *Handler) ImageUploadURL(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.CreateImageUploadURL(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case err != nil:
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
@@ -368,7 +357,7 @@ func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request)
 	item, err := h.svc.SetPortfolioCategories(r.Context(), uid, itemID, in.Codes, in.UpdatedAt)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Элемент портфолио не найден.")
 	case errors.Is(err, ErrConflict):

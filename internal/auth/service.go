@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/mail"
 	"strings"
 	"time"
@@ -239,6 +240,13 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	if !u.IsActive {
 		return TokenPair{}, ErrInactive
 	}
+	// Token revocation: refresh, выпущенный ДО последней смены пароля, считаем
+	// отозванным. Закрывает сценарий «атакующий с украденным паролем → юзер
+	// сделал reset → refresh атакующего продолжает работать до своего TTL».
+	// Access не проверяем — его TTL короткий (минуты), переживёт сам.
+	if c.IssuedAt != nil && c.IssuedAt.Time.Before(u.PasswordChangedAt) {
+		return TokenPair{}, ErrInvalidToken
+	}
 	return s.tokens.Issue(u.ID, s.now())
 }
 
@@ -246,21 +254,31 @@ func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 	return s.repo.FindByID(ctx, id)
 }
 
-// IsEmailVerified — централизованная проверка для soft-gate (POST /leads,
-// POST /me/profile/publish). Контракт:
-//   - (true, nil)  — почта подтверждена;
-//   - (false, nil) — почта НЕ подтверждена (нормальный кейс soft-gate);
-//   - (_, err)     — ошибка БД/чтения, не путать с «не подтверждено».
-// Если verification выключен в конфиге — всегда возвращает (true, nil).
-func (s *Service) IsEmailVerified(ctx context.Context, id uuid.UUID) (bool, error) {
-	if s.verificationOff {
-		return true, nil
-	}
+// CheckActiveVerified — централизованная проверка soft-gate'а для действий,
+// у которых средняя/высокая цена побочного эффекта (POST /leads рассылает
+// письма; POST /me/profile/publish добавляет в поиск). Контракт:
+//   - (active, verified, nil) — оба флага из БД (verification выключен →
+//     verified=true принудительно).
+//   - (_, _, err)             — ошибка БД/чтения.
+// Caller сам решает как мапить: !active → 403 inactive; active && !verified →
+// 403 email_unverified; иначе пропускает.
+//
+// Зачем не оставить старый IsEmailVerified=true для !is_active: middleware
+// JWT-токены не реchecker по БД на каждый запрос (cost), поэтому юзер,
+// деактивированный администратором, продолжает носить валидный access. Эта
+// проверка — единственная точка где мы можем его остановить на write-path'ах.
+func (s *Service) CheckActiveVerified(ctx context.Context, id uuid.UUID) (active, verified bool, err error) {
 	u, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return u.EmailVerifiedAt != nil, nil
+	if !u.IsActive {
+		return false, false, nil
+	}
+	if s.verificationOff {
+		return true, true, nil
+	}
+	return true, u.EmailVerifiedAt != nil, nil
 }
 
 // VerifyEmail — обмен raw-токена из письма на «email подтверждён».
@@ -306,8 +324,12 @@ func (s *Service) ResendVerification(ctx context.Context, userID uuid.UUID) erro
 	if s.resendCooldown != nil {
 		ok, err := s.resendCooldown.Acquire(ctx, "email-verify-resend:"+userID.String())
 		if err != nil {
-			// Не валим запрос если Redis недоступен — отправим, но логировать
-			// должен caller. На уровне сервиса жёсткой ошибки нет.
+			// Не валим запрос если Redis недоступен — отправим, но залогируем
+			// чтобы было видно простоев Redis: иначе при downtime cooldown тихо
+			// отключается и можно эксплойтить (или просто завалить юзера
+			// письмами при двойном клике).
+			slog.Warn("auth: resend cooldown check failed, allowing send",
+				"user_id", userID, "err", err)
 			ok = true
 		}
 		if !ok {
@@ -316,7 +338,15 @@ func (s *Service) ResendVerification(ctx context.Context, userID uuid.UUID) erro
 	}
 	// display_name тащим из specialist_profiles если есть, чтобы письмо было
 	// именным. Для клиента-без-профиля будет ToName="" и mailer вставит generic.
-	displayName, _ := s.repo.GetDisplayName(ctx, userID)
+	displayName, err := s.repo.GetDisplayName(ctx, userID)
+	if err != nil {
+		// ErrNoRows маппится в ("", nil) — сюда долетит только реальная
+		// БД-ошибка. Письмо отправим (имени не будет), но залогируем —
+		// тихий swallow тут уже не делаем.
+		slog.Warn("auth: get display name failed, using empty",
+			"user_id", userID, "err", err)
+		displayName = ""
+	}
 	return s.repo.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := s.repo.InvalidatePrevVerificationsInTx(ctx, tx, userID); err != nil {
 			return err
@@ -420,7 +450,12 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 	if !u.IsActive || u.Email == nil {
 		return nil
 	}
-	displayName, _ := s.repo.GetDisplayName(ctx, u.ID)
+	displayName, err := s.repo.GetDisplayName(ctx, u.ID)
+	if err != nil {
+		slog.Warn("auth: get display name failed, using empty",
+			"user_id", u.ID, "err", err)
+		displayName = ""
+	}
 	return s.repo.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := s.repo.InvalidatePrevPasswordResetTokensInTx(ctx, tx, u.ID); err != nil {
 			return err
