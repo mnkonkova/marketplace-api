@@ -300,7 +300,11 @@ func (h *Handler) AdminAdvanceStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var advIn advanceStageReq
-	_ = json.NewDecoder(r.Body).Decode(&advIn)
+	// Body опциональное, но битый JSON — 400 (см. decodeOptionalJSON).
+	if err := decodeOptionalJSON(r, &advIn); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
 	p, err := h.svc.AdvanceStage(r.Context(), pid, actorID, advIn.UpdatedAt)
 	if err != nil {
 		writeManagerErr(w, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -143,9 +144,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 			proposed = &id0
 		}
 		if _, perr := s.projectStarter.StartFromLead(ctx, *in.ClientUserID, id, title, in.Brief, proposed); perr != nil {
-			// логично залогировать на стороне сервера, но лид важнее —
-			// клиент уже видит «бриф отправлен», молча проглатываем.
-			_ = perr
+			// Лид важнее проекта (клиент уже видит «бриф отправлен»), 200 не
+			// ломаем. Но без лога такие провалы невозможно расследовать —
+			// именно так инцидент с отсутствующим default-pipeline остался
+			// невидимым в проде.
+			slog.Error("leads: StartFromLead failed",
+				"lead_id", id, "client_id", in.ClientUserID, "err", perr)
 		}
 	}
 	// Контакты подгружаем уже после создания — они уезжают в ответ ровно

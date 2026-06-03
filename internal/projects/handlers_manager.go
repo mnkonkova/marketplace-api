@@ -354,8 +354,12 @@ func (h *Handler) ManagerAdvanceStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in advanceStageReq
-	// Тело опциональное — optimistic-lock через updated_at тоже опционально.
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	// Тело опциональное, но если прислали — обязано быть валидным JSON.
+	// Иначе клиент мог бы «потерять» updated_at и обойти optimistic-lock.
+	if err := decodeOptionalJSON(r, &in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
 	p, err := h.svc.AdvanceStage(r.Context(), pid, uid, in.UpdatedAt)
 	if err != nil {
 		writeManagerErr(w, err)

@@ -27,9 +27,12 @@ var (
 
 // ListInbox — проекты без ответственного (assigned_to_user_id IS NULL),
 // для inbox-страницы менеджера. Сортировка — старые сверху, чтобы никого
-// не «забыли».
+// не «забыли». cancelled исключаем: админ может cancel неприсвоенный проект
+// (CancelProject не требует assigned_to), и без фильтра он бы навсегда висел
+// в инбоксе.
 func (r *Repo) ListInbox(ctx context.Context) ([]Project, error) {
-	return r.listAssignedFilter(ctx, "WHERE assigned_to_user_id IS NULL ORDER BY created_at ASC")
+	return r.listAssignedFilter(ctx,
+		"WHERE assigned_to_user_id IS NULL AND status <> 'cancelled' ORDER BY created_at ASC")
 }
 
 // ListAssignedTo — проекты конкретного менеджера для канбана. Берём
@@ -53,14 +56,15 @@ ORDER BY updated_at DESC`, managerID)
 
 // ListBySpecialist — проекты, в которых данный пользователь — назначенный
 // специалист (read-only вкладка в специалистском кабинете). Не зависит от
-// assigned_to (менеджер) — это контракт «кому делаешь работу».
+// assigned_to (менеджер) — это контракт «кому делаешь работу». cancelled
+// прячем — симметрично клиенту, у которого тоже не показываем отменённые.
 func (r *Repo) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
-WHERE specialist_user_id = $1
+WHERE specialist_user_id = $1 AND status <> 'cancelled'
 ORDER BY updated_at DESC`, specialistID)
 	if err != nil {
 		return nil, fmt.Errorf("list specialist projects: %w", err)

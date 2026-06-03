@@ -156,6 +156,12 @@ func (r *Repo) PatchPipeline(ctx context.Context, id uuid.UUID, in PatchPipeline
 	if in.IsActive != nil {
 		sets = append(sets, fmt.Sprintf("is_active = $%d", len(args)+1))
 		args = append(args, *in.IsActive)
+		// Если деактивируем — сразу снимаем is_default, иначе остаётся
+		// «inactive default», под который не подбирается ни одна воронка
+		// (см. GetDefaultPipelineID), и лиды перестают рожать проекты.
+		if !*in.IsActive {
+			sets = append(sets, "is_default = FALSE")
+		}
 	}
 	if len(sets) == 0 {
 		return r.GetPipeline(ctx, id)
@@ -229,8 +235,11 @@ func (r *Repo) DeletePipeline(ctx context.Context, id uuid.UUID) error {
 	if hasActive {
 		return ErrHasActiveProjects
 	}
+	// Сбрасываем is_default одновременно с is_active — иначе остаётся
+	// «inactive default»: GetDefaultPipelineID требует и то и другое, поэтому
+	// StartFromLead тихо начнёт падать и проекты перестанут создаваться.
 	tag, err := r.db.Exec(ctx,
-		`UPDATE pipelines SET is_active = FALSE, updated_at = now() WHERE id = $1`, id)
+		`UPDATE pipelines SET is_active = FALSE, is_default = FALSE, updated_at = now() WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete pipeline: %w", err)
 	}

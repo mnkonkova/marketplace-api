@@ -71,16 +71,48 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 // ---- Клиентские чтения ----
 
 // ListClientProjects — список проектов клиента с enrich-ом display_status.
+// SQL-стоимость: ListForClient + LoadStagesBatch + LoadStepsBatch + (опц.)
+// LoadClientDisplayNames — 3..4 запроса независимо от количества проектов.
 func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([]ProjectClientView, error) {
 	projects, err := s.repo.ListForClient(ctx, clientID)
 	if err != nil {
 		return nil, err
 	}
+	if len(projects) == 0 {
+		return []ProjectClientView{}, nil
+	}
+	ids := make([]uuid.UUID, 0, len(projects))
+	specSet := map[uuid.UUID]struct{}{}
+	for _, p := range projects {
+		ids = append(ids, p.ID)
+		if p.SpecialistUserID != nil {
+			specSet[*p.SpecialistUserID] = struct{}{}
+		}
+	}
+	stagesByProject, err := s.repo.LoadStagesBatch(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	stepsByProject, err := s.repo.LoadStepsBatch(ctx, ids, true)
+	if err != nil {
+		return nil, err
+	}
+	names := map[uuid.UUID]string{}
+	if len(specSet) > 0 {
+		specIDs := make([]uuid.UUID, 0, len(specSet))
+		for id := range specSet {
+			specIDs = append(specIDs, id)
+		}
+		// best-effort: имена специалистов нужны только для отображения.
+		if n, err := s.repo.LoadClientDisplayNames(ctx, specIDs); err == nil {
+			names = n
+		}
+	}
 	views := make([]ProjectClientView, 0, len(projects))
 	for _, p := range projects {
-		view, err := s.enrichClientView(ctx, p)
-		if err != nil {
-			return nil, err
+		view := buildClientView(p, stagesByProject[p.ID], stepsByProject[p.ID])
+		if p.SpecialistUserID != nil {
+			view.SpecialistDisplayName = names[*p.SpecialistUserID]
 		}
 		views = append(views, view)
 	}
@@ -96,9 +128,8 @@ func (s *Service) GetClientProject(ctx context.Context, projectID, clientID uuid
 	return s.enrichClientView(ctx, p)
 }
 
-// enrichClientView — общая сборка ProjectClientView из Project: стадии и
-// шаги (только visible_to_client), потом считаем display_status / progress /
-// current_step. N+1 SQL per project — приемлемо для MVP объёма.
+// enrichClientView — single-project путь (GetClientProject). Для списка
+// см. ListClientProjects: там стадии/шаги грузятся одной пачкой через batch.
 func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClientView, error) {
 	stages, err := s.repo.LoadStages(ctx, p.ID)
 	if err != nil {
@@ -108,8 +139,20 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 	if err != nil {
 		return ProjectClientView{}, err
 	}
+	view := buildClientView(p, stages, steps)
+	if p.SpecialistUserID != nil {
+		// best-effort: имя specialist'а из specialist_profiles
+		if names, err := s.repo.LoadClientDisplayNames(ctx, []uuid.UUID{*p.SpecialistUserID}); err == nil {
+			view.SpecialistDisplayName = names[*p.SpecialistUserID]
+		}
+	}
+	return view, nil
+}
 
-	// Группируем шаги по stage_id, превращая Step в StepView.
+// buildClientView — чистая сборка view из уже загруженных данных. Никаких
+// SQL: одна и та же логика работает и для single-project (GetClientProject),
+// и для каждого элемента батч-листинга (ListClientProjects).
+func buildClientView(p Project, stages []Stage, steps []Step) ProjectClientView {
 	byStage := map[uuid.UUID][]StepView{}
 	flat := make([]StepView, 0, len(steps))
 	for _, st := range steps {
@@ -117,13 +160,10 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 		byStage[st.StageID] = append(byStage[st.StageID], v)
 		flat = append(flat, v)
 	}
-
 	current := DeriveCurrentStep(flat)
-
 	stageViews := make([]StageView, 0, len(stages))
 	for _, st := range stages {
 		stepsInStage := byStage[st.ID]
-		// помечаем current
 		for i := range stepsInStage {
 			if current != nil && stepsInStage[i].ID == current.ID {
 				stepsInStage[i].IsCurrent = true
@@ -138,7 +178,6 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 			Steps:         stepsInStage,
 		})
 	}
-
 	view := ProjectClientView{
 		Project:        p,
 		DisplayStatus:  DeriveProjectDisplayStatus(p.Status, flat),
@@ -152,13 +191,7 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 		view.CurrentStepOwner = current.Owner
 		view.CurrentStepStatus = current.Status
 	}
-	if p.SpecialistUserID != nil {
-		// best-effort: имя specialist'а из specialist_profiles
-		if names, err := s.repo.LoadClientDisplayNames(ctx, []uuid.UUID{*p.SpecialistUserID}); err == nil {
-			view.SpecialistDisplayName = names[*p.SpecialistUserID]
-		}
-	}
-	return view, nil
+	return view
 }
 
 // ---- Клиентские действия ----
@@ -258,7 +291,16 @@ func (s *Service) RequestRevision(ctx context.Context, projectID, stepID, actorI
 // SubmitReview — клиент оставил отзыв на review-шаге (waiting_client →
 // done). Сам объект reviews создаётся отдельным сервисом reviews; здесь
 // фиксируем только шаг.
+//
+// actorID — id залогиненного клиента. Сервис сам проверяет, что проект
+// принадлежит ему, чтобы ручка не была единственной точкой авторизации:
+// если SubmitReview переиспользуется из другого контекста (manager-flow,
+// internal job), доступ всё равно отвалится.
 func (s *Service) SubmitReview(ctx context.Context, projectID, stepID, actorID uuid.UUID) (Step, error) {
+	// Anti-enumeration: «чужой проект» неотличим от «нет такого» (404).
+	if _, err := s.repo.GetByIDForClient(ctx, projectID, actorID); err != nil {
+		return Step{}, err
+	}
 	step, err := s.repo.GetStep(ctx, projectID, stepID)
 	if err != nil {
 		return Step{}, err

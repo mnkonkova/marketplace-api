@@ -256,12 +256,17 @@ FROM projects WHERE id = $1`
 }
 
 // ListForClient — проекты клиента, отсортированные по дате создания.
+// cancelled скрываем: у них 30-дневная retention до физического удаления
+// (см. cleanup.go), в кабинете клиента им делать нечего — только засоряют
+// «Мои проекты». Симметрично админскому ListAll по умолчанию.
 func (r *Repo) ListForClient(ctx context.Context, clientID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
-FROM projects WHERE client_user_id = $1 ORDER BY created_at DESC`, clientID)
+FROM projects
+WHERE client_user_id = $1 AND status <> 'cancelled'
+ORDER BY created_at DESC`, clientID)
 	if err != nil {
 		return nil, fmt.Errorf("list client projects: %w", err)
 	}
@@ -277,6 +282,73 @@ FROM projects WHERE client_user_id = $1 ORDER BY created_at DESC`, clientID)
 			return nil, fmt.Errorf("scan project: %w", err)
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// LoadStagesBatch — стадии для пачки проектов одним SELECT. Группирует по
+// project_id, сохраняя порядок sort_order. Используется для list-эндпоинтов
+// (клиентский /me/projects, менеджерский inbox/канбан, админский /admin/projects),
+// чтобы избежать N+1 при enrich-е.
+func (r *Repo) LoadStagesBatch(ctx context.Context, projectIDs []uuid.UUID) (map[uuid.UUID][]Stage, error) {
+	out := make(map[uuid.UUID][]Stage, len(projectIDs))
+	if len(projectIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT id, project_id, name, sort_order, started_at, completed_at
+FROM project_stages
+WHERE project_id = ANY($1)
+ORDER BY project_id, sort_order`, projectIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load stages batch: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s Stage
+		if err := rows.Scan(&s.ID, &s.ProjectID, &s.Name, &s.SortOrder, &s.StartedAt, &s.CompletedAt); err != nil {
+			return nil, fmt.Errorf("scan stage: %w", err)
+		}
+		out[s.ProjectID] = append(out[s.ProjectID], s)
+	}
+	return out, rows.Err()
+}
+
+// LoadStepsBatch — шаги для пачки проектов одним SELECT. Парная LoadStagesBatch.
+// onlyVisibleToClient=true фильтрует скрытые от клиента — для клиентского списка.
+func (r *Repo) LoadStepsBatch(ctx context.Context, projectIDs []uuid.UUID, onlyVisibleToClient bool) (map[uuid.UUID][]Step, error) {
+	out := make(map[uuid.UUID][]Step, len(projectIDs))
+	if len(projectIDs) == 0 {
+		return out, nil
+	}
+	q := `
+SELECT ps.id, ps.project_id, ps.stage_id, ps.name, ps.owner, ps.status,
+       ps.duration_days, ps.visible_to_client, ps.visible_to_specialist,
+       ps.weight, ps.sort_order, ps.is_review, ps.eta_date, ps.review_deadline,
+       ps.started_at, ps.completed_at, ps.created_at, ps.updated_at
+FROM project_steps ps
+JOIN project_stages st ON st.id = ps.stage_id
+WHERE ps.project_id = ANY($1)`
+	if onlyVisibleToClient {
+		q += " AND ps.visible_to_client = TRUE"
+	}
+	q += " ORDER BY ps.project_id, st.sort_order, ps.sort_order"
+	rows, err := r.db.Query(ctx, q, projectIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load steps batch: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s Step
+		if err := rows.Scan(
+			&s.ID, &s.ProjectID, &s.StageID, &s.Name, &s.Owner, &s.Status,
+			&s.DurationDays, &s.VisibleToClient, &s.VisibleToSpecialist,
+			&s.Weight, &s.SortOrder, &s.IsReview, &s.EtaDate, &s.ReviewDeadline,
+			&s.StartedAt, &s.CompletedAt, &s.CreatedAt, &s.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan step: %w", err)
+		}
+		out[s.ProjectID] = append(out[s.ProjectID], s)
 	}
 	return out, rows.Err()
 }

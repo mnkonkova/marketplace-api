@@ -51,9 +51,14 @@ func (s *Service) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) 
 
 func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([]ProjectManagerView, error) {
 	views := make([]ProjectManagerView, 0, len(projects))
+	if len(projects) == 0 {
+		return views, nil
+	}
 	// Собираем уникальные user_id всех участников — для одного батч-запроса.
 	idSet := make(map[uuid.UUID]struct{}, 2*len(projects))
+	projectIDs := make([]uuid.UUID, 0, len(projects))
 	for _, p := range projects {
+		projectIDs = append(projectIDs, p.ID)
 		idSet[p.ClientUserID] = struct{}{}
 		if p.SpecialistUserID != nil {
 			idSet[*p.SpecialistUserID] = struct{}{}
@@ -68,6 +73,15 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 		// best-effort: контакты не критичны для канбана
 		contacts = map[uuid.UUID]PartyContact{}
 	}
+	// Стадии и шаги — батчем, без N+1 на список (было: 2*N запросов в канбане).
+	stagesByProject, err := s.repo.LoadStagesBatch(ctx, projectIDs)
+	if err != nil {
+		return nil, err
+	}
+	stepsByProject, err := s.repo.LoadStepsBatch(ctx, projectIDs, false)
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range projects {
 		view := ProjectManagerView{Project: p}
 		if c, ok := contacts[p.ClientUserID]; ok {
@@ -81,11 +95,7 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 				view.Specialist = &cc
 			}
 		}
-		// все шаги (включая скрытые) — менеджер видит всё.
-		steps, err := s.repo.LoadSteps(ctx, p.ID, false)
-		if err != nil {
-			return nil, err
-		}
+		steps := stepsByProject[p.ID]
 		stepViews := make([]StepView, 0, len(steps))
 		for _, st := range steps {
 			stepViews = append(stepViews, StepView{Step: st})
@@ -98,16 +108,46 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 			view.CurrentStepOwner = cur.Owner
 			view.CurrentStepStatus = cur.Status
 		}
-		// Текущая стадия = первая с шагом не в done|skipped.
-		curStage, _, err := s.repo.CurrentAndNextStage(ctx, p.ID)
-		if err == nil && curStage != nil {
-			view.CurrentStageID = &curStage.ID
-			view.CurrentStageName = curStage.Name
-			view.CurrentStageOrder = curStage.SortOrder
+		// Текущая стадия = первая с шагом не в done|skipped. Раньше — отдельный
+		// SQL на каждый проект; теперь считаем из уже загруженных стадий+шагов.
+		if cur := deriveCurrentStage(stagesByProject[p.ID], steps); cur != nil {
+			view.CurrentStageID = &cur.ID
+			view.CurrentStageName = cur.Name
+			view.CurrentStageOrder = cur.SortOrder
 		}
 		views = append(views, view)
 	}
 	return views, nil
+}
+
+// deriveCurrentStage — текущая активная стадия из in-memory стадий+шагов:
+// первая (по sort_order) стадия, в которой есть хотя бы один шаг НЕ в
+// done|skipped. Если все стадии завершены — nil. Эквивалентно
+// CurrentAndNextStage без SQL — для использования в батч-листинге.
+// stages должны быть отсортированы по sort_order (LoadStagesBatch это делает).
+func deriveCurrentStage(stages []Stage, steps []Step) *Stage {
+	stepsByStage := map[uuid.UUID][]Step{}
+	for _, st := range steps {
+		stepsByStage[st.StageID] = append(stepsByStage[st.StageID], st)
+	}
+	for i := range stages {
+		ss := stepsByStage[stages[i].ID]
+		if len(ss) == 0 {
+			// Стадия без шагов считаем not-done (так же как CurrentAndNextStage).
+			return &stages[i]
+		}
+		allDone := true
+		for _, s := range ss {
+			if s.Status != StepStatusDone && s.Status != StepStatusSkipped {
+				allDone = false
+				break
+			}
+		}
+		if !allDone {
+			return &stages[i]
+		}
+	}
+	return nil
 }
 
 // GetFull — детальная страница проекта (менеджер или админ).

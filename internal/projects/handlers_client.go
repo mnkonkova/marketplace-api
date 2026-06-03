@@ -128,10 +128,7 @@ func (h *Handler) ClientSubmitReview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.svc.GetClientProject(r.Context(), pid, uid); err != nil {
-		writeServiceErr(w, err)
-		return
-	}
+	// access-check теперь внутри SubmitReview (см. service.go).
 	step, err := h.svc.SubmitReview(r.Context(), pid, sid, uid)
 	if err != nil {
 		writeServiceErr(w, err)
