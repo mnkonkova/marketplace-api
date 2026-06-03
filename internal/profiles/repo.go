@@ -523,8 +523,11 @@ func (r *Repo) DeletePortfolioItemInTx(ctx context.Context, tx pgx.Tx, userID, i
 }
 
 func (r *Repo) listReviews(ctx context.Context, userID uuid.UUID) ([]Review, error) {
+	// author_user_id отдаём как есть — фронт UI всё равно показывает
+	// «Клиент» через AuthorName, но у нас (support/ops) есть UUID
+	// для поднятия email и связи с недовольным.
 	rows, err := r.db.Query(ctx, `
-SELECT id, COALESCE(NULLIF(author_name, ''), 'Клиент'), rating, text, created_at
+SELECT id, author_user_id, COALESCE(NULLIF(author_name, ''), 'Клиент'), rating, text, created_at
 FROM reviews
 WHERE target_user_id = $1
 ORDER BY created_at DESC
@@ -536,7 +539,7 @@ LIMIT 20`, userID)
 	out := make([]Review, 0, 8)
 	for rows.Next() {
 		var rev Review
-		if err := rows.Scan(&rev.ID, &rev.AuthorName, &rev.Rating, &rev.Text, &rev.CreatedAt); err != nil {
+		if err := rows.Scan(&rev.ID, &rev.AuthorUserID, &rev.AuthorName, &rev.Rating, &rev.Text, &rev.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, rev)

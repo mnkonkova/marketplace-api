@@ -20,11 +20,17 @@ type SkillRef struct {
 }
 
 type Review struct {
-	ID         uuid.UUID `json:"id"`
-	AuthorName string    `json:"author_name"`
-	Rating     int       `json:"rating"`
-	Text       string    `json:"text"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID uuid.UUID `json:"id"`
+	// AuthorUserID — UUID юзера, оставившего отзыв. По нему можно
+	// зайти в users и поднять email/телефон (для службы поддержки —
+	// «кто этот недовольный клиент»). Публичное имя в UI всё равно
+	// маскируется как «Клиент» через AuthorName, но для трекинга
+	// внутри команды UUID полезен.
+	AuthorUserID uuid.UUID `json:"author_user_id"`
+	AuthorName   string    `json:"author_name"`
+	Rating       int       `json:"rating"`
+	Text         string    `json:"text"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type PortfolioItem struct {
