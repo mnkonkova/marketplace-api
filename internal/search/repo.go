@@ -37,6 +37,11 @@ type IndexDoc struct {
 	// LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.
 	// Используется /feed для tie-breaker'а после rating_avg.
 	LastVideoAt     *time.Time `json:"last_video_at,omitempty"`
+	// ProductionName / IsFreelance — где работает спец, для отображения в
+	// поиске и feed. Производственное имя резолвится через LEFT JOIN
+	// productions (пусто если деактивирован/не выбран).
+	ProductionName  string     `json:"production_name,omitempty"`
+	IsFreelance     bool       `json:"is_freelance"`
 }
 
 func (r *Repo) LoadDoc(ctx context.Context, userID uuid.UUID) (IndexDoc, error) {
@@ -56,8 +61,10 @@ SELECT
   p.is_published, p.updated_at,
   (SELECT MAX(created_at) FROM portfolio_items
      WHERE user_id = p.user_id AND kind = 'video'
-       AND video_url IS NOT NULL AND video_url <> '')
+       AND video_url IS NOT NULL AND video_url <> ''),
+  COALESCE(pr.name, ''), p.is_freelance
 FROM specialist_profiles p
+LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1`
 	var d IndexDoc
 	err := r.db.QueryRow(ctx, q, userID).Scan(
@@ -68,6 +75,7 @@ WHERE p.user_id = $1`
 		&d.RatingAvg, &d.ReviewsCount,
 		&d.IsPublished, &d.UpdatedAt,
 		&d.LastVideoAt,
+		&d.ProductionName, &d.IsFreelance,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return IndexDoc{}, ErrNotFound

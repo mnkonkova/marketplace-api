@@ -55,6 +55,12 @@ type PublicProfile struct {
 	Skills       []SkillRef      `json:"skills"`
 	Portfolio    []PortfolioItem `json:"portfolio"`
 	Reviews      []Review        `json:"reviews"`
+	// ProductionName — название студии, в которой работает спец. Пусто, если
+	// спец фрилансер или ещё не выбрал. IsFreelance=true говорит «я сам по
+	// себе» (тогда ProductionName всегда пусто). На фронте: name → как есть;
+	// is_freelance → «Фриланс»; оба пусты → ничего не показываем.
+	ProductionName string `json:"production_name,omitempty"`
+	IsFreelance    bool   `json:"is_freelance"`
 }
 
 type Profile struct {

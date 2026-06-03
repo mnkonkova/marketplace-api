@@ -34,6 +34,10 @@ type FeedVideoDoc struct {
 	RatingAvg       float64  `json:"rating_avg"`
 	ReviewsCount    int      `json:"reviews_count"`
 	IsPublished     bool     `json:"is_published"`
+	// ProductionName — название студии или "" (фрилансер / не выбрал /
+	// студия деактивирована). IsFreelance — флаг фрилансера.
+	ProductionName  string   `json:"production_name,omitempty"`
+	IsFreelance     bool     `json:"is_freelance"`
 }
 
 // LoadFeedVideoDocs — собирает все видео-доки одного спеца. Возвращает
@@ -60,9 +64,11 @@ SELECT
   COALESCE((SELECT array_agg(category_code) FROM specialist_categories WHERE user_id = p.user_id), ARRAY[]::text[]),
   COALESCE((SELECT category_code FROM specialist_categories WHERE user_id = p.user_id AND is_primary LIMIT 1), ''),
   p.rating_avg, p.reviews_count,
-  p.is_published
+  p.is_published,
+  COALESCE(pr.name, ''), p.is_freelance
 FROM specialist_profiles p
 JOIN portfolio_items pi ON pi.user_id = p.user_id
+LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1
   AND p.is_published = TRUE
   AND pi.kind = 'video'
@@ -90,6 +96,7 @@ ORDER BY pi.sort_order, pi.created_at DESC`
 			&d.Categories, &d.PrimaryCategory,
 			&d.RatingAvg, &d.ReviewsCount,
 			&d.IsPublished,
+			&d.ProductionName, &d.IsFreelance,
 		); err != nil {
 			return nil, fmt.Errorf("scan feed video: %w", err)
 		}

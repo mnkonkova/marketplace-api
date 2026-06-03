@@ -296,10 +296,19 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 			return Profile{}, ErrEmailUnverified
 		}
 	}
-	if published && s.checker != nil && s.checker.Available() {
+	if published {
+		// Хард-валидация перед публикацией. Базовая часть (production/bio/
+		// display_name) обязательна всегда — без неё в каталог попадали
+		// «пустые» карточки. LLM-проверка дополнительно, если есть checker.
 		p, err := s.repo.Get(ctx, userID)
 		if err != nil {
 			return Profile{}, err
+		}
+		// Production XOR freelance: ровно одно должно быть выбрано. Иначе
+		// в карточке отображается «непонятный статус» — фронту нечего
+		// нарисовать (имя студии нет, фрилансером не объявлен).
+		if p.ProductionID == nil && !p.IsFreelance {
+			return Profile{}, fmt.Errorf("%w: выберите студию или отметьте «фрилансер»", ErrPublishIncomplete)
 		}
 		bio := strings.TrimSpace(p.Bio)
 		name := strings.TrimSpace(p.DisplayName)
@@ -309,18 +318,20 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 		if name == "" {
 			return Profile{}, fmt.Errorf("%w: display_name is empty", ErrPublishIncomplete)
 		}
-		title, _ := s.repo.CategoryTitle(ctx, p.PrimaryCategory)
-		res, err := s.checker.Check(ctx, CheckInput{
-			Bio:                  bio,
-			DisplayName:          name,
-			PrimaryCategory:      p.PrimaryCategory,
-			PrimaryCategoryTitle: title,
-		})
-		if err != nil {
-			return Profile{}, fmt.Errorf("profile check: %w", err)
-		}
-		if !res.OK {
-			return Profile{}, &ProfileRejectedError{Result: res}
+		if s.checker != nil && s.checker.Available() {
+			title, _ := s.repo.CategoryTitle(ctx, p.PrimaryCategory)
+			res, err := s.checker.Check(ctx, CheckInput{
+				Bio:                  bio,
+				DisplayName:          name,
+				PrimaryCategory:      p.PrimaryCategory,
+				PrimaryCategoryTitle: title,
+			})
+			if err != nil {
+				return Profile{}, fmt.Errorf("profile check: %w", err)
+			}
+			if !res.OK {
+				return Profile{}, &ProfileRejectedError{Result: res}
+			}
 		}
 	}
 	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {

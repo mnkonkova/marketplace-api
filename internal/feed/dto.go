@@ -35,6 +35,10 @@ type Specialist struct {
 	PrimaryCategory string   `json:"primary_category,omitempty"`
 	RatingAvg       float64  `json:"rating_avg"`
 	ReviewsCount    int      `json:"reviews_count"`
+	// ProductionName — название студии или пусто. IsFreelance — флаг
+	// фрилансера. Фронт overlay: name > "Фриланс" > (ничего).
+	ProductionName  string   `json:"production_name,omitempty"`
+	IsFreelance     bool     `json:"is_freelance"`
 }
 
 // Item — одна позиция в ленте: видео + контекст специалиста + индекс этого

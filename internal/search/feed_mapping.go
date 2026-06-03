@@ -51,6 +51,8 @@ func FeedVideoMapping() map[string]any {
 				"rating_avg":       map[string]any{"type": "float"},
 				"reviews_count":    map[string]any{"type": "integer"},
 				"is_published":     map[string]any{"type": "boolean"},
+				"production_name":  map[string]any{"type": "text", "analyzer": "ru_en", "fields": map[string]any{"raw": map[string]any{"type": "keyword"}}},
+				"is_freelance":     map[string]any{"type": "boolean"},
 			},
 		},
 	}

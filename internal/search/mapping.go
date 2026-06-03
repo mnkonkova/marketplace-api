@@ -37,6 +37,11 @@ func IndexMapping() map[string]any {
 				// Денормализовано из portfolio_items, чтобы /feed мог
 				// ранжировать без N запросов в PG. null если у спеца нет видео.
 				"last_video_at":    map[string]any{"type": "date"},
+				// production_name — название студии или пусто (фрилансер / не выбрал).
+				// Денормализовано из productions, чтобы карточка спеца в поиске
+				// рендерилась без JOIN. Деактивированные studios резолвятся в "".
+				"production_name":  map[string]any{"type": "text", "analyzer": "ru_en", "fields": map[string]any{"raw": map[string]any{"type": "keyword"}}},
+				"is_freelance":     map[string]any{"type": "boolean"},
 			},
 		},
 	}

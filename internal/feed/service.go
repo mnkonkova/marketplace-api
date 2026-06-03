@@ -315,5 +315,7 @@ func specFromFeedDoc(d search.FeedVideoDoc) Specialist {
 		PrimaryCategory: d.PrimaryCategory,
 		RatingAvg:       d.RatingAvg,
 		ReviewsCount:    d.ReviewsCount,
+		ProductionName:  d.ProductionName,
+		IsFreelance:     d.IsFreelance,
 	}
 }

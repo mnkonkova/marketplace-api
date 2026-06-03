@@ -291,13 +291,16 @@ func (r *Repo) GetPublic(ctx context.Context, userID uuid.UUID) (PublicProfile, 
 SELECT p.user_id, p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
-       p.rating_avg, p.reviews_count
+       p.rating_avg, p.reviews_count,
+       COALESCE(pr.name, ''), p.is_freelance
 FROM specialist_profiles p
+LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1 AND p.is_published = TRUE`
 	var p PublicProfile
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&p.UserID, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
 		&p.RateMin, &p.RateMax, &p.Currency, &p.RatingAvg, &p.ReviewsCount,
+		&p.ProductionName, &p.IsFreelance,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublicProfile{}, ErrNotFound
