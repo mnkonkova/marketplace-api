@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -161,6 +162,8 @@ func (r *Repo) PatchPipeline(ctx context.Context, id uuid.UUID, in PatchPipeline
 		// (см. GetDefaultPipelineID), и лиды перестают рожать проекты.
 		if !*in.IsActive {
 			sets = append(sets, "is_default = FALSE")
+			slog.Warn("pipelines: PatchPipeline deactivates → is_default reset",
+				"pipeline_id", id)
 		}
 	}
 	if len(sets) == 0 {
@@ -191,8 +194,9 @@ func (r *Repo) MakeDefault(ctx context.Context, id uuid.UUID) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx,
-		`UPDATE pipelines SET is_default = FALSE, updated_at = now() WHERE is_default = TRUE`); err != nil {
+	unsetTag, err := tx.Exec(ctx,
+		`UPDATE pipelines SET is_default = FALSE, updated_at = now() WHERE is_default = TRUE`)
+	if err != nil {
 		return fmt.Errorf("unset previous default: %w", err)
 	}
 	tag, err := tx.Exec(ctx,
@@ -202,9 +206,18 @@ func (r *Repo) MakeDefault(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("set default: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		// Не нашли строку → rollback откатит и UNSET тоже, state не меняется.
+		// Логируем, потому что снаружи это выглядит как «нажала, ничего».
+		slog.Warn("pipelines: MakeDefault target not found or inactive — rollback",
+			"pipeline_id", id, "unset_affected", unsetTag.RowsAffected())
 		return ErrNotFound
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	slog.Info("pipelines: MakeDefault committed",
+		"pipeline_id", id, "previous_default_unset", unsetTag.RowsAffected())
+	return nil
 }
 
 // GetDefaultPipelineID — id текущей default-воронки. Используется при
@@ -246,6 +259,8 @@ func (r *Repo) DeletePipeline(ctx context.Context, id uuid.UUID) error {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
+	slog.Warn("pipelines: DeletePipeline soft → is_active+is_default reset",
+		"pipeline_id", id)
 	return nil
 }
 

@@ -138,25 +138,25 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	if err != nil {
 		return CreateResult{}, err
 	}
-	// Если клиент залогинен и есть default-воронка — создаём проект в CRM
-	// (в inbox менеджеров). Best-effort: ошибка не валит ответ /leads.
+	// Если клиент залогинен и есть default-воронка — создаём по проекту в CRM
+	// на каждого выбранного спеца (в inbox менеджеров). Best-effort:
+	// ошибка одного спеца не валит ни другие проекты, ни ответ /leads.
+	//
+	// Раньше делали один проект с proposed=NULL когда выбрано >1 спеца —
+	// менеджер должен был сам резолвить «кому из N отдать». На практике
+	// получалось хуже: один лид с 5 спецами выглядел в инбоксе как один
+	// проект «5 кандидатов», менеджер тратил время на merging вместо того
+	// чтобы быстро отдать каждому своего. N проектов = N независимых
+	// pipelines, каждый со своим proposed.
 	if in.ClientUserID != nil && s.projectStarter != nil {
 		title := briefTitle(in.Brief)
-		// Если выбрали ровно одного спеца — передадим его как proposed.
-		// Несколько = в проекте оставим NULL: менеджер сам выберет, когда
-		// кто-то из них примет.
-		var proposed *uuid.UUID
-		if len(valid) == 1 {
-			id0 := valid[0]
-			proposed = &id0
-		}
-		if _, perr := s.projectStarter.StartFromLead(ctx, *in.ClientUserID, id, title, in.Brief, proposed); perr != nil {
-			// Лид важнее проекта (клиент уже видит «бриф отправлен»), 200 не
-			// ломаем. Но без лога такие провалы невозможно расследовать —
-			// именно так инцидент с отсутствующим default-pipeline остался
-			// невидимым в проде.
-			slog.Error("leads: StartFromLead failed",
-				"lead_id", id, "client_id", in.ClientUserID, "err", perr)
+		for _, sid := range valid {
+			specID := sid
+			if _, perr := s.projectStarter.StartFromLead(ctx, *in.ClientUserID, id, title, in.Brief, &specID); perr != nil {
+				slog.Error("leads: StartFromLead failed",
+					"lead_id", id, "client_id", in.ClientUserID,
+					"specialist_id", specID, "err", perr)
+			}
 		}
 	}
 	// Контакты подгружаем уже после создания — они уезжают в ответ ровно
