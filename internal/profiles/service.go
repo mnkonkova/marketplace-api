@@ -69,11 +69,18 @@ type CheckResult struct {
 }
 
 // MediaStorage — абстракция над S3-совместимым хранилищем. Сервис не знает
-// про minio/aws — только про presigned PUT и сборку public URL. main.go
-// внедряет реализацию через WithMediaStorage; nil = аплоад выключен.
+// про minio/aws — только про presigned PUT, сборку public URL и операции
+// для orphan-sweep'a (List/Remove/KeyFromURL). main.go внедряет реализацию
+// через WithMediaStorage; nil = аплоад и sweep выключены.
 type MediaStorage interface {
 	PresignPut(ctx context.Context, key, contentType string, expiry time.Duration) (string, error)
 	PublicURL(key string) string
+	// ListObjects стримит объекты под prefix; yield=false останавливает.
+	ListObjects(ctx context.Context, prefix string, yield func(key string, lastModified time.Time) bool) error
+	// RemoveObject — удаление одного ключа; идемпотентно.
+	RemoveObject(ctx context.Context, key string) error
+	// KeyFromURL — обратное от PublicURL; "" если URL не из bucket'а.
+	KeyFromURL(rawURL string) string
 }
 
 type Service struct {

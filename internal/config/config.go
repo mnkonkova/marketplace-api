@@ -120,6 +120,16 @@ type Config struct {
 	N8nWebhookURL   string `env:"N8N_WEBHOOK_URL"`
 	N8nWebhookToken string `env:"N8N_WEBHOOK_TOKEN"`
 
+	// S3OrphanMinAge — мин. возраст объекта S3 до того, как его можно
+	// удалить как orphan. Должен быть заметно больше portfolioUploadExpiry
+	// (15m), чтобы не прибить in-flight presigned upload до записи в БД.
+	// Дефолт 24h: с большим запасом покрывает любые штатные задержки.
+	S3OrphanMinAge time.Duration `env:"S3_ORPHAN_MIN_AGE" envDefault:"24h"`
+	// S3SweepInterval — периодичность sweep'a. 6h по умолчанию:
+	// orphan'ы не сильно горят (S3-расходы накапливаются медленно), а
+	// листинг bucket'а на сотнях тысяч объектов не дёшев. <=0 → выключено.
+	S3SweepInterval time.Duration `env:"S3_SWEEP_INTERVAL" envDefault:"6h"`
+
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 
 	// CORSOrigins — список разрешённых origin'ов через запятую

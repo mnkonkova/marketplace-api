@@ -541,6 +541,35 @@ LIMIT 20`, userID)
 	return out, rows.Err()
 }
 
+// LoadReferencedMediaURLs возвращает все непустые avatar_url, video_url и
+// thumbnail_url из БД одним UNION-запросом. Используется orphan-sweep'ом:
+// всё что не в этом списке (после извлечения ключа) — кандидат на удаление
+// из bucket'а. Внешние URL (youtube и т.п.) тоже в выдаче — каллер их
+// отфильтрует через s3.Client.KeyFromURL → "".
+func (r *Repo) LoadReferencedMediaURLs(ctx context.Context) ([]string, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT url FROM (
+  SELECT avatar_url    AS url FROM specialist_profiles WHERE avatar_url    IS NOT NULL AND avatar_url    <> ''
+  UNION ALL
+  SELECT video_url     AS url FROM portfolio_items     WHERE video_url     IS NOT NULL AND video_url     <> ''
+  UNION ALL
+  SELECT thumbnail_url AS url FROM portfolio_items     WHERE thumbnail_url IS NOT NULL AND thumbnail_url <> ''
+) t`)
+	if err != nil {
+		return nil, fmt.Errorf("load referenced media: %w", err)
+	}
+	defer rows.Close()
+	out := make([]string, 0, 64)
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return nil, err
+		}
+		out = append(out, url)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repo) ValidSkillIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
 	if len(ids) == 0 {
 		return nil, nil

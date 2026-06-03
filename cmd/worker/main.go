@@ -22,6 +22,8 @@ import (
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
+	"marketpclce/internal/platform/s3"
+	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
 	"marketpclce/internal/search"
 )
@@ -213,6 +215,34 @@ func main() {
 	go runOldProjectsCleanupTicker(rootCtx, projectsSvc,
 		cfg.ProjectRetention, cfg.ProjectCancelledRetention, cfg.ProjectCleanupInterval, logger)
 
+	// S3 orphan sweep: presigned uploads/удалённые портфолио оставляют
+	// «осиротевшие» объекты в bucket'е. Раз в S3SweepInterval листим
+	// portfolio/ и images/, удаляем не-referenced + старше S3OrphanMinAge.
+	// Поднимается только если есть s3-credentials, иначе no-op.
+	if cfg.S3AccessKey != "" && cfg.S3SecretKey != "" {
+		s3Client, err := s3.New(s3.Config{
+			Endpoint:  cfg.S3Endpoint,
+			AccessKey: cfg.S3AccessKey,
+			SecretKey: cfg.S3SecretKey,
+			Bucket:    cfg.S3Bucket,
+			Region:    cfg.S3Region,
+			UseSSL:    cfg.S3UseSSL,
+			PublicURL: cfg.S3PublicURL,
+		})
+		if err != nil {
+			slog.Warn("worker: s3 sweep disabled", "err", err)
+		} else {
+			profilesSvc := profiles.NewService(profiles.NewRepo(pool)).WithMediaStorage(s3Client)
+			go runMediaSweepTicker(rootCtx, profilesSvc, cfg.S3OrphanMinAge, cfg.S3SweepInterval, logger)
+			slog.Info("worker: s3 sweep ready",
+				"bucket", s3Client.Bucket(),
+				"interval", cfg.S3SweepInterval,
+				"min_age", cfg.S3OrphanMinAge)
+		}
+	} else {
+		slog.Info("worker: s3 sweep disabled (no credentials)")
+	}
+
 	// /metrics для alloy. Отдельный listener, чтобы не путать с api:8080 и
 	// чтобы worker оставался без бизнес-API. /healthz нужен compose'у — без
 	// него health-check'и не зацепятся.
@@ -312,6 +342,39 @@ func runOldProjectsCleanupTicker(ctx context.Context, svc *projects.Service, don
 			}
 			if n > 0 {
 				logger.Info("old projects cleaned up", "count", n)
+			}
+		}
+	}
+}
+
+// runMediaSweepTicker — периодически удаляет orphan-объекты из S3
+// (presigned uploads без записи в БД, либо файлы от удалённых портфолио/
+// аватаров). interval<=0 → выключено.
+func runMediaSweepTicker(ctx context.Context, svc *profiles.Service, minAge, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	// Первый прогон сразу — чтобы при рестарте worker'а долго не ждать.
+	if deleted, kept, err := svc.SweepOrphanMedia(ctx, minAge); err != nil {
+		logger.Warn("s3 sweep initial run failed", "err", err)
+	} else if deleted > 0 {
+		logger.Info("s3 sweep", "deleted", deleted, "kept", kept)
+	}
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			deleted, kept, err := svc.SweepOrphanMedia(ctx, minAge)
+			if err != nil {
+				logger.Warn("s3 sweep failed", "err", err)
+				continue
+			}
+			if deleted > 0 {
+				logger.Info("s3 sweep", "deleted", deleted, "kept", kept)
 			}
 		}
 	}

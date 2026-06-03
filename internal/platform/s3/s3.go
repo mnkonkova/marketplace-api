@@ -99,6 +99,52 @@ func (c *Client) PublicURL(key string) string {
 // Bucket — для логирования/диагностики.
 func (c *Client) Bucket() string { return c.bucket }
 
+// ListObjects — стримит все объекты под prefix. yield вызывается на каждый
+// объект; если возвращает false, итерация останавливается. Возвращаемая
+// ошибка — фатальная (битый канал / отказ S3); per-object ошибки приходят
+// через obj.Err внутри MinIO-канала и тоже превращаются в return.
+//
+// Используется sweep'ом orphan media: проходим portfolio/ и images/ под
+// тысячи объектов, нужен стрим без буферизации (память O(1)).
+func (c *Client) ListObjects(ctx context.Context, prefix string, yield func(key string, lastModified time.Time) bool) error {
+	for obj := range c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	}) {
+		if obj.Err != nil {
+			return fmt.Errorf("list %s: %w", prefix, obj.Err)
+		}
+		if !yield(obj.Key, obj.LastModified) {
+			return nil
+		}
+	}
+	return ctx.Err()
+}
+
+// RemoveObject — удаляет один объект. Идемпотентно (повторный вызов на
+// отсутствующий ключ — не ошибка для S3 API).
+func (c *Client) RemoveObject(ctx context.Context, key string) error {
+	if err := c.mc.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("remove %s: %w", key, err)
+	}
+	return nil
+}
+
+// KeyFromURL — обратное от PublicURL: восстанавливает S3-ключ из публичного
+// URL. Если URL не принадлежит нашему bucket'у (внешние ссылки на YouTube,
+// Vimeo и т.п.) — возвращает "". Используется в sweep'е, чтобы собрать
+// referenced-set по avatar_url / video_url / thumbnail_url.
+func (c *Client) KeyFromURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	prefix := c.publicURL + "/"
+	if !strings.HasPrefix(rawURL, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(rawURL, prefix)
+}
+
 // parseEndpoint вычленяет host и решает про SSL: если в endpoint есть схема,
 // она побеждает над UseSSL-флагом, чтобы https://storage.yandexcloud.net
 // автоматически шёл по TLS, а http://localhost:9000 — без.
