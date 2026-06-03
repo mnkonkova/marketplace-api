@@ -138,16 +138,16 @@ func TestCommentAuthorNameFallback(t *testing.T) {
 	// 1) автор только с email — должен резолвиться в email-префикс.
 	var emailOnly uuid.UUID
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'manager', TRUE, now()) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_manager, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, TRUE, now()) RETURNING id`,
 		"only-email-"+uuid.NewString()+"@example.com").Scan(&emailOnly)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, emailOnly)
 
 	// 2) автор с client_profile.display_name = "Иван-Клиент"
 	var withCP uuid.UUID
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'client', TRUE, now()) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`,
 		"cp-"+uuid.NewString()+"@example.com").Scan(&withCP)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, withCP)
 	if _, err := pool.Exec(ctx,

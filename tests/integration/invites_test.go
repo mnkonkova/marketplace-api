@@ -21,12 +21,12 @@ func TestMagicLinkFullCycle(t *testing.T) {
 	// Создаём админа-creator и target-юзера.
 	var creatorID, userID uuid.UUID
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'admin', TRUE, now()) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_admin, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, TRUE, now()) RETURNING id`,
 		"creator-"+uuid.NewString()+"@x").Scan(&creatorID)
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved)
-VALUES ($1, 'x', 'client', 'client', TRUE) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_approved)
+VALUES ($1, 'x', 'client', TRUE) RETURNING id`,
 		"target-"+uuid.NewString()+"@x").Scan(&userID)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{creatorID, userID})
 
@@ -70,10 +70,10 @@ func TestMagicLinkConsumeTwice(t *testing.T) {
 	ctx := context.Background()
 
 	var creatorID, userID uuid.UUID
-	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'admin', TRUE, now()) RETURNING id`, "c-"+uuid.NewString()+"@x").Scan(&creatorID)
-	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, role, is_approved)
-VALUES ($1, 'x', 'client', 'client', TRUE) RETURNING id`, "u-"+uuid.NewString()+"@x").Scan(&userID)
+	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, is_admin, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, TRUE, now()) RETURNING id`, "c-"+uuid.NewString()+"@x").Scan(&creatorID)
+	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, is_approved)
+VALUES ($1, 'x', 'client', TRUE) RETURNING id`, "u-"+uuid.NewString()+"@x").Scan(&userID)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{creatorID, userID})
 
 	repo := admin.NewRepo(pool)
@@ -98,10 +98,10 @@ func TestMagicLinkInvalidatesPrevious(t *testing.T) {
 	ctx := context.Background()
 
 	var creatorID, userID uuid.UUID
-	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'admin', TRUE, now()) RETURNING id`, "c-"+uuid.NewString()+"@x").Scan(&creatorID)
-	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, role, is_approved)
-VALUES ($1, 'x', 'client', 'client', TRUE) RETURNING id`, "u-"+uuid.NewString()+"@x").Scan(&userID)
+	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, is_admin, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, TRUE, now()) RETURNING id`, "c-"+uuid.NewString()+"@x").Scan(&creatorID)
+	_ = pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, kind, is_approved)
+VALUES ($1, 'x', 'client', TRUE) RETURNING id`, "u-"+uuid.NewString()+"@x").Scan(&userID)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{creatorID, userID})
 
 	repo := admin.NewRepo(pool)
@@ -130,8 +130,8 @@ func TestApproveRevokeManager(t *testing.T) {
 
 	var mgrID uuid.UUID
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved)
-VALUES ($1, 'x', 'specialist', 'manager', FALSE) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_manager, is_approved)
+VALUES ($1, 'x', 'specialist', TRUE, FALSE) RETURNING id`,
 		"mgr-"+uuid.NewString()+"@x").Scan(&mgrID)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, mgrID)
 
@@ -165,8 +165,8 @@ func TestSetApprovedRejectsNonManager(t *testing.T) {
 
 	var clientID uuid.UUID
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved)
-VALUES ($1, 'x', 'client', 'client', TRUE) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_approved)
+VALUES ($1, 'x', 'client', TRUE) RETURNING id`,
 		"cl-"+uuid.NewString()+"@x").Scan(&clientID)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, clientID)
 

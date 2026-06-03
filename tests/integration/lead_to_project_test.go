@@ -23,8 +23,8 @@ func TestStartFromLeadHappyPath(t *testing.T) {
 	// Создаём клиента и воронку, делаем её default.
 	var clientID uuid.UUID
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'client', TRUE, now()) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`,
 		"l2p-"+uuid.NewString()+"@x").Scan(&clientID)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, clientID)
 
@@ -120,8 +120,8 @@ func TestBriefTitle(t *testing.T) {
 
 	var clientID uuid.UUID
 	_ = pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'client', TRUE, now()) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`,
 		"bt-"+uuid.NewString()+"@x").Scan(&clientID)
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, clientID)
 

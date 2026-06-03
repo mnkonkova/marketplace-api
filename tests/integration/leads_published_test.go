@@ -18,8 +18,8 @@ func makeSpecialist(t *testing.T, pool *pgxpool.Pool, published bool) uuid.UUID 
 	ctx := context.Background()
 	var uid uuid.UUID
 	if err := pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'specialist', 'client', TRUE, now()) RETURNING id`,
+INSERT INTO users (email, password_hash, kind, is_approved, email_verified_at)
+VALUES ($1, 'x', 'specialist', TRUE, now()) RETURNING id`,
 		"sp-"+uuid.NewString()+"@x").Scan(&uid); err != nil {
 		t.Fatalf("create user: %v", err)
 	}

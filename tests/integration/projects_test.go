@@ -25,8 +25,8 @@ func setupPipelineAndProject(t *testing.T, pool *pgxpool.Pool) (clientID, pipeli
 	// тестовый client (email уникальный с timestamp, чтобы не конфликтовать)
 	email := "it-" + uuid.NewString() + "@example.com"
 	if err := pool.QueryRow(ctx, `
-INSERT INTO users (email, password_hash, kind, role, is_approved, email_verified_at)
-VALUES ($1, 'x', 'client', 'client', TRUE, now()) RETURNING id`, email).Scan(&clientID); err != nil {
+INSERT INTO users (email, password_hash, kind, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`, email).Scan(&clientID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
@@ -283,8 +283,8 @@ func TestClaimAlreadyClaimed(t *testing.T) {
 	m1, m2 := uuid.New(), uuid.New()
 	for _, mid := range []uuid.UUID{m1, m2} {
 		if _, err := pool.Exec(ctx, `
-INSERT INTO users (id, email, password_hash, kind, role, is_approved)
-VALUES ($1, $2, 'x', 'specialist', 'manager', TRUE)`,
+INSERT INTO users (id, email, password_hash, kind, is_manager, is_approved)
+VALUES ($1, $2, 'x', 'specialist', TRUE, TRUE)`,
 			mid, "mgr-"+mid.String()+"@example.com"); err != nil {
 			t.Fatalf("create manager: %v", err)
 		}
