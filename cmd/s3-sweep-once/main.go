@@ -100,7 +100,7 @@ func main() {
 		cutoff := time.Now().Add(-minAge)
 		var orphans, keptRef, keptYoung int
 		for _, prefix := range []string{"portfolio/", "images/"} {
-			_ = s3Client.ListObjects(ctx, prefix, func(key string, lastModified time.Time) bool {
+			if err := s3Client.ListObjects(ctx, prefix, func(key string, lastModified time.Time) bool {
 				if _, ok := ref[key]; ok {
 					keptRef++
 					fmt.Printf("  KEEP-ref:   %s\n", key)
@@ -114,7 +114,10 @@ func main() {
 				orphans++
 				fmt.Printf("  orphan:     %s (last_modified=%s)\n", key, lastModified.Format(time.RFC3339))
 				return true
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "list %s: %v\n", prefix, err)
+				os.Exit(1)
+			}
 		}
 		fmt.Printf("dry-run: orphans=%d kept_ref=%d kept_young=%d referenced_in_db=%d minAge=%s elapsed=%s bucket=%s\n",
 			orphans, keptRef, keptYoung, len(ref), minAge, time.Since(start).Round(time.Millisecond), s3Client.Bucket())
