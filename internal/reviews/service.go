@@ -14,7 +14,10 @@ var ErrInvalidInput = errors.New("invalid input")
 
 const (
 	textMaxLen   = 2000
-	textMinNoLead = 10 // если отзыв без привязки к lead'у, текст обязателен
+	// Минимум 3 символа — достаточно для «топ» / «огонь», но отсекает
+	// случайные пробелы и однобуквенный спам. lead-привязанный отзыв
+	// проходит и без текста (пустая строка тоже валидна).
+	textMinNoLead = 3
 	authorNameCap = 120
 )
 
@@ -26,23 +29,25 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Review, error) {
 	in.AuthorName = strings.TrimSpace(in.AuthorName)
 	in.Text = strings.TrimSpace(in.Text)
 
+	// Сообщения на русском — handler передаёт их в errorBody.message,
+	// фронт показывает текст напрямую через NzMessageService.
 	if in.Rating < 1 || in.Rating > 5 {
-		return Review{}, fmt.Errorf("%w: rating must be 1..5", ErrInvalidInput)
+		return Review{}, fmt.Errorf("%w: выберите оценку от 1 до 5 звёзд", ErrInvalidInput)
 	}
 	if in.TargetUserID == uuid.Nil {
-		return Review{}, fmt.Errorf("%w: target_user_id is required", ErrInvalidInput)
+		return Review{}, fmt.Errorf("%w: не указан специалист, которому оставляете отзыв", ErrInvalidInput)
 	}
 	if in.AuthorUserID == in.TargetUserID {
-		return Review{}, fmt.Errorf("%w: cannot review yourself", ErrInvalidInput)
+		return Review{}, fmt.Errorf("%w: нельзя оставить отзыв самому себе", ErrInvalidInput)
 	}
 	if utf8.RuneCountInString(in.Text) > textMaxLen {
-		return Review{}, fmt.Errorf("%w: text too long (max %d)", ErrInvalidInput, textMaxLen)
+		return Review{}, fmt.Errorf("%w: текст слишком длинный (максимум %d символов)", ErrInvalidInput, textMaxLen)
 	}
 	if utf8.RuneCountInString(in.AuthorName) > authorNameCap {
-		return Review{}, fmt.Errorf("%w: author_name too long (max %d)", ErrInvalidInput, authorNameCap)
+		return Review{}, fmt.Errorf("%w: имя автора слишком длинное (максимум %d символов)", ErrInvalidInput, authorNameCap)
 	}
 	if in.LeadID == nil && utf8.RuneCountInString(in.Text) < textMinNoLead {
-		return Review{}, fmt.Errorf("%w: text must be at least %d chars when no lead is referenced", ErrInvalidInput, textMinNoLead)
+		return Review{}, fmt.Errorf("%w: напишите хотя бы %d символа в тексте отзыва", ErrInvalidInput, textMinNoLead)
 	}
 
 	isSpec, err := s.repo.TargetIsSpecialist(ctx, in.TargetUserID)
@@ -50,7 +55,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Review, error) {
 		return Review{}, err
 	}
 	if !isSpec {
-		return Review{}, fmt.Errorf("%w: target is not a specialist", ErrInvalidInput)
+		return Review{}, fmt.Errorf("%w: пользователь не является специалистом", ErrInvalidInput)
 	}
 
 	if in.LeadID != nil {
@@ -72,15 +77,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Review, error) {
 
 func (s *Service) Update(ctx context.Context, id, authorID uuid.UUID, in UpdateInput) (Review, error) {
 	if in.Rating == nil && in.Text == nil {
-		return Review{}, fmt.Errorf("%w: nothing to update", ErrInvalidInput)
+		return Review{}, fmt.Errorf("%w: нечего обновлять — поменяйте оценку или текст", ErrInvalidInput)
 	}
 	if in.Rating != nil && (*in.Rating < 1 || *in.Rating > 5) {
-		return Review{}, fmt.Errorf("%w: rating must be 1..5", ErrInvalidInput)
+		return Review{}, fmt.Errorf("%w: выберите оценку от 1 до 5 звёзд", ErrInvalidInput)
 	}
 	if in.Text != nil {
 		t := strings.TrimSpace(*in.Text)
 		if utf8.RuneCountInString(t) > textMaxLen {
-			return Review{}, fmt.Errorf("%w: text too long (max %d)", ErrInvalidInput, textMaxLen)
+			return Review{}, fmt.Errorf("%w: текст слишком длинный (максимум %d символов)", ErrInvalidInput, textMaxLen)
 		}
 		in.Text = &t
 	}
