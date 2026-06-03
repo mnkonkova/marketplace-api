@@ -53,7 +53,7 @@ func (u User) Role() string {
 		return RoleAdmin
 	case u.IsManager:
 		return RoleManager
-	case u.Kind == KindSpecialist || u.Kind == KindBoth:
+	case u.Kind == KindSpecialist:
 		return RoleSpecialist
 	default:
 		return RoleClient

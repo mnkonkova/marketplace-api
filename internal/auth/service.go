@@ -37,7 +37,6 @@ var (
 const (
 	KindClient     = "client"
 	KindSpecialist = "specialist"
-	KindBoth       = "both"
 )
 
 // CRM-роли (users.role). Отдельно от Kind — см. docs/CRM_V5_BRIEF.md §1.
@@ -129,14 +128,14 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 		return RegisterResult{}, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
 	}
 	switch in.Kind {
-	case KindClient, KindSpecialist, KindBoth:
+	case KindClient, KindSpecialist:
 	default:
-		return RegisterResult{}, fmt.Errorf("%w: kind must be client, specialist or both", ErrInvalidInput)
+		return RegisterResult{}, fmt.Errorf("%w: kind must be client or specialist", ErrInvalidInput)
 	}
 	// CRM-роль теперь не приходит из регистрации: manager/admin промоутит
 	// только админ. Через /auth/register создаётся обычный юзер (kind задаёт
 	// маркетплейс-идентичность), is_manager/is_admin остаются FALSE.
-	needsProfile := in.Kind == KindSpecialist || in.Kind == KindBoth
+	needsProfile := in.Kind == KindSpecialist
 	if needsProfile && in.DisplayName == "" {
 		return RegisterResult{}, fmt.Errorf("%w: display_name is required for specialists", ErrInvalidInput)
 	}
