@@ -218,12 +218,16 @@ func main() {
 	// S3 orphan sweep: presigned uploads/удалённые портфолио оставляют
 	// «осиротевшие» объекты в bucket'е. Раз в S3SweepInterval листим
 	// portfolio/ и images/, удаляем не-referenced + старше S3OrphanMinAge.
-	// Поднимается только если есть s3-credentials, иначе no-op.
-	if cfg.S3AccessKey != "" && cfg.S3SecretKey != "" {
+	//
+	// Используется ОТДЕЛЬНАЯ пара S3_SWEEP_* ключей: основной S3_ACCESS_KEY
+	// у фронта upload-only (presigned PUT), без list/delete; для sweep'a
+	// нужен сервис-аккаунт с list+delete. Если sweep-ключи пусты — sweep
+	// выключен (no-op), фронт-аплоад продолжает работать.
+	if cfg.S3SweepAccessKey != "" && cfg.S3SweepSecretKey != "" {
 		s3Client, err := s3.New(s3.Config{
 			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3AccessKey,
-			SecretKey: cfg.S3SecretKey,
+			AccessKey: cfg.S3SweepAccessKey,
+			SecretKey: cfg.S3SweepSecretKey,
 			Bucket:    cfg.S3Bucket,
 			Region:    cfg.S3Region,
 			UseSSL:    cfg.S3UseSSL,
@@ -240,7 +244,7 @@ func main() {
 				"min_age", cfg.S3OrphanMinAge)
 		}
 	} else {
-		slog.Info("worker: s3 sweep disabled (no credentials)")
+		slog.Info("worker: s3 sweep disabled (S3_SWEEP_* keys not set)")
 	}
 
 	// /metrics для alloy. Отдельный listener, чтобы не путать с api:8080 и

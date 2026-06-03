@@ -120,6 +120,14 @@ type Config struct {
 	N8nWebhookURL   string `env:"N8N_WEBHOOK_URL"`
 	N8nWebhookToken string `env:"N8N_WEBHOOK_TOKEN"`
 
+	// S3SweepAccessKey / S3SweepSecretKey — отдельный сервис-аккаунт для
+	// orphan-sweep'a в worker'е и CLI cmd/s3-sweep-once. Требует list +
+	// delete на bucket. Принцип наименьших привилегий: основной S3_ACCESS_KEY
+	// (которым подписываются presigned PUT'ы для фронта) должен быть upload-
+	// only, без list/delete. Если эти ключи пусты — sweep выключен (no-op),
+	// фронт-аплоад продолжает работать.
+	S3SweepAccessKey string `env:"S3_SWEEP_ACCESS_KEY"`
+	S3SweepSecretKey string `env:"S3_SWEEP_SECRET_KEY"`
 	// S3OrphanMinAge — мин. возраст объекта S3 до того, как его можно
 	// удалить как orphan. Должен быть заметно больше portfolioUploadExpiry
 	// (15m), чтобы не прибить in-flight presigned upload до записи в БД.

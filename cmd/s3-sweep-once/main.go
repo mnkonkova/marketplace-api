@@ -46,14 +46,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if cfg.S3AccessKey == "" || cfg.S3SecretKey == "" {
-		fmt.Fprintln(os.Stderr, "s3 creds not set")
+	// CLI sweep'a берёт те же sweep-ключи что и worker (list+delete роль),
+	// а не основной upload-only S3_ACCESS_KEY.
+	if cfg.S3SweepAccessKey == "" || cfg.S3SweepSecretKey == "" {
+		fmt.Fprintln(os.Stderr, "S3_SWEEP_ACCESS_KEY / S3_SWEEP_SECRET_KEY not set")
 		os.Exit(1)
 	}
 	s3Client, err := s3.New(s3.Config{
 		Endpoint:  cfg.S3Endpoint,
-		AccessKey: cfg.S3AccessKey,
-		SecretKey: cfg.S3SecretKey,
+		AccessKey: cfg.S3SweepAccessKey,
+		SecretKey: cfg.S3SweepSecretKey,
 		Bucket:    cfg.S3Bucket,
 		Region:    cfg.S3Region,
 		UseSSL:    cfg.S3UseSSL,
