@@ -279,11 +279,13 @@ VALUES ($1, NULL, $2, 'human', 'specialist_approved', $3)`,
 		mustJSON(map[string]string{"specialist_user_id": proposed.String()})); err != nil {
 		return uuid.Nil, fmt.Errorf("event: %w", err)
 	}
+	apayload := map[string]any{
+		"project_id":         projectID.String(),
+		"specialist_user_id": proposed.String(),
+	}
+	enrichProjectPayload(ctx, tx, projectID, apayload)
 	if err := emit(ctx, tx, projectID, nil, actorID, "project.specialist_approved",
-		map[string]string{
-			"project_id":         projectID.String(),
-			"specialist_user_id": proposed.String(),
-		}); err != nil {
+		apayload); err != nil {
 		return uuid.Nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -351,11 +353,13 @@ VALUES ($1, NULL, $2, 'human', 'specialist_assigned', $3)`,
 		mustJSON(map[string]string{"specialist_user_id": specialistID.String()})); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}
+	apayload := map[string]any{
+		"project_id":         projectID.String(),
+		"specialist_user_id": specialistID.String(),
+	}
+	enrichProjectPayload(ctx, tx, projectID, apayload)
 	if err := emit(ctx, tx, projectID, nil, actorID, "project.specialist_assigned",
-		map[string]string{
-			"project_id":         projectID.String(),
-			"specialist_user_id": specialistID.String(),
-		}); err != nil {
+		apayload); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -746,13 +750,31 @@ VALUES ($1, NULL, $2, 'human', 'stage_advance', $3)`,
 	return r.GetByID(ctx, projectID)
 }
 
-// GetByIDForManager — проект, видимый менеджеру (assigned_to_user_id = me).
-// Без жёсткой проверки: если managerID=uuid.Nil — отдаст любой (для админа).
+// GetByIDForManager — проект, видимый менеджеру:
+//   - assigned_to_user_id = me            — свои проекты (полный доступ);
+//   - assigned_to_user_id IS NULL         — «общий» инбокс (можно взять на себя);
+//   - assigned_to_user_id = другой        — НЕ виден (ErrNotFound).
+//
+// Чужие assigned-проекты прятаны, чтобы менеджер не лез в чужую работу.
+// Если managerID=uuid.Nil — отдаём любой проект (для admin-вызовов).
 func (r *Repo) GetByIDForManager(ctx context.Context, projectID, managerID uuid.UUID) (Project, error) {
 	if managerID == uuid.Nil {
 		return r.GetByID(ctx, projectID)
 	}
-	return r.getByID(ctx, projectID, &managerID, "assigned_to_user_id")
+	p, err := r.GetByID(ctx, projectID)
+	if err != nil {
+		return Project{}, err
+	}
+	// Своё — ок.
+	if p.AssignedToUserID != nil && *p.AssignedToUserID == managerID {
+		return p, nil
+	}
+	// Unassigned — видно всем менеджерам (для claim'а).
+	if p.AssignedToUserID == nil {
+		return p, nil
+	}
+	// Чужой assigned — прячем за not_found (не выдаём факт существования).
+	return Project{}, ErrNotFound
 }
 
 // MoveProjectToStage — фактическая реализация лежит в move_stage.go ради
