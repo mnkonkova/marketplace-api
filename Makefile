@@ -1,5 +1,6 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt swag \
-        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos
+        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos \
+        prod-backup-db prod-backup-db-restore
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -112,3 +113,41 @@ prod-seed:
 # напишет в БД ссылки на эти объекты, и фид заработает.
 prod-seed-videos:
 	$(PROD_DC) run --rm api seed-videos
+
+# Бекап БД с ротацией: pg_dump из работающего postgres-контейнера →
+# gzip → backups/marketpclce-YYYY-MM-DD_HHMMSS.sql.gz. Удаляет файлы
+# старше 3 дней (BACKUP_KEEP_DAYS=3 — переопределяется при вызове).
+# Использует exec, а не run --rm — postgres всегда живой в prod'е.
+# --clean --if-exists даёт «безопасный restore»: DROP TABLE IF EXISTS
+# перед CREATE, идемпотентно поверх существующей БД.
+#
+# Для регулярного бекапа в cron:
+#   0 3 * * * cd /opt/marketplace-api && make prod-backup-db >> backups/cron.log 2>&1
+BACKUP_DIR ?= backups
+BACKUP_KEEP_DAYS ?= 3
+prod-backup-db:
+	@mkdir -p $(BACKUP_DIR)
+	@PG_USER="$$(grep -E '^POSTGRES_USER=' .env.prod 2>/dev/null | cut -d= -f2- | tr -d '\"' || echo marketpclce)"; \
+	 PG_DB="$$(grep -E '^POSTGRES_DB=' .env.prod 2>/dev/null | cut -d= -f2- | tr -d '\"' || echo marketpclce)"; \
+	 OUT="$(BACKUP_DIR)/$${PG_DB}-$$(date +%Y-%m-%d_%H%M%S).sql.gz"; \
+	 echo "[backup] $$OUT"; \
+	 $(PROD_DC) exec -T postgres pg_dump -U "$$PG_USER" -d "$$PG_DB" --no-owner --clean --if-exists | gzip > "$$OUT"; \
+	 SIZE=$$(stat -c%s "$$OUT" 2>/dev/null || stat -f%z "$$OUT"); \
+	 if [ "$$SIZE" -lt 1024 ]; then \
+	   echo "[backup] FAIL: $$OUT < 1KB (pg_dump probably failed)"; \
+	   rm -f "$$OUT"; exit 1; \
+	 fi; \
+	 echo "[backup] OK: $$(numfmt --to=iec $$SIZE 2>/dev/null || echo $$SIZE bytes)"; \
+	 find $(BACKUP_DIR) -name "$${PG_DB}-*.sql.gz" -type f -mtime +$(BACKUP_KEEP_DAYS) -print -delete
+
+# Восстановление из последнего бекапа (или указанного через BACKUP_FILE).
+# ВНИМАНИЕ: DROP + CREATE, текущие данные затрутся. Только для recovery.
+prod-backup-db-restore:
+	@PG_USER="$$(grep -E '^POSTGRES_USER=' .env.prod 2>/dev/null | cut -d= -f2- | tr -d '\"' || echo marketpclce)"; \
+	 PG_DB="$$(grep -E '^POSTGRES_DB=' .env.prod 2>/dev/null | cut -d= -f2- | tr -d '\"' || echo marketpclce)"; \
+	 FILE="$${BACKUP_FILE:-$$(ls -t $(BACKUP_DIR)/$${PG_DB}-*.sql.gz 2>/dev/null | head -1)}"; \
+	 if [ -z "$$FILE" ] || [ ! -f "$$FILE" ]; then \
+	   echo "no backup file found in $(BACKUP_DIR)/, set BACKUP_FILE=..."; exit 1; \
+	 fi; \
+	 echo "[restore] $$FILE → $$PG_DB"; \
+	 gunzip -c "$$FILE" | $(PROD_DC) exec -T postgres psql -U "$$PG_USER" -d "$$PG_DB"

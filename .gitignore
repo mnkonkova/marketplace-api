@@ -10,3 +10,5 @@ coverage.out
 conversation-*.txt
 .claude/settings.local.json
 node_modules/
+# pg_dump архивы от `make prod-backup-db` — лежат на проде, в git не нужны.
+backups/
