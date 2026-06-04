@@ -262,6 +262,13 @@ func (s *Service) ApproveProposedSpecialist(ctx context.Context, projectID, acto
 	return s.repo.ApproveProposedSpecialist(ctx, projectID, actorID)
 }
 
+// AssignSpecialist — назначает конкретного спеца на проект напрямую (минуя
+// proposed-flow). Используется в Phase 1 (manual-проекты без бриф'a) и
+// после реджекта предложенного спеца.
+func (s *Service) AssignSpecialist(ctx context.Context, projectID, actorID, specialistID uuid.UUID) error {
+	return s.repo.AssignSpecialist(ctx, projectID, actorID, specialistID)
+}
+
 // RejectProposedSpecialist — менеджер/админ отклоняет предложенного клиентом.
 func (s *Service) RejectProposedSpecialist(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
 	return s.repo.RejectProposedSpecialist(ctx, projectID, actorID, reason)

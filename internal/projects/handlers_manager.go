@@ -102,6 +102,56 @@ type approveResp struct {
 	SpecialistUserID uuid.UUID `json:"specialist_user_id"`
 }
 
+type assignSpecReq struct {
+	SpecialistUserID string `json:"specialist_user_id"`
+}
+
+// ManagerAssignSpecialist godoc
+// @Summary  Назначить специалиста на проект (по UUID)
+// @Description Используется для проектов, заведённых менеджером без брифа,
+// @Description либо после reject_specialist'a — выбрать другого. Валидирует
+// @Description что target — kind='specialist' и активен.
+// @Tags     manager-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id  path  string         true  "project id"
+// @Param    body body assignSpecReq  true  "specialist_user_id"
+// @Success  204
+// @Failure  400  {object} errorResponse
+// @Router   /manager/projects/{id}/assign_specialist [post]
+func (h *Handler) ManagerAssignSpecialist(w http.ResponseWriter, r *http.Request) {
+	uid, ok := managerFrom(w, r)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	if err := h.svc.AssertManagerHasAccess(r.Context(), pid, effectiveOwnerID(r, uid)); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	var in assignSpecReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	specID, err := uuid.Parse(strings.TrimSpace(in.SpecialistUserID))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_specialist_id",
+			"specialist_user_id обязателен и должен быть UUID.")
+		return
+	}
+	if err := h.svc.AssignSpecialist(r.Context(), pid, uid, specID); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type rejectSpecReq struct {
 	Reason string `json:"reason"`
 }

@@ -292,10 +292,78 @@ VALUES ($1, NULL, $2, 'human', 'specialist_approved', $3)`,
 	return *proposed, nil
 }
 
+// AssignSpecialist — назначает конкретного спеца на проект напрямую,
+// минуя proposed-flow. Используется в трёх кейсах:
+//  1) проект создан вручную менеджером без spec'a (Phase 1 — no-account);
+//  2) изначальный proposed-спец был отклонён, менеджер выбрал другого;
+//  3) админ переназначает спеца в спорной ситуации.
+//
+// Валидация: целевой юзер должен быть kind='specialist' и активен.
+// step_event/outbox events те же что у ApproveProposedSpecialist, но с
+// event_kind='specialist_assigned' — чтобы аналитика различала «клиент
+// предложил, мы согласились» от «менеджер назначил сам».
+func (r *Repo) AssignSpecialist(ctx context.Context, projectID, actorID, specialistID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Проверяем что spec существует и валидный.
+	var kind string
+	var active bool
+	if err := tx.QueryRow(ctx,
+		`SELECT kind, is_active FROM users WHERE id=$1`,
+		specialistID).Scan(&kind, &active); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: специалист не найден", ErrInvalidInput)
+		}
+		return fmt.Errorf("load specialist: %w", err)
+	}
+	if kind != "specialist" {
+		return fmt.Errorf("%w: выбранный юзер не специалист (kind=%s)", ErrInvalidInput, kind)
+	}
+	if !active {
+		return fmt.Errorf("%w: специалист деактивирован", ErrInvalidInput)
+	}
+
+	// Проверяем что проект существует и берём lock.
+	var projectExists bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1 FOR UPDATE)`,
+		projectID).Scan(&projectExists); err != nil {
+		return fmt.Errorf("check project: %w", err)
+	}
+	if !projectExists {
+		return ErrNotFound
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE projects SET specialist_user_id=$2, updated_at=now() WHERE id=$1`,
+		projectID, specialistID); err != nil {
+		return fmt.Errorf("set specialist: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO project_step_events
+  (project_id, step_id, actor_user_id, actor_type, event_kind, payload)
+VALUES ($1, NULL, $2, 'human', 'specialist_assigned', $3)`,
+		projectID, actorID,
+		mustJSON(map[string]string{"specialist_user_id": specialistID.String()})); err != nil {
+		return fmt.Errorf("event: %w", err)
+	}
+	if err := emit(ctx, tx, projectID, nil, actorID, "project.specialist_assigned",
+		map[string]string{
+			"project_id":         projectID.String(),
+			"specialist_user_id": specialistID.String(),
+		}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // RejectProposedSpecialist — снимает «предложение». specialist_user_id не
 // трогаем (он и так NULL — иначе спец был бы уже подтверждён). Менеджер
-// после реджекта подберёт другого спеца сам (TODO: пока ручкой через
-// admin/assign-style endpoint, в MVP — через SQL).
+// после реджекта подберёт другого спеца сам (через AssignSpecialist).
 func (r *Repo) RejectProposedSpecialist(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

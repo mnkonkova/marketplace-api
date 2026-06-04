@@ -135,6 +135,50 @@ func (h *Handler) AdminGetProject(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, view)
 }
 
+type adminAssignSpecReq struct {
+	SpecialistUserID string `json:"specialist_user_id"`
+}
+
+// AdminAssignSpecialist godoc
+// @Summary  Назначить специалиста на проект (по UUID) — админ
+// @Tags     admin-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id  path  string             true "project id"
+// @Param    body body adminAssignSpecReq true "specialist_user_id"
+// @Success  204
+// @Failure  400  {object} errorResponse
+// @Router   /admin/projects/{id}/assign_specialist [post]
+func (h *Handler) AdminAssignSpecialist(w http.ResponseWriter, r *http.Request) {
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	actor, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	var in adminAssignSpecReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	specID, err := uuid.Parse(strings.TrimSpace(in.SpecialistUserID))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_specialist_id",
+			"specialist_user_id обязателен и должен быть UUID.")
+		return
+	}
+	if err := h.svc.AssignSpecialist(r.Context(), pid, actor, specID); err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type adminCreateProjectReq struct {
 	// ClientUserID — для зарегистрированного клиента. Если пусто,
 	// нужно client_name + client_contact (no-account клиент).
