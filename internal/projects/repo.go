@@ -51,14 +51,18 @@ func (r *Repo) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUI
 	}
 
 	// 2. Создать проект (status=active, started_at=startedAt).
+	// NULLIF на client_name/contact — пустые строки храним как NULL,
+	// чтобы CHECK constraint видел их как «не задано».
 	var projectID uuid.UUID
 	if err := tx.QueryRow(ctx, `
 INSERT INTO projects
-  (lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
+  (lead_id, lead_recipient_specialist_id, client_user_id, client_name, client_contact,
+   specialist_user_id, assigned_to_user_id,
    pipeline_id, title, source, status, revisions_included, budget, notes, started_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9,$10,$11,$12)
+VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$10,'active',$11,$12,$13,$14)
 RETURNING id`,
-		in.LeadID, in.LeadRecipientSpecialistID, in.ClientUserID, in.SpecialistUserID, in.AssignedToUserID,
+		in.LeadID, in.LeadRecipientSpecialistID, in.ClientUserID, in.ClientName, in.ClientContact,
+		in.SpecialistUserID, in.AssignedToUserID,
 		in.PipelineID, in.Title, string(in.Source), revs, in.Budget, in.Notes, startedAt,
 	).Scan(&projectID); err != nil {
 		return uuid.Nil, fmt.Errorf("insert project: %w", err)
@@ -202,9 +206,19 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 	}
 
 	// 6. Событие created — для outbox/n8n (Ф8 повесит на этот event email).
-	if err := emit(ctx, tx, projectID, nil, in.ClientUserID, "project.created",
-		map[string]any{"project_id": projectID.String(), "client_user_id": in.ClientUserID.String()},
-	); err != nil {
+	// actorID для no-account-клиента = uuid.Nil; в payload client_user_id
+	// либо UUID, либо null (отдельные no-account-клиенты идентифицируются
+	// по project.client_name/client_contact).
+	var actor uuid.UUID
+	payload := map[string]any{"project_id": projectID.String()}
+	if in.ClientUserID != nil {
+		actor = *in.ClientUserID
+		payload["client_user_id"] = in.ClientUserID.String()
+	} else {
+		payload["client_name"] = in.ClientName
+		payload["client_contact"] = in.ClientContact
+	}
+	if err := emit(ctx, tx, projectID, nil, actor, "project.created", payload); err != nil {
 		return uuid.Nil, err
 	}
 
@@ -226,7 +240,9 @@ func (r *Repo) GetByID(ctx context.Context, projectID uuid.UUID) (Project, error
 
 func (r *Repo) getByID(ctx context.Context, projectID uuid.UUID, userIDFilter *uuid.UUID, col string) (Project, error) {
 	q := `
-SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
+       COALESCE(client_name,''), COALESCE(client_contact,''),
+       specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects WHERE id = $1`
@@ -237,7 +253,9 @@ FROM projects WHERE id = $1`
 	}
 	var p Project
 	err := r.db.QueryRow(ctx, q, args...).Scan(
-		&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
+		&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID,
+		&p.ClientName, &p.ClientContact,
+		&p.SpecialistUserID, &p.AssignedToUserID,
 		&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 		&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
@@ -261,7 +279,9 @@ FROM projects WHERE id = $1`
 // «Мои проекты». Симметрично админскому ListAll по умолчанию.
 func (r *Repo) ListForClient(ctx context.Context, clientID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT id, lead_id, lead_recipient_specialist_id, client_user_id, specialist_user_id, assigned_to_user_id,
+SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
+       COALESCE(client_name,''), COALESCE(client_contact,''),
+       specialist_user_id, assigned_to_user_id,
        pipeline_id, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
@@ -275,7 +295,9 @@ ORDER BY created_at DESC`, clientID)
 	for rows.Next() {
 		var p Project
 		if err := rows.Scan(
-			&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID, &p.SpecialistUserID, &p.AssignedToUserID,
+			&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID,
+			&p.ClientName, &p.ClientContact,
+			&p.SpecialistUserID, &p.AssignedToUserID,
 			&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 			&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {

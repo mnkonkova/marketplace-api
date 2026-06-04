@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -506,6 +507,92 @@ func (h *Handler) ManagerPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, p)
+}
+
+type managerCreateProjectReq struct {
+	// ClientUserID — для зарегистрированного клиента. Если пусто,
+	// нужно client_name+client_contact (no-account клиент).
+	ClientUserID     string `json:"client_user_id,omitempty"`
+	ClientName       string `json:"client_name,omitempty"`
+	ClientContact    string `json:"client_contact,omitempty"`
+	SpecialistUserID string `json:"specialist_user_id,omitempty"`
+	PipelineID       string `json:"pipeline_id"`
+	Title            string `json:"title"`
+	Budget           *int   `json:"budget,omitempty"`
+	Notes            string `json:"notes,omitempty"`
+}
+
+// ManagerCreateProject godoc
+// @Summary  Менеджер: создать проект вручную (включая клиента без аккаунта)
+// @Description Создаёт проект с указанным pipeline_id. Если client_user_id
+// @Description не передан, требуется client_name+client_contact (no-account
+// @Description клиент). assigned_to_user_id принудительно ставится в текущего
+// @Description менеджера — менеджер не может вешать чужой проект на коллегу.
+// @Tags     manager-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    body body managerCreateProjectReq true "project"
+// @Success  201 {object} Project
+// @Failure  400 {object} errorResponse
+// @Router   /manager/projects [post]
+func (h *Handler) ManagerCreateProject(w http.ResponseWriter, r *http.Request) {
+	uid, ok := managerFrom(w, r)
+	if !ok {
+		return
+	}
+	var in managerCreateProjectReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	pipelineID, err := uuid.Parse(in.PipelineID)
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id",
+			"pipeline_id обязателен и должен быть UUID.")
+		return
+	}
+	// Менеджер автоматически становится assigned_to — иначе пришлось бы
+	// делать второй POST claim. У админа другой endpoint, там флаг гибкий.
+	startInput := StartProjectInput{
+		PipelineID:       pipelineID,
+		AssignedToUserID: &uid,
+		Title:            in.Title,
+		Budget:           in.Budget,
+		Notes:            in.Notes,
+		Source:           SourceManual,
+		ClientName:       in.ClientName,
+		ClientContact:    in.ClientContact,
+	}
+	if s := strings.TrimSpace(in.ClientUserID); s != "" {
+		clientID, err := uuid.Parse(s)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_client_id",
+				"client_user_id должен быть UUID.")
+			return
+		}
+		startInput.ClientUserID = &clientID
+	}
+	if s := strings.TrimSpace(in.SpecialistUserID); s != "" {
+		sid, err := uuid.Parse(s)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_specialist_id",
+				"specialist_user_id невалиден.")
+			return
+		}
+		startInput.SpecialistUserID = &sid
+	}
+	projectID, err := h.svc.StartProject(r.Context(), startInput)
+	if err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	p, err := h.svc.repo.GetByID(r.Context(), projectID)
+	if err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, p)
 }
 
 // типы для swaggo

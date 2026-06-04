@@ -136,7 +136,11 @@ func (h *Handler) AdminGetProject(w http.ResponseWriter, r *http.Request) {
 }
 
 type adminCreateProjectReq struct {
-	ClientUserID     string `json:"client_user_id"`
+	// ClientUserID — для зарегистрированного клиента. Если пусто,
+	// нужно client_name + client_contact (no-account клиент).
+	ClientUserID     string `json:"client_user_id,omitempty"`
+	ClientName       string `json:"client_name,omitempty"`
+	ClientContact    string `json:"client_contact,omitempty"`
 	SpecialistUserID string `json:"specialist_user_id,omitempty"`
 	AssignedToUserID string `json:"assigned_to_user_id,omitempty"`
 	PipelineID       string `json:"pipeline_id"`
@@ -161,12 +165,6 @@ func (h *Handler) AdminCreateProject(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
 		return
 	}
-	clientID, err := uuid.Parse(strings.TrimSpace(in.ClientUserID))
-	if err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_client_id",
-			"client_user_id обязателен и должен быть UUID.")
-		return
-	}
 	pipelineID, err := uuid.Parse(strings.TrimSpace(in.PipelineID))
 	if err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id",
@@ -174,12 +172,24 @@ func (h *Handler) AdminCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	startInput := StartProjectInput{
-		ClientUserID: clientID,
-		PipelineID:   pipelineID,
-		Title:        in.Title,
-		Budget:       in.Budget,
-		Notes:        in.Notes,
-		Source:       ProjectSource(strings.TrimSpace(in.Source)),
+		PipelineID:    pipelineID,
+		Title:         in.Title,
+		Budget:        in.Budget,
+		Notes:         in.Notes,
+		Source:        ProjectSource(strings.TrimSpace(in.Source)),
+		ClientName:    strings.TrimSpace(in.ClientName),
+		ClientContact: strings.TrimSpace(in.ClientContact),
+	}
+	// client_user_id опционально: если передан, парсим. Иначе сервис
+	// проверит что есть client_name+client_contact.
+	if s := strings.TrimSpace(in.ClientUserID); s != "" {
+		clientID, err := uuid.Parse(s)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_client_id",
+				"client_user_id должен быть UUID.")
+			return
+		}
+		startInput.ClientUserID = &clientID
 	}
 	if in.SpecialistUserID != "" {
 		sid, err := uuid.Parse(strings.TrimSpace(in.SpecialistUserID))

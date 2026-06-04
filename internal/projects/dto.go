@@ -81,7 +81,15 @@ type Project struct {
 	ID                uuid.UUID  `json:"id"`
 	LeadID            *uuid.UUID `json:"lead_id,omitempty"`
 	LeadRecipientSpecialistID   *uuid.UUID `json:"lead_recipient_specialist_id,omitempty"`
-	ClientUserID      uuid.UUID  `json:"client_user_id"`
+	// ClientUserID — клиент с аккаунтом. nil если проект заведён менеджером/
+	// админом для клиента без регистрации; тогда контакты в ClientName/
+	// ClientContact. CHECK constraint гарантирует одно из двух.
+	ClientUserID      *uuid.UUID `json:"client_user_id,omitempty"`
+	// ClientName / ClientContact — заполняется когда client_user_id=NULL.
+	// Для зарегистрированных клиентов остаются пустыми (берём из
+	// client_profiles по client_user_id).
+	ClientName        string     `json:"client_name,omitempty"`
+	ClientContact     string     `json:"client_contact,omitempty"`
 	SpecialistUserID  *uuid.UUID `json:"specialist_user_id,omitempty"`
 	AssignedToUserID  *uuid.UUID `json:"assigned_to_user_id,omitempty"`
 	PipelineID        uuid.UUID  `json:"pipeline_id"`
@@ -173,8 +181,17 @@ type ProjectClientView struct {
 
 // StartProjectInput — параметры запуска проекта со снэпшотом пайплайна.
 // Если StartedAt = nil, сервис проставляет now() (нужен для расчёта eta_date).
+//
+// Инвариант: должно быть задано одно из двух:
+//   - ClientUserID (зарегистрированный клиент);
+//   - ClientName + ClientContact (no-account клиент: менеджер/админ
+//     ведёт проект для контакта, который не зарегистрировался).
+// Service.StartProject валидирует это; миграция 00016 поддерживает
+// то же на DB-level через CHECK constraint.
 type StartProjectInput struct {
-	ClientUserID     uuid.UUID
+	ClientUserID     *uuid.UUID
+	ClientName       string
+	ClientContact    string
 	SpecialistUserID *uuid.UUID
 	AssignedToUserID *uuid.UUID
 	LeadID           *uuid.UUID

@@ -205,6 +205,7 @@ func NewRouter(d Deps) http.Handler {
 
 				r.Get("/manager/projects/inbox", d.Projects.ManagerInbox)
 				r.Get("/manager/projects", d.Projects.ManagerListAssigned)
+				r.Post("/manager/projects", d.Projects.ManagerCreateProject)
 				r.Get("/manager/projects/{id}", d.Projects.ManagerGetFull)
 				r.Patch("/manager/projects/{id}", d.Projects.ManagerPatch)
 				r.Post("/manager/projects/{id}/claim", d.Projects.ManagerClaim)

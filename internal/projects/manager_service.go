@@ -55,11 +55,15 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 		return views, nil
 	}
 	// Собираем уникальные user_id всех участников — для одного батч-запроса.
+	// No-account клиенты (ClientUserID=nil) пропускаются: для них
+	// view.Client заполняем из p.ClientName/p.ClientContact ниже.
 	idSet := make(map[uuid.UUID]struct{}, 2*len(projects))
 	projectIDs := make([]uuid.UUID, 0, len(projects))
 	for _, p := range projects {
 		projectIDs = append(projectIDs, p.ID)
-		idSet[p.ClientUserID] = struct{}{}
+		if p.ClientUserID != nil {
+			idSet[*p.ClientUserID] = struct{}{}
+		}
 		if p.SpecialistUserID != nil {
 			idSet[*p.SpecialistUserID] = struct{}{}
 		}
@@ -84,10 +88,20 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 	}
 	for _, p := range projects {
 		view := ProjectManagerView{Project: p}
-		if c, ok := contacts[p.ClientUserID]; ok {
-			cc := c
+		if p.ClientUserID != nil {
+			if c, ok := contacts[*p.ClientUserID]; ok {
+				cc := c
+				view.Client = &cc
+				view.ClientDisplayName = cc.DisplayName
+			}
+		} else if p.ClientName != "" {
+			// No-account клиент: контакты прямо на проекте.
+			cc := PartyContact{
+				DisplayName: p.ClientName,
+				Phone:       p.ClientContact,
+			}
 			view.Client = &cc
-			view.ClientDisplayName = cc.DisplayName
+			view.ClientDisplayName = p.ClientName
 		}
 		if p.SpecialistUserID != nil {
 			if c, ok := contacts[*p.SpecialistUserID]; ok {
@@ -194,7 +208,12 @@ func (s *Service) GetFull(ctx context.Context, projectID, managerID uuid.UUID) (
 		Stages:        stageViews,
 	}
 	// Контакты обеих сторон — для блока «Связаться» на странице проекта.
-	ids := []uuid.UUID{p.ClientUserID}
+	// No-account клиент (ClientUserID=nil): берём ClientName/ClientContact
+	// прямо с проекта, без обращения к users.
+	ids := make([]uuid.UUID, 0, 3)
+	if p.ClientUserID != nil {
+		ids = append(ids, *p.ClientUserID)
+	}
 	if p.SpecialistUserID != nil {
 		ids = append(ids, *p.SpecialistUserID)
 	}
@@ -202,8 +221,13 @@ func (s *Service) GetFull(ctx context.Context, projectID, managerID uuid.UUID) (
 		ids = append(ids, *p.LeadRecipientSpecialistID)
 	}
 	if contacts, cerr := s.repo.LoadPartyContacts(ctx, ids); cerr == nil {
-		if c, ok := contacts[p.ClientUserID]; ok {
-			cc := c
+		if p.ClientUserID != nil {
+			if c, ok := contacts[*p.ClientUserID]; ok {
+				cc := c
+				out.Client = &cc
+			}
+		} else if p.ClientName != "" {
+			cc := PartyContact{DisplayName: p.ClientName, Phone: p.ClientContact}
 			out.Client = &cc
 		}
 		if p.SpecialistUserID != nil {

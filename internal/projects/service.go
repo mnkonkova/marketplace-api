@@ -56,9 +56,17 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 	if utf8.RuneCountInString(in.Title) > 200 {
 		return uuid.Nil, fmt.Errorf("%w: title is too long", ErrInvalidInput)
 	}
-	if in.ClientUserID == uuid.Nil {
-		return uuid.Nil, fmt.Errorf("%w: client_user_id is required", ErrInvalidInput)
+	// Клиент задаётся либо через client_user_id (зарегистрированный),
+	// либо через client_name+client_contact (заводит менеджер/админ для
+	// клиента без аккаунта). Без того и другого создавать проект нельзя.
+	hasContact := strings.TrimSpace(in.ClientName) != "" && strings.TrimSpace(in.ClientContact) != ""
+	if in.ClientUserID == nil && !hasContact {
+		return uuid.Nil, fmt.Errorf("%w: укажите либо client_user_id, либо client_name+client_contact", ErrInvalidInput)
 	}
+	// Нормализуем contact-поля: пустые строки сбрасываем, чтобы DB
+	// видела NULL (под CHECK constraint).
+	in.ClientName = strings.TrimSpace(in.ClientName)
+	in.ClientContact = strings.TrimSpace(in.ClientContact)
 	if in.PipelineID == uuid.Nil {
 		return uuid.Nil, fmt.Errorf("%w: pipeline_id is required", ErrInvalidInput)
 	}

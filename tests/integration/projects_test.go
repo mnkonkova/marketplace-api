@@ -54,7 +54,7 @@ VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`, email).Scan(&clientID); e
 
 	projectsRepo := projects.NewRepo(pool)
 	projectID, err = projectsRepo.StartProject(ctx, projects.StartProjectInput{
-		ClientUserID: clientID,
+		ClientUserID: &clientID,
 		PipelineID:   pipelineID,
 		Title:        "IT-проект",
 		Source:       projects.SourceManual,
