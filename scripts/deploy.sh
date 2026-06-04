@@ -50,6 +50,14 @@ until "${COMPOSE[@]}" exec -T postgres pg_isready -U "${POSTGRES_USER:-marketpcl
   sleep 1
 done
 
+# Бекап перед миграцией — единственный путь recovery, если goose
+# что-то сломает (DROP/ALTER). SKIP_BACKUP=1 пропустить (только если
+# миграция точно безопасная: add column, index, table).
+if [[ "${SKIP_BACKUP:-0}" != "1" ]]; then
+  echo "→ pre-migrate backup"
+  make prod-backup-db
+fi
+
 echo "→ apply migrations"
 "${COMPOSE[@]}" run --rm api goose -dir /app/migrations postgres "$DATABASE_URL" up
 

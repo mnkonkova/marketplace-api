@@ -66,6 +66,16 @@ if [[ "${SKIP_MIGRATE:-0}" != "1" && ( "$target" == "all" || "$target" == "api" 
   source .env.prod
   set +a
 
+  # Бекап БД перед миграцией — единственный безопасный way откатиться,
+  # если goose-апдейт сделал DROP/ALTER который ломает данные. Падающий
+  # бекап (например, postgres ещё стартует) останавливает деплой через
+  # set -e. SKIP_BACKUP=1 чтобы пропустить (для миграций которые точно
+  # без DROP — add column / index / table).
+  if [[ "${SKIP_BACKUP:-0}" != "1" ]]; then
+    echo "→ pre-migrate backup"
+    make prod-backup-db
+  fi
+
   echo "→ apply migrations (idempotent)"
   "${COMPOSE[@]}" run --rm api goose -dir /app/migrations postgres "$DATABASE_URL" up
 fi
