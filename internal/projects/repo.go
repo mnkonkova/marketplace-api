@@ -68,141 +68,10 @@ RETURNING id`,
 		return uuid.Nil, fmt.Errorf("insert project: %w", err)
 	}
 
-	// 3. Снэпшот стадий: вставляем по sort_order и собираем mapping
-	// pipeline_stage_id → project_stage_id для последующего snapshot шагов.
-	stageRows, err := tx.Query(ctx,
-		`SELECT id, name, sort_order FROM pipeline_stages
-		 WHERE pipeline_id = $1 ORDER BY sort_order, created_at`,
-		in.PipelineID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("list pipeline stages: %w", err)
-	}
-	type stageMapEntry struct {
-		PipelineStageID uuid.UUID
-		ProjectStageID  uuid.UUID
-		Name            string
-		SortOrder       int
-	}
-	stagesByPipelineID := map[uuid.UUID]uuid.UUID{}
-	var stages []stageMapEntry
-	for stageRows.Next() {
-		var pid uuid.UUID
-		var name string
-		var sortOrder int
-		if err := stageRows.Scan(&pid, &name, &sortOrder); err != nil {
-			stageRows.Close()
-			return uuid.Nil, fmt.Errorf("scan pipeline stage: %w", err)
-		}
-		stages = append(stages, stageMapEntry{PipelineStageID: pid, Name: name, SortOrder: sortOrder})
-	}
-	stageRows.Close()
-	if err := stageRows.Err(); err != nil {
-		return uuid.Nil, fmt.Errorf("iter pipeline stages: %w", err)
-	}
-	if len(stages) == 0 {
-		return uuid.Nil, ErrPipelineEmpty
-	}
-
-	for i := range stages {
-		var psID uuid.UUID
-		if err := tx.QueryRow(ctx,
-			`INSERT INTO project_stages (project_id, name, sort_order)
-			 VALUES ($1,$2,$3) RETURNING id`,
-			projectID, stages[i].Name, stages[i].SortOrder).Scan(&psID); err != nil {
-			return uuid.Nil, fmt.Errorf("insert project stage: %w", err)
-		}
-		stages[i].ProjectStageID = psID
-		stagesByPipelineID[stages[i].PipelineStageID] = psID
-	}
-
-	// 4. Снэпшот шагов: одним проходом для всех стадий, в правильном порядке
-	// (stage_id sort_order → step sort_order), накапливая eta_date.
-	stageIDs := make([]uuid.UUID, 0, len(stages))
-	for _, st := range stages {
-		stageIDs = append(stageIDs, st.PipelineStageID)
-	}
-	stepRows, err := tx.Query(ctx, `
-SELECT s.id, s.stage_id, s.name, s.owner, s.duration_days,
-       s.visible_to_client, s.visible_to_specialist, s.weight, s.sort_order, s.is_review
-FROM pipeline_steps s
-JOIN pipeline_stages st ON st.id = s.stage_id
-WHERE s.stage_id = ANY($1)
-ORDER BY st.sort_order, s.sort_order, s.created_at`, stageIDs)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("list pipeline steps: %w", err)
-	}
-	type rawStep struct {
-		StageID             uuid.UUID
-		Name                string
-		Owner               string
-		DurationDays        int
-		VisibleToClient     bool
-		VisibleToSpecialist bool
-		Weight              int
-		SortOrder           int
-		IsReview            bool
-	}
-	var rawSteps []rawStep
-	for stepRows.Next() {
-		var s rawStep
-		var ignored uuid.UUID
-		if err := stepRows.Scan(&ignored, &s.StageID, &s.Name, &s.Owner, &s.DurationDays,
-			&s.VisibleToClient, &s.VisibleToSpecialist, &s.Weight, &s.SortOrder, &s.IsReview); err != nil {
-			stepRows.Close()
-			return uuid.Nil, fmt.Errorf("scan pipeline step: %w", err)
-		}
-		rawSteps = append(rawSteps, s)
-	}
-	stepRows.Close()
-	if err := stepRows.Err(); err != nil {
-		return uuid.Nil, fmt.Errorf("iter pipeline steps: %w", err)
-	}
-	if len(rawSteps) == 0 {
-		return uuid.Nil, ErrPipelineEmpty
-	}
-
-	cursor := *startedAt
-	for i, raw := range rawSteps {
-		projectStageID, ok := stagesByPipelineID[raw.StageID]
-		if !ok {
-			return uuid.Nil, fmt.Errorf("stage mapping missing for %s", raw.StageID)
-		}
-		cursor = cursor.AddDate(0, 0, raw.DurationDays)
-		eta := cursor
-
-		// Первый шаг проекта стартует сразу в in_progress (если owner=team)
-		// — это «работа уже идёт» с момента старта. Шаг с owner=client первым
-		// мы оставляем в pending: клиент сам активирует своим действием (или
-		// менеджер пометит start). Чтобы не угадывать, простая правило:
-		// первый шаг → in_progress независимо от owner; started_at=startedAt.
-		status := StepStatusPending
-		var stepStartedAt *time.Time
-		if i == 0 {
-			status = StepStatusInProgress
-			s := *startedAt
-			stepStartedAt = &s
-		}
-
-		if _, err := tx.Exec(ctx, `
-INSERT INTO project_steps
-  (project_id, stage_id, name, owner, status, duration_days,
-   visible_to_client, visible_to_specialist, weight, sort_order, is_review,
-   eta_date, started_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			projectID, projectStageID, raw.Name, raw.Owner, string(status), raw.DurationDays,
-			raw.VisibleToClient, raw.VisibleToSpecialist, raw.Weight, raw.SortOrder, raw.IsReview,
-			eta, stepStartedAt,
-		); err != nil {
-			return uuid.Nil, fmt.Errorf("insert project step: %w", err)
-		}
-	}
-
-	// 5. Активируем первую стадию.
-	if _, err := tx.Exec(ctx,
-		`UPDATE project_stages SET started_at = $2
-		 WHERE project_id = $1 AND id = $3`,
-		projectID, *startedAt, stages[0].ProjectStageID); err != nil {
-		return uuid.Nil, fmt.Errorf("activate first stage: %w", err)
+	// 3-5. Снэпшот стадий и шагов + активация первой стадии — общий helper,
+	// используется и при создании, и при ChangeFunnel (там тот же flow с нуля).
+	if err := materializePipeline(ctx, tx, projectID, in.PipelineID, *startedAt); err != nil {
+		return uuid.Nil, err
 	}
 
 	// 6. Событие created — для outbox/n8n (Ф8 повесит на этот event email).
@@ -226,6 +95,234 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		return uuid.Nil, fmt.Errorf("commit: %w", err)
 	}
 	return projectID, nil
+}
+
+// materializePipeline — снапшот стадий/шагов выбранной воронки в
+// project_stages/project_steps + активация первой стадии и первого шага.
+// startedAt используется как точка отсчёта для eta_date (накопительно по
+// duration_days). Применяется при создании проекта (StartProject) и при
+// смене воронки (ChangeFunnel) — обе операции стартуют шаги с нуля.
+func materializePipeline(
+	ctx context.Context,
+	tx pgx.Tx,
+	projectID, pipelineID uuid.UUID,
+	startedAt time.Time,
+) error {
+	stageRows, err := tx.Query(ctx,
+		`SELECT id, name, sort_order FROM pipeline_stages
+		 WHERE pipeline_id = $1 ORDER BY sort_order, created_at`,
+		pipelineID)
+	if err != nil {
+		return fmt.Errorf("list pipeline stages: %w", err)
+	}
+	type stageMapEntry struct {
+		PipelineStageID uuid.UUID
+		ProjectStageID  uuid.UUID
+		Name            string
+		SortOrder       int
+	}
+	stagesByPipelineID := map[uuid.UUID]uuid.UUID{}
+	var stages []stageMapEntry
+	for stageRows.Next() {
+		var pid uuid.UUID
+		var name string
+		var sortOrder int
+		if err := stageRows.Scan(&pid, &name, &sortOrder); err != nil {
+			stageRows.Close()
+			return fmt.Errorf("scan pipeline stage: %w", err)
+		}
+		stages = append(stages, stageMapEntry{PipelineStageID: pid, Name: name, SortOrder: sortOrder})
+	}
+	stageRows.Close()
+	if err := stageRows.Err(); err != nil {
+		return fmt.Errorf("iter pipeline stages: %w", err)
+	}
+	if len(stages) == 0 {
+		return ErrPipelineEmpty
+	}
+
+	for i := range stages {
+		var psID uuid.UUID
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO project_stages (project_id, name, sort_order)
+			 VALUES ($1,$2,$3) RETURNING id`,
+			projectID, stages[i].Name, stages[i].SortOrder).Scan(&psID); err != nil {
+			return fmt.Errorf("insert project stage: %w", err)
+		}
+		stages[i].ProjectStageID = psID
+		stagesByPipelineID[stages[i].PipelineStageID] = psID
+	}
+
+	stageIDs := make([]uuid.UUID, 0, len(stages))
+	for _, st := range stages {
+		stageIDs = append(stageIDs, st.PipelineStageID)
+	}
+	stepRows, err := tx.Query(ctx, `
+SELECT s.id, s.stage_id, s.name, s.owner, s.duration_days,
+       s.visible_to_client, s.visible_to_specialist, s.weight, s.sort_order, s.is_review
+FROM pipeline_steps s
+JOIN pipeline_stages st ON st.id = s.stage_id
+WHERE s.stage_id = ANY($1)
+ORDER BY st.sort_order, s.sort_order, s.created_at`, stageIDs)
+	if err != nil {
+		return fmt.Errorf("list pipeline steps: %w", err)
+	}
+	type rawStep struct {
+		StageID             uuid.UUID
+		Name                string
+		Owner               string
+		DurationDays        int
+		VisibleToClient     bool
+		VisibleToSpecialist bool
+		Weight              int
+		SortOrder           int
+		IsReview            bool
+	}
+	var rawSteps []rawStep
+	for stepRows.Next() {
+		var s rawStep
+		var ignored uuid.UUID
+		if err := stepRows.Scan(&ignored, &s.StageID, &s.Name, &s.Owner, &s.DurationDays,
+			&s.VisibleToClient, &s.VisibleToSpecialist, &s.Weight, &s.SortOrder, &s.IsReview); err != nil {
+			stepRows.Close()
+			return fmt.Errorf("scan pipeline step: %w", err)
+		}
+		rawSteps = append(rawSteps, s)
+	}
+	stepRows.Close()
+	if err := stepRows.Err(); err != nil {
+		return fmt.Errorf("iter pipeline steps: %w", err)
+	}
+	if len(rawSteps) == 0 {
+		return ErrPipelineEmpty
+	}
+
+	cursor := startedAt
+	for i, raw := range rawSteps {
+		projectStageID, ok := stagesByPipelineID[raw.StageID]
+		if !ok {
+			return fmt.Errorf("stage mapping missing for %s", raw.StageID)
+		}
+		cursor = cursor.AddDate(0, 0, raw.DurationDays)
+		eta := cursor
+
+		// Первый шаг проекта стартует в in_progress (см. StartProject — то же
+		// правило: «работа уже идёт» с момента старта).
+		status := StepStatusPending
+		var stepStartedAt *time.Time
+		if i == 0 {
+			status = StepStatusInProgress
+			s := startedAt
+			stepStartedAt = &s
+		}
+
+		if _, err := tx.Exec(ctx, `
+INSERT INTO project_steps
+  (project_id, stage_id, name, owner, status, duration_days,
+   visible_to_client, visible_to_specialist, weight, sort_order, is_review,
+   eta_date, started_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			projectID, projectStageID, raw.Name, raw.Owner, string(status), raw.DurationDays,
+			raw.VisibleToClient, raw.VisibleToSpecialist, raw.Weight, raw.SortOrder, raw.IsReview,
+			eta, stepStartedAt,
+		); err != nil {
+			return fmt.Errorf("insert project step: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE project_stages SET started_at = $2
+		 WHERE project_id = $1 AND id = $3`,
+		projectID, startedAt, stages[0].ProjectStageID); err != nil {
+		return fmt.Errorf("activate first stage: %w", err)
+	}
+	return nil
+}
+
+// ChangeFunnel — поменять воронку у проекта. Старые project_stages /
+// project_steps удаляются (CASCADE через FK), новая воронка инстанциируется
+// с нуля. revisions_used обнуляется, started_at пересчитывается. Применяется
+// админом из карточки проекта.
+//
+// Не делаем optimistic-lock: операция явная (модалка с подтверждением),
+// race-condition тут маловероятен.
+func (r *Repo) ChangeFunnel(
+	ctx context.Context,
+	projectID, newPipelineID, actorID uuid.UUID,
+) (Project, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Project{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// 1. Берём проект под FOR UPDATE — блокируем от параллельных move/advance.
+	var oldPipelineID uuid.UUID
+	var status string
+	if err := tx.QueryRow(ctx,
+		`SELECT pipeline_id, status FROM projects WHERE id = $1 FOR UPDATE`,
+		projectID).Scan(&oldPipelineID, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Project{}, ErrNotFound
+		}
+		return Project{}, fmt.Errorf("load project: %w", err)
+	}
+	if status != "active" {
+		return Project{}, fmt.Errorf("%w: cannot change funnel of non-active project", ErrInvalidTransition)
+	}
+
+	// 2. Снимок revisions_included из новой воронки + валидация is_active.
+	var revs int
+	if err := tx.QueryRow(ctx,
+		`SELECT revisions_included FROM pipelines WHERE id = $1 AND is_active = TRUE`,
+		newPipelineID).Scan(&revs); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Project{}, fmt.Errorf("%w: new pipeline missing or inactive", ErrNotFound)
+		}
+		return Project{}, fmt.Errorf("load new pipeline: %w", err)
+	}
+
+	// 3. Снести старые стадии (CASCADE убьёт project_steps + project_events,
+	// привязанные к step_id; project_events с step_id=NULL сохранятся).
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM project_stages WHERE project_id = $1`, projectID); err != nil {
+		return Project{}, fmt.Errorf("delete old stages: %w", err)
+	}
+
+	// 4. Перепривязать проект к новой воронке + сбросить прогресс.
+	now := time.Now()
+	if _, err := tx.Exec(ctx, `
+UPDATE projects SET
+  pipeline_id        = $2,
+  revisions_included = $3,
+  revisions_used     = 0,
+  status             = 'active',
+  completed_at       = NULL,
+  started_at         = $4,
+  updated_at         = now()
+WHERE id = $1`, projectID, newPipelineID, revs, now); err != nil {
+		return Project{}, fmt.Errorf("update project: %w", err)
+	}
+
+	// 5. Инстанциируем новые project_stages/project_steps.
+	if err := materializePipeline(ctx, tx, projectID, newPipelineID, now); err != nil {
+		return Project{}, err
+	}
+
+	// 6. Событие в outbox/audit для воркера и истории проекта.
+	payload := map[string]any{
+		"project_id":      projectID.String(),
+		"old_pipeline_id": oldPipelineID.String(),
+		"new_pipeline_id": newPipelineID.String(),
+	}
+	if err := emit(ctx, tx, projectID, nil, actorID, "project.funnel_changed", payload); err != nil {
+		return Project{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Project{}, fmt.Errorf("commit: %w", err)
+	}
+	return r.GetByID(ctx, projectID)
 }
 
 // GetByIDForClient — проект клиента; ErrForbidden если клиент не владелец.

@@ -286,6 +286,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/projects/{id}/advance_stage", d.Projects.AdminAdvanceStage)
 					r.Post("/admin/projects/{id}/move_stage", d.Projects.AdminMoveStage)
 					r.Post("/admin/projects/{id}/move_step", d.Projects.AdminMoveStep)
+					r.Post("/admin/projects/{id}/change_funnel", d.Projects.AdminChangeFunnel)
 					r.Post("/admin/projects/{id}/assign", d.Projects.AdminAssignManager)
 					r.Post("/admin/projects/{id}/assign_specialist", d.Projects.AdminAssignSpecialist)
 					r.Get("/admin/projects/{id}/events", d.Projects.AdminListProjectEvents)

@@ -59,6 +59,9 @@ func writeManagerErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNoProposedSpecialist):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "no_proposed_specialist",
 			"Клиент не выбрал исполнителя — нечего подтверждать.")
+	case errors.Is(err, ErrPipelineEmpty):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "pipeline_empty",
+			"В выбранной воронке нет ни одной стадии/шага. Заполните воронку перед использованием.")
 	default:
 		// Логируем всё, что не маппится в доменную ошибку: иначе 500 уходит
 		// клиенту молча и его невозможно расследовать.
@@ -286,6 +289,10 @@ type moveStageReq struct {
 type moveStepReq struct {
 	TargetStepID string     `json:"target_step_id"`
 	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
+}
+
+type changeFunnelReq struct {
+	PipelineID string `json:"pipeline_id"`
 }
 
 // ManagerMoveStep godoc

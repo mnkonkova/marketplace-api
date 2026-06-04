@@ -337,6 +337,44 @@ func (h *Handler) AdminMoveStep(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, p)
 }
 
+// AdminChangeFunnel godoc
+// @Summary  Админ: сменить воронку проекта (сбросить прогресс)
+// @Description Удаляет project_stages/project_steps текущего проекта и инстанциирует их из новой воронки. revisions_used обнуляется, started_at пересчитывается. Только для status=active.
+// @Tags     admin-projects
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path  string             true "project id"
+// @Param    body body  changeFunnelReq    true "new pipeline_id"
+// @Success  200  {object} Project
+// @Failure  400  {object} errorResponse    "bad_id | bad_pipeline_id | invalid_transition"
+// @Failure  404  {object} errorResponse    "no_project | no_pipeline"
+// @Router   /admin/projects/{id}/change_funnel [post]
+func (h *Handler) AdminChangeFunnel(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := auth.UserIDFrom(r.Context())
+	pid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	var in changeFunnelReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	newPipelineID, err := uuid.Parse(in.PipelineID)
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id", "pipeline_id должен быть UUID.")
+		return
+	}
+	p, err := h.svc.ChangeFunnel(r.Context(), pid, newPipelineID, actorID)
+	if err != nil {
+		writeManagerErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, p)
+}
+
 // AdminAdvanceStage godoc
 // @Summary  Админ-канбан: продвинуть стадию любого проекта
 // @Tags     admin-projects

@@ -420,3 +420,10 @@ func (s *Service) MoveProjectToStage(ctx context.Context, projectID, targetStage
 func (s *Service) MoveProjectToStep(ctx context.Context, projectID, targetStepID, actorID uuid.UUID, expectedUpdatedAt *time.Time) (Project, error) {
 	return s.repo.MoveProjectToStep(ctx, projectID, targetStepID, actorID, s.reviewDeadline(), expectedUpdatedAt)
 }
+
+// ChangeFunnel — поменять воронку у проекта. Прогресс сбрасывается:
+// project_stages / project_steps удаляются и инстанциируются заново
+// из новой воронки. См. repo.ChangeFunnel.
+func (s *Service) ChangeFunnel(ctx context.Context, projectID, newPipelineID, actorID uuid.UUID) (Project, error) {
+	return s.repo.ChangeFunnel(ctx, projectID, newPipelineID, actorID)
+}
