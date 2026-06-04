@@ -68,6 +68,13 @@ type CheckResult struct {
 	Name PartResult `json:"name"`
 }
 
+// MultipartPart — пара (part_number, etag) для финализации multipart.
+// Локальный тип, чтобы домен не зависел от minio-go.
+type MultipartPart struct {
+	PartNumber int
+	ETag       string
+}
+
 // MediaStorage — абстракция над S3-совместимым хранилищем. Сервис не знает
 // про minio/aws — только про presigned PUT, сборку public URL и операции
 // для orphan-sweep'a (List/Remove/KeyFromURL). main.go внедряет реализацию
@@ -81,6 +88,12 @@ type MediaStorage interface {
 	RemoveObject(ctx context.Context, key string) error
 	// KeyFromURL — обратное от PublicURL; "" если URL не из bucket'а.
 	KeyFromURL(rawURL string) string
+	// Multipart upload — для крупных файлов (>5 МБ). Фронт льёт чанки сам
+	// через presigned PUT, сервер только инициирует/финализирует/отменяет.
+	NewMultipartUpload(ctx context.Context, key, contentType string) (uploadID string, err error)
+	PresignPart(ctx context.Context, key, uploadID string, partNumber int, expiry time.Duration) (string, error)
+	CompleteMultipart(ctx context.Context, key, uploadID string, parts []MultipartPart) error
+	AbortMultipart(ctx context.Context, key, uploadID string) error
 }
 
 type Service struct {
@@ -358,9 +371,14 @@ const (
 	portfolioMaxTitleLen        = 200
 	portfolioMaxDescriptionLen  = 1000
 
-	// 50 МБ — синхронизировано с фронтом. Увеличим, когда будет HLS-транскод.
+	// 50 МБ — лимит для single PUT (legacy presign endpoint).
 	portfolioMaxUploadBytes = 50 * 1024 * 1024
 	portfolioUploadExpiry   = 15 * time.Minute
+
+	// 200 МБ — лимит для multipart upload. 5 МБ part — минимум, который
+	// принимает S3 (кроме последнего чанка), и удобный шаг для retry.
+	portfolioMaxMultipartBytes = 200 * 1024 * 1024
+	portfolioMultipartPartSize = 5 * 1024 * 1024
 
 	// Картинки (аватар + превью к видео): 5 МБ хватает с запасом, типы —
 	// jpeg/png/webp. Срок presigned URL короче — меньше окно для misuse.
@@ -569,6 +587,147 @@ func (s *Service) CreatePortfolioUploadURL(
 		Key:       key,
 		ExpiresIn: int(portfolioUploadExpiry.Seconds()),
 	}, nil
+}
+
+// StartPortfolioMultipart — инициирует S3 multipart upload для крупного
+// видео. Возвращает upload_id, ключ и part_size, по которому фронт нарежет
+// файл. Для каждой части фронт ходит за presigned PUT в PortfolioMultipartPartURL.
+func (s *Service) StartPortfolioMultipart(
+	ctx context.Context,
+	userID uuid.UUID,
+	in PortfolioMultipartStartInput,
+) (PortfolioMultipartStartOutput, error) {
+	if s.media == nil {
+		return PortfolioMultipartStartOutput{}, errors.New("media storage not configured")
+	}
+	ext, ok := allowedUploadTypes[in.ContentType]
+	if !ok {
+		return PortfolioMultipartStartOutput{}, fmt.Errorf("%w: content_type must be video/mp4 or video/quicktime", ErrInvalidInput)
+	}
+	if in.SizeBytes <= 0 {
+		return PortfolioMultipartStartOutput{}, fmt.Errorf("%w: size_bytes is required", ErrInvalidInput)
+	}
+	if in.SizeBytes > portfolioMaxMultipartBytes {
+		return PortfolioMultipartStartOutput{}, fmt.Errorf("%w: file too large (max %d MB)", ErrInvalidInput, portfolioMaxMultipartBytes/(1024*1024))
+	}
+
+	// Тот же soft-check на лимит 20 видео, что у single-PUT.
+	existing, err := s.repo.ListPortfolio(ctx, userID)
+	if err != nil {
+		return PortfolioMultipartStartOutput{}, err
+	}
+	videos := 0
+	for _, it := range existing {
+		if it.VideoURL != "" {
+			videos++
+		}
+	}
+	if videos >= portfolioMaxVideosPerUser {
+		return PortfolioMultipartStartOutput{}, fmt.Errorf("%w: max %d videos", ErrInvalidInput, portfolioMaxVideosPerUser)
+	}
+
+	key := path.Join("portfolio", userID.String(), uuid.NewString()+ext)
+	uploadID, err := s.media.NewMultipartUpload(ctx, key, in.ContentType)
+	if err != nil {
+		return PortfolioMultipartStartOutput{}, fmt.Errorf("new multipart: %w", err)
+	}
+
+	return PortfolioMultipartStartOutput{
+		UploadID:  uploadID,
+		Key:       key,
+		PublicURL: s.media.PublicURL(key),
+		PartSize:  portfolioMultipartPartSize,
+	}, nil
+}
+
+// PortfolioMultipartPartURL — presigned PUT для одной части. Проверяем,
+// что ключ принадлежит этому пользователю (защита от cross-user upload-id
+// injection — мы не сохраняем own’ership в БД, опираемся на префикс ключа).
+func (s *Service) PortfolioMultipartPartURL(
+	ctx context.Context,
+	userID uuid.UUID,
+	in PortfolioMultipartPartURLInput,
+) (PortfolioMultipartPartURLOutput, error) {
+	if s.media == nil {
+		return PortfolioMultipartPartURLOutput{}, errors.New("media storage not configured")
+	}
+	if err := assertOwnedKey(userID, in.Key); err != nil {
+		return PortfolioMultipartPartURLOutput{}, err
+	}
+	if in.UploadID == "" {
+		return PortfolioMultipartPartURLOutput{}, fmt.Errorf("%w: upload_id is required", ErrInvalidInput)
+	}
+	if in.PartNumber < 1 || in.PartNumber > 10000 {
+		return PortfolioMultipartPartURLOutput{}, fmt.Errorf("%w: part_number must be in [1, 10000]", ErrInvalidInput)
+	}
+	u, err := s.media.PresignPart(ctx, in.Key, in.UploadID, in.PartNumber, portfolioUploadExpiry)
+	if err != nil {
+		return PortfolioMultipartPartURLOutput{}, fmt.Errorf("presign part: %w", err)
+	}
+	return PortfolioMultipartPartURLOutput{
+		UploadURL: u,
+		ExpiresIn: int(portfolioUploadExpiry.Seconds()),
+	}, nil
+}
+
+// CompletePortfolioMultipart — финализирует multipart. После успеха
+// фронт зовёт POST /me/portfolio с public_url (как и в single-PUT-флоу).
+func (s *Service) CompletePortfolioMultipart(
+	ctx context.Context,
+	userID uuid.UUID,
+	in PortfolioMultipartCompleteInput,
+) error {
+	if s.media == nil {
+		return errors.New("media storage not configured")
+	}
+	if err := assertOwnedKey(userID, in.Key); err != nil {
+		return err
+	}
+	if in.UploadID == "" {
+		return fmt.Errorf("%w: upload_id is required", ErrInvalidInput)
+	}
+	if len(in.Parts) == 0 {
+		return fmt.Errorf("%w: parts is empty", ErrInvalidInput)
+	}
+	parts := make([]MultipartPart, len(in.Parts))
+	for i, p := range in.Parts {
+		if p.PartNumber < 1 || p.PartNumber > 10000 {
+			return fmt.Errorf("%w: part_number must be in [1, 10000]", ErrInvalidInput)
+		}
+		if p.ETag == "" {
+			return fmt.Errorf("%w: etag is required for part %d", ErrInvalidInput, p.PartNumber)
+		}
+		parts[i] = MultipartPart{PartNumber: p.PartNumber, ETag: p.ETag}
+	}
+	return s.media.CompleteMultipart(ctx, in.Key, in.UploadID, parts)
+}
+
+// AbortPortfolioMultipart — отменяет multipart upload. Идемпотентно.
+func (s *Service) AbortPortfolioMultipart(
+	ctx context.Context,
+	userID uuid.UUID,
+	in PortfolioMultipartAbortInput,
+) error {
+	if s.media == nil {
+		return errors.New("media storage not configured")
+	}
+	if err := assertOwnedKey(userID, in.Key); err != nil {
+		return err
+	}
+	if in.UploadID == "" {
+		return fmt.Errorf("%w: upload_id is required", ErrInvalidInput)
+	}
+	return s.media.AbortMultipart(ctx, in.Key, in.UploadID)
+}
+
+// assertOwnedKey — ключи имеют префикс portfolio/{user_id}/, без него
+// клиент мог бы попросить presigned URL для чужого upload_id.
+func assertOwnedKey(userID uuid.UUID, key string) error {
+	prefix := "portfolio/" + userID.String() + "/"
+	if !strings.HasPrefix(key, prefix) {
+		return fmt.Errorf("%w: key does not belong to user", ErrInvalidInput)
+	}
+	return nil
 }
 
 // CreateImageUploadURL — presigned PUT для аватара или превью видео.

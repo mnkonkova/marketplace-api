@@ -254,3 +254,56 @@ type PortfolioUploadURL struct {
 	Key       string `json:"key"`
 	ExpiresIn int    `json:"expires_in"` // секунды
 }
+
+// PortfolioMultipartStartInput — старт S3 multipart upload для крупного видео
+// (фронт делит файл на чанки по part_size и грузит каждую часть через
+// presigned PUT). Используется для файлов > 5 МБ.
+type PortfolioMultipartStartInput struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+}
+
+// PortfolioMultipartStartOutput — ответ на старт. PartSize в байтах:
+// фронт должен бить файл ровно по этому размеру (последний чанк меньше).
+type PortfolioMultipartStartOutput struct {
+	UploadID  string `json:"upload_id"`
+	Key       string `json:"key"`
+	PublicURL string `json:"public_url"`
+	PartSize  int64  `json:"part_size"`
+}
+
+// PortfolioMultipartPartURLInput — presigned PUT для конкретной части
+// (фронт зовёт за URL для каждой части по очереди или параллельно).
+type PortfolioMultipartPartURLInput struct {
+	Key        string `json:"key"`
+	UploadID   string `json:"upload_id"`
+	PartNumber int    `json:"part_number"`
+}
+
+type PortfolioMultipartPartURLOutput struct {
+	UploadURL string `json:"upload_url"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
+// PortfolioMultipartPart — пара (part_number, etag), которую фронт получает
+// в Response header ETag после успешного PUT каждой части.
+type PortfolioMultipartPart struct {
+	PartNumber int    `json:"part_number"`
+	ETag       string `json:"etag"`
+}
+
+// PortfolioMultipartCompleteInput — финализация. parts должны быть упорядочены
+// по part_number возрастающе.
+type PortfolioMultipartCompleteInput struct {
+	Key      string                   `json:"key"`
+	UploadID string                   `json:"upload_id"`
+	Parts    []PortfolioMultipartPart `json:"parts"`
+}
+
+// PortfolioMultipartAbortInput — отмена. Бэк зовёт AbortMultipartUpload в S3
+// и удалит уже залитые части.
+type PortfolioMultipartAbortInput struct {
+	Key      string `json:"key"`
+	UploadID string `json:"upload_id"`
+}

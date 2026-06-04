@@ -236,7 +236,7 @@ func main() {
 		if err != nil {
 			slog.Warn("worker: s3 sweep disabled", "err", err)
 		} else {
-			profilesSvc := profiles.NewService(profiles.NewRepo(pool)).WithMediaStorage(s3Client)
+			profilesSvc := profiles.NewService(profiles.NewRepo(pool)).WithMediaStorage(profiles.NewS3MediaStorage(s3Client))
 			go runMediaSweepTicker(rootCtx, profilesSvc, cfg.S3OrphanMinAge, cfg.S3SweepInterval, logger)
 			slog.Info("worker: s3 sweep ready",
 				"bucket", s3Client.Bucket(),

@@ -135,7 +135,7 @@ func main() {
 		if err != nil {
 			slog.Warn("s3 disabled", "err", err)
 		} else {
-			profilesSvc.WithMediaStorage(s3Client)
+			profilesSvc.WithMediaStorage(profiles.NewS3MediaStorage(s3Client))
 			slog.Info("s3 ready", "bucket", s3Client.Bucket(), "endpoint", cfg.S3Endpoint)
 		}
 	} else {

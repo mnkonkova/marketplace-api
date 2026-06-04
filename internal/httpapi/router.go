@@ -162,6 +162,11 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/me/portfolio", d.Profiles.PortfolioList)
 			r.Post("/me/portfolio", d.Profiles.PortfolioCreate)
 			r.Post("/me/portfolio/upload-url", d.Profiles.PortfolioUploadURL)
+			// S3 multipart для крупного видео (> 5 МБ, до 200 МБ).
+			r.Post("/me/portfolio/multipart/start", d.Profiles.PortfolioMultipartStart)
+			r.Post("/me/portfolio/multipart/part-url", d.Profiles.PortfolioMultipartPartURL)
+			r.Post("/me/portfolio/multipart/complete", d.Profiles.PortfolioMultipartComplete)
+			r.Post("/me/portfolio/multipart/abort", d.Profiles.PortfolioMultipartAbort)
 			r.Put("/me/portfolio/{id}/categories", d.Profiles.PortfolioSetCategories)
 			r.Delete("/me/portfolio/{id}", d.Profiles.PortfolioDelete)
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -126,6 +127,76 @@ func (c *Client) ListObjects(ctx context.Context, prefix string, yield func(key 
 func (c *Client) RemoveObject(ctx context.Context, key string) error {
 	if err := c.mc.RemoveObject(ctx, c.bucket, key, minio.RemoveObjectOptions{}); err != nil {
 		return fmt.Errorf("remove %s: %w", key, err)
+	}
+	return nil
+}
+
+// CompletePart — пара (partNumber, etag) для завершения multipart. Нужна,
+// чтобы хендлеры не зависели от minio-go типов напрямую.
+type CompletePart struct {
+	PartNumber int
+	ETag       string
+}
+
+// NewMultipartUpload — инициирует S3 multipart upload, возвращает uploadID.
+// Клиент дальше льёт по чанкам через presigned PUT (см. PresignPart) и
+// финалит через CompleteMultipart.
+func (c *Client) NewMultipartUpload(ctx context.Context, key, contentType string) (string, error) {
+	core := minio.Core{Client: c.mc}
+	uploadID, err := core.NewMultipartUpload(ctx, c.bucket, key, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return "", fmt.Errorf("new multipart: %w", err)
+	}
+	return uploadID, nil
+}
+
+// PresignPart — выдаёт presigned PUT URL для конкретной части multipart.
+// partNumber ∈ [1, 10000] (ограничение S3). Каждая часть кроме последней
+// должна быть ≥ 5 MiB — это валидируется на стороне S3, не здесь.
+func (c *Client) PresignPart(
+	ctx context.Context,
+	key, uploadID string,
+	partNumber int,
+	expiry time.Duration,
+) (string, error) {
+	reqParams := url.Values{}
+	reqParams.Set("partNumber", strconv.Itoa(partNumber))
+	reqParams.Set("uploadId", uploadID)
+	u, err := c.mc.Presign(ctx, "PUT", c.bucket, key, expiry, reqParams)
+	if err != nil {
+		return "", fmt.Errorf("presign part: %w", err)
+	}
+	return u.String(), nil
+}
+
+// CompleteMultipart — финализирует multipart. parts должны быть упорядочены
+// по PartNumber. ETag — заголовок, который S3 вернул на PUT каждой части
+// (фронт его читает из response.headers.get('ETag') и присылает обратно).
+func (c *Client) CompleteMultipart(
+	ctx context.Context,
+	key, uploadID string,
+	parts []CompletePart,
+) error {
+	mparts := make([]minio.CompletePart, len(parts))
+	for i, p := range parts {
+		mparts[i] = minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag}
+	}
+	core := minio.Core{Client: c.mc}
+	if _, err := core.CompleteMultipartUpload(ctx, c.bucket, key, uploadID, mparts, minio.PutObjectOptions{}); err != nil {
+		return fmt.Errorf("complete multipart: %w", err)
+	}
+	return nil
+}
+
+// AbortMultipart — отменяет multipart upload. S3 удалит уже загруженные части.
+// Идемпотентно (повторный вызов на отсутствующий uploadID не считается фатальной
+// ошибкой со стороны клиента).
+func (c *Client) AbortMultipart(ctx context.Context, key, uploadID string) error {
+	core := minio.Core{Client: c.mc}
+	if err := core.AbortMultipartUpload(ctx, c.bucket, key, uploadID); err != nil {
+		return fmt.Errorf("abort multipart: %w", err)
 	}
 	return nil
 }

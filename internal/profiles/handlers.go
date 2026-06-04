@@ -280,6 +280,159 @@ func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// PortfolioMultipartStart godoc
+// @Summary      Старт S3 multipart upload видео (для файлов > 5 МБ)
+// @Description  Возвращает upload_id, ключ и part_size. Фронт нарезает файл на чанки по part_size и для каждой части ходит за presigned PUT в /me/portfolio/multipart/part-url. После всех PUT — /me/portfolio/multipart/complete.
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioMultipartStartInput  true  "filename/content_type/size"
+// @Success      200   {object}  PortfolioMultipartStartOutput
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/portfolio/multipart/start [post]
+func (h *Handler) PortfolioMultipartStart(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	if !h.svc.MediaAvailable() {
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "storage_disabled", msgStorageOff)
+		return
+	}
+	var in PortfolioMultipartStartInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	out, err := h.svc.StartPortfolioMultipart(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case err != nil:
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusOK, out)
+	}
+}
+
+// PortfolioMultipartPartURL godoc
+// @Summary      Presigned PUT URL для одной части multipart upload'а
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioMultipartPartURLInput  true  "key/upload_id/part_number"
+// @Success      200   {object}  PortfolioMultipartPartURLOutput
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/portfolio/multipart/part-url [post]
+func (h *Handler) PortfolioMultipartPartURL(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	if !h.svc.MediaAvailable() {
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "storage_disabled", msgStorageOff)
+		return
+	}
+	var in PortfolioMultipartPartURLInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	out, err := h.svc.PortfolioMultipartPartURL(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case err != nil:
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusOK, out)
+	}
+}
+
+// PortfolioMultipartComplete godoc
+// @Summary      Завершить multipart upload (собрать чанки)
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioMultipartCompleteInput  true  "key/upload_id/parts"
+// @Success      204
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/portfolio/multipart/complete [post]
+func (h *Handler) PortfolioMultipartComplete(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	if !h.svc.MediaAvailable() {
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "storage_disabled", msgStorageOff)
+		return
+	}
+	var in PortfolioMultipartCompleteInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	err := h.svc.CompletePortfolioMultipart(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case err != nil:
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// PortfolioMultipartAbort godoc
+// @Summary      Отменить multipart upload (удалить уже залитые части)
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioMultipartAbortInput  true  "key/upload_id"
+// @Success      204
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/portfolio/multipart/abort [post]
+func (h *Handler) PortfolioMultipartAbort(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	if !h.svc.MediaAvailable() {
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "storage_disabled", msgStorageOff)
+		return
+	}
+	var in PortfolioMultipartAbortInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	err := h.svc.AbortPortfolioMultipart(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case err != nil:
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // ImageUploadURL godoc
 // @Summary      Presigned PUT URL для аплоада картинки (аватар / превью)
 // @Tags         portfolio

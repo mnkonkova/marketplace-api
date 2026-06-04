@@ -74,7 +74,7 @@ func main() {
 	defer pool.Close()
 
 	repo := profiles.NewRepo(pool)
-	svc := profiles.NewService(repo).WithMediaStorage(s3Client)
+	svc := profiles.NewService(repo).WithMediaStorage(profiles.NewS3MediaStorage(s3Client))
 
 	minAge := cfg.S3OrphanMinAge
 	if minAgeOverride > 0 {
