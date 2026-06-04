@@ -220,6 +220,11 @@ func NewRouter(d Deps) http.Handler {
 					// назначить спеца). manager и admin — равные права.
 					r.Get("/manager/users/search", d.Admin.AdminSearchUsers)
 				}
+				if d.Pipelines != nil {
+					// Менеджеру нужен список воронок для селекта в форме
+					// «создать проект». Read-only — редактировать может админ.
+					r.Get("/manager/pipelines", d.Pipelines.AdminListPipelines)
+				}
 				r.Post("/manager/projects/{id}/steps/{step_id}/start", d.Projects.ManagerStartStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/complete", d.Projects.ManagerCompleteStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/skip", d.Projects.ManagerSkipStep)
