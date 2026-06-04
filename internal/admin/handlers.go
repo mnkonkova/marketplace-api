@@ -68,6 +68,33 @@ func (h *Handler) AdminListManagers(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, managersListResp{Items: items})
 }
 
+// AdminSearchUsers godoc
+// @Summary  Поиск юзеров (для лукапов в CRM)
+// @Description ILIKE по email/phone/display_name. Только активные,
+// @Description фильтр kind=client|specialist. q короче 2 символов — пусто.
+// @Tags     admin-users
+// @Produce  json
+// @Security BearerAuth
+// @Param    q    query string true  "часть email/phone/имени, мин 2 символа"
+// @Param    kind query string true  "client | specialist"
+// @Success  200 {object} userSearchResp
+// @Router   /admin/users/search [get]
+func (h *Handler) AdminSearchUsers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	kind := r.URL.Query().Get("kind")
+	if kind != "client" && kind != "specialist" {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_kind",
+			"kind должен быть client или specialist.")
+		return
+	}
+	items, err := h.svc.SearchUsers(r.Context(), q, kind)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, userSearchResp{Items: items})
+}
+
 // AdminApproveManager godoc
 // @Summary  Аппрувить менеджера
 // @Tags     admin-users
@@ -198,6 +225,10 @@ func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 // типы для swaggo
 type managersListResp struct {
 	Items []ManagerInfo `json:"items"`
+}
+
+type userSearchResp struct {
+	Items []UserSearchResult `json:"items"`
 }
 
 type errorResponse struct {

@@ -41,3 +41,15 @@ type InviteGenerateResult struct {
 	URL       string    `json:"url"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+// UserSearchResult — компактное представление юзера для лукапов
+// в admin/manager интерфейсе (создать проект для существующего клиента,
+// назначить спеца). Имя берётся из client_profiles или specialist_profiles
+// в зависимости от kind; пустая строка если профиля нет.
+type UserSearchResult struct {
+	UserID      uuid.UUID `json:"user_id"`
+	Email       string    `json:"email,omitempty"`
+	Phone       string    `json:"phone,omitempty"`
+	Kind        string    `json:"kind"`
+	DisplayName string    `json:"display_name,omitempty"`
+}

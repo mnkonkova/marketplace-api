@@ -66,6 +66,57 @@ WHERE u.is_manager = TRUE`
 	return out, rows.Err()
 }
 
+// SearchUsers — лукап для admin/manager UI: создать проект для существующего
+// клиента или назначить спеца. Ищем по ILIKE '%q%' одновременно в email,
+// phone и display_name (из соответствующего профиля). Фильтр kind обязательный
+// (client или specialist). q короче 2 символов — пустой результат (защита от
+// случайных дребезгов клавиатуры, которые открыли бы выдачу всех 200 спецов).
+// Возвращает максимум 20 результатов — фронту нужно показать топ-N для
+// автокомплита, не полный листинг.
+func (r *Repo) SearchUsers(ctx context.Context, q, kind string) ([]UserSearchResult, error) {
+	q = strings.TrimSpace(q)
+	if len(q) < 2 {
+		return []UserSearchResult{}, nil
+	}
+	if kind != "client" && kind != "specialist" {
+		return nil, fmt.Errorf("invalid kind %q", kind)
+	}
+	pattern := "%" + q + "%"
+	var profileTable string
+	if kind == "client" {
+		profileTable = "client_profiles"
+	} else {
+		profileTable = "specialist_profiles"
+	}
+	// LEFT JOIN — у client'а может не быть профиля (тогда display_name='');
+	// у specialist'а профиль есть всегда (создаётся при регистрации).
+	queryStr := `
+SELECT u.id, COALESCE(u.email::text,''), COALESCE(u.phone,''),
+       u.kind, COALESCE(p.display_name,'')
+FROM users u
+LEFT JOIN ` + profileTable + ` p ON p.user_id = u.id
+WHERE u.kind = $1 AND u.is_active = TRUE
+  AND (u.email::text ILIKE $2 OR u.phone ILIKE $2 OR p.display_name ILIKE $2)
+ORDER BY
+  CASE WHEN u.email::text ILIKE $3 OR p.display_name ILIKE $3 THEN 0 ELSE 1 END,
+  u.created_at DESC
+LIMIT 20`
+	rows, err := r.db.Query(ctx, queryStr, kind, pattern, q+"%")
+	if err != nil {
+		return nil, fmt.Errorf("search users: %w", err)
+	}
+	defer rows.Close()
+	out := make([]UserSearchResult, 0, 20)
+	for rows.Next() {
+		var u UserSearchResult
+		if err := rows.Scan(&u.UserID, &u.Email, &u.Phone, &u.Kind, &u.DisplayName); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // SetApproved — менеджеру (только!) меняем is_approved. Если юзер не manager —
 // ErrNotManager (защита от случайного одобрения кого попало). Идемпотентен.
 func (r *Repo) SetApproved(ctx context.Context, userID uuid.UUID, approved bool) error {

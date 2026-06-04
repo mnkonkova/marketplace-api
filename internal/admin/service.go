@@ -42,6 +42,12 @@ func (s *Service) ListManagers(ctx context.Context, approved *bool) ([]ManagerIn
 	return s.repo.ListManagers(ctx, approved)
 }
 
+// SearchUsers — лукап юзеров для admin/manager UI. Прокидывается в repo
+// как есть. Возвращает [] для коротких q (< 2 символов), чтобы не нагружать.
+func (s *Service) SearchUsers(ctx context.Context, q, kind string) ([]UserSearchResult, error) {
+	return s.repo.SearchUsers(ctx, q, kind)
+}
+
 func (s *Service) ApproveManager(ctx context.Context, userID uuid.UUID) error {
 	return s.repo.SetApproved(ctx, userID, true)
 }

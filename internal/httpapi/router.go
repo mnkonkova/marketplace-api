@@ -216,6 +216,9 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/manager/projects/{id}/move_step", d.Projects.ManagerMoveStep)
 				if d.Admin != nil {
 					r.Post("/manager/users/{id}/generate_invite", d.Admin.ManagerGenerateInvite)
+					// Лукап юзеров (создать проект для существующего клиента,
+					// назначить спеца). manager и admin — равные права.
+					r.Get("/manager/users/search", d.Admin.AdminSearchUsers)
 				}
 				r.Post("/manager/projects/{id}/steps/{step_id}/start", d.Projects.ManagerStartStep)
 				r.Post("/manager/projects/{id}/steps/{step_id}/complete", d.Projects.ManagerCompleteStep)
@@ -261,6 +264,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/managers/{id}/revoke", d.Admin.AdminRevokeManager)
 					r.Post("/admin/users", d.Admin.AdminCreateClient)
 					r.Post("/admin/users/{id}/generate_invite", d.Admin.AdminGenerateInvite)
+					r.Get("/admin/users/search", d.Admin.AdminSearchUsers)
 				}
 				if d.Projects != nil {
 					r.Get("/admin/projects", d.Projects.AdminListProjects)
