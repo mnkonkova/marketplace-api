@@ -92,6 +92,36 @@ func (s *Service) GenerateInvite(ctx context.Context, userID, createdBy uuid.UUI
 	}, nil
 }
 
+// PromoteToManager — назначает существующему юзеру роль менеджера
+// (is_manager=TRUE, is_approved=TRUE) и опционально сразу генерирует
+// invite для входа. Используется в admin/managers, когда юзер уже
+// зарегистрирован и его нужно сделать менеджером.
+//
+// Идемпотентно: повторный вызов на уже-менеджере просто перегенерит
+// invite. is_approved=TRUE ставим сразу — admin аппрувит фактом promote'a,
+// отдельный шаг approve не нужен.
+func (s *Service) PromoteToManager(
+	ctx context.Context,
+	userID, createdBy uuid.UUID,
+	sendInvite bool,
+) (InviteGenerateResult, error) {
+	if err := s.repo.PromoteToManager(ctx, userID); err != nil {
+		return InviteGenerateResult{}, err
+	}
+	if !sendInvite {
+		return InviteGenerateResult{}, nil
+	}
+	raw, expiresAt, err := s.repo.GenerateInvite(ctx, userID, createdBy, s.inviteTTL)
+	if err != nil {
+		return InviteGenerateResult{}, err
+	}
+	return InviteGenerateResult{
+		Token:     raw,
+		URL:       s.appBaseURL + "/auth/invite?token=" + raw,
+		ExpiresAt: expiresAt,
+	}, nil
+}
+
 // RedeemInvite — публичный эндпоинт. Обменивает токен на пару tokens
 // (фронт сразу логинит юзера). Юзер становится email_verified.
 func (s *Service) RedeemInvite(ctx context.Context, rawToken string) (auth.TokenPair, uuid.UUID, error) {

@@ -266,6 +266,7 @@ func NewRouter(d Deps) http.Handler {
 				}
 				if d.Admin != nil {
 					r.Get("/admin/managers", d.Admin.AdminListManagers)
+					r.Post("/admin/managers/promote", d.Admin.AdminPromoteToManager)
 					r.Post("/admin/managers/{id}/approve", d.Admin.AdminApproveManager)
 					r.Post("/admin/managers/{id}/revoke", d.Admin.AdminRevokeManager)
 					r.Post("/admin/users", d.Admin.AdminCreateClient)

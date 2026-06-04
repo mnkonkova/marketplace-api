@@ -82,9 +82,9 @@ func (h *Handler) AdminListManagers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AdminSearchUsers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	kind := r.URL.Query().Get("kind")
-	if kind != "client" && kind != "specialist" {
+	if kind != "" && kind != "all" && kind != "client" && kind != "specialist" {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_kind",
-			"kind должен быть client или specialist.")
+			"kind должен быть client, specialist или all.")
 		return
 	}
 	items, err := h.svc.SearchUsers(r.Context(), q, kind)
@@ -93,6 +93,48 @@ func (h *Handler) AdminSearchUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, userSearchResp{Items: items})
+}
+
+type promoteManagerReq struct {
+	UserID     string `json:"user_id"`
+	SendInvite bool   `json:"send_invite,omitempty"`
+}
+
+// AdminPromoteToManager godoc
+// @Summary  Сделать существующего юзера менеджером (+ опционально invite)
+// @Description Ищется юзер через /admin/users/search, далее этот endpoint
+// @Description выставляет is_manager=TRUE и is_approved=TRUE. send_invite=true
+// @Description дополнительно генерит magic-link для входа.
+// @Tags     admin-users
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    body body promoteManagerReq true "user_id + send_invite"
+// @Success  200 {object} InviteGenerateResult "{} если send_invite=false"
+// @Router   /admin/managers/promote [post]
+func (h *Handler) AdminPromoteToManager(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	var in promoteManagerReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	userID, err := uuid.Parse(strings.TrimSpace(in.UserID))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_user_id",
+			"user_id обязателен и должен быть UUID.")
+		return
+	}
+	res, err := h.svc.PromoteToManager(r.Context(), userID, actor, in.SendInvite)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 // AdminApproveManager godoc

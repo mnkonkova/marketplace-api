@@ -67,41 +67,52 @@ WHERE u.is_manager = TRUE`
 }
 
 // SearchUsers — лукап для admin/manager UI: создать проект для существующего
-// клиента или назначить спеца. Ищем по ILIKE '%q%' одновременно в email,
-// phone и display_name (из соответствующего профиля). Фильтр kind обязательный
-// (client или specialist). q короче 2 символов — пустой результат (защита от
-// случайных дребезгов клавиатуры, которые открыли бы выдачу всех 200 спецов).
-// Возвращает максимум 20 результатов — фронту нужно показать топ-N для
-// автокомплита, не полный листинг.
+// клиента, назначить спеца, найти юзера для promote-to-manager. Ищем по
+// ILIKE '%q%' одновременно в email, phone и display_name (из обоих профильных
+// таблиц через COALESCE). q короче 2 символов — пустой результат.
+// Возвращает максимум 20 результатов.
+//
+// kind:
+//   - "client" / "specialist" — узкий фильтр по users.kind.
+//   - "all" / ""             — без фильтра, для admin promote-to-manager.
 func (r *Repo) SearchUsers(ctx context.Context, q, kind string) ([]UserSearchResult, error) {
 	q = strings.TrimSpace(q)
 	if len(q) < 2 {
 		return []UserSearchResult{}, nil
 	}
-	if kind != "client" && kind != "specialist" {
+	if kind != "" && kind != "all" && kind != "client" && kind != "specialist" {
 		return nil, fmt.Errorf("invalid kind %q", kind)
 	}
 	pattern := "%" + q + "%"
-	var profileTable string
-	if kind == "client" {
-		profileTable = "client_profiles"
-	} else {
-		profileTable = "specialist_profiles"
-	}
-	// LEFT JOIN — у client'а может не быть профиля (тогда display_name='');
-	// у specialist'а профиль есть всегда (создаётся при регистрации).
+	prefix := q + "%"
+
+	// LEFT JOIN на оба профиля. COALESCE имени: сначала client_profiles,
+	// затем specialist_profiles. У спеца профиль гарантирован, у клиента —
+	// опционален. Если оба пусты — display_name=''.
 	queryStr := `
 SELECT u.id, COALESCE(u.email::text,''), COALESCE(u.phone,''),
-       u.kind, COALESCE(p.display_name,'')
+       u.kind,
+       COALESCE(NULLIF(cp.display_name,''), NULLIF(sp.display_name,''), '')
 FROM users u
-LEFT JOIN ` + profileTable + ` p ON p.user_id = u.id
-WHERE u.kind = $1 AND u.is_active = TRUE
-  AND (u.email::text ILIKE $2 OR u.phone ILIKE $2 OR p.display_name ILIKE $2)
+LEFT JOIN client_profiles     cp ON cp.user_id = u.id
+LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
+WHERE u.is_active = TRUE`
+	args := []any{pattern, prefix}
+	pIdx := 3
+	if kind != "" && kind != "all" {
+		queryStr += fmt.Sprintf(" AND u.kind = $%d", pIdx)
+		args = append(args, kind)
+		pIdx++
+	}
+	queryStr += `
+  AND (u.email::text ILIKE $1 OR u.phone ILIKE $1
+       OR cp.display_name ILIKE $1 OR sp.display_name ILIKE $1)
 ORDER BY
-  CASE WHEN u.email::text ILIKE $3 OR p.display_name ILIKE $3 THEN 0 ELSE 1 END,
+  CASE WHEN u.email::text ILIKE $2 OR cp.display_name ILIKE $2 OR sp.display_name ILIKE $2
+       THEN 0 ELSE 1 END,
   u.created_at DESC
 LIMIT 20`
-	rows, err := r.db.Query(ctx, queryStr, kind, pattern, q+"%")
+	rows, err := r.db.Query(ctx, queryStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search users: %w", err)
 	}
@@ -115,6 +126,23 @@ LIMIT 20`
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// PromoteToManager — выставляет is_manager=TRUE и is_approved=TRUE.
+// Используется в /admin/managers/promote: админ нашёл юзера по email/имени,
+// делает его менеджером без отдельного approve-шага. Идемпотентно.
+func (r *Repo) PromoteToManager(ctx context.Context, userID uuid.UUID) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE users SET is_manager = TRUE, is_approved = TRUE, updated_at = now()
+		 WHERE id = $1 AND is_active = TRUE`,
+		userID)
+	if err != nil {
+		return fmt.Errorf("promote to manager: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetApproved — менеджеру (только!) меняем is_approved. Если юзер не manager —
