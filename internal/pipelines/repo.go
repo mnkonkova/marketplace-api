@@ -187,12 +187,26 @@ func (r *Repo) PatchPipeline(ctx context.Context, id uuid.UUID, in PatchPipeline
 
 // MakeDefault — пометить воронку как дефолтную, сняв default с других.
 // Атомарно одной транзакцией. Если воронка не is_active — ошибка.
+//
+// Advisory lock на постоянный ключ (5612) — гарантирует что одновременно
+// выполняется только ОДНА MakeDefault-транзакция в кластере. Без него
+// два concurrent MakeDefault'a (двойной клик фронта) могут наложиться
+// и оставить is_default в неопределённом состоянии — наблюдалось у
+// пользователя как «default слетает», audit-trigger ловил pattern
+// unset → set → unset → set. С lock'ом второй вызов ждёт первого,
+// видит уже-default и просто заново подтверждает, без race.
+const makeDefaultAdvisoryKey = 5612
+
 func (r *Repo) MakeDefault(ctx context.Context, id uuid.UUID) error {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, makeDefaultAdvisoryKey); err != nil {
+		return fmt.Errorf("acquire advisory lock: %w", err)
+	}
 
 	unsetTag, err := tx.Exec(ctx,
 		`UPDATE pipelines SET is_default = FALSE, updated_at = now() WHERE is_default = TRUE`)

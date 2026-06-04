@@ -169,6 +169,29 @@ func (r *Repo) SetApproved(ctx context.Context, userID uuid.UUID, approved bool)
 	return nil
 }
 
+// DemoteFromManager — полностью снимает manager-роль: is_manager=FALSE,
+// is_approved=FALSE. После этого юзер возвращается к своей базовой роли
+// по kind (client → RoleClient, specialist → RoleSpecialist).
+//
+// Раньше «снять менеджера» делалось через SetApproved(false), которое
+// убирало только is_approved. Но Role() при is_manager=TRUE возвращает
+// RoleManager независимо от is_approved, и middleware режет с 403
+// forbidden_unapproved — юзер ни менеджер (заблокирован), ни клиент.
+// Now drop the flag вообще.
+func (r *Repo) DemoteFromManager(ctx context.Context, userID uuid.UUID) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE users SET is_manager = FALSE, is_approved = FALSE, updated_at = now()
+		 WHERE id = $1`,
+		userID)
+	if err != nil {
+		return fmt.Errorf("demote manager: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // CreateClient — заводит юзера (kind=client, без manager/admin-флагов;
 // password = случайные 32 байта в base64; юзер всё равно зайдёт по magic-link).
 // is_approved=TRUE, email_verified_at=now (раз создаёт админ, верификации не нужно).

@@ -52,8 +52,10 @@ func (s *Service) ApproveManager(ctx context.Context, userID uuid.UUID) error {
 	return s.repo.SetApproved(ctx, userID, true)
 }
 
+// RevokeManager — полностью снимает роль менеджера. is_manager=FALSE,
+// is_approved=FALSE. Role() после этого вернёт client/specialist по kind.
 func (s *Service) RevokeManager(ctx context.Context, userID uuid.UUID) error {
-	return s.repo.SetApproved(ctx, userID, false)
+	return s.repo.DemoteFromManager(ctx, userID)
 }
 
 // ---- Клиенты ----
