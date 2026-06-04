@@ -430,24 +430,22 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		}
 	}
 
-	// hard-лимит: 20 видео на спеца. ОК для MVP, но превышается явной ошибкой,
-	// чтобы не молча дропать.
-	existing, err := s.repo.ListPortfolio(ctx, userID)
-	if err != nil {
-		return PortfolioItem{}, err
-	}
-	videos := 0
-	for _, it := range existing {
-		if it.VideoURL != "" {
-			videos++
-		}
-	}
-	if videos >= portfolioMaxVideosPerUser {
-		return PortfolioItem{}, fmt.Errorf("%w: max %d videos", ErrInvalidInput, portfolioMaxVideosPerUser)
-	}
-
+	// hard-лимит: 20 видео на спеца. Проверка ВНУТРИ транзакции с
+	// row-lock'ом на specialist_profiles (через LockProfileForUpdateInTx) —
+	// иначе двое параллельных INSERT'ов оба пройдут pre-check на 19 и
+	// получат 21 видео. Lock сериализует их через одну строку профиля.
 	var item PortfolioItem
 	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.LockProfileForUpdateInTx(ctx, tx, userID, nil); err != nil {
+			return err
+		}
+		n, err := s.repo.CountVideosInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if n >= portfolioMaxVideosPerUser {
+			return fmt.Errorf("%w: max %d videos", ErrInvalidInput, portfolioMaxVideosPerUser)
+		}
 		var txErr error
 		item, txErr = s.repo.CreatePortfolioVideoInTx(ctx, tx, userID, in)
 		if txErr != nil {
@@ -536,7 +534,11 @@ func (s *Service) CreatePortfolioUploadURL(
 		return PortfolioUploadURL{}, fmt.Errorf("%w: file too large (max %d MB)", ErrInvalidInput, portfolioMaxUploadBytes/(1024*1024))
 	}
 
-	// Hard-cap 20 видео — проверяем здесь, чтобы не выдавать URL впустую.
+	// Hard-cap 20 видео — soft-check здесь, чтобы не выдавать presigned URL
+	// впустую если лимит уже достигнут. Настоящее enforcement делает
+	// AddPortfolioVideo под row-lock'ом (см. там CountVideosInTx). Race
+	// здесь не опасен: даже если 21-й URL выдан, POST /me/portfolio
+	// откажет.
 	existing, err := s.repo.ListPortfolio(ctx, userID)
 	if err != nil {
 		return PortfolioUploadURL{}, err

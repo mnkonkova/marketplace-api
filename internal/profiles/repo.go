@@ -413,6 +413,23 @@ func (r *Repo) ListPortfolio(ctx context.Context, userID uuid.UUID) ([]Portfolio
 	return r.listPortfolio(ctx, userID)
 }
 
+// CountVideosInTx — число видео-айтемов спеца (kind='video' и непустой
+// video_url) внутри переданной транзакции. Используется в проверке
+// hard-лимита: считаем после row-lock'a на specialist_profiles, чтобы
+// двое параллельных INSERT'ов не обошли проверку («19+19 → 21»).
+func (r *Repo) CountVideosInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (int, error) {
+	var n int
+	err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM portfolio_items
+		 WHERE user_id = $1 AND kind = 'video'
+		   AND video_url IS NOT NULL AND video_url <> ''`,
+		userID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count videos: %w", err)
+	}
+	return n, nil
+}
+
 // CreatePortfolioVideoInTx — добавляет видео-айтем внутри переданной
 // транзакции. Вызывающий код в одной tx эмитит outbox-событие, чтобы
 // ES-индекс спеца (last_video_at) обновился атомарно с записью в PG.
