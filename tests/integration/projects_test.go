@@ -64,6 +64,11 @@ VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`, email).Scan(&clientID); e
 	}
 
 	cleanup = func() {
+		// Чистим outbox для этого проекта — иначе worker при следующем
+		// запуске отправит project.created (и любые другие test-события)
+		// в n8n → Telegram. На outbox нет FK к projects, поэтому сами.
+		_, _ = pool.Exec(ctx, `DELETE FROM outbox WHERE aggregate = 'project' AND aggregate_id = $1`,
+			projectID.String())
 		// каскады: projects → stages, steps, events, comments
 		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
 		_, _ = pool.Exec(ctx, `DELETE FROM pipelines WHERE id = $1`, pipelineID)
