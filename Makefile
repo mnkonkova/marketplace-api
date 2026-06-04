@@ -1,6 +1,6 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt swag \
         deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos \
-        backup-db prod-backup-db prod-restore-db
+        backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -157,6 +157,48 @@ prod-restore-db:
 	 fi; \
 	 echo "[restore] $$FILE → $$PG_DB"; \
 	 gunzip -c "$$FILE" | $(PROD_DC) exec -T postgres psql -U "$$PG_USER" -d "$$PG_DB"
+
+# ── n8n volume backup ────────────────────────────────────────────────
+# Бекап всего volume n8n: workflows + credentials + encryption-key + sqlite.
+# Полный снапшот — годится для миграции на новый VDS и для DR.
+# Без --stop: sqlite в WAL-режиме читается консистентно из работающего
+# контейнера. Если хочется гарантий — `docker stop` перед вызовом.
+#
+# Перенос на другой VDS:
+#   1) make backup-n8n          # на старом сервере → backups/n8n/n8n-*.tar.gz
+#   2) scp backups/n8n/n8n-*.tar.gz new-vds:/opt/marketplace-api/backups/n8n/
+#   3) на новом VDS: запустить контейнер n8n один раз (создаёт volume),
+#      остановить, и `make restore-n8n` — затрёт пустой volume снапшотом.
+N8N_CONTAINER ?= marketplace-api-n8n-1
+N8N_VOLUME ?= marketplace-api_n8n-data
+N8N_BACKUP_DIR ?= backups/n8n
+backup-n8n:
+	@mkdir -p $(N8N_BACKUP_DIR)
+	@OUT="$(N8N_BACKUP_DIR)/n8n-$$(date +%Y-%m-%d_%H%M%S).tar.gz"; \
+	 echo "[n8n-backup] $$OUT"; \
+	 docker run --rm -v $(N8N_VOLUME):/data:ro -v "$$(pwd)/$(N8N_BACKUP_DIR):/out" alpine \
+	   tar czf "/out/$$(basename $$OUT)" -C /data . ; \
+	 SIZE=$$(stat -c%s "$$OUT" 2>/dev/null || stat -f%z "$$OUT"); \
+	 if [ "$$SIZE" -lt 1024 ]; then \
+	   echo "[n8n-backup] FAIL: $$OUT < 1KB"; rm -f "$$OUT"; exit 1; \
+	 fi; \
+	 echo "[n8n-backup] OK: $$(numfmt --to=iec $$SIZE 2>/dev/null || echo $$SIZE bytes)"; \
+	 find $(N8N_BACKUP_DIR) -name "n8n-*.tar.gz" -type f -mtime +$(BACKUP_KEEP_DAYS) -print -delete
+
+# Восстановление n8n volume из tarball. Затирает текущее содержимое
+# volume — контейнер автоматически тушится/поднимается.
+#   make restore-n8n                                  # последний
+#   make restore-n8n BACKUP_FILE=backups/n8n/x.tar.gz # конкретный
+restore-n8n:
+	@FILE="$${BACKUP_FILE:-$$(ls -t $(N8N_BACKUP_DIR)/n8n-*.tar.gz 2>/dev/null | head -1)}"; \
+	 if [ -z "$$FILE" ] || [ ! -f "$$FILE" ]; then \
+	   echo "no n8n backup found in $(N8N_BACKUP_DIR)/, set BACKUP_FILE=..."; exit 1; \
+	 fi; \
+	 echo "[n8n-restore] $$FILE → volume $(N8N_VOLUME)"; \
+	 docker stop $(N8N_CONTAINER) 2>/dev/null || echo "[n8n-restore] container not running"; \
+	 docker run --rm -v $(N8N_VOLUME):/data -v "$$(pwd)/$$(dirname $$FILE):/in" alpine \
+	   sh -c "find /data -mindepth 1 -delete 2>/dev/null; tar xzf /in/$$(basename $$FILE) -C /data"; \
+	 docker start $(N8N_CONTAINER) 2>/dev/null && echo "[n8n-restore] OK, container restarted" || echo "[n8n-restore] start container manually"
 
 # Dev-вариант: тот же бекап, но против локального docker compose
 # (DC, .env вместо PROD_DC, .env.prod). Нужен для теста make-логики
