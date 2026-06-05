@@ -1,0 +1,62 @@
+{
+  "id": "crmEmailNotify",
+  "name": "CRM email notifications (verify + reset)",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-events",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 304],
+      "webhookId": "crm-email-events"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Принимает outbox event {event_id, event_type, data:{to,to_name,token,base_url}}\n// и собирает payload для UniSender Go /email/send.json.\n// Поддержка: email.verify_send, email.password_reset_send.\nconst raw = $input.first().json;\nconst e = raw.body || raw;\nconst t = e.event_type;\nconst d = e.data || {};\n\n// ⚠️ Заменить на реальный from в n8n UI (Code node → правка константы).\n// Хранить в env-vars из n8n task runner запрещено (см. enrichProjectPayload\n// в API — там та же причина). Для прода — отдельный workflow на каждое окружение.\nconst FROM_EMAIL = 'noreply@marketpclce.com';\nconst FROM_NAME  = 'Marketpclce';\n\nconst to     = d.to || '';\nconst toName = d.to_name || '';\nconst token  = d.token || '';\nconst base   = (d.base_url || '').replace(/\\/$/,'');\n\nlet subject, plain, html;\nswitch (t) {\n  case 'email.verify_send': {\n    const link = `${base}/verify?token=${encodeURIComponent(token)}`;\n    subject = 'Подтвердите email';\n    plain = `Здравствуйте${toName?', '+toName:''}!\\n\\nПодтвердите свой email перейдя по ссылке:\\n${link}\\n\\nСсылка действительна 24 часа.\\n\\n— Marketpclce`;\n    html  = `<p>Здравствуйте${toName?', '+toName:''}!</p>` +\n            `<p>Подтвердите свой email:</p>` +\n            `<p><a href=\"${link}\">Подтвердить</a></p>` +\n            `<p>Если кнопка не работает — скопируйте ссылку: <br>${link}</p>` +\n            `<p>Ссылка действительна 24 часа.</p>` +\n            `<p>— Marketpclce</p>`;\n    break;\n  }\n  case 'email.password_reset_send': {\n    const link = `${base}/auth/reset?token=${encodeURIComponent(token)}`;\n    subject = 'Сброс пароля';\n    plain = `Здравствуйте${toName?', '+toName:''}!\\n\\nДля сброса пароля перейдите по ссылке:\\n${link}\\n\\nЕсли вы не запрашивали сброс — проигнорируйте это письмо.\\n\\n— Marketpclce`;\n    html  = `<p>Здравствуйте${toName?', '+toName:''}!</p>` +\n            `<p>Для сброса пароля:</p>` +\n            `<p><a href=\"${link}\">Сбросить пароль</a></p>` +\n            `<p>Если кнопка не работает — скопируйте ссылку: <br>${link}</p>` +\n            `<p>Если вы не запрашивали сброс — проигнорируйте это письмо.</p>` +\n            `<p>— Marketpclce</p>`;\n    break;\n  }\n  default:\n    return [];\n}\n\nreturn [{ json: {\n  message: {\n    recipients: [{ email: to, substitutions: toName ? { to_name: toName } : {} }],\n    subject,\n    body: { plaintext: plain, html },\n    from_email: FROM_EMAIL,\n    from_name:  FROM_NAME,\n  }\n}}];"
+      },
+      "id": "node-format",
+      "name": "Render email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [464, 304]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://goapi.unisender.ru/ru/transactional/api/v1/email/send.json",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "node-unisender",
+      "name": "UniSender Go send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [688, 304],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "UniSender Go X-API-KEY"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{"node": "Render email", "type": "main", "index": 0}]]
+    },
+    "Render email": {
+      "main": [[{"node": "UniSender Go send", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {"executionOrder": "v1"}
+}

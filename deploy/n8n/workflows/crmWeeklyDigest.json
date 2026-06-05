@@ -1,0 +1,85 @@
+{
+  "id": "crmWeeklyDigest",
+  "name": "CRM weekly digest → Telegram",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [1],
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "node-schedule",
+      "name": "Monday 9:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 304]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days') AS new_briefs,\n  COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days' AND assigned_to_user_id IS NOT NULL) AS taken_in_work,\n  COUNT(*) FILTER (WHERE status = 'done' AND completed_at >= now() - interval '7 days') AS completed,\n  COUNT(*) FILTER (WHERE status IN ('active','on_hold','dispute')) AS in_progress_total,\n  COUNT(*) FILTER (WHERE status IN ('active','on_hold','dispute') AND assigned_to_user_id IS NULL) AS unassigned_total\nFROM projects;",
+        "options": {}
+      },
+      "id": "node-pg",
+      "name": "Postgres stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [464, 304],
+      "credentials": {
+        "postgres": {
+          "name": "Postgres CRM"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Формирует Telegram-дайджест по статистике за прошедшие 7 дней.\nconst r = $input.first().json;\nconst lines = [\n  '📊 *Еженедельный дайджест CRM*',\n  '',\n  `🆕 Новые брифы: *${r.new_briefs ?? 0}*`,\n  `👨‍💼 Взято в работу: *${r.taken_in_work ?? 0}*`,\n  `✅ Завершено: *${r.completed ?? 0}*`,\n  '',\n  `📂 В работе сейчас: *${r.in_progress_total ?? 0}*`,\n  `🔓 Без менеджера: *${r.unassigned_total ?? 0}*`,\n];\nreturn [{ json: { text: lines.join('\\n') } }];"
+      },
+      "id": "node-format",
+      "name": "Format digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [688, 304]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003870426167",
+        "text": "={{$json.text}}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "node-telegram",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [912, 304],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram CRM bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Monday 9:00": {
+      "main": [[{"node": "Postgres stats", "type": "main", "index": 0}]]
+    },
+    "Postgres stats": {
+      "main": [[{"node": "Format digest", "type": "main", "index": 0}]]
+    },
+    "Format digest": {
+      "main": [[{"node": "Telegram", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {"executionOrder": "v1"}
+}
