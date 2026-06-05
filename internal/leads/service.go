@@ -135,6 +135,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	in.SpecialistIDs = valid
 
 	id, err := s.repo.Create(ctx, in)
+	if errors.Is(err, ErrRecipientUnpublishedRace) {
+		// R6: между ValidPublishedSpecialists и INSERT кого-то сняли с
+		// публикации — отдаём то же сообщение, что и при offline-фильтре.
+		return CreateResult{}, ErrSpecialistUnpublished
+	}
 	if err != nil {
 		return CreateResult{}, err
 	}

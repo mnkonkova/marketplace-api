@@ -237,6 +237,42 @@ SELECT $1, s FROM unnest($2::uuid[]) AS s`,
 	return nil
 }
 
+// RevalidatePublishInTx — повторяет hard-проверки SetPublished внутри tx
+// под FOR UPDATE на specialist_profiles, чтобы между долгим LLM-checker'ом
+// и финальным UPDATE юзер не смог почистить bio/display_name/production
+// (R10). Если условия нарушены — ErrPublishIncomplete.
+func (r *Repo) RevalidatePublishInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+	var (
+		productionID *uuid.UUID
+		isFreelance  bool
+		bio          string
+		displayName  string
+	)
+	err := tx.QueryRow(ctx, `
+SELECT production_id, is_freelance,
+       COALESCE(TRIM(bio), ''),
+       COALESCE(TRIM(display_name), '')
+FROM specialist_profiles
+WHERE user_id = $1
+FOR UPDATE`, userID).Scan(&productionID, &isFreelance, &bio, &displayName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("revalidate publish: %w", err)
+	}
+	if productionID == nil && !isFreelance {
+		return fmt.Errorf("%w: выберите студию или отметьте «фрилансер»", ErrPublishIncomplete)
+	}
+	if bio == "" {
+		return fmt.Errorf("%w: bio is empty", ErrPublishIncomplete)
+	}
+	if displayName == "" {
+		return fmt.Errorf("%w: display_name is empty", ErrPublishIncomplete)
+	}
+	return nil
+}
+
 func (r *Repo) SetPublishedInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, published bool) error {
 	tag, err := tx.Exec(ctx,
 		`UPDATE specialist_profiles SET is_published = $2, updated_at = now() WHERE user_id = $1`,

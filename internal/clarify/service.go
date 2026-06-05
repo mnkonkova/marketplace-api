@@ -8,7 +8,10 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"marketpclce/internal/llm"
 )
@@ -40,13 +43,21 @@ type Service struct {
 	lister      CategoryLister
 	skillLister SkillLister
 
-	catMu     sync.Mutex
-	catCache  []CategoryRef
-	catExpiry time.Time
+	// R8: вместо sync.Mutex вокруг DB-fetch используем singleflight —
+	// одновременно прилетевшие запросы делят один load, остальные
+	// читают кеш без блокировки на лок. catCache/skCache читаются
+	// через atomic.Value, чтобы fast-path (cache hit) был lock-free.
+	catLoad   singleflight.Group
+	catCache  atomic.Value // *categoryCacheEntry
+	skLoad    singleflight.Group
+	skMu      sync.RWMutex // защищает skCache/skExpiry (map нельзя atomic.Value)
+	skCache   map[string][]SkillRef
+	skExpiry  map[string]time.Time
+}
 
-	skMu     sync.Mutex
-	skCache  map[string][]SkillRef
-	skExpiry map[string]time.Time
+type categoryCacheEntry struct {
+	cats   []CategoryRef
+	expiry time.Time
 }
 
 func NewService(client llm.Provider, maxTokens int, effort string) *Service {
@@ -79,22 +90,34 @@ func (s *Service) WithSkillLister(l SkillLister) *Service {
 // categories возвращает кешированный список категорий (TTL 5 минут).
 // Если lister упал или не настроен — возвращает nil; вызывающий код
 // должен передать nil в buildSystemPrompt, тот подставит fallbackCategories.
+//
+// R8: fast-path читает atomic.Value без блокировки. На cache-miss
+// singleflight гарантирует один DB-fetch на N параллельных запросов —
+// раньше N запросов ждали друг друга на одном sync.Mutex'е.
 func (s *Service) categories(ctx context.Context) []CategoryRef {
 	if s.lister == nil {
 		return nil
 	}
-	s.catMu.Lock()
-	defer s.catMu.Unlock()
-	if time.Now().Before(s.catExpiry) && s.catCache != nil {
-		return s.catCache
+	if entry, _ := s.catCache.Load().(*categoryCacheEntry); entry != nil && time.Now().Before(entry.expiry) {
+		return entry.cats
 	}
-	cats, err := s.lister.ListCategoriesForPrompt(ctx)
+	v, err, _ := s.catLoad.Do("categories", func() (interface{}, error) {
+		// Двойная проверка: пока ждали singleflight, кто-то мог обновить кеш.
+		if entry, _ := s.catCache.Load().(*categoryCacheEntry); entry != nil && time.Now().Before(entry.expiry) {
+			return entry.cats, nil
+		}
+		cats, err := s.lister.ListCategoriesForPrompt(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.catCache.Store(&categoryCacheEntry{cats: cats, expiry: time.Now().Add(promptCacheTTL)})
+		return cats, nil
+	})
 	if err != nil {
 		slog.Warn("clarify: list categories for prompt failed, using fallback", "err", err)
 		return nil
 	}
-	s.catCache = cats
-	s.catExpiry = time.Now().Add(promptCacheTTL)
+	cats, _ := v.([]CategoryRef)
 	return cats
 }
 
@@ -102,22 +125,44 @@ func (s *Service) categories(ctx context.Context) []CategoryRef {
 // Кеш по ключу category, чтобы фильтр был дешёвым на горячих категориях.
 // Если lister упал или не настроен — возвращает nil, и buildSystemPrompt
 // подставит fallbackSkills.
+//
+// R8: то же что и в categories — singleflight по key=category вместо
+// глобального Mutex, fast-path через RLock.
 func (s *Service) skills(ctx context.Context, category string) []SkillRef {
 	if s.skillLister == nil {
 		return nil
 	}
-	s.skMu.Lock()
-	defer s.skMu.Unlock()
+	s.skMu.RLock()
 	if exp, ok := s.skExpiry[category]; ok && time.Now().Before(exp) {
-		return s.skCache[category]
+		cached := s.skCache[category]
+		s.skMu.RUnlock()
+		return cached
 	}
-	skills, err := s.skillLister.ListSkillsForPrompt(ctx, category)
+	s.skMu.RUnlock()
+	v, err, _ := s.skLoad.Do(category, func() (interface{}, error) {
+		// Double-check после singleflight (см. categories).
+		s.skMu.RLock()
+		if exp, ok := s.skExpiry[category]; ok && time.Now().Before(exp) {
+			cached := s.skCache[category]
+			s.skMu.RUnlock()
+			return cached, nil
+		}
+		s.skMu.RUnlock()
+		skills, err := s.skillLister.ListSkillsForPrompt(ctx, category)
+		if err != nil {
+			return nil, err
+		}
+		s.skMu.Lock()
+		s.skCache[category] = skills
+		s.skExpiry[category] = time.Now().Add(promptCacheTTL)
+		s.skMu.Unlock()
+		return skills, nil
+	})
 	if err != nil {
 		slog.Warn("clarify: list skills for prompt failed, using fallback", "err", err, "category", category)
 		return nil
 	}
-	s.skCache[category] = skills
-	s.skExpiry[category] = time.Now().Add(promptCacheTTL)
+	skills, _ := v.([]SkillRef)
 	return skills
 }
 

@@ -349,6 +349,21 @@ func (s *Service) ResendVerification(ctx context.Context, userID uuid.UUID) erro
 		displayName = ""
 	}
 	return s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		// R7: перечитываем email_verified_at внутри tx с FOR UPDATE.
+		// Раньше между FindByID (наверху) и issue-токена параллельный
+		// VerifyEmail успевал подтвердить email — мы всё равно слали
+		// «верифицируйтесь» уже verified-юзеру и сжигали cooldown.
+		// FOR UPDATE сериализует с VerifyEmail (тот тоже UPDATE юзера).
+		var verifiedAt *time.Time
+		if err := tx.QueryRow(ctx,
+			`SELECT email_verified_at FROM users WHERE id = $1 FOR UPDATE`,
+			userID).Scan(&verifiedAt); err != nil {
+			return fmt.Errorf("recheck verification: %w", err)
+		}
+		if verifiedAt != nil {
+			// Уже verified — no-op, не шлём письмо.
+			return nil
+		}
 		if err := s.repo.InvalidatePrevVerificationsInTx(ctx, tx, userID); err != nil {
 			return err
 		}

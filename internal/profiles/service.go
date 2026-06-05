@@ -348,6 +348,18 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 		}
 	}
 	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		// R10: при публикации перечитываем профиль ВНУТРИ tx и валидируем
+		// заново. Между Get (наверху) и SetPublishedInTx LLM-checker.Check
+		// мог проработать секунды (а с adaptive thinking до десятков),
+		// и юзер во втором табе успевал почистить bio/display_name или
+		// переключить production. Без этой проверки публиковали профиль
+		// с устаревшими значениями (пустой bio, нет студии).
+		// Unpublish (published=false) валидацию пропускает — без условий.
+		if published {
+			if err := s.repo.RevalidatePublishInTx(ctx, tx, userID); err != nil {
+				return err
+			}
+		}
 		if err := s.repo.SetPublishedInTx(ctx, tx, userID, published); err != nil {
 			return err
 		}

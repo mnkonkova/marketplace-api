@@ -13,7 +13,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Handler func(ctx context.Context, aggregateID, eventType string, payload []byte) error
+// R4: outboxID — выделенная уникальная по таблице outbox колонка id
+// (BIGSERIAL). Используется handler'ами для построения уникального
+// EventID при отправке во внешние системы (n8n). Раньше handler'ы
+// строили EventID как aggregateID+"/"+eventType, и два события
+// одного типа на один aggregate имели одинаковый EventID — n8n не
+// мог их дедупнуть.
+type Handler func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error
 
 type Worker struct {
 	db              *pgxpool.Pool
@@ -185,7 +191,7 @@ LIMIT $1`
 			processedIDs = append(processedIDs, e.id)
 			continue
 		}
-		hErr := h(ctx, e.aggregateID, e.eventType, e.payload)
+		hErr := h(ctx, e.id, e.aggregateID, e.eventType, e.payload)
 		if hErr == nil {
 			handlerSuccessTotal.WithLabelValues(e.aggregate, e.eventType).Inc()
 			processedIDs = append(processedIDs, e.id)

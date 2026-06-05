@@ -493,17 +493,32 @@ WHERE id = $1 AND (assigned_to_user_id IS NULL OR assigned_to_user_id = $2)`,
 		return fmt.Errorf("claim project: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		// либо нет проекта, либо уже взят другим. Различить через probe.
-		var existsTaken bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1 AND assigned_to_user_id IS NOT NULL AND assigned_to_user_id <> $2)`,
-			projectID, managerID).Scan(&existsTaken); err != nil {
+		// R2: probe-SELECT с FOR UPDATE на конкретной строке. Раньше probe
+		// шёл без лока и между UPDATE-fail и probe админ мог сделать
+		// unassign → existsTaken=false → возвращали ErrNotFound, хотя проект
+		// существует и теперь свободен. С локом probe видит стабильный
+		// снэпшот и одновременная мутация уже невозможна.
+		// FOR UPDATE нельзя засунуть в SELECT EXISTS — берём прямой SELECT.
+		var assignedTo *uuid.UUID
+		err := tx.QueryRow(ctx,
+			`SELECT assigned_to_user_id FROM projects WHERE id = $1 FOR UPDATE`,
+			projectID).Scan(&assignedTo)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
 			return fmt.Errorf("probe project: %w", err)
 		}
-		if existsTaken {
+		if assignedTo != nil && *assignedTo != managerID {
 			return ErrAlreadyClaimed
 		}
-		return ErrNotFound
+		// Проект свободен (NULL) или уже наш — идемпотентно достраиваем
+		// до claimed-состояния. Без этого вернули бы ErrNotFound в гонке.
+		if _, err := tx.Exec(ctx,
+			`UPDATE projects SET assigned_to_user_id = $2, updated_at = now() WHERE id = $1`,
+			projectID, managerID); err != nil {
+			return fmt.Errorf("retry claim: %w", err)
+		}
 	}
 
 	// Событие assigned для ленты активности.
@@ -525,6 +540,12 @@ VALUES ($1, NULL, $2, 'human', 'assigned', $3)`,
 
 // PatchProject — title/budget/notes c optimistic-lock. Bool+value тот же
 // паттерн что в profiles, чтобы можно было занулять.
+//
+// R5: UPDATE и probe-SELECT (NotFound vs Conflict) идут в ОДНОЙ
+// транзакции — раньше probe выполнялся через r.db (другой коннект
+// пула), и между UPDATE-fail и probe проект могли удалить → отдавали
+// ErrConflict вместо ErrNotFound. Внутри одной tx видим консистентный
+// снимок.
 func (r *Repo) PatchProject(ctx context.Context, projectID uuid.UUID, in ManagerPatchInput) (Project, error) {
 	const q = `
 UPDATE projects SET
@@ -547,8 +568,13 @@ RETURNING id, lead_id, lead_recipient_specialist_id, client_user_id,
 		v := strings.TrimSpace(*in.Notes)
 		trimmedNotes = &v
 	}
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Project{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var p Project
-	err := r.db.QueryRow(ctx, q,
+	err = tx.QueryRow(ctx, q,
 		projectID,
 		trimmedTitle,
 		in.Budget != nil, in.Budget,
@@ -562,11 +588,10 @@ RETURNING id, lead_id, lead_recipient_specialist_id, client_user_id,
 		&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// либо нет, либо updated_at не совпал
+		// либо нет, либо updated_at не совпал — probe в той же tx.
 		if in.UpdatedAt != nil {
-			// probe — есть ли вообще такой
 			var exists bool
-			if perr := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)`,
+			if perr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)`,
 				projectID).Scan(&exists); perr == nil && exists {
 				return Project{}, ErrConflict
 			}
@@ -575,6 +600,9 @@ RETURNING id, lead_id, lead_recipient_specialist_id, client_user_id,
 	}
 	if err != nil {
 		return Project{}, fmt.Errorf("patch project: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Project{}, fmt.Errorf("commit: %w", err)
 	}
 	return p, nil
 }

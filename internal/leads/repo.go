@@ -23,6 +23,11 @@ type Repo struct{ db *pgxpool.Pool }
 
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
+// ErrRecipientUnpublishedRace — между service-level pre-check (см. ValidPublishedSpecialists)
+// и INSERT в lead_recipients кто-то снял спеца с публикации (is_published=FALSE).
+// Service маппит это в ErrSpecialistUnpublished — UI говорит «обновите корзину».
+var ErrRecipientUnpublishedRace = errors.New("recipient unpublished during create")
+
 func (r *Repo) Create(ctx context.Context, in CreateInput) (uuid.UUID, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -42,14 +47,32 @@ RETURNING id`,
 		return uuid.Nil, fmt.Errorf("insert lead: %w", err)
 	}
 
-	// Один INSERT через unnest вместо N round-trip'ов. На 5-10 спецах разница
-	// невелика, но row-lock'и и WAL делаются единым батчем.
 	if len(in.SpecialistIDs) > 0 {
-		if _, err := tx.Exec(ctx, `
-INSERT INTO lead_recipients (lead_id, specialist_user_id)
-SELECT $1, s FROM unnest($2::uuid[]) AS s
-ON CONFLICT DO NOTHING`, id, in.SpecialistIDs); err != nil {
+		// R6: INSERT с JOIN на specialist_profiles.is_published=TRUE и
+		// FOR SHARE — закрывает окно между сервисным pre-check'ом и
+		// записью. Если кто-то параллельно снял спеца с публикации, его
+		// строка не попадёт в insert. Дальше сверяем count: если меньше
+		// чем входных id — возвращаем гонку наверх, сервис сообщит
+		// клиенту «обновите корзину» (ErrSpecialistUnpublished).
+		var inserted int
+		if err := tx.QueryRow(ctx, `
+WITH valid AS (
+  SELECT sp.user_id
+  FROM unnest($2::uuid[]) AS req(id)
+  JOIN specialist_profiles sp ON sp.user_id = req.id
+  WHERE sp.is_published = TRUE
+  FOR SHARE OF sp
+), ins AS (
+  INSERT INTO lead_recipients (lead_id, specialist_user_id)
+  SELECT $1, user_id FROM valid
+  ON CONFLICT DO NOTHING
+  RETURNING specialist_user_id
+)
+SELECT COUNT(*) FROM ins`, id, in.SpecialistIDs).Scan(&inserted); err != nil {
 			return uuid.Nil, fmt.Errorf("insert recipients: %w", err)
+		}
+		if inserted < len(in.SpecialistIDs) {
+			return uuid.Nil, ErrRecipientUnpublishedRace
 		}
 	}
 

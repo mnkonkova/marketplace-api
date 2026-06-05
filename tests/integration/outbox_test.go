@@ -96,7 +96,7 @@ func TestWorkerTick_SuccessMarksProcessed(t *testing.T) {
 	defer cleanupOutbox(t, id)
 
 	called := false
-	handler := func(_ context.Context, _, _ string, _ []byte) error {
+	handler := func(_ context.Context, _ int64, _, _ string, _ []byte) error {
 		called = true
 		return nil
 	}
@@ -131,7 +131,7 @@ func TestWorkerTick_ErrorSchedulesRetry(t *testing.T) {
 	id := emitOne(t, "test-retry", uuid.NewString(), "fail", "v")
 	defer cleanupOutbox(t, id)
 
-	handler := func(_ context.Context, _, _ string, _ []byte) error {
+	handler := func(_ context.Context, _ int64, _, _ string, _ []byte) error {
 		return errors.New("transient")
 	}
 	w := outbox.NewWorker(pool, quietLogger(),
@@ -180,7 +180,7 @@ func TestWorkerTick_DeadLetterAfterMaxAttempts(t *testing.T) {
 		t.Fatalf("set attempts: %v", err)
 	}
 
-	handler := func(_ context.Context, _, _ string, _ []byte) error {
+	handler := func(_ context.Context, _ int64, _, _ string, _ []byte) error {
 		return errors.New("nope")
 	}
 	w := outbox.NewWorker(pool, quietLogger(),

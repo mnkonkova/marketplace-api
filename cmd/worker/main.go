@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -80,7 +81,7 @@ func main() {
 		}
 	}
 
-	specialistHandler := func(ctx context.Context, aggregateID, eventType string, _ []byte) error {
+	specialistHandler := func(ctx context.Context, _ int64, aggregateID, eventType string, _ []byte) error {
 		uid, err := uuid.Parse(aggregateID)
 		if err != nil {
 			return err
@@ -113,10 +114,11 @@ func main() {
 		slog.Info("n8n email webhook ready", "url", cfg.N8nEmailWebhookURL)
 	}
 
-	emailHandler := func(ctx context.Context, aggregateID, eventType string, payload []byte) error {
+	emailHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
 		if n8nEmailDispatcher != nil {
 			return n8nEmailDispatcher.Send(ctx, notifications.Payload{
-				EventID:     aggregateID + "/" + eventType,
+				// R4: outbox.id уникален по таблице → идемпотентность в n8n.
+				EventID:     strconv.FormatInt(outboxID, 10),
 				Aggregate:   "user",
 				AggregateID: aggregateID,
 				EventType:   eventType,
@@ -161,14 +163,15 @@ func main() {
 		slog.Info("n8n webhook ready", "url", cfg.N8nWebhookURL)
 	}
 
-	projectHandler := func(ctx context.Context, aggregateID, eventType string, payload []byte) error {
+	projectHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
 		// no-op если диспатчер не сконфигурирован — событие считается
 		// обработанным, чтобы не копить ретраи на проде без webhook.
 		if n8nDispatcher == nil {
 			return nil
 		}
 		return n8nDispatcher.Send(ctx, notifications.Payload{
-			EventID:     aggregateID + "/" + eventType,
+			// R4: outbox.id уникален по таблице → идемпотентность в n8n.
+			EventID:     strconv.FormatInt(outboxID, 10),
 			Aggregate:   outbox.AggregateProject,
 			AggregateID: aggregateID,
 			EventType:   eventType,

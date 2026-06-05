@@ -99,13 +99,13 @@ VALUES ($1, NULL, $2, 'human', 'comment', $3, $4)`,
 		return Comment{}, fmt.Errorf("bump project: %w", err)
 	}
 
-	// display_name автора — best-effort (вне tx, в Get-ответе).
-	if err := tx.Commit(ctx); err != nil {
-		return Comment{}, fmt.Errorf("commit: %w", err)
-	}
-
-	// display_name автора: тот же фолбэк, что и в ListComments.
-	if err := r.db.QueryRow(ctx, `
+	// R9: display_name автора берём ВНУТРИ tx — между Commit и отдельным
+	// SELECT'ом профиль мог быть удалён (или авторские поля стёрты), и в
+	// ответе уходил пустой AuthorName. Внутри tx видим консистентный
+	// снимок, нагрузка та же — один лёгкий SELECT с двумя LEFT JOIN'ами.
+	// Фолбэк-ладдер тот же что в ListComments: specialist_profile →
+	// client_profile → email-префикс.
+	if err := tx.QueryRow(ctx, `
 SELECT COALESCE(
   NULLIF(sp.display_name, ''),
   NULLIF(cp.display_name, ''),
@@ -117,6 +117,10 @@ LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
 LEFT JOIN client_profiles cp ON cp.user_id = u.id
 WHERE u.id = $1`, authorID).Scan(&c.AuthorName); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		c.AuthorName = ""
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Comment{}, fmt.Errorf("commit: %w", err)
 	}
 	return c, nil
 }

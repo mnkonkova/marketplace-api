@@ -69,15 +69,20 @@ func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 		return Result{}, ErrLLMDisabled
 	}
 
-	out := Result{
-		Bio:  skippedPart(),
-		Name: skippedPart(),
-	}
-
+	// R3: горутины пишут в локальные значения и собираются в out ПОСЛЕ
+	// wg.Wait(). Раньше обе писали в разные поля одной struct (out.Bio /
+	// out.Name) — формально wg синхронизирует, но go test -race ловит, и
+	// при добавлении третьей секции (например, portfolio) шанс настоящего
+	// data race вырастает. Локальные переменные — гарантированно без UB.
 	var (
-		wg              sync.WaitGroup
-		bioErr, nameErr error
+		wg       sync.WaitGroup
+		bioRes   PartResult
+		nameRes  PartResult
+		bioErr   error
+		nameErr  error
 	)
+	bioRes = skippedPart()
+	nameRes = skippedPart()
 	if bio != "" {
 		wg.Add(1)
 		go func() {
@@ -88,7 +93,7 @@ func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 				bioErr = fmt.Errorf("bio: %w", err)
 				return
 			}
-			out.Bio = res
+			bioRes = res
 		}()
 	}
 	if name != "" {
@@ -101,7 +106,7 @@ func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 				nameErr = fmt.Errorf("name: %w", err)
 				return
 			}
-			out.Name = res
+			nameRes = res
 		}()
 	}
 	wg.Wait()
@@ -113,8 +118,11 @@ func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 		return Result{}, nameErr
 	}
 
-	out.OK = out.Bio.OK && out.Name.OK
-	return out, nil
+	return Result{
+		OK:   bioRes.OK && nameRes.OK,
+		Bio:  bioRes,
+		Name: nameRes,
+	}, nil
 }
 
 func (s *Service) checkPart(ctx context.Context, system, userMsg string) (PartResult, error) {
