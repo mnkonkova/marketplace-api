@@ -54,10 +54,27 @@ func CORS(allowed []string) func(http.Handler) http.Handler {
 			}
 			origin := r.Header.Get("Origin")
 			if origin != "" {
-				if _, ok := set[origin]; ok || allowAll {
+				_, exact := set[origin]
+				switch {
+				case exact:
+					// Origin в явном allow-list — можно отражать с credentials,
+					// JWT в Authorization и куки уезжают cross-origin безопасно.
 					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Set("Vary", "Origin")
 					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				case allowAll:
+					// Wildcard "*" в CORS_ORIGINS: ставим `*` без credentials.
+					// Браузер сам отбросит fetch(credentials:'include') на `*`,
+					// то есть аутентифицированные ручки остаются недоступны для
+					// произвольных origin'ов. До этого здесь отражался любой
+					// Origin вместе с Allow-Credentials:true — это снимало SOP
+					// для JWT-кабинета (data-sec D2).
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+				default:
+					// Origin не подходит — заголовков не ставим, браузер
+					// заблокирует ответ. OPTIONS всё равно ниже отдаём 204.
+				}
+				if exact || allowAll {
+					w.Header().Set("Vary", "Origin")
 					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Requested-With")
 					w.Header().Set("Access-Control-Max-Age", "600")

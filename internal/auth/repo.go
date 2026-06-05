@@ -160,6 +160,27 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// IsTokenRevoked — реализация auth.RevocationChecker. Возвращает true,
+// если access-токен с issuedAt был выпущен до последней смены пароля
+// (одна точка с Refresh-логикой в service.go:246). DB-cost: один лукап
+// по PK на каждый authenticated request — приемлемо, users.id — PK.
+//
+// data-sec D8: без этой проверки украденный access жил до своего TTL
+// даже после смены пароля жертвой.
+func (r *Repo) IsTokenRevoked(ctx context.Context, userID uuid.UUID, issuedAt time.Time) (bool, error) {
+	var pwdChanged time.Time
+	err := r.db.QueryRow(ctx,
+		`SELECT password_changed_at FROM users WHERE id = $1`, userID).Scan(&pwdChanged)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Юзер удалён — токен считаем отозванным.
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load password_changed_at: %w", err)
+	}
+	return issuedAt.Before(pwdChanged), nil
+}
+
 // InvalidatePrevVerificationsInTx — гасит все непогашенные токены этого
 // юзера (resend). Идемпотентно: если активных нет — no-op.
 func (r *Repo) InvalidatePrevVerificationsInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {

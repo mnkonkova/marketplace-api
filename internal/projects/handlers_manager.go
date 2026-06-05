@@ -59,6 +59,10 @@ func writeManagerErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNoProposedSpecialist):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "no_proposed_specialist",
 			"Клиент не выбрал исполнителя — нечего подтверждать.")
+	case errors.Is(err, ErrInvalidClientUser):
+		// data-sec D5: попытка передать в client_user_id UUID менеджера/админа.
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_client_user",
+			"client_user_id должен указывать на обычного пользователя, не менеджера/админа.")
 	case errors.Is(err, ErrPipelineEmpty):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "pipeline_empty",
 			"В выбранной воронке нет ни одной стадии/шага. Заполните воронку перед использованием.")

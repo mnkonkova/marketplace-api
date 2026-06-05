@@ -416,6 +416,18 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 	if in.ThumbnailURL != "" && !IsHTTPURL(in.ThumbnailURL) {
 		return PortfolioItem{}, fmt.Errorf("%w: thumbnail_url must be http(s)", ErrInvalidInput)
 	}
+	// data-sec D6: video/thumb должны лежать в нашем bucket'е. Раньше
+	// принимался любой http(s) URL — спец мог опубликовать ссылку на
+	// внешний phishing/malware-домен, и она бы уехала в OpenSearch-feed.
+	// KeyFromURL возвращает "" если URL не из нашего PublicURL.
+	if s.media != nil {
+		if s.media.KeyFromURL(in.VideoURL) == "" {
+			return PortfolioItem{}, fmt.Errorf("%w: video_url должен указывать на наше хранилище", ErrInvalidInput)
+		}
+		if in.ThumbnailURL != "" && s.media.KeyFromURL(in.ThumbnailURL) == "" {
+			return PortfolioItem{}, fmt.Errorf("%w: thumbnail_url должен указывать на наше хранилище", ErrInvalidInput)
+		}
+	}
 	if in.Title == "" {
 		return PortfolioItem{}, fmt.Errorf("%w: title is required", ErrInvalidInput)
 	}
@@ -722,7 +734,24 @@ func (s *Service) AbortPortfolioMultipart(
 
 // assertOwnedKey — ключи имеют префикс portfolio/{user_id}/, без него
 // клиент мог бы попросить presigned URL для чужого upload_id.
+//
+// data-sec D3: одной только HasPrefix-проверки недостаточно — ключ вида
+// "portfolio/<my>/../<victim>/file.mp4" префиксу удовлетворяет, но после
+// S3-нормализации указывает на чужой объект. Поэтому дополнительно:
+//   1) запрещаем "..", "//" и начальный "/" в сыром ключе (раннее
+//      отсечение очевидного traversal),
+//   2) сверяем path.Clean(key) с исходником — любая нормализация значит
+//      попытку обмана.
 func assertOwnedKey(userID uuid.UUID, key string) error {
+	if key == "" ||
+		strings.HasPrefix(key, "/") ||
+		strings.Contains(key, "..") ||
+		strings.Contains(key, "//") {
+		return fmt.Errorf("%w: invalid key", ErrInvalidInput)
+	}
+	if path.Clean(key) != key {
+		return fmt.Errorf("%w: invalid key", ErrInvalidInput)
+	}
 	prefix := "portfolio/" + userID.String() + "/"
 	if !strings.HasPrefix(key, prefix) {
 		return fmt.Errorf("%w: key does not belong to user", ErrInvalidInput)

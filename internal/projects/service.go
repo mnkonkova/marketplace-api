@@ -21,6 +21,11 @@ var (
 	ErrNotClientStep = errors.New("step is not assigned to client")
 	// ErrNotReviewStep — submit_review для is_review=false.
 	ErrNotReviewStep = errors.New("step is not a review step")
+	// ErrInvalidClientUser — попытка указать в client_user_id юзера,
+	// который является менеджером/админом (data-sec D5). Раньше менеджер мог
+	// прицепить проект к UUID коллеги/админа — у жертвы появлялся фейковый
+	// проект в кабинете + раскрывались контакты при GetFull.
+	ErrInvalidClientUser = errors.New("client_user_id refers to non-client (manager/admin)")
 )
 
 type Service struct {
@@ -72,6 +77,15 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 	}
 	if in.Source == "" {
 		in.Source = SourceManual
+	}
+	// data-sec D5: если client_user_id передан явно, проверяем что таргет —
+	// обычный юзер (не менеджер и не админ). Без этой проверки менеджер
+	// мог прицепить проект к UUID коллеги-менеджера или админа: жертва
+	// видела бы фейковый проект в /me/projects и контакты менеджера.
+	if in.ClientUserID != nil {
+		if err := s.repo.AssertUserCanBeClient(ctx, *in.ClientUserID); err != nil {
+			return uuid.Nil, err
+		}
 	}
 	return s.repo.StartProject(ctx, in)
 }

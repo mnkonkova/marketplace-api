@@ -34,6 +34,10 @@ type Deps struct {
 	TokenIssuer *auth.TokenIssuer
 	Auth        *auth.Handler
 	AuthRepo    auth.IdentityLoader
+	// AuthRevocation — чекер отзыва access-токенов (data-sec D8). nil = без
+	// проверки (только для тестового окружения). В проде проставляется в
+	// cmd/api/main.go тем же *auth.Repo.
+	AuthRevocation auth.RevocationChecker
 	Catalog     *catalog.Handler
 	Profiles     *profiles.Handler
 	ProfileCheck *profilecheck.Handler
@@ -125,7 +129,7 @@ func NewRouter(d Deps) http.Handler {
 		}
 
 		r.Group(func(r chi.Router) {
-			r.Use(auth.OptionalMiddleware(d.TokenIssuer))
+			r.Use(auth.OptionalMiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
 			r.Use(RateLimit(d.Limiter, "leads", d.LeadsWindows))
 			r.Post("/leads", d.Leads.Create)
 		})
@@ -141,7 +145,7 @@ func NewRouter(d Deps) http.Handler {
 		}
 
 		r.Group(func(r chi.Router) {
-			r.Use(auth.Middleware(d.TokenIssuer))
+			r.Use(auth.MiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
 			r.Get("/me", d.Auth.Me)
 			// Pipelines читаются всеми залогиненными — нужен и менеджеру (для
 			// канбана), и админу. Запись по-прежнему только под admin.
@@ -192,7 +196,7 @@ func NewRouter(d Deps) http.Handler {
 		})
 
 		r.Group(func(r chi.Router) {
-			r.Use(auth.Middleware(d.TokenIssuer))
+			r.Use(auth.MiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
 			r.Use(RateLimit(d.Limiter, "leads", d.LeadsWindows))
 			r.Post("/reviews", d.Reviews.Create)
 			r.Patch("/reviews/{id}", d.Reviews.Update)
@@ -202,7 +206,7 @@ func NewRouter(d Deps) http.Handler {
 		// /manager/* — только role=manager AND is_approved.
 		if d.AuthRepo != nil && d.Projects != nil {
 			r.Group(func(r chi.Router) {
-				r.Use(auth.Middleware(d.TokenIssuer))
+				r.Use(auth.MiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
 				// Admin может ходить через manager-URL — effectiveOwnerID()
 				// пропускает assigned_to-фильтр для роли admin.
 				r.Use(auth.RequireRoles(d.AuthRepo, auth.RoleManager, auth.RoleAdmin))
@@ -244,7 +248,7 @@ func NewRouter(d Deps) http.Handler {
 		// группа не маунтится — невозможно проверить роль).
 		if d.AuthRepo != nil {
 			r.Group(func(r chi.Router) {
-				r.Use(auth.Middleware(d.TokenIssuer))
+				r.Use(auth.MiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
 				r.Use(auth.RequireRoles(d.AuthRepo, auth.RoleAdmin))
 				r.Use(RateLimit(d.Limiter, "crm", d.CRMWindows))
 

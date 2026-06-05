@@ -18,7 +18,6 @@ const (
 	// случайные пробелы и однобуквенный спам. lead-привязанный отзыв
 	// проходит и без текста (пустая строка тоже валидна).
 	textMinNoLead = 3
-	authorNameCap = 120
 )
 
 type Service struct{ repo *Repo }
@@ -26,9 +25,9 @@ type Service struct{ repo *Repo }
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Review, error) {
-	in.AuthorName = strings.TrimSpace(in.AuthorName)
 	in.Text = strings.TrimSpace(in.Text)
 
+	// Pure-input валидация (без БД) — то что не зависит от состояния.
 	// Сообщения на русском — handler передаёт их в errorBody.message,
 	// фронт показывает текст напрямую через NzMessageService.
 	if in.Rating < 1 || in.Rating > 5 {
@@ -43,31 +42,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Review, error) {
 	if utf8.RuneCountInString(in.Text) > textMaxLen {
 		return Review{}, fmt.Errorf("%w: текст слишком длинный (максимум %d символов)", ErrInvalidInput, textMaxLen)
 	}
-	if utf8.RuneCountInString(in.AuthorName) > authorNameCap {
-		return Review{}, fmt.Errorf("%w: имя автора слишком длинное (максимум %d символов)", ErrInvalidInput, authorNameCap)
-	}
 	if in.LeadID == nil && utf8.RuneCountInString(in.Text) < textMinNoLead {
 		return Review{}, fmt.Errorf("%w: напишите хотя бы %d символа в тексте отзыва", ErrInvalidInput, textMinNoLead)
 	}
 
-	isSpec, err := s.repo.TargetIsSpecialist(ctx, in.TargetUserID)
-	if err != nil {
-		return Review{}, err
-	}
-	if !isSpec {
-		return Review{}, fmt.Errorf("%w: пользователь не является специалистом", ErrInvalidInput)
-	}
-
-	if in.LeadID != nil {
-		ok, err := s.repo.LeadAuthorizesReview(ctx, *in.LeadID, in.AuthorUserID, in.TargetUserID)
-		if err != nil {
-			return Review{}, err
-		}
-		if !ok {
-			return Review{}, ErrLeadCheck
-		}
-	}
-
+	// Все state-зависимые проверки (TargetIsSpecialist, LeadAuthorizesReview)
+	// и резолв author_name теперь делаются ВНУТРИ Repo.Create в одной
+	// транзакции — иначе между check и INSERT окно для гонки (data-sec D9),
+	// плюс это место единое для проверки прав (data-sec D7 — имя из БД).
 	id, err := s.repo.Create(ctx, in)
 	if err != nil {
 		return Review{}, err

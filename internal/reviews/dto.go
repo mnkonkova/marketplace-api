@@ -18,10 +18,12 @@ type Review struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+// CreateInput — поля, которые сервис принимает от хендлера.
+// AuthorName здесь нет: имя резолвится в Repo.Create по AuthorUserID,
+// чтобы исключить подмену из тела запроса (data-sec D7).
 type CreateInput struct {
 	LeadID       *uuid.UUID
 	AuthorUserID uuid.UUID
-	AuthorName   string
 	TargetUserID uuid.UUID
 	Rating       int
 	Text         string

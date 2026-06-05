@@ -251,9 +251,17 @@ func (r *Repo) GenerateInvite(ctx context.Context, userID, createdBy uuid.UUID, 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// существует ли юзер вообще
+	// data-sec D1: инвайт можно генерить только для обычных юзеров (клиент/спец),
+	// НЕ для менеджеров и админов. Раньше тут было `WHERE id = $1` без
+	// фильтра роли — менеджер мог через `/manager/users/{id}/generate_invite`
+	// сгенерить токен на UUID админа, потом редимить и получить JWT админа
+	// (privilege escalation, см. internal/auth/handlers redeem_invite).
 	var exists bool
-	if e := tx.QueryRow(ctx, `SELECT TRUE FROM users WHERE id = $1`, userID).Scan(&exists); e != nil {
+	if e := tx.QueryRow(ctx, `
+SELECT TRUE FROM users
+WHERE id = $1
+  AND is_admin   = FALSE
+  AND is_manager = FALSE`, userID).Scan(&exists); e != nil {
 		if errors.Is(e, pgx.ErrNoRows) {
 			return "", time.Time{}, ErrNotFound
 		}

@@ -75,19 +75,9 @@ func TestCreate_RejectsTooLongText(t *testing.T) {
 	}
 }
 
-func TestCreate_RejectsTooLongAuthorName(t *testing.T) {
-	s := reviews.NewService(nil)
-	_, err := s.Create(context.Background(), reviews.CreateInput{
-		Rating:       5,
-		TargetUserID: uuid.New(),
-		AuthorUserID: uuid.New(),
-		AuthorName:   strings.Repeat("X", 200),
-		Text:         "Good",
-	})
-	if !errors.Is(err, reviews.ErrInvalidInput) {
-		t.Errorf("want ErrInvalidInput for long author name, got %v", err)
-	}
-}
+// TestCreate_RejectsTooLongAuthorName удалён: AuthorName больше не
+// принимается из входа (data-sec D7), резолвится в БД. Сценарий
+// «слишком длинное имя» физически невозможен — нечего тестировать.
 
 func TestCreate_RejectsShortTextWithoutLead(t *testing.T) {
 	s := reviews.NewService(nil)

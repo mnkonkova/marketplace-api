@@ -4,11 +4,23 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"marketpclce/internal/httpx"
 )
+
+// RevocationChecker — точка отзыва access-токенов. Реализация (auth.Repo)
+// сравнивает iat токена с users.password_changed_at: токен старше последней
+// смены пароля считается отозванным.
+//
+// data-sec D8: до этого access жил до своего TTL независимо от reset'a
+// пароля — украденный токен оставался валидным минуты-часы после reset'a.
+// Refresh уже проверялся (см. service.go Refresh), но access нет.
+type RevocationChecker interface {
+	IsTokenRevoked(ctx context.Context, userID uuid.UUID, issuedAt time.Time) (bool, error)
+}
 
 type ctxKey int
 
@@ -82,7 +94,17 @@ func RequireRoles(repo IdentityLoader, roles ...string) func(http.Handler) http.
 	}
 }
 
+// Middleware — оригинальный конструктор без revocation-чекера. Сохранён
+// для unit-тестов middleware (tests/auth/middleware_test.go), которые
+// дёргают auth.Middleware(issuer) напрямую. В проде используется
+// MiddlewareWithRevocation, см. router.go.
 func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
+	return MiddlewareWithRevocation(issuer, nil)
+}
+
+// MiddlewareWithRevocation — Middleware + проверка отзыва access-токена.
+// rev==nil → проверка пропускается (поведение как у старого Middleware).
+func MiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := r.Header.Get("Authorization")
@@ -96,6 +118,17 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return
 			}
+			if rev != nil && c.IssuedAt != nil {
+				revoked, rerr := rev.IsTokenRevoked(r.Context(), c.UserID, c.IssuedAt.Time)
+				if rerr != nil || revoked {
+					// На rerr тоже отвечаем 401, чтобы не пропустить
+					// токен, отзыв которого мы не смогли проверить
+					// (fail-closed). Чек идёт по индексу users.id PK —
+					// при недоступности БД API всё равно нерабоч.
+					http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+					return
+				}
+			}
 			ctx := WithUserID(r.Context(), c.UserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -103,6 +136,12 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 }
 
 func OptionalMiddleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
+	return OptionalMiddlewareWithRevocation(issuer, nil)
+}
+
+// OptionalMiddlewareWithRevocation — Optional + проверка отзыва. Если
+// токен отсутствует, пропускаем без проверки (как раньше).
+func OptionalMiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := r.Header.Get("Authorization")
@@ -115,6 +154,13 @@ func OptionalMiddleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 			if err != nil {
 				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 				return
+			}
+			if rev != nil && c.IssuedAt != nil {
+				revoked, rerr := rev.IsTokenRevoked(r.Context(), c.UserID, c.IssuedAt.Time)
+				if rerr != nil || revoked {
+					http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+					return
+				}
 			}
 			ctx := WithUserID(r.Context(), c.UserID)
 			next.ServeHTTP(w, r.WithContext(ctx))

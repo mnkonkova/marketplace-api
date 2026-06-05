@@ -226,6 +226,10 @@ func main() {
 		TokenIssuer:  tokenIssuer,
 		Auth:         authHandler,
 		AuthRepo:     authRepo,
+		// data-sec D8: тот же *auth.Repo реализует RevocationChecker через
+		// users.password_changed_at. После reset'a пароля все access-токены
+		// с iat ДО reset'a отвергаются на каждом authenticated-запросе.
+		AuthRevocation: authRepo,
 		Catalog:      catalogHandler,
 		Profiles:     profilesHandler,
 		ProfileCheck: profileCheckHandler,

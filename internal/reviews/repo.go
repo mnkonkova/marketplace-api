@@ -7,15 +7,33 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"marketpclce/internal/outbox"
 )
 
+// isUniqueViolation — PG SQLSTATE 23505. Используется для перевода
+// дубликата UNIQUE-индекса в ErrDuplicate (data-sec D10).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 var (
 	ErrNotFound  = errors.New("review not found")
 	ErrForbidden = errors.New("not the author")
 	ErrLeadCheck = errors.New("lead does not authorize this review")
+	// ErrTargetNotSpecialist — target_user_id принадлежит юзеру без
+	// specialist_profile. Раньше отдавалось как ErrInvalidInput из сервиса,
+	// теперь проверка перенесена в tx (data-sec D9), отдельный sentinel
+	// чтобы хендлер мог различить 400 vs 500.
+	ErrTargetNotSpecialist = errors.New("target is not a specialist")
+	// ErrDuplicate — UNIQUE-нарушение по (lead_id, author, target) ИЛИ
+	// по партиальному UNIQUE (author, target) WHERE lead_id IS NULL
+	// (миграция 00017, data-sec D10): один автор не может оставить
+	// несколько отзывов одному спецу без привязки к лиду.
+	ErrDuplicate = errors.New("review already exists for this pair")
 	// ErrConflict — клиент прислал UpdateInput.UpdatedAt не совпадающий
 	// с текущим updated_at (кто-то параллельно отредактировал отзыв).
 	ErrConflict = errors.New("review updated_at mismatch")
@@ -25,41 +43,10 @@ type Repo struct{ db *pgxpool.Pool }
 
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
-// TargetIsPublishedSpecialist — target должен быть профилем спеца.
-// is_published проверять не нужно (отзыв ставится по факту работы, профиль
-// мог временно сняться с публикации), но запись в specialist_profiles обязана.
-func (r *Repo) TargetIsSpecialist(ctx context.Context, id uuid.UUID) (bool, error) {
-	var ok bool
-	err := r.db.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM specialist_profiles WHERE user_id = $1)`, id,
-	).Scan(&ok)
-	if err != nil {
-		return false, fmt.Errorf("check target: %w", err)
-	}
-	return ok, nil
-}
-
-// LeadAuthorizesReview — клиент мог оставить отзыв по этому lead'у только
-// если он же создавал заявку и target есть в lead_recipients со статусом
-// accepted. UNIQUE(lead_id, author_user_id, target_user_id) в таблице
-// reviews не даст двух отзывов по одной паре.
-func (r *Repo) LeadAuthorizesReview(ctx context.Context, leadID, authorID, targetID uuid.UUID) (bool, error) {
-	var ok bool
-	err := r.db.QueryRow(ctx, `
-SELECT EXISTS(
-  SELECT 1
-  FROM leads l
-  JOIN lead_recipients lr ON lr.lead_id = l.id
-  WHERE l.id = $1
-    AND l.client_user_id = $2
-    AND lr.specialist_user_id = $3
-    AND lr.status = 'accepted'
-)`, leadID, authorID, targetID).Scan(&ok)
-	if err != nil {
-		return false, fmt.Errorf("check lead authorization: %w", err)
-	}
-	return ok, nil
-}
+// TargetIsSpecialist / LeadAuthorizesReview раньше были публичными
+// методами, которые сервис дёргал вне tx. Это давало TOCTOU-окно
+// (data-sec D9), поэтому проверки переехали внутрь Create-tx ниже.
+// Отдельные функции удалены — единая точка контроля.
 
 func (r *Repo) Create(ctx context.Context, in CreateInput) (uuid.UUID, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
@@ -68,13 +55,70 @@ func (r *Repo) Create(ctx context.Context, in CreateInput) (uuid.UUID, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// data-sec D9: проверки target-роли и lead-авторизации идут ВНУТРИ
+	// той же tx, что и INSERT. FOR SHARE на specialist_profiles фиксирует
+	// строку — между check и insert никто не удалит профиль/не снимет
+	// аксепт лида. Раньше эти проверки делались в Service вне tx, и
+	// между ними и INSERT было окно для гонки.
+	var isSpec bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM specialist_profiles WHERE user_id = $1 FOR SHARE)`,
+		in.TargetUserID).Scan(&isSpec); err != nil {
+		return uuid.Nil, fmt.Errorf("check target: %w", err)
+	}
+	if !isSpec {
+		return uuid.Nil, ErrTargetNotSpecialist
+	}
+	if in.LeadID != nil {
+		var leadOK bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM leads l
+  JOIN lead_recipients lr ON lr.lead_id = l.id
+  WHERE l.id = $1
+    AND l.client_user_id = $2
+    AND lr.specialist_user_id = $3
+    AND lr.status = 'accepted'
+  FOR SHARE OF lr
+)`, *in.LeadID, in.AuthorUserID, in.TargetUserID).Scan(&leadOK); err != nil {
+			return uuid.Nil, fmt.Errorf("check lead: %w", err)
+		}
+		if !leadOK {
+			return uuid.Nil, ErrLeadCheck
+		}
+	}
+
+	// data-sec D7: имя автора резолвим из БД, не из тела запроса.
+	// Фолбэк-ладдер тот же, что у LoadClientDisplayNames (projects/manager_repo):
+	// specialist_profiles → client_profiles → префикс email.
+	var authorName string
+	if err := tx.QueryRow(ctx, `
+SELECT COALESCE(
+  NULLIF(sp.display_name, ''),
+  NULLIF(cp.display_name, ''),
+  split_part(u.email, '@', 1),
+  ''
+)
+FROM users u
+LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
+LEFT JOIN client_profiles      cp ON cp.user_id = u.id
+WHERE u.id = $1`, in.AuthorUserID).Scan(&authorName); err != nil {
+		return uuid.Nil, fmt.Errorf("resolve author name: %w", err)
+	}
+
 	var id uuid.UUID
 	err = tx.QueryRow(ctx, `
 INSERT INTO reviews (lead_id, author_user_id, author_name, target_user_id, rating, text)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id`,
-		in.LeadID, in.AuthorUserID, in.AuthorName, in.TargetUserID, in.Rating, in.Text,
+		in.LeadID, in.AuthorUserID, authorName, in.TargetUserID, in.Rating, in.Text,
 	).Scan(&id)
+	if isUniqueViolation(err) {
+		// Уник-нарушение по одному из двух индексов:
+		// (lead_id, author, target) или (author, target) WHERE lead_id IS NULL.
+		return uuid.Nil, ErrDuplicate
+	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("insert review: %w", err)
 	}

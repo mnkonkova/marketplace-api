@@ -23,6 +23,30 @@ type Repo struct{ db *pgxpool.Pool }
 
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
+// AssertUserCanBeClient — проверяет, что userID существует и НЕ является
+// менеджером/админом. Возвращает ErrInvalidClientUser, если юзер с такими
+// флагами, и ErrNotFound, если юзера нет. См. data-sec D5: эта проверка
+// блокирует менеджера от привязки проекта к UUID коллеги/админа.
+//
+// kind НЕ проверяем — клиентом проекта может быть и spec, и both
+// (специалист тоже имеет право заказать работу у другого).
+func (r *Repo) AssertUserCanBeClient(ctx context.Context, userID uuid.UUID) error {
+	var isManager, isAdmin bool
+	err := r.db.QueryRow(ctx,
+		`SELECT is_manager, is_admin FROM users WHERE id = $1`,
+		userID).Scan(&isManager, &isAdmin)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("check user kind: %w", err)
+	}
+	if isManager || isAdmin {
+		return ErrInvalidClientUser
+	}
+	return nil
+}
+
 // StartProject — атомарно создать проект + снэпшот стадий и шагов.
 // eta_date считается от StartedAt + накопленные duration_days по sort_order.
 // Возвращает id созданного проекта.
@@ -87,6 +111,7 @@ RETURNING id`,
 		payload["client_name"] = in.ClientName
 		payload["client_contact"] = in.ClientContact
 	}
+	enrichProjectPayload(ctx, tx, projectID, payload)
 	if err := emit(ctx, tx, projectID, nil, actor, "project.created", payload); err != nil {
 		return uuid.Nil, err
 	}
@@ -652,8 +677,10 @@ VALUES ($1,$2,$3,$4,'step_transition',$5,$6,$7)`,
 		return TransitionResult{}, err
 	}
 	if disputed {
+		dpayload := map[string]any{"project_id": in.ProjectID.String()}
+		enrichProjectPayload(ctx, tx, in.ProjectID, dpayload)
 		if err := emit(ctx, tx, in.ProjectID, nil, in.ActorUserID, "project.disputed",
-			map[string]string{"project_id": in.ProjectID.String()},
+			dpayload,
 		); err != nil {
 			return TransitionResult{}, err
 		}

@@ -18,10 +18,14 @@ type Handler struct{ svc *Service }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
+// data-sec D7: author_name больше НЕ принимается из тела запроса —
+// раньше любой авторизованный мог подменить отображаемое имя автора
+// отзыва (impersonation). Имя теперь берётся в сервисе из профиля автора
+// по AuthorUserID. Поле сохранено в legacy-форме, чтобы старые клиенты
+// не падали на 400, но игнорируется.
 type createReq struct {
 	LeadID       string `json:"lead_id,omitempty"`
 	TargetUserID string `json:"target_user_id"`
-	AuthorName   string `json:"author_name,omitempty"`
 	Rating       int    `json:"rating"`
 	Text         string `json:"text"`
 }
@@ -82,7 +86,6 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	rv, err := h.svc.Create(r.Context(), CreateInput{
 		LeadID:       leadID,
 		AuthorUserID: uid,
-		AuthorName:   in.AuthorName,
 		TargetUserID: target,
 		Rating:       in.Rating,
 		Text:         in.Text,
@@ -90,9 +93,18 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", invalidInputMessage(err))
+	case errors.Is(err, ErrTargetNotSpecialist):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "target_not_specialist",
+			"Пользователь не является специалистом.")
 	case errors.Is(err, ErrLeadCheck):
 		httpx.WriteErrMsg(w, http.StatusForbidden, "lead_does_not_authorize",
 			"Лид не подтверждает право оставить отзыв этому специалисту.")
+	case errors.Is(err, ErrDuplicate):
+		// data-sec D10: повторный отзыв тому же спецу от того же автора
+		// (с тем же lead_id или вовсе без него) — 409. Раньше без партиального
+		// UNIQUE дубли без lead_id просачивались, давая spam-rating.
+		httpx.WriteErrMsg(w, http.StatusConflict, "review_exists",
+			"Вы уже оставляли отзыв этому специалисту.")
 	case err != nil:
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось создать отзыв.")
 	default:
