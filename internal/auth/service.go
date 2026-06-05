@@ -323,13 +323,15 @@ func (s *Service) ResendVerification(ctx context.Context, userID uuid.UUID) erro
 	if s.resendCooldown != nil {
 		ok, err := s.resendCooldown.Acquire(ctx, "email-verify-resend:"+userID.String())
 		if err != nil {
-			// Не валим запрос если Redis недоступен — отправим, но залогируем
-			// чтобы было видно простоев Redis: иначе при downtime cooldown тихо
-			// отключается и можно эксплойтить (или просто завалить юзера
-			// письмами при двойном клике).
-			slog.Warn("auth: resend cooldown check failed, allowing send",
+			// data-sec D13: fail-CLOSED. Раньше при недоступности Redis
+			// cooldown молча открывался — атакующий мог положить Redis или
+			// поймать момент даунтайма и залить жертву верификационными
+			// письмами (десятки в секунду). Теперь ошибка чекера
+			// эквивалентна «cooldown активен» — пользователь видит «слишком
+			// часто» как при штатном rate-limit'е, операторы — warn в логах.
+			slog.Warn("auth: resend cooldown check failed, treating as active",
 				"user_id", userID, "err", err)
-			ok = true
+			return ErrResendCooldown
 		}
 		if !ok {
 			return ErrResendCooldown

@@ -83,8 +83,18 @@ func (r *Repo) SearchUsers(ctx context.Context, q, kind string) ([]UserSearchRes
 	if kind != "" && kind != "all" && kind != "client" && kind != "specialist" {
 		return nil, fmt.Errorf("invalid kind %q", kind)
 	}
-	pattern := "%" + q + "%"
-	prefix := q + "%"
+	// data-sec D11: escape LIKE-метасимволов в пользовательском вводе.
+	// Без этого q="_" даёт match-all (любой символ в ILIKE), а q="%%%%" —
+	// дорогой seq-scan. Эскейпим `\`, `%`, `_` обратным слэшем и говорим
+	// PG ESCAPE '\' ниже в самом запросе.
+	likeEsc := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	qEsc := likeEsc.Replace(q)
+	pattern := "%" + qEsc + "%"
+	prefix := qEsc + "%"
 
 	// LEFT JOIN на оба профиля. COALESCE имени: сначала client_profiles,
 	// затем specialist_profiles. У спеца профиль гарантирован, у клиента —
@@ -104,11 +114,13 @@ WHERE u.is_active = TRUE`
 		args = append(args, kind)
 		pIdx++
 	}
+	// ESCAPE '\' — парный к likeEsc выше: PG будет трактовать `\%` и `\_`
+	// в pattern/prefix как литералы, а не как метасимволы LIKE.
 	queryStr += `
-  AND (u.email::text ILIKE $1 OR u.phone ILIKE $1
-       OR cp.display_name ILIKE $1 OR sp.display_name ILIKE $1)
+  AND (u.email::text ILIKE $1 ESCAPE '\' OR u.phone ILIKE $1 ESCAPE '\'
+       OR cp.display_name ILIKE $1 ESCAPE '\' OR sp.display_name ILIKE $1 ESCAPE '\')
 ORDER BY
-  CASE WHEN u.email::text ILIKE $2 OR cp.display_name ILIKE $2 OR sp.display_name ILIKE $2
+  CASE WHEN u.email::text ILIKE $2 ESCAPE '\' OR cp.display_name ILIKE $2 ESCAPE '\' OR sp.display_name ILIKE $2 ESCAPE '\'
        THEN 0 ELSE 1 END,
   u.created_at DESC
 LIMIT 20`

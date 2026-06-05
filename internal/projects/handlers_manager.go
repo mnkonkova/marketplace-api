@@ -38,7 +38,11 @@ func effectiveOwnerID(r *http.Request, uid uuid.UUID) uuid.UUID {
 func writeManagerErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", err.Error())
+		// data-sec D12: возвращаем только детали ErrInvalidInput-обёртки,
+		// без "invalid input: " префикса. Защита от случайного wrap'a
+		// БД-ошибки сюда в будущем — InvalidInputMessage отбирает только
+		// контент после префикса.
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrStepNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект или шаг не найден.")
 	case errors.Is(err, ErrAlreadyClaimed):

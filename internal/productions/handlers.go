@@ -71,7 +71,8 @@ func (h *Handler) AdminCreate(w http.ResponseWriter, r *http.Request) {
 	p, err := h.svc.Create(r.Context(), CreateInput{Name: in.Name, Description: in.Description})
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", err.Error())
+		// data-sec D12: только детали обёртки, без префикса "invalid input:".
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrAlreadyExists):
 		httpx.WriteErrMsg(w, http.StatusConflict, "name_taken",
 			"Активный продакшен с таким именем уже есть.")
@@ -119,7 +120,8 @@ func (h *Handler) AdminPatch(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", err.Error())
+		// data-sec D12: только детали обёртки, без префикса "invalid input:".
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Продакшен не найден.")
 	case errors.Is(err, ErrAlreadyExists):

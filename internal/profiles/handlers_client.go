@@ -53,7 +53,8 @@ func (h *Handler) PatchClient(w http.ResponseWriter, r *http.Request) {
 	cp, err := h.svc.PatchClientProfile(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", err.Error())
+		// data-sec D12: только детали обёртки, без префикса "invalid input:".
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrConflict):
 		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
 	case err != nil:

@@ -29,7 +29,8 @@ func parseID(w http.ResponseWriter, r *http.Request, name string) (uuid.UUID, bo
 func writeServiceErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", err.Error())
+		// data-sec D12: см. writeManagerErr в projects/handlers_manager.go.
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Пользователь не найден.")
 	case errors.Is(err, ErrNotManager):

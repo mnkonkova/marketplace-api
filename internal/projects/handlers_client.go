@@ -43,7 +43,8 @@ func parseProjectStep(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.U
 func writeServiceErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", err.Error())
+		// data-sec D12: только детали обёртки, без префикса "invalid input:".
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrStepNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект или шаг не найден.")
 	case errors.Is(err, ErrNotClientStep):
