@@ -167,8 +167,7 @@ nano .env.prod
 | `JWT_SECRET` | `openssl rand -hex 32` |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | Yandex Cloud → Service Account → Static access key |
 | `LLM_API_KEY` | console.anthropic.com (опционально) |
-| `UNISENDER_API_KEY` / `UNISENDER_FROM_EMAIL` | unisender.com |
-| `N8N_WEBHOOK_URL` | пока пустое (заполним в шаге 7) |
+| `N8N_WEBHOOK_URL` / `N8N_EMAIL_WEBHOOK_URL` | пока пустое (заполним в шаге 7) |
 
 `CORS_ORIGINS` оставь пустым — фронт и API под одним доменом, CORS не нужен.
 

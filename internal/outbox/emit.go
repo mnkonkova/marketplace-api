@@ -22,7 +22,7 @@ const (
 	EventSpecialistDeleted   = "specialist.deleted"
 
 	// EventEmailVerifySend — payload: {to, to_name, token, base_url}.
-	// Воркер на это событие шлёт письмо подтверждения через mailer.Sender.
+	// Воркер на это событие шлёт письмо подтверждения в n8n webhook (workflow crmEmailNotify).
 	EventEmailVerifySend = "email.verify_send"
 
 	// EventEmailPasswordResetSend — payload: {to, to_name, token, base_url}.

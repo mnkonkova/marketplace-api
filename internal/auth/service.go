@@ -90,7 +90,7 @@ func (s *Service) WithPasswordResetTTL(ttl time.Duration) *Service {
 
 // WithEmailVerification конфигурирует параметры подтверждения email:
 // TTL токена, базовый URL фронта (для verify-ссылки), cooldown-провайдер,
-// флаг выключения soft-gate (для локального запуска без Unisender).
+// флаг выключения soft-gate (для локального запуска без n8n).
 // Вызывается из cmd/api/main.go после загрузки config.
 func (s *Service) WithEmailVerification(tokenTTL time.Duration, appBaseURL string, cooldown ResendCooldown, disabled bool) *Service {
 	if tokenTTL > 0 {
@@ -178,7 +178,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 				return err
 			}
 		}
-		// Если soft-gate выключен (локальный запуск без Unisender) — сразу
+		// Если soft-gate выключен (локальный запуск без n8n) — сразу
 		// помечаем юзера verified и не плодим outbox-события: писем не будет.
 		if s.verificationOff {
 			if _, err := tx.Exec(ctx,

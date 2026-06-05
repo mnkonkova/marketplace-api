@@ -17,7 +17,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"marketpclce/internal/config"
-	"marketpclce/internal/mailer"
 	"marketpclce/internal/notifications"
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
@@ -100,39 +99,21 @@ func main() {
 		}
 	}
 
-	// Mailer: без UNISENDER_API_KEY отправка отключена — события email.*
-	// будут падать с ошибкой и оставаться в outbox для ретрая. В деве это
-	// норм: ставите ключ и события долетают; в проде — обязательно задать.
-	var sender mailer.Sender
-	if cfg.UnisenderAPIKey != "" {
-		sender = mailer.NewUnisenderGo(mailer.UnisenderGoConfig{
-			APIKey:    cfg.UnisenderAPIKey,
-			BaseURL:   cfg.UnisenderAPIBaseURL,
-			FromEmail: cfg.UnisenderFromEmail,
-			FromName:  cfg.UnisenderFromName,
-		})
-		slog.Info("mailer ready", "provider", "unisender_go", "from", cfg.UnisenderFromEmail)
-	} else {
-		slog.Warn("mailer disabled (UNISENDER_API_KEY empty) — email.* events will fail and stay in outbox")
-	}
-
-	// n8n-диспатчер для email.* (verify, password_reset). Если URL задан —
-	// email_handler шлёт payload в n8n, который сам рендерит и шлёт письмо
-	// через свой workflow (UniSender Go / SMTP / etc). Это позволяет
-	// править шаблоны без redeploy API. Если URL пуст — fallback на
-	// встроенный sender (UniSender mailer выше); если и sender пуст —
-	// событие пишется в log.
+	// email.* (verify_send, password_reset_send) ходят только через n8n
+	// (workflow crmEmailNotify, см. deploy/n8n/workflows/). n8n получает
+	// {event_id, event_type, data:{to,token,base_url}}, сам рендерит HTML
+	// и шлёт через UniSender (или любой SMTP/HTTP-провайдер из своего UI).
+	// Если N8N_EMAIL_WEBHOOK_URL пустой — событие логируется в stdout
+	// (verify-URL копируется руками; типично для локального запуска без n8n)
+	// и квитируется, чтобы не висеть в outbox-ретраях.
 	n8nEmailDispatcher := notifications.NewWebhookDispatcher(cfg.N8nEmailWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
 	if n8nEmailDispatcher == nil {
-		slog.Info("n8n email webhook disabled (N8N_EMAIL_WEBHOOK_URL empty) — fallback на встроенный mailer")
+		slog.Info("n8n email webhook disabled (N8N_EMAIL_WEBHOOK_URL empty) — verify-URL будет печататься в stdout")
 	} else {
 		slog.Info("n8n email webhook ready", "url", cfg.N8nEmailWebhookURL)
 	}
 
 	emailHandler := func(ctx context.Context, aggregateID, eventType string, payload []byte) error {
-		// Если включён n8n email-диспатч — сразу шлём туда, без локального
-		// рендера. n8n получит {event_id, event_type, data:{to,token,base_url}}
-		// и сам соберёт письмо. Token/base_url остаются в payload как есть.
 		if n8nEmailDispatcher != nil {
 			return n8nEmailDispatcher.Send(ctx, notifications.Payload{
 				EventID:     aggregateID + "/" + eventType,
@@ -143,48 +124,28 @@ func main() {
 				OccurredAt:  time.Now().UTC(),
 			})
 		}
+		// Fallback для локального запуска без n8n: логируем URL и квитируем.
 		switch eventType {
 		case outbox.EventEmailVerifySend:
 			var p outbox.EmailVerifyPayload
 			if err := json.Unmarshal(payload, &p); err != nil {
 				return fmt.Errorf("decode email payload: %w", err)
 			}
-			// Без mailer'а (типично для локального запуска без Unisender)
-			// логируем verify-URL в stdout — дев берёт его руками. Помечаем
-			// событие как обработанное, чтобы не зависало в outbox-ретраях.
-			if sender == nil {
-				slog.Info("verify-email (mailer disabled, copy this URL manually)",
-					"to", p.To,
-					"url", p.BaseURL+"/verify?token="+p.Token,
-				)
-				return nil
-			}
-			subj, plain := renderVerifyEmail(p)
-			return sender.Send(ctx, mailer.Message{
-				To:      p.To,
-				ToName:  p.ToName,
-				Subject: subj,
-				Plain:   plain,
-			})
+			slog.Info("verify-email (n8n disabled, copy this URL manually)",
+				"to", p.To,
+				"url", p.BaseURL+"/verify?token="+p.Token,
+			)
+			return nil
 		case outbox.EventEmailPasswordResetSend:
 			var p outbox.EmailPasswordResetPayload
 			if err := json.Unmarshal(payload, &p); err != nil {
 				return fmt.Errorf("decode password reset payload: %w", err)
 			}
-			if sender == nil {
-				slog.Info("password-reset (mailer disabled, copy this URL manually)",
-					"to", p.To,
-					"url", p.BaseURL+"/auth/reset?token="+p.Token,
-				)
-				return nil
-			}
-			subj, plain := renderPasswordResetEmail(p)
-			return sender.Send(ctx, mailer.Message{
-				To:      p.To,
-				ToName:  p.ToName,
-				Subject: subj,
-				Plain:   plain,
-			})
+			slog.Info("password-reset (n8n disabled, copy this URL manually)",
+				"to", p.To,
+				"url", p.BaseURL+"/auth/reset?token="+p.Token,
+			)
+			return nil
 		default:
 			slog.Warn("unknown email event", "type", eventType)
 			return nil
@@ -305,45 +266,6 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("worker bye")
-}
-
-// renderVerifyEmail — собирает subject + plain-text тело письма
-// подтверждения почты. Plain-only для MVP: меньше шансов уехать в спам,
-// быстрее доставка, нет HTML/CSS-зоопарка под разные клиенты.
-func renderVerifyEmail(p outbox.EmailVerifyPayload) (subject, plain string) {
-	greeting := "Привет!"
-	if p.ToName != "" {
-		greeting = "Привет, " + p.ToName + "!"
-	}
-	link := p.BaseURL + "/verify?token=" + p.Token
-	subject = "Подтвердите почту на marketpclce"
-	plain = greeting + "\n\n" +
-		"Подтвердите, что это вы зарегистрировались на marketpclce.\n" +
-		"Перейдите по ссылке:\n\n" +
-		link + "\n\n" +
-		"Ссылка действует 24 часа.\n" +
-		"Если это не вы — просто проигнорируйте письмо.\n\n" +
-		"— marketpclce"
-	return subject, plain
-}
-
-// renderPasswordResetEmail — письмо со ссылкой сброса пароля. Plain-only
-// по тем же причинам что у verify: меньше шансов в спам, нет HTML-зоопарка.
-func renderPasswordResetEmail(p outbox.EmailPasswordResetPayload) (subject, plain string) {
-	greeting := "Привет!"
-	if p.ToName != "" {
-		greeting = "Привет, " + p.ToName + "!"
-	}
-	link := p.BaseURL + "/auth/reset?token=" + p.Token
-	subject = "Сброс пароля на marketpclce"
-	plain = greeting + "\n\n" +
-		"Кто-то запросил сброс пароля для вашего аккаунта.\n" +
-		"Если это вы — перейдите по ссылке и задайте новый пароль:\n\n" +
-		link + "\n\n" +
-		"Ссылка действует 1 час.\n" +
-		"Если это не вы — просто проигнорируйте письмо, пароль не изменится.\n\n" +
-		"— marketpclce"
-	return subject, plain
 }
 
 // runOldProjectsCleanupTicker — периодически удаляет done-проекты старше
