@@ -1,6 +1,6 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test test-db-up test-db-reset test-integration lint fmt swag \
         deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos \
-        backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n
+        backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n n8n-import n8n-export
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -232,6 +232,47 @@ restore-n8n:
 	 docker run --rm -v $(N8N_VOLUME):/data -v "$$(pwd)/$$(dirname $$FILE):/in" alpine \
 	   sh -c "find /data -mindepth 1 -delete 2>/dev/null; tar xzf /in/$$(basename $$FILE) -C /data"; \
 	 docker start $(N8N_CONTAINER) 2>/dev/null && echo "[n8n-restore] OK, container restarted" || echo "[n8n-restore] start container manually"
+
+# ── n8n workflow sync с git ──────────────────────────────────────────
+# n8n-import — загрузить версионированные workflows из deploy/n8n/workflows/
+# в n8n. Используется на первом старте VDS (после restore-n8n не нужен —
+# tarball уже включает workflows). Идемпотентно: повторный импорт обновляет
+# определения, но СБРАСЫВАЕТ active-флаг в false. Поэтому workflow'ы после
+# импорта нужно вручную активировать в UI (тумблер Active).
+#
+# Credentials (Telegram bot token, UniSender API key, Postgres) — отдельно,
+# через n8n UI: при импорте credential-references в нодах указывают на
+# имя ('Telegram CRM bot' и т.п.), а юзер привязывает реальные credentials.
+N8N_WORKFLOWS_DIR ?= deploy/n8n/workflows
+n8n-import:
+	@if [ ! -d "$(N8N_WORKFLOWS_DIR)" ]; then \
+	  echo "no $(N8N_WORKFLOWS_DIR)/ — nothing to import"; exit 1; fi
+	@echo "[n8n-import] $(N8N_WORKFLOWS_DIR)/ → $(N8N_CONTAINER)"
+	@docker exec $(N8N_CONTAINER) sh -c 'rm -rf /tmp/wf-import && mkdir -p /tmp/wf-import'
+	@docker cp $(N8N_WORKFLOWS_DIR)/. $(N8N_CONTAINER):/tmp/wf-import/
+	@for f in $(N8N_WORKFLOWS_DIR)/*.json; do \
+	   name=$$(basename $$f); \
+	   echo "  → $$name"; \
+	   docker exec $(N8N_CONTAINER) sh -c "printf '[' > /tmp/wf-one.json && cat /tmp/wf-import/$$name >> /tmp/wf-one.json && printf ']' >> /tmp/wf-one.json"; \
+	   docker exec $(N8N_CONTAINER) n8n import:workflow --input=/tmp/wf-one.json 2>&1 | grep -v '^$$' | tail -2; \
+	 done
+
+# n8n-export — выгрузить workflows из n8n в deploy/n8n/workflows/ для
+# коммита в git. Чистит per-install метаданные (createdAt, versionId,
+# project ownership) и credential id'шники — оставляет только имя.
+# Используется когда правил workflow в UI и хочешь зафиксировать в git.
+n8n-export:
+	@mkdir -p $(N8N_WORKFLOWS_DIR)
+	@docker exec $(N8N_CONTAINER) sh -c 'rm -rf /tmp/wf-export && mkdir -p /tmp/wf-export && n8n export:workflow --all --separate --output=/tmp/wf-export' 2>&1 | tail -2
+	@rm -rf /tmp/n8n-export-tmp && mkdir -p /tmp/n8n-export-tmp
+	@docker cp $(N8N_CONTAINER):/tmp/wf-export/. /tmp/n8n-export-tmp/
+	@for f in /tmp/n8n-export-tmp/*.json; do \
+	   python3 -c "import json,sys; w=json.load(open('$$f')); clean={'id':w['id'],'name':w['name'],'active':False,'nodes':w['nodes'],'connections':w['connections'],'settings':w.get('settings',{'executionOrder':'v1'})}; \
+[n.update({'credentials':{k:{'name':v.get('name','')} for k,v in n['credentials'].items()}}) if 'credentials' in n else None for n in clean['nodes']]; \
+print(json.dumps(clean, ensure_ascii=False, indent=2))" > "$(N8N_WORKFLOWS_DIR)/$$(basename $$f)"; \
+	   echo "  → $$(basename $$f)"; \
+	 done
+	@rm -rf /tmp/n8n-export-tmp
 
 # Dev-вариант: тот же бекап, но против локального docker compose
 # (DC, .env вместо PROD_DC, .env.prod). Нужен для теста make-логики

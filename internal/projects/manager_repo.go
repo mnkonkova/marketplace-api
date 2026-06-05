@@ -176,10 +176,22 @@ VALUES ($1, NULL, $2, 'human', $3, $4)`,
 		projectID, actorID, eventKind, mustJSON(payload)); err != nil {
 		return fmt.Errorf("insert event: %w", err)
 	}
-	outboxPayload := map[string]string{"project_id": projectID.String()}
+	outboxPayload := map[string]any{"project_id": projectID.String()}
 	if managerID != nil {
 		outboxPayload["manager_user_id"] = managerID.String()
+		// У менеджеров нет profile-таблицы — берём users.email и кладём
+		// часть до '@' как display_name (для Telegram-нотификации).
+		var email string
+		if err := tx.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, *managerID).Scan(&email); err == nil && email != "" {
+			outboxPayload["manager_email"] = email
+			if at := strings.IndexByte(email, '@'); at > 0 {
+				outboxPayload["manager_display_name"] = email[:at]
+			} else {
+				outboxPayload["manager_display_name"] = email
+			}
+		}
 	}
+	enrichProjectPayload(ctx, tx, projectID, outboxPayload)
 	if err := emit(ctx, tx, projectID, nil, actorID, "project."+eventKind, outboxPayload); err != nil {
 		return err
 	}

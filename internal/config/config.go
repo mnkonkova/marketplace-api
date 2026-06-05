@@ -120,6 +120,12 @@ type Config struct {
 	N8nWebhookURL   string `env:"N8N_WEBHOOK_URL"`
 	N8nWebhookToken string `env:"N8N_WEBHOOK_TOKEN"`
 
+	// N8nEmailWebhookURL — отдельный workflow в n8n для email.*
+	// (verify + password reset). Пусто → email шлёт встроенный mailer
+	// (UniSender Go) как раньше; если и mailer пустой — событие пишется
+	// в log и квитируется (см. cmd/worker emailHandler).
+	N8nEmailWebhookURL string `env:"N8N_EMAIL_WEBHOOK_URL"`
+
 	// S3SweepAccessKey / S3SweepSecretKey — отдельный сервис-аккаунт для
 	// orphan-sweep'a в worker'е и CLI cmd/s3-sweep-once. Требует list +
 	// delete на bucket. Принцип наименьших привилегий: основной S3_ACCESS_KEY

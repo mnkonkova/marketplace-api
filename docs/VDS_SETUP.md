@@ -12,8 +12,7 @@
 + observability (node-exporter + alloy). Всё под одним доменом, Caddy
 проксирует.
 
-См. также `docs/DEPLOY.md` (старая шпаргалка, частично перекрывается)
-и `docs/MONITORING.md` (Grafana Cloud).
+См. также `docs/MONITORING.md` (Grafana Cloud).
 
 ---
 
@@ -326,18 +325,37 @@ docker run -d \
 
 1. Открой `https://n8n.<домен>` — экран **Owner Setup**.
 2. Заведи email/пароль (минимум 8 символов, 1 заглавная, 1 цифра).
-3. Создай Workflow → Webhook node:
-   - HTTP Method: `POST`
-   - Path: `project-events`
-   - Authentication: `None` (пока)
-4. Скопируй **Production URL** из node'a:
-   `https://n8n.<домен>/webhook/project-events`
-5. Пропиши в `.env.prod`:
+3. **Импортируй версионированные workflows из git** (3 штуки лежат
+   в `deploy/n8n/workflows/`):
+   ```bash
+   cd /opt/marketpclce/api
+   make n8n-import
    ```
-   N8N_WEBHOOK_URL=https://n8n.<домен>/webhook/project-events
-   ```
-6. `make deploy` → перезапустит worker с включённым диспатчером.
-7. **Активируй workflow** в n8n (тумблер справа сверху).
+   Появятся: `CRM project events → Telegram`, `CRM weekly digest → Telegram`,
+   `CRM email notifications`. Все деактивированы.
+4. **Создай credentials в n8n UI** (Settings → Credentials → New):
+   - `Telegram CRM bot` (Telegram API) — bot token от @BotFather, chat_id
+     группы менеджеров. Перепривяжи credential к нодам Telegram в обоих
+     Telegram-workflows.
+   - `UniSender Go X-API-KEY` (HTTP Header Auth) — Name = `X-API-KEY`,
+     Value = `UNISENDER_API_KEY` из `.env.prod`. Привяжи к ноде
+     `UniSender Go send` в email-workflow.
+   - `Postgres CRM` (Postgres) — host=`postgres`, port=5432, db=`marketpclce`,
+     user/password из `.env.prod`. Привяжи к ноде в digest-workflow.
+5. Скопируй **Production URL** Webhook node'ов:
+   - `https://n8n.<домен>/webhook/project-events` → в `N8N_WEBHOOK_URL`
+   - `https://n8n.<домен>/webhook/email-events`   → в `N8N_EMAIL_WEBHOOK_URL`
+6. `make deploy` → перезапустит worker с включёнными диспатчерами.
+7. **Активируй workflows** в n8n (тумблер справа сверху на каждом).
+
+### Изменение workflows (dev → git → prod)
+
+1. Открой n8n локально (`http://localhost:5678` или `http://n8n.<домен>`),
+   правь workflow в UI, **Save**.
+2. `make n8n-export` — выгрузит изменения в `deploy/n8n/workflows/`
+   (без credentials и runtime-метаданных).
+3. `git diff` → закоммитить.
+4. На VDS: `git pull && make n8n-import` → подтянет новую версию.
 
 ### Сценарий B — restore
 

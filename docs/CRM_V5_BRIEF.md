@@ -19,7 +19,7 @@ search / reviews).
 ## 0. Что прочитать перед стартом
 
 ### marketplace-api
-1. `CLAUDE.md`, `README.md`, `docs/DEPLOY.md`.
+1. `CLAUDE.md`, `README.md`, `docs/VDS_SETUP.md`.
 2. `internal/leads/` — **референсный домен** (repo/service/handlers/dto).
 3. `internal/catalog/` — референс для справочников (productions по образцу).
 4. `internal/profiles/` — расширим (выбор продакшена).

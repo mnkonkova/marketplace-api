@@ -116,7 +116,33 @@ func main() {
 		slog.Warn("mailer disabled (UNISENDER_API_KEY empty) — email.* events will fail and stay in outbox")
 	}
 
-	emailHandler := func(ctx context.Context, _, eventType string, payload []byte) error {
+	// n8n-диспатчер для email.* (verify, password_reset). Если URL задан —
+	// email_handler шлёт payload в n8n, который сам рендерит и шлёт письмо
+	// через свой workflow (UniSender Go / SMTP / etc). Это позволяет
+	// править шаблоны без redeploy API. Если URL пуст — fallback на
+	// встроенный sender (UniSender mailer выше); если и sender пуст —
+	// событие пишется в log.
+	n8nEmailDispatcher := notifications.NewWebhookDispatcher(cfg.N8nEmailWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
+	if n8nEmailDispatcher == nil {
+		slog.Info("n8n email webhook disabled (N8N_EMAIL_WEBHOOK_URL empty) — fallback на встроенный mailer")
+	} else {
+		slog.Info("n8n email webhook ready", "url", cfg.N8nEmailWebhookURL)
+	}
+
+	emailHandler := func(ctx context.Context, aggregateID, eventType string, payload []byte) error {
+		// Если включён n8n email-диспатч — сразу шлём туда, без локального
+		// рендера. n8n получит {event_id, event_type, data:{to,token,base_url}}
+		// и сам соберёт письмо. Token/base_url остаются в payload как есть.
+		if n8nEmailDispatcher != nil {
+			return n8nEmailDispatcher.Send(ctx, notifications.Payload{
+				EventID:     aggregateID + "/" + eventType,
+				Aggregate:   "user",
+				AggregateID: aggregateID,
+				EventType:   eventType,
+				Data:        payload,
+				OccurredAt:  time.Now().UTC(),
+			})
+		}
 		switch eventType {
 		case outbox.EventEmailVerifySend:
 			var p outbox.EmailVerifyPayload
@@ -167,7 +193,7 @@ func main() {
 
 	// n8n-диспатчер для CRM-событий project.*. nil = выключен (события
 	// квитируются как no-op, чтобы не зависать в outbox-ретраях).
-	n8nDispatcher := notifications.NewWebhookDispatcher(cfg.N8nWebhookURL, cfg.N8nWebhookToken)
+	n8nDispatcher := notifications.NewWebhookDispatcher(cfg.N8nWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
 	if n8nDispatcher == nil {
 		slog.Info("n8n webhook disabled (N8N_WEBHOOK_URL empty) — project.* events будут no-op")
 	} else {
