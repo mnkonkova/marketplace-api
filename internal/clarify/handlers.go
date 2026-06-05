@@ -1,15 +1,20 @@
 package clarify
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"marketpclce/internal/httpx"
 	"marketpclce/internal/llm"
 )
+
+// P5: см. summarize/handlers.go — жёсткий потолок ожидания LLM.
+const llmHandlerTimeout = 25 * time.Second
 
 type Handler struct{ svc *Service }
 
@@ -33,6 +38,8 @@ type request struct {
 // @Failure      503   {object}  errorResponse
 // @Router       /clarify [post]
 func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), llmHandlerTimeout)
+	defer cancel()
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON в теле запроса.")
@@ -45,7 +52,7 @@ func (h *Handler) Clarify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.svc.Run(r.Context(), Input{Category: in.Category, History: in.History})
+	res, err := h.svc.Run(ctx, Input{Category: in.Category, History: in.History})
 	switch {
 	case errors.Is(err, ErrLLMDisabled):
 		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "llm_disabled",

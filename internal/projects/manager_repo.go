@@ -30,14 +30,22 @@ var (
 // не «забыли». cancelled исключаем: админ может cancel неприсвоенный проект
 // (CancelProject не требует assigned_to), и без фильтра он бы навсегда висел
 // в инбоксе.
+//
+// P1: LIMIT 500. projects_unassigned_idx (00010) поддерживает фильтр.
 func (r *Repo) ListInbox(ctx context.Context) ([]Project, error) {
 	return r.listAssignedFilter(ctx,
-		"WHERE assigned_to_user_id IS NULL AND status <> 'cancelled' ORDER BY created_at ASC")
+		"WHERE assigned_to_user_id IS NULL AND status <> 'cancelled' ORDER BY created_at ASC LIMIT 500")
 }
 
 // ListAssignedTo — проекты конкретного менеджера для канбана. Берём
 // только не-терминальные (draft/active/on_hold/dispute) — done/cancelled
 // в канбане не нужны.
+//
+// P1: жёсткий LIMIT 500. До этого выгружали весь набор — у менеджера с
+// 10k проектов = мегабайтный JSON + RAM-удар. 500 покрывает любой
+// реалистичный канбан (5 стадий × 100 карточек); если когда-нибудь
+// упрёмся — добавим keyset-пагинацию через updated_at cursor.
+// Composite index projects_assigned_updated_idx (00019) убирает Sort.
 func (r *Repo) ListAssignedTo(ctx context.Context, managerID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
@@ -48,7 +56,8 @@ SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
 FROM projects
 WHERE assigned_to_user_id = $1
   AND status IN ('draft','active','on_hold','dispute')
-ORDER BY updated_at DESC`, managerID)
+ORDER BY updated_at DESC
+LIMIT 500`, managerID)
 	if err != nil {
 		return nil, fmt.Errorf("list assigned projects: %w", err)
 	}
@@ -61,6 +70,8 @@ ORDER BY updated_at DESC`, managerID)
 // assigned_to (менеджер) — это контракт «кому делаешь работу». cancelled
 // прячем — симметрично клиенту, у которого тоже не показываем отменённые.
 func (r *Repo) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) ([]Project, error) {
+	// P1: LIMIT 500 (см. ListAssignedTo); composite index
+	// projects_specialist_updated_idx (00019) поддерживает ORDER BY.
 	rows, err := r.db.Query(ctx, `
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(client_name,''), COALESCE(client_contact,''),
@@ -69,7 +80,8 @@ SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
 WHERE specialist_user_id = $1 AND status <> 'cancelled'
-ORDER BY updated_at DESC`, specialistID)
+ORDER BY updated_at DESC
+LIMIT 500`, specialistID)
 	if err != nil {
 		return nil, fmt.Errorf("list specialist projects: %w", err)
 	}
@@ -81,6 +93,9 @@ ORDER BY updated_at DESC`, specialistID)
 // прячем cancelled — у них своя retention 30 дней до физического удаления,
 // в админке они только засоряют список. Чтобы посмотреть скрытые —
 // явно указать statusFilter='cancelled'.
+//
+// P1: hard cap LIMIT 1000 (адмиский набор шире менеджерского, но
+// тоже не бесконечный). При росте проекта понадобится пагинация.
 func (r *Repo) ListAll(ctx context.Context, statusFilter string) ([]Project, error) {
 	q := `
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
@@ -96,7 +111,7 @@ FROM projects`
 	} else {
 		q += " WHERE status <> 'cancelled'"
 	}
-	q += " ORDER BY updated_at DESC"
+	q += " ORDER BY updated_at DESC LIMIT 1000"
 	rows, err := r.db.Query(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list all projects: %w", err)
@@ -719,15 +734,42 @@ FOR UPDATE`, projectID)
 	}
 
 	// 1. Найти первую стадию, где НЕ все шаги done/skipped.
+	//
+	// P2: было N запросов BOOL_AND по каждой стадии под FOR UPDATE — каждая
+	// округлая трип держала лок дольше. Заменили на один GROUP BY: сразу
+	// получаем все стадии со статусом done/incomplete и проходим в Go.
+	// COALESCE(BOOL_AND, TRUE): стадия без шагов считается done (нечего ждать).
+	stageIDs := make([]uuid.UUID, 0, len(stages))
+	for _, st := range stages {
+		stageIDs = append(stageIDs, st.ID)
+	}
+	stageDoneRows, err := tx.Query(ctx, `
+SELECT s.id, COALESCE(BOOL_AND(ps.status IN ('done','skipped')), TRUE)
+FROM project_stages s
+LEFT JOIN project_steps ps ON ps.stage_id = s.id
+WHERE s.id = ANY($1)
+GROUP BY s.id`, stageIDs)
+	if err != nil {
+		return Project{}, fmt.Errorf("check stages done: %w", err)
+	}
+	allDoneByID := make(map[uuid.UUID]bool, len(stages))
+	for stageDoneRows.Next() {
+		var sid uuid.UUID
+		var done bool
+		if err := stageDoneRows.Scan(&sid, &done); err != nil {
+			stageDoneRows.Close()
+			return Project{}, fmt.Errorf("scan stage done: %w", err)
+		}
+		allDoneByID[sid] = done
+	}
+	stageDoneRows.Close()
+	if err := stageDoneRows.Err(); err != nil {
+		return Project{}, err
+	}
+
 	var currentIdx = -1
 	for i, st := range stages {
-		var allDone bool
-		if err := tx.QueryRow(ctx, `
-SELECT BOOL_AND(status IN ('done','skipped'))
-FROM project_steps WHERE stage_id = $1`, st.ID).Scan(&allDone); err != nil {
-			return Project{}, fmt.Errorf("check stage done: %w", err)
-		}
-		if !allDone {
+		if !allDoneByID[st.ID] {
 			currentIdx = i
 			break
 		}

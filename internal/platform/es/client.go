@@ -105,6 +105,87 @@ func (c *Client) IndexDoc(ctx context.Context, index, id string, doc any) error 
 	return c.do(ctx, http.MethodPut, "/"+index+"/_doc/"+id+"?refresh=false", doc, nil)
 }
 
+// BulkDoc — пара (id, doc) для пакетной индексации.
+type BulkDoc struct {
+	ID  string
+	Doc any
+}
+
+// BulkIndex — один POST /_bulk вместо N PUT'ов. Используется feed_indexer.
+// ReconcileVideos для спеца с N видео (P7): раньше 30 round-trip'ов на
+// внутри одной outbox-tx (см. P3), теперь один request.
+//
+// Тело — NDJSON: попеременно action ("index"+_id) и сам doc, разделены \n.
+// Ошибки парсятся: при errors=true собираем перечисление "id: reason" и
+// возвращаем как ErrStatus, иначе nil. Частичный успех (например, 9 из 10
+// прошло) трактуем как ошибку — feed_indexer считает spec'a несинхронным.
+func (c *Client) BulkIndex(ctx context.Context, index string, docs []BulkDoc) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	for _, d := range docs {
+		action := map[string]any{
+			"index": map[string]any{"_index": index, "_id": d.ID},
+		}
+		actionJSON, err := json.Marshal(action)
+		if err != nil {
+			return fmt.Errorf("marshal bulk action: %w", err)
+		}
+		docJSON, err := json.Marshal(d.Doc)
+		if err != nil {
+			return fmt.Errorf("marshal bulk doc %s: %w", d.ID, err)
+		}
+		buf.Write(actionJSON)
+		buf.WriteByte('\n')
+		buf.Write(docJSON)
+		buf.WriteByte('\n')
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.base+"/_bulk?refresh=false", &buf)
+	if err != nil {
+		return err
+	}
+	// /_bulk требует именно application/x-ndjson, иначе OS не разделит документы.
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("opensearch bulk: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return &ErrStatus{Status: resp.StatusCode, Body: string(respBody)}
+	}
+	var parsed struct {
+		Errors bool `json:"errors"`
+		Items  []struct {
+			Index struct {
+				ID     string `json:"_id"`
+				Status int    `json:"status"`
+				Error  *struct {
+					Type   string `json:"type"`
+					Reason string `json:"reason"`
+				} `json:"error,omitempty"`
+			} `json:"index"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return fmt.Errorf("decode bulk response: %w", err)
+	}
+	if parsed.Errors {
+		var firstErr string
+		for _, it := range parsed.Items {
+			if it.Index.Error != nil {
+				firstErr = fmt.Sprintf("%s: %s", it.Index.ID, it.Index.Error.Reason)
+				break
+			}
+		}
+		return fmt.Errorf("bulk partial failure: %s", firstErr)
+	}
+	return nil
+}
+
 func (c *Client) DeleteDoc(ctx context.Context, index, id string) error {
 	err := c.do(ctx, http.MethodDelete, "/"+index+"/_doc/"+id, nil, nil)
 	var es *ErrStatus

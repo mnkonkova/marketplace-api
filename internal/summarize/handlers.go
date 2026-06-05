@@ -7,11 +7,19 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"marketpclce/internal/httpx"
 	"marketpclce/internal/llm"
 	"marketpclce/internal/search"
 )
+
+// P5: жёсткий потолок ожидания LLM в хендлере. У http.Client глобальный
+// Timeout=60s, но без deadline на context.Context соединение может
+// висеть пока сетевой стек что-то таскает. 25s — баланс: укладываемся
+// в большинство claude/deepseek-ответов с adaptive thinking, но не
+// держим юзера и connection-pool на минуту.
+const llmHandlerTimeout = 25 * time.Second
 
 type Handler struct {
 	svc       *Service
@@ -56,6 +64,8 @@ type request struct {
 // @Failure      502   {object}  errorResponse
 // @Router       /search/summarize [post]
 func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), llmHandlerTimeout)
+	defer cancel()
 	var in request
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON в теле запроса.")
@@ -77,14 +87,14 @@ func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 		targetCategory = in.Categories[0]
 	}
 
-	if cached, ok := h.cache.Get(r.Context(), q); ok {
+	if cached, ok := h.cache.Get(ctx, q); ok {
 		cached.Cached = true
-		h.attachCategoryTotal(r.Context(), &cached, targetCategory)
+		h.attachCategoryTotal(ctx, &cached, targetCategory)
 		httpx.WriteJSON(w, http.StatusOK, cached)
 		return
 	}
 
-	res, err := h.svc.Run(r.Context(), q)
+	res, err := h.svc.Run(ctx, q)
 	if err != nil {
 		var apiErr *llm.APIError
 		if errors.As(err, &apiErr) {
@@ -97,8 +107,8 @@ func (h *Handler) Summarize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.cache.Set(r.Context(), q, res)
-	h.attachCategoryTotal(r.Context(), &res, targetCategory)
+	h.cache.Set(ctx, q, res)
+	h.attachCategoryTotal(ctx, &res, targetCategory)
 	httpx.WriteJSON(w, http.StatusOK, res)
 }
 

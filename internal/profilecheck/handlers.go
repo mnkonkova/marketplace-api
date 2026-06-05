@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -13,6 +14,11 @@ import (
 	"marketpclce/internal/httpx"
 	"marketpclce/internal/llm"
 )
+
+// P5: верхний потолок ожидания profilecheck. У сервиса внутри есть
+// retry на транзиентных ошибках (300ms backoff × 2 попытки) + adaptive
+// thinking — берём 30s, чтобы покрыть retry без обрезания нормального ответа.
+const llmHandlerTimeout = 30 * time.Second
 
 type ProfileLookup interface {
 	PrimaryCategory(ctx context.Context, userID uuid.UUID) (code, title string, err error)
@@ -47,7 +53,9 @@ type checkReq struct {
 // @Failure      503   {object}  errorResponse
 // @Router       /me/profile/check [post]
 func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
-	uid, ok := auth.UserIDFrom(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), llmHandlerTimeout)
+	defer cancel()
+	uid, ok := auth.UserIDFrom(ctx)
 	if !ok {
 		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Требуется авторизация.")
 		return
@@ -60,13 +68,13 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 
 	var code, title string
 	if h.lookup != nil {
-		c, t, err := h.lookup.PrimaryCategory(r.Context(), uid)
+		c, t, err := h.lookup.PrimaryCategory(ctx, uid)
 		if err == nil {
 			code, title = c, t
 		}
 	}
 
-	res, err := h.svc.Check(r.Context(), Input{
+	res, err := h.svc.Check(ctx, Input{
 		Bio:                  in.Bio,
 		DisplayName:          in.DisplayName,
 		PrimaryCategory:      code,

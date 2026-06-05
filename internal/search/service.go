@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"golang.org/x/sync/errgroup"
+
 	"marketpclce/internal/platform/es"
 )
 
@@ -57,12 +59,55 @@ func (s *Service) Search(ctx context.Context, q Query) (Result, error) {
 		q.Offset = 0
 	}
 
-	out, err := s.runQuery(ctx, q, queryOpts{broadened: false})
-	if err != nil {
+	// P6: релакс-запрос (для "similar") и основной запрос запускаются
+	// ПАРАЛЛЕЛЬНО через errgroup — раньше шли последовательно, удваивая
+	// p95 для скудных категорий (каждый ~50-200ms к OS).
+	//
+	// Релакс гоняем только если включён триггер (Offset==0 и есть soft-
+	// фильтры). excludeIDs из основного запроса достанем после Wait'a и
+	// отфильтруем в памяти — релакс-запрос не знает заранее, кого
+	// исключить, но в обмен на это пускаем его в фоне.
+	relaxed := softFiltersInQuery(q)
+	wantRelax := q.Offset == 0 && len(relaxed) > 0
+
+	var (
+		out  Result
+		soft Result
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		res, err := s.runQuery(gctx, q, queryOpts{broadened: false})
+		if err != nil {
+			return err
+		}
+		out = res
+		return nil
+	})
+	if wantRelax {
+		softQ := q
+		softQ.City = ""
+		softQ.RateMin = nil
+		softQ.RateMax = nil
+		// Берём с запасом — после фильтра исключений останется достаточно.
+		softQ.Limit = similarThreshold * 3
+		softQ.Offset = 0
+		g.Go(func() error {
+			res, err := s.runQuery(gctx, softQ, queryOpts{skipFacets: true})
+			if err != nil {
+				// Релакс — best-effort: фейл не валит весь поиск.
+				return nil
+			}
+			soft = res
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
 		return Result{}, err
 	}
 
-	// Старый бродинг для пустой текстовой выдачи — оставляем для совместимости с summarize-сценарием.
+	// Старый бродинг для пустой текстовой выдачи — оставляем для совместимости.
+	// Идёт последовательно, потому что нужен ровно когда основной=0
+	// (запускать его параллельно бессмысленно — в 95% случаев потратим зря).
 	if out.Total == 0 && q.Q != "" {
 		broadened := q
 		broadened.Q = ""
@@ -73,26 +118,24 @@ func (s *Service) Search(ctx context.Context, q Query) (Result, error) {
 		return out2, nil
 	}
 
-	// Ленивая релаксация: если строгий результат скудный и есть soft-фильтры — добираем «похожих».
-	// Триггерим по Total (а не len(Items)) — иначе при маленьком Limit релаксация бьёт зря.
-	if q.Offset == 0 && out.Total < similarThreshold {
-		relaxed := softFiltersInQuery(q)
-		if len(relaxed) > 0 {
-			excludeIDs := make([]string, 0, len(out.Items))
-			for _, d := range out.Items {
-				excludeIDs = append(excludeIDs, d.UserID)
+	// Триггер «добираем похожих»: основной результат скудный (Total < N)
+	// и есть soft-фильтры. Триггерим по Total (а не len(Items)) — иначе
+	// при маленьком Limit релаксация бьёт зря.
+	if wantRelax && out.Total < similarThreshold && len(soft.Items) > 0 {
+		// Пост-фильтр: убираем из soft тех, кто уже есть в основном результате.
+		excludeIDs := make(map[string]struct{}, len(out.Items))
+		for _, d := range out.Items {
+			excludeIDs[d.UserID] = struct{}{}
+		}
+		filtered := soft.Items[:0]
+		for _, d := range soft.Items {
+			if _, dup := excludeIDs[d.UserID]; !dup {
+				filtered = append(filtered, d)
 			}
-			soft := q
-			soft.City = ""
-			soft.RateMin = nil
-			soft.RateMax = nil
-			soft.Limit = similarThreshold * 3
-			soft.Offset = 0
-			out2, err := s.runQuery(ctx, soft, queryOpts{excludeIDs: excludeIDs, skipFacets: true})
-			if err == nil && len(out2.Items) > 0 {
-				out.Similar = out2.Items
-				out.Relaxed = relaxed
-			}
+		}
+		if len(filtered) > 0 {
+			out.Similar = filtered
+			out.Relaxed = relaxed
 		}
 	}
 

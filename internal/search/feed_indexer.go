@@ -39,10 +39,18 @@ func (i *FeedIndexer) ReconcileVideos(ctx context.Context, userID uuid.UUID) err
 		return fmt.Errorf("delete previous: %w", err)
 	}
 
+	// P7: один _bulk вместо N PUT'ов. На спеце с 30 видео раньше было
+	// 30 round-trip'ов в OS — внутри outbox-tick'a (см. P3) это умножало
+	// длительность открытой PG-транзакции. Теперь — один request.
+	if len(docs) == 0 {
+		return nil
+	}
+	bulk := make([]es.BulkDoc, 0, len(docs))
 	for _, d := range docs {
-		if err := i.es.IndexDoc(ctx, i.index, d.VideoID, d); err != nil {
-			return fmt.Errorf("index video %s: %w", d.VideoID, err)
-		}
+		bulk = append(bulk, es.BulkDoc{ID: d.VideoID, Doc: d})
+	}
+	if err := i.es.BulkIndex(ctx, i.index, bulk); err != nil {
+		return fmt.Errorf("bulk index videos: %w", err)
 	}
 	return nil
 }

@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"marketpclce/internal/outbox"
 )
 
 // WebhookDispatcher шлёт event payload в HTTP webhook (n8n / любой иной).
@@ -77,14 +78,26 @@ func (d *WebhookDispatcher) Send(ctx context.Context, p Payload) error {
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
+		// Сетевая ошибка / таймаут / DNS / connection reset — транзиентно,
+		// retry имеет смысл.
 		return fmt.Errorf("post: %w", err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
-	if resp.StatusCode/100 != 2 {
-		return errors.New("webhook returned non-2xx: " + resp.Status)
+	switch {
+	case resp.StatusCode/100 == 2:
+		return nil
+	case resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode/100 == 5:
+		// 408/429/5xx — транзиентные. 408/5xx — на стороне n8n переходный
+		// сбой, 429 — backpressure (наш экспоненциальный backoff с retry
+		// сделает то что надо). Возвращаем обычную ошибку → retry.
+		return fmt.Errorf("webhook returned non-2xx: %s", resp.Status)
+	default:
+		// P4: 4xx (кроме 408/429) — перманентный отказ. 400 (битый payload),
+		// 401/403 (токен/доступ), 404 (workflow удалён в n8n), 422 (валидация).
+		// Дальнейшие retry бессмысленны — сразу в DLQ через outbox.ErrPermanent.
+		return fmt.Errorf("webhook returned %s: %w", resp.Status, outbox.ErrPermanent)
 	}
-	return nil
 }

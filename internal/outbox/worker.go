@@ -21,6 +21,14 @@ import (
 // мог их дедупнуть.
 type Handler func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error
 
+// ErrPermanent — sentinel для перманентных ошибок handler'a. Worker
+// при errors.Is(hErr, ErrPermanent) НЕ ретраит и сразу переводит
+// событие в DLQ (dead_at = now(), attempts++). Используется для
+// 4xx-ответов внешних webhook'ов (n8n вернул 400/401/404 — повторы
+// не помогут, нужно ручное разбирательство), битых payload-ов
+// (JSON unmarshal failed) и т.п. P4.
+var ErrPermanent = errors.New("permanent: do not retry")
+
 type Worker struct {
 	db              *pgxpool.Pool
 	handlers        map[string]Handler
@@ -145,14 +153,31 @@ type entry struct {
 	attempts    int
 }
 
-func (w *Worker) tick(ctx context.Context) (int, error) {
-	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
+// leaseDuration — на сколько вперёд сдвигаем next_attempt_at при "лизе"
+// записи (P3). Должно быть больше суммарного handler-таймаута + запаса,
+// иначе другой воркер подхватит запись, пока первый ещё её обрабатывает.
+// 10 минут с запасом покрывают n8n webhook (10s × ~50 в батче) + любые
+// побочные эффекты handler'a.
+const leaseDuration = 10 * time.Minute
 
-	const q = `
+// tick: P3 — lease-and-release.
+//   Phase 1 (короткая tx): SELECT FOR UPDATE SKIP LOCKED + UPDATE
+//     next_attempt_at = now()+lease для этих id. COMMIT. Локов больше нет.
+//   Phase 2 (без tx): для каждого entry запускаем handler. HTTP-вызовы
+//     в n8n идут НЕ внутри PG-транзакции — autovacuum работает, bloat
+//     не растёт, idle-in-tx не маячит.
+//   Phase 3 (короткая tx): по результатам ставим processed_at /
+//     next_attempt_at(backoff) / dead_at.
+// Если воркер крашится между phase 2 и phase 3, записи "leased" до
+// next_attempt_at в будущем — другой воркер подхватит их после истечения
+// аренды. n8n идемпотентен по EventID (см. R4), повторов не страшно.
+func (w *Worker) tick(ctx context.Context) (int, error) {
+	// --- Phase 1: lease ---
+	leaseTx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("begin lease tx: %w", err)
+	}
+	const selectQ = `
 SELECT id, aggregate, aggregate_id, event_type, payload, attempts
 FROM outbox
 WHERE processed_at IS NULL
@@ -161,8 +186,9 @@ WHERE processed_at IS NULL
 ORDER BY id
 FOR UPDATE SKIP LOCKED
 LIMIT $1`
-	rows, err := tx.Query(ctx, q, w.batchSize)
+	rows, err := leaseTx.Query(ctx, selectQ, w.batchSize)
 	if err != nil {
+		_ = leaseTx.Rollback(ctx)
 		return 0, fmt.Errorf("select outbox: %w", err)
 	}
 	entries := make([]entry, 0, w.batchSize)
@@ -170,81 +196,120 @@ LIMIT $1`
 		var e entry
 		if err := rows.Scan(&e.id, &e.aggregate, &e.aggregateID, &e.eventType, &e.payload, &e.attempts); err != nil {
 			rows.Close()
+			_ = leaseTx.Rollback(ctx)
 			return 0, fmt.Errorf("scan outbox: %w", err)
 		}
 		entries = append(entries, e)
 	}
 	rows.Close()
 	if rows.Err() != nil {
+		_ = leaseTx.Rollback(ctx)
 		return 0, rows.Err()
 	}
+	if len(entries) == 0 {
+		_ = leaseTx.Rollback(ctx)
+		return 0, nil
+	}
+	leaseExpiry := time.Now().Add(leaseDuration)
+	leaseIDs := make([]int64, 0, len(entries))
+	for _, e := range entries {
+		leaseIDs = append(leaseIDs, e.id)
+	}
+	if _, err := leaseTx.Exec(ctx,
+		`UPDATE outbox SET next_attempt_at = $2 WHERE id = ANY($1)`,
+		leaseIDs, leaseExpiry); err != nil {
+		_ = leaseTx.Rollback(ctx)
+		return 0, fmt.Errorf("lease: %w", err)
+	}
+	if err := leaseTx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit lease: %w", err)
+	}
 
-	processedIDs := make([]int64, 0, len(entries))
+	// --- Phase 2: handlers вне tx ---
+	type result struct {
+		entry     entry
+		hErr      error
+		permanent bool
+	}
+	results := make([]result, 0, len(entries))
 	for _, e := range entries {
 		h, ok := w.handlers[e.aggregate]
 		if !ok {
-			// Нет хендлера — это либо аггрегат для другого инстанса воркера
-			// (если будем шардировать), либо опечатка/мусор. Сейчас второе:
-			// помечаем processed, чтобы не висело. Дополнительный лог даст
-			// заметить, если такое посыплется.
 			w.logger.Warn("outbox no handler", "aggregate", e.aggregate, "id", e.id)
-			processedIDs = append(processedIDs, e.id)
+			// success-эквивалент: помечаем processed (см. ниже).
+			results = append(results, result{entry: e})
 			continue
 		}
 		hErr := h(ctx, e.id, e.aggregateID, e.eventType, e.payload)
-		if hErr == nil {
+		if errors.Is(hErr, context.Canceled) {
+			// Shutdown посреди батча — оставляем оставшиеся записи "leased",
+			// при следующем старте обработаются после истечения аренды.
+			return 0, hErr
+		}
+		results = append(results, result{
+			entry:     e,
+			hErr:      hErr,
+			permanent: hErr != nil && errors.Is(hErr, ErrPermanent),
+		})
+	}
+
+	// --- Phase 3: маркировка результатов ---
+	markTx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("begin mark tx: %w", err)
+	}
+	defer func() { _ = markTx.Rollback(ctx) }()
+
+	processedIDs := make([]int64, 0, len(results))
+	for _, r := range results {
+		e := r.entry
+		if r.hErr == nil {
 			handlerSuccessTotal.WithLabelValues(e.aggregate, e.eventType).Inc()
 			processedIDs = append(processedIDs, e.id)
 			continue
 		}
-		// Shutdown — не наказываем счётчик. Запись останется как была
-		// (attempts/next_attempt_at не двинутся), следующий запуск
-		// подберёт её обычным путём.
-		if errors.Is(hErr, context.Canceled) {
-			return 0, hErr
-		}
 		handlerErrorsTotal.WithLabelValues(e.aggregate, e.eventType).Inc()
-
 		nextAttempts := e.attempts + 1
-		if nextAttempts >= w.maxAttempts {
-			// DLQ: помечаем dead_at, чтобы воркер больше не трогал. Запись
-			// останется в таблице для разбора (cleanup её не сносит).
-			if _, uErr := tx.Exec(ctx, `
+		if r.permanent || nextAttempts >= w.maxAttempts {
+			if _, uErr := markTx.Exec(ctx, `
 UPDATE outbox
 SET attempts = $2, last_error = $3, dead_at = now(), next_attempt_at = NULL
-WHERE id = $1`, e.id, nextAttempts, hErr.Error()); uErr != nil {
+WHERE id = $1`, e.id, nextAttempts, r.hErr.Error()); uErr != nil {
 				return 0, fmt.Errorf("mark dead: %w", uErr)
 			}
 			deadTotal.WithLabelValues(e.aggregate, e.eventType).Inc()
+			reason := "max_attempts"
+			if r.permanent {
+				reason = "permanent"
+			}
 			w.logger.Error("outbox dead-lettered",
 				"aggregate", e.aggregate, "event", e.eventType,
 				"aggregate_id", e.aggregateID, "outbox_id", e.id,
-				"attempts", nextAttempts, "err", hErr)
+				"attempts", nextAttempts, "reason", reason, "err", r.hErr)
 			continue
 		}
-
 		next := time.Now().Add(w.backoffFor(nextAttempts))
-		if _, uErr := tx.Exec(ctx, `
+		if _, uErr := markTx.Exec(ctx, `
 UPDATE outbox
 SET attempts = $2, last_error = $3, next_attempt_at = $4
-WHERE id = $1`, e.id, nextAttempts, hErr.Error(), next); uErr != nil {
+WHERE id = $1`, e.id, nextAttempts, r.hErr.Error(), next); uErr != nil {
 			return 0, fmt.Errorf("mark retry: %w", uErr)
 		}
 		w.logger.Warn("outbox handler failed, scheduled retry",
 			"aggregate", e.aggregate, "event", e.eventType,
 			"aggregate_id", e.aggregateID, "outbox_id", e.id,
-			"attempts", nextAttempts, "next_attempt_at", next, "err", hErr)
+			"attempts", nextAttempts, "next_attempt_at", next, "err", r.hErr)
 	}
 
 	if len(processedIDs) > 0 {
-		if _, err := tx.Exec(ctx,
-			`UPDATE outbox SET processed_at = now() WHERE id = ANY($1)`,
+		if _, err := markTx.Exec(ctx,
+			`UPDATE outbox SET processed_at = now(), next_attempt_at = NULL WHERE id = ANY($1)`,
 			processedIDs); err != nil {
 			return 0, fmt.Errorf("mark processed: %w", err)
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := markTx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit: %w", err)
 	}
 	return len(processedIDs), nil
