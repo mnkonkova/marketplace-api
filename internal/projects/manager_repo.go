@@ -254,10 +254,13 @@ func (r *Repo) ApproveProposedSpecialist(ctx context.Context, projectID, actorID
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var proposed *uuid.UUID
+	// Берём lead_id заодно с proposed: понадобится ниже для авто-«согласия»
+	// спеца на лид (см. autoAcceptLeadRecipient). leadID может быть NULL —
+	// если проект создан вручную менеджером, без брифа.
+	var leadID, proposed *uuid.UUID
 	if err := tx.QueryRow(ctx,
-		`SELECT lead_recipient_specialist_id FROM projects WHERE id=$1 FOR UPDATE`,
-		projectID).Scan(&proposed); err != nil {
+		`SELECT lead_id, lead_recipient_specialist_id FROM projects WHERE id=$1 FOR UPDATE`,
+		projectID).Scan(&leadID, &proposed); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, ErrNotFound
 		}
@@ -270,6 +273,12 @@ func (r *Repo) ApproveProposedSpecialist(ctx context.Context, projectID, actorID
 		`UPDATE projects SET specialist_user_id=$2, updated_at=now() WHERE id=$1`,
 		projectID, *proposed); err != nil {
 		return uuid.Nil, fmt.Errorf("set specialist: %w", err)
+	}
+	// Менеджер согласовал спеца → автоматически проставляем lead_recipients.status='accepted'.
+	// Раньше спец должен был сам ткнуть «принять» в инбоксе лидов, иначе клиент не мог
+	// оставить отзыв (reviews.LeadAuthorizesReview, см. internal/reviews/repo.go).
+	if err := autoAcceptLeadRecipient(ctx, tx, leadID, *proposed); err != nil {
+		return uuid.Nil, err
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_step_events
@@ -329,21 +338,31 @@ func (r *Repo) AssignSpecialist(ctx context.Context, projectID, actorID, special
 		return fmt.Errorf("%w: специалист деактивирован", ErrInvalidInput)
 	}
 
-	// Проверяем что проект существует и берём lock.
-	var projectExists bool
+	// Берём lock и заодно lead_id — он нужен ниже, чтобы автоматически
+	// зачесть назначение как согласие спеца на лид (см. autoAcceptLeadRecipient).
+	// При свободном назначении (без брифа) lead_id будет NULL — это ок,
+	// helper в таком случае no-op.
+	var leadID *uuid.UUID
 	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1 FOR UPDATE)`,
-		projectID).Scan(&projectExists); err != nil {
-		return fmt.Errorf("check project: %w", err)
-	}
-	if !projectExists {
-		return ErrNotFound
+		`SELECT lead_id FROM projects WHERE id=$1 FOR UPDATE`,
+		projectID).Scan(&leadID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("load project: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx,
 		`UPDATE projects SET specialist_user_id=$2, updated_at=now() WHERE id=$1`,
 		projectID, specialistID); err != nil {
 		return fmt.Errorf("set specialist: %w", err)
+	}
+	// Назначение менеджером засчитываем как согласие спеца — иначе клиент
+	// не сможет оставить отзыв (reviews.LeadAuthorizesReview). Если менеджер
+	// назначил спеца, которого не было в исходных получателях лида,
+	// helper сам вставит для него запись lead_recipients со status='accepted'.
+	if err := autoAcceptLeadRecipient(ctx, tx, leadID, specialistID); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_step_events
@@ -363,6 +382,43 @@ VALUES ($1, NULL, $2, 'human', 'specialist_assigned', $3)`,
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// autoAcceptLeadRecipient — отмечает специалиста как «принявшего» лид в
+// момент, когда менеджер сам подтвердил/назначил его на проект
+// (ApproveProposedSpecialist / AssignSpecialist).
+//
+// Зачем: без этого в lead_recipients статус остаётся 'sent', и клиент не
+// может оставить отзыв — reviews.LeadAuthorizesReview требует строго
+// status='accepted' (см. internal/reviews/repo.go). Семантика: согласование
+// менеджером => дефолтное согласие спеца. Спецу больше не надо самому
+// тыкать «принять» в инбоксе лидов после ручного назначения.
+//
+// Кейсы:
+//  1) Спец был в исходном списке получателей (proposed-flow) — UPDATE
+//     существующей строки lead_recipients.
+//  2) Менеджер назначил спеца, не входившего в получателей лида
+//     (свободное назначение через AssignSpecialist) — INSERT новой
+//     строки, чтобы review-check потом нашёл связку (lead, spec).
+//  3) leadID == nil — проект создан вручную, без лида — no-op.
+//
+// responded_at сохраняется при апдейте (через COALESCE), чтобы не
+// затирать реальное время ответа спеца, если он успел отреагировать.
+func autoAcceptLeadRecipient(ctx context.Context, tx pgx.Tx, leadID *uuid.UUID, specialistID uuid.UUID) error {
+	if leadID == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO lead_recipients (lead_id, specialist_user_id, status, responded_at)
+VALUES ($1, $2, 'accepted', now())
+ON CONFLICT (lead_id, specialist_user_id) DO UPDATE
+SET status       = 'accepted',
+    responded_at = COALESCE(lead_recipients.responded_at, EXCLUDED.responded_at),
+    updated_at   = now()`,
+		*leadID, specialistID); err != nil {
+		return fmt.Errorf("auto-accept lead recipient: %w", err)
+	}
+	return nil
 }
 
 // RejectProposedSpecialist — снимает «предложение». specialist_user_id не
