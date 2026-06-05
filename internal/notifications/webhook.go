@@ -16,18 +16,23 @@ import (
 // Один воркер CRM-событий → один URL. Идемпотентность на стороне n8n
 // обеспечивается передачей event_id (уникальный id из outbox).
 type WebhookDispatcher struct {
-	url    string
-	token  string
-	client *http.Client
+	url        string
+	token      string
+	appBaseURL string
+	client     *http.Client
 }
 
-func NewWebhookDispatcher(url, token string) *WebhookDispatcher {
+// NewWebhookDispatcher — appBaseURL пробрасывается в payload, чтобы n8n
+// мог собирать ссылки на CRM (`/manager/projects/{id}`) без доступа к
+// env vars (n8n task runner их блокирует) и без хардкода в Code node.
+func NewWebhookDispatcher(url, token, appBaseURL string) *WebhookDispatcher {
 	if strings.TrimSpace(url) == "" {
 		return nil
 	}
 	return &WebhookDispatcher{
-		url:   url,
-		token: token,
+		url:        url,
+		token:      token,
+		appBaseURL: appBaseURL,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -36,13 +41,14 @@ func NewWebhookDispatcher(url, token string) *WebhookDispatcher {
 
 // Payload — то что отправляется в n8n. EventID — для идемпотентности.
 // Payload.Data — оригинальный outbox payload (JSON-объект); n8n ветвится
-// по EventType.
+// по EventType. AppBaseURL — базовый URL фронта (для сборки ссылок).
 type Payload struct {
 	EventID     string          `json:"event_id"`
 	Aggregate   string          `json:"aggregate"`
 	AggregateID string          `json:"aggregate_id"`
 	EventType   string          `json:"event_type"`
 	Data        json.RawMessage `json:"data,omitempty"`
+	AppBaseURL  string          `json:"app_base_url,omitempty"`
 	OccurredAt  time.Time       `json:"occurred_at"`
 }
 
@@ -52,6 +58,9 @@ type Payload struct {
 func (d *WebhookDispatcher) Send(ctx context.Context, p Payload) error {
 	if d == nil {
 		return nil
+	}
+	if p.AppBaseURL == "" {
+		p.AppBaseURL = d.appBaseURL
 	}
 	body, err := json.Marshal(p)
 	if err != nil {

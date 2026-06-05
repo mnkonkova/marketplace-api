@@ -34,7 +34,7 @@ S3 (Yandex Object Storage) подключается опционально: ес
 
 Прод-стек поднимается на одной VDS через `docker-compose.prod.yml`: postgres,
 opensearch, redis, api, worker, web (Caddy + статика фронта). Полная
-шпаргалка по первому развёртыванию — в [`docs/DEPLOY.md`](docs/DEPLOY.md):
+шпаргалка по первому развёртыванию — в [`docs/VDS_SETUP.md`](docs/VDS_SETUP.md):
 DNS, ufw, sysctl, заполнение `.env.prod`.
 
 Раскладка на сервере (оба репо рядом):
@@ -48,7 +48,7 @@ DNS, ufw, sysctl, заполнение `.env.prod`.
 
 ```bash
 cd /opt/marketpclce/api
-cp .env.prod.example .env.prod && nano .env.prod   # секреты — см. docs/DEPLOY.md
+cp .env.prod.example .env.prod && nano .env.prod   # секреты — см. docs/VDS_SETUP.md
 make deploy                                         # build + migrate + start всего стека
 ```
 
