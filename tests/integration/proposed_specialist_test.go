@@ -73,7 +73,7 @@ func TestApproveProposedSpecialistEmpty(t *testing.T) {
 func TestRejectProposedSpecialist(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
-	_, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	spec := makeSpecialist(t, pool, true)
@@ -83,7 +83,7 @@ func TestRejectProposedSpecialist(t *testing.T) {
 		`UPDATE projects SET lead_recipient_specialist_id=$2 WHERE id=$1`, pid, spec)
 
 	repo := projects.NewRepo(pool)
-	if err := repo.RejectProposedSpecialist(ctx, pid, uuid.New(), "не профильно"); err != nil {
+	if err := repo.RejectProposedSpecialist(ctx, pid, clientID, "не профильно"); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 	var proposed, confirmed *uuid.UUID

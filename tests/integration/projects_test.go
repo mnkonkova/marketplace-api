@@ -124,14 +124,14 @@ func TestStartProjectSnapshot(t *testing.T) {
 
 func TestAdvanceStageBlockedByClient(t *testing.T) {
 	pool := integration.Pool(t)
-	_, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	repo := projects.NewRepo(pool)
 	ctx := context.Background()
 
 	// Изначально в стадии 1 есть незавершённый client-шаг → advance должен 409.
-	_, err := repo.AdvanceStage(ctx, pid, uuid.New(), 7*24*time.Hour, nil)
+	_, err := repo.AdvanceStage(ctx, pid, clientID, 7*24*time.Hour, nil)
 	if !errors.Is(err, projects.ErrStageBlocked) {
 		t.Fatalf("want ErrStageBlocked, got %v", err)
 	}
@@ -141,7 +141,7 @@ func TestAdvanceStageBlockedByClient(t *testing.T) {
 
 func TestAdvanceStageOK(t *testing.T) {
 	pool := integration.Pool(t)
-	_, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	repo := projects.NewRepo(pool)
@@ -154,7 +154,7 @@ func TestAdvanceStageOK(t *testing.T) {
 		t.Fatalf("close client steps: %v", err)
 	}
 
-	_, err := repo.AdvanceStage(ctx, pid, uuid.New(), 7*24*time.Hour, nil)
+	_, err := repo.AdvanceStage(ctx, pid, clientID, 7*24*time.Hour, nil)
 	if err != nil {
 		t.Fatalf("advance: %v", err)
 	}
@@ -188,7 +188,7 @@ WHERE st.project_id = $1 AND st.sort_order = 1 AND ps.sort_order = 0`,
 
 func TestAdvanceStageOptimisticLock(t *testing.T) {
 	pool := integration.Pool(t)
-	_, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	repo := projects.NewRepo(pool)
@@ -201,7 +201,7 @@ func TestAdvanceStageOptimisticLock(t *testing.T) {
 
 	// Шлём заведомо устаревший updated_at — должен быть ErrConflict.
 	stale := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	_, err := repo.AdvanceStage(ctx, pid, uuid.New(), 7*24*time.Hour, &stale)
+	_, err := repo.AdvanceStage(ctx, pid, clientID, 7*24*time.Hour, &stale)
 	if !errors.Is(err, projects.ErrConflict) {
 		t.Fatalf("want ErrConflict on stale updated_at, got %v", err)
 	}
@@ -211,7 +211,7 @@ func TestAdvanceStageOptimisticLock(t *testing.T) {
 
 func TestMoveProjectToStageBackAndForward(t *testing.T) {
 	pool := integration.Pool(t)
-	_, plID, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, plID, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	repo := projects.NewRepo(pool)
@@ -229,7 +229,7 @@ func TestMoveProjectToStageBackAndForward(t *testing.T) {
 	_, _ = pool.Exec(ctx,
 		`UPDATE project_steps SET status='done', completed_at=now()
 		 WHERE project_id=$1 AND owner='client'`, pid)
-	if _, err := repo.MoveProjectToStage(ctx, pid, stage2PipelineID, uuid.New(), 7*24*time.Hour, nil); err != nil {
+	if _, err := repo.MoveProjectToStage(ctx, pid, stage2PipelineID, clientID, 7*24*time.Hour, nil); err != nil {
 		t.Fatalf("move forward: %v", err)
 	}
 
@@ -252,7 +252,7 @@ WHERE st.project_id=$1 AND st.sort_order=1 AND ps.sort_order=0`,
 		`SELECT id FROM pipeline_stages WHERE pipeline_id = $1 AND sort_order = 0`,
 		plID).Scan(&stage1PipelineID)
 
-	if _, err := repo.MoveProjectToStage(ctx, pid, stage1PipelineID, uuid.New(), 7*24*time.Hour, nil); err != nil {
+	if _, err := repo.MoveProjectToStage(ctx, pid, stage1PipelineID, clientID, 7*24*time.Hour, nil); err != nil {
 		t.Fatalf("move backward: %v", err)
 	}
 

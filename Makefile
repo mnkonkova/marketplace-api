@@ -1,9 +1,18 @@
-.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test lint fmt swag \
+.PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test test-db-up test-db-reset test-integration lint fmt swag \
         deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos \
         backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
+
+# Отдельная БД для integration-тестов (тот же postgres-контейнер, другая БД).
+# Парсим user/host/port из DATABASE_URL чтобы не дублировать config.
+TEST_DB_NAME ?= marketpclce_test
+PG_USER ?= $$(echo "$(DSN)" | sed -n 's|postgres://\([^:]*\):.*|\1|p')
+PG_PASS ?= $$(echo "$(DSN)" | sed -n 's|postgres://[^:]*:\([^@]*\)@.*|\1|p')
+PG_HOST_PORT ?= $$(echo "$(DSN)" | sed -n 's|.*@\([^/]*\)/.*|\1|p')
+TEST_DSN ?= postgres://$(PG_USER):$(PG_PASS)@$(PG_HOST_PORT)/$(TEST_DB_NAME)?sslmode=disable
+PG_CONTAINER ?= marketplace-api-postgres-1
 PROD_DSN ?= $$(grep -E '^DATABASE_URL=' .env.prod 2>/dev/null | cut -d= -f2- | tr -d '"')
 PROD_DC ?= docker compose -f docker-compose.prod.yml --env-file .env.prod
 
@@ -56,6 +65,30 @@ migrate-create:
 
 test:
 	go test ./...
+
+# === Integration test DB ===
+# Поднимает отдельную БД marketpclce_test в том же postgres-контейнере,
+# что и dev. Не трогает dev-БД. Идемпотентно — повторный вызов не падает.
+test-db-up:
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tAc \
+		"SELECT 1 FROM pg_database WHERE datname='$(TEST_DB_NAME)'" | grep -q 1 \
+		|| docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c \
+			"CREATE DATABASE $(TEST_DB_NAME);"
+	@TEST_DSN_FOR_MIGRATE="$(TEST_DSN)"; \
+		go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest \
+			-dir migrations postgres "$$TEST_DSN_FOR_MIGRATE" up
+	@echo "test-db ready: $(TEST_DSN)"
+
+# Сбрасывает test-БД — DROP + CREATE + миграции. Полная зачистка между прогонами.
+test-db-reset:
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c \
+		"DROP DATABASE IF EXISTS $(TEST_DB_NAME);"
+	@$(MAKE) test-db-up
+
+# Запускает все тесты с TEST_DATABASE_URL — integration-тесты не SKIPped.
+# Перед запуском убедись что test-db поднята (make test-db-up).
+test-integration:
+	TEST_DATABASE_URL="$(TEST_DSN)" go test ./...
 
 fmt:
 	gofmt -w .

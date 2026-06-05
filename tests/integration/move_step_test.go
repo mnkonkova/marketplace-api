@@ -29,7 +29,7 @@ func loadStepsByName(t *testing.T, repo *projects.Repo, pid uuid.UUID) map[strin
 
 func TestMoveStepSkipsClientStepForward(t *testing.T) {
 	pool := integration.Pool(t)
-	_, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	repo := projects.NewRepo(pool)
@@ -43,7 +43,7 @@ func TestMoveStepSkipsClientStepForward(t *testing.T) {
 	// Двигаем проект на "Финализация" (team-шаг stage2). Между текущим и
 	// целевым стоит client-шаг "Апрув клиента" в pending — раньше это давало
 	// ErrStageBlocked, теперь client-шаг должен пометиться skipped.
-	if _, err := repo.MoveProjectToStep(ctx, pid, finalizationID, uuid.New(), 7*24*time.Hour, nil); err != nil {
+	if _, err := repo.MoveProjectToStep(ctx, pid, finalizationID, clientID, 7*24*time.Hour, nil); err != nil {
 		t.Fatalf("move step: %v", err)
 	}
 
@@ -83,7 +83,7 @@ WHERE project_id=$1 AND step_id=$2 AND event_kind='step_skipped_by_staff'`,
 
 func TestMoveStepBackwardResetsSkippedClient(t *testing.T) {
 	pool := integration.Pool(t)
-	_, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	repo := projects.NewRepo(pool)
@@ -94,11 +94,11 @@ func TestMoveStepBackwardResetsSkippedClient(t *testing.T) {
 	editID := byName["Сделать монтаж"].ID
 
 	// Двигаем вперёд (skipped on client).
-	if _, err := repo.MoveProjectToStep(ctx, pid, finalizationID, uuid.New(), 7*24*time.Hour, nil); err != nil {
+	if _, err := repo.MoveProjectToStep(ctx, pid, finalizationID, clientID, 7*24*time.Hour, nil); err != nil {
 		t.Fatalf("forward: %v", err)
 	}
 	// Двигаем назад на "Сделать монтаж".
-	if _, err := repo.MoveProjectToStep(ctx, pid, editID, uuid.New(), 7*24*time.Hour, nil); err != nil {
+	if _, err := repo.MoveProjectToStep(ctx, pid, editID, clientID, 7*24*time.Hour, nil); err != nil {
 		t.Fatalf("backward: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestMoveStepBackwardResetsSkippedClient(t *testing.T) {
 
 func TestMoveStepActivatesReviewDeadline(t *testing.T) {
 	pool := integration.Pool(t)
-	_, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
 	defer cleanup()
 
 	// помечаем последний шаг (Оставить отзыв) как is_review для теста дедлайна.
@@ -130,7 +130,7 @@ func TestMoveStepActivatesReviewDeadline(t *testing.T) {
 	byName := loadStepsByName(t, repo, pid)
 	reviewID := byName["Оставить отзыв"].ID
 
-	if _, err := repo.MoveProjectToStep(ctx, pid, reviewID, uuid.New(), 5*24*time.Hour, nil); err != nil {
+	if _, err := repo.MoveProjectToStep(ctx, pid, reviewID, clientID, 5*24*time.Hour, nil); err != nil {
 		t.Fatalf("move: %v", err)
 	}
 
