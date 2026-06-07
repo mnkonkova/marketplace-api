@@ -44,7 +44,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -102,7 +102,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -159,7 +159,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -216,7 +216,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -257,7 +257,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -308,7 +308,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -356,7 +356,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -403,7 +403,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -442,7 +442,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -507,7 +507,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -565,7 +565,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -619,7 +619,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -677,7 +677,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -735,7 +735,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -786,7 +786,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -847,7 +847,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -912,7 +912,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -973,7 +973,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1021,7 +1021,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1086,7 +1086,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1159,7 +1159,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1225,7 +1225,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1304,7 +1304,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1355,7 +1355,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1420,7 +1420,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1481,7 +1481,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1539,7 +1539,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1597,7 +1597,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1635,7 +1635,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1693,7 +1693,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       },
       "targets": [
         {
@@ -1759,7 +1759,7 @@
         "label": "Route",
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_PROMETHEUS}"
+          "uid": "grafanacloud-prom"
         },
         "query": "label_values(http_requests_total{job=\"marketpclce-api\"}, route)",
         "multi": true,

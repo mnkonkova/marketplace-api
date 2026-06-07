@@ -65,7 +65,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -119,7 +119,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -149,7 +149,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -204,7 +204,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -250,7 +250,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -279,7 +279,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -321,7 +321,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -350,7 +350,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -380,7 +380,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -463,7 +463,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     },
     {
@@ -498,7 +498,7 @@
       },
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "grafanacloud-prom"
       }
     }
   ],
@@ -509,21 +509,7 @@
     "business"
   ],
   "templating": {
-    "list": [
-      {
-        "name": "DS_PROMETHEUS",
-        "label": "Prometheus",
-        "type": "datasource",
-        "query": "prometheus",
-        "current": {
-          "selected": true,
-          "text": "grafanacloud-prom",
-          "value": "grafanacloud-prom"
-        },
-        "hide": 0,
-        "regex": ""
-      }
-    ]
+    "list": []
   },
   "time": {
     "from": "now-24h",
