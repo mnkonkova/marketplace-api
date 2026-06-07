@@ -306,10 +306,17 @@ n8n живёт в отдельном контейнере (вне нашего c
 
 ### Поднять n8n
 
+⚠️ Имя сети зависит от названия директории, из которой ты делала
+`make deploy`. Стандартно для раскладки `/opt/marketpclce/api/` оно
+будет `api_default`. Проверь:
+```bash
+docker network ls | grep default
+```
+
 ```bash
 docker run -d \
   --name marketplace-api-n8n-1 \
-  --network marketplace-api_default \
+  --network api_default \
   --restart unless-stopped \
   -p 5678:5678 \
   -v marketplace-api_n8n-data:/home/node/.n8n \
@@ -320,10 +327,10 @@ docker run -d \
   n8nio/n8n
 ```
 
-`--network marketplace-api_default` обязательно — иначе Caddy в `web`
-контейнере не достучится до n8n. Имя контейнера `marketplace-api-n8n-1`
-является DNS-именем в этой сети (см. `Caddyfile`: `reverse_proxy
-marketplace-api-n8n-1:5678`).
+`--network api_default` (или твой реальный имя сети из `docker network ls`)
+— обязательно, иначе Caddy в `web` контейнере не достучится до n8n.
+Имя контейнера `marketplace-api-n8n-1` — DNS-имя в этой сети
+(см. `Caddyfile`: `reverse_proxy marketplace-api-n8n-1:5678`).
 
 Заведи A-запись `n8n.<домен>` → IP VDS до запуска `make deploy`,
 чтобы Caddy выписал TLS на этот поддомен через HTTP-01 challenge.
