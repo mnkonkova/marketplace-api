@@ -97,6 +97,22 @@ func (c *Client) PublicURL(key string) string {
 	return c.publicURL + "/" + strings.TrimLeft(key, "/")
 }
 
+// Download качает объект в локальный файл через S3 GetObject. Используется
+// transcoding-пайплайном (worker качает оригинал → ffmpeg → upload preview).
+// localPath обязан указывать в существующую директорию.
+func (c *Client) Download(ctx context.Context, key, localPath string) error {
+	return c.mc.FGetObject(ctx, c.bucket, key, localPath, minio.GetObjectOptions{})
+}
+
+// Upload заливает локальный файл в S3. contentType пишется в metadata.
+// Multipart переключается автоматически (minio-go выбирает по размеру).
+func (c *Client) Upload(ctx context.Context, key, localPath, contentType string) error {
+	_, err := c.mc.FPutObject(ctx, c.bucket, key, localPath, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	return err
+}
+
 // Bucket — для логирования/диагностики.
 func (c *Client) Bucket() string { return c.bucket }
 

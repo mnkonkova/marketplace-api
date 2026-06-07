@@ -95,6 +95,15 @@ type Config struct {
 	OutboxCleanupInterval time.Duration `env:"OUTBOX_CLEANUP_INTERVAL" envDefault:"1h"`
 	WorkerMetricsAddr     string        `env:"WORKER_METRICS_ADDR" envDefault:":9090"`
 
+	// Транскод-пайплайн preview-видео (см. docs/VIDEO_TRANSCODING.md).
+	// FFmpegPath пустой → exec.LookPath("ffmpeg") (берётся первый из PATH).
+	// Если ffmpeg не найден на старте воркера — обработчик
+	// portfolio.video_uploaded стартует как no-op (логирует и квитирует),
+	// чтобы воркер запускался и в dev-окружении без ffmpeg.
+	FFmpegPath        string        `env:"FFMPEG_PATH" envDefault:""`
+	TranscodeTimeout  time.Duration `env:"TRANSCODE_TIMEOUT" envDefault:"90s"`
+	TranscodeTempDir  string        `env:"TRANSCODE_TEMP_DIR" envDefault:"/tmp/transcode"`
+
 	// CRM v5: review-шаг ставится в waiting_client с deadline=now+ReviewDeadline.
 	// По истечении worker переводит шаг в skipped. Дефолт 7 дней.
 	ReviewDeadline      time.Duration `env:"REVIEW_DEADLINE" envDefault:"168h"`
@@ -122,6 +131,11 @@ type Config struct {
 	// (UniSender Go) как раньше; если и mailer пустой — событие пишется
 	// в log и квитируется (см. cmd/worker emailHandler).
 	N8nEmailWebhookURL string `env:"N8N_EMAIL_WEBHOOK_URL"`
+
+	// N8nSupportWebhookURL — workflow для обращений в поддержку из футера UI
+	// (event support.message_received). Пусто → событие квитируется как
+	// no-op (запись в support_messages остаётся, но в Telegram не уходит).
+	N8nSupportWebhookURL string `env:"N8N_SUPPORT_WEBHOOK_URL"`
 
 	// S3SweepAccessKey / S3SweepSecretKey — отдельный сервис-аккаунт для
 	// orphan-sweep'a в worker'е и CLI cmd/s3-sweep-once. Требует list +

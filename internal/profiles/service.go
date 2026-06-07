@@ -495,8 +495,25 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		}
 		// Outbox-событие: воркер переиндексирует ES-документ спеца,
 		// в т.ч. last_video_at — это критично для /feed ранжирования.
-		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			return err
+		}
+		// portfolio.video_uploaded → транскод-пайплайн в воркере (см.
+		// docs/VIDEO_TRANSCODING.md). Эмитим только если s3-ключ
+		// резолвится из URL — для внешних ссылок (D6 их теперь не
+		// принимает, но на всякий случай) транскода нет.
+		if s.media != nil {
+			if key := s.media.KeyFromURL(in.VideoURL); key != "" {
+				return outbox.Emit(ctx, tx, outbox.AggregatePortfolio, item.ID.String(),
+					outbox.EventPortfolioVideoUploaded, outbox.PortfolioVideoUploadedPayload{
+						ItemID: item.ID.String(),
+						UserID: userID.String(),
+						S3Key:  key,
+					})
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return PortfolioItem{}, err

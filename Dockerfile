@@ -20,7 +20,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/api    
         github.com/pressly/goose/v3/cmd/goose@latest
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && \
+# ca-certificates + tzdata — общие для api/worker.
+# ffmpeg — нужен только воркеру для transcoding-пайплайна preview-видео
+# (см. docs/VIDEO_TRANSCODING.md). api его не вызывает, но образ один,
+# чтобы не плодить tag'и. Размер: ~70 МБ установленных пакетов.
+# Если ffmpeg в PATH не найдётся (например, при сборке из этого
+# Dockerfile с другим базовым образом) — worker стартует с transcode no-op.
+RUN apk add --no-cache ca-certificates tzdata ffmpeg && \
     addgroup -S app && adduser -S -G app app
 
 WORKDIR /app

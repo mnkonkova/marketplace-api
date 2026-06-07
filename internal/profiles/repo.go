@@ -420,7 +420,8 @@ func (r *Repo) listPortfolio(ctx context.Context, userID uuid.UUID) ([]Portfolio
 	rows, err := r.db.Query(ctx, `
 SELECT id, title, description,
        COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-       category_codes, sort_order, created_at, updated_at
+       category_codes, sort_order, created_at, updated_at,
+       COALESCE(preview_url, ''), preview_status
 FROM portfolio_items
 WHERE user_id = $1
 ORDER BY sort_order, created_at DESC`, userID)
@@ -435,6 +436,7 @@ ORDER BY sort_order, created_at DESC`, userID)
 			&p.ID, &p.Title, &p.Description,
 			&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 			&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
+			&p.PreviewURL, &p.PreviewStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -487,7 +489,8 @@ VALUES (
 )
 RETURNING id, title, description,
           COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-          category_codes, sort_order, created_at, updated_at`
+          category_codes, sort_order, created_at, updated_at,
+          COALESCE(preview_url, ''), preview_status`
 	var p PortfolioItem
 	cats := in.CategoryCodes
 	if cats == nil {
@@ -511,6 +514,7 @@ RETURNING id, title, description,
 		&p.ID, &p.Title, &p.Description,
 		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
+		&p.PreviewURL, &p.PreviewStatus,
 	)
 	if err != nil {
 		return PortfolioItem{}, fmt.Errorf("insert portfolio: %w", err)

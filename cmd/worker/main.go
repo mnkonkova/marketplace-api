@@ -26,6 +26,7 @@ import (
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
 	"marketpclce/internal/search"
+	"marketpclce/internal/transcode"
 )
 
 func main() {
@@ -180,11 +181,87 @@ func main() {
 		})
 	}
 
+	// support.message_received → отдельный workflow (дамп в Telegram).
+	n8nSupportDispatcher := notifications.NewWebhookDispatcher(cfg.N8nSupportWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
+	if n8nSupportDispatcher == nil {
+		slog.Info("n8n support webhook disabled (N8N_SUPPORT_WEBHOOK_URL empty)")
+	} else {
+		slog.Info("n8n support webhook ready", "url", cfg.N8nSupportWebhookURL)
+	}
+	supportHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
+		if n8nSupportDispatcher == nil {
+			return nil
+		}
+		return n8nSupportDispatcher.Send(ctx, notifications.Payload{
+			EventID:     strconv.FormatInt(outboxID, 10),
+			Aggregate:   outbox.AggregateSupport,
+			AggregateID: aggregateID,
+			EventType:   eventType,
+			Data:        payload,
+			OccurredAt:  time.Now().UTC(),
+		})
+	}
+
+	// portfolio.video_uploaded → транскодинг preview (480p, ~500KB) через
+	// локальный ffmpeg. См. docs/VIDEO_TRANSCODING.md.
+	// Условия для активации:
+	//   1) ffmpeg есть в PATH (или указан через FFMPEG_PATH)
+	//   2) S3-ключи сконфигурены (нужен Get+Put на bucket)
+	// Если что-то из этого нет — handler стартует как no-op (логирует и
+	// квитирует событие), worker не валится. Это позволяет запускать
+	// воркер локально без ffmpeg/без S3 и видеть остальные хендлеры.
+	portfolioHandler := transcodeNoOpHandler
+	ffmpeg, ffmpegErr := transcode.NewFFmpegBin(cfg.FFmpegPath, cfg.TranscodeTimeout)
+	switch {
+	case ffmpegErr != nil:
+		slog.Warn("transcode disabled (ffmpeg not available) — portfolio.video_uploaded acked as no-op",
+			"err", ffmpegErr)
+	case cfg.S3AccessKey == "" || cfg.S3SecretKey == "":
+		slog.Warn("transcode disabled (S3 creds not set) — portfolio.video_uploaded acked as no-op")
+	default:
+		s3TC, err := s3.New(s3.Config{
+			Endpoint:  cfg.S3Endpoint,
+			AccessKey: cfg.S3AccessKey,
+			SecretKey: cfg.S3SecretKey,
+			Bucket:    cfg.S3Bucket,
+			Region:    cfg.S3Region,
+			UseSSL:    cfg.S3UseSSL,
+			PublicURL: cfg.S3PublicURL,
+		})
+		if err != nil {
+			slog.Error("transcode s3 client init failed", "err", err)
+			os.Exit(1)
+		}
+		transcoder, err := transcode.NewService(transcode.Config{
+			FFmpeg:  ffmpeg,
+			Storage: s3TC,
+			TempDir: cfg.TranscodeTempDir,
+			DB:      pool,
+		}, logger)
+		if err != nil {
+			slog.Error("transcode service init failed", "err", err)
+			os.Exit(1)
+		}
+		portfolioHandler = func(ctx context.Context, _ int64, aggregateID, eventType string, payload []byte) error {
+			if eventType != outbox.EventPortfolioVideoUploaded {
+				return fmt.Errorf("%w: unknown portfolio event %q", outbox.ErrPermanent, eventType)
+			}
+			err := transcoder.Process(ctx, payload)
+			if err != nil && errors.Is(err, transcode.ErrPermanent) {
+				return fmt.Errorf("%w: %v", outbox.ErrPermanent, err)
+			}
+			return err
+		}
+		slog.Info("transcode ready", "ffmpeg_timeout", cfg.TranscodeTimeout, "tempdir", cfg.TranscodeTempDir)
+	}
+
 	worker := outbox.NewWorker(pool, logger,
 		map[string]outbox.Handler{
 			outbox.AggregateSpecialist: specialistHandler,
 			outbox.AggregateEmail:      emailHandler,
 			outbox.AggregateProject:    projectHandler,
+			outbox.AggregateSupport:    supportHandler,
+			outbox.AggregatePortfolio:  portfolioHandler,
 		},
 		outbox.Config{
 			MaxAttempts:     cfg.OutboxMaxAttempts,
@@ -300,6 +377,15 @@ func runOldProjectsCleanupTicker(ctx context.Context, svc *projects.Service, don
 			}
 		}
 	}
+}
+
+// transcodeNoOpHandler — заглушка для portfolio.video_uploaded когда
+// ffmpeg/S3 не сконфигурены. Не делает ничего, только логирует — событие
+// квитируется как success, чтобы не висеть в outbox-ретраях.
+var transcodeNoOpHandler outbox.Handler = func(_ context.Context, _ int64, aggregateID, eventType string, _ []byte) error {
+	slog.Info("transcode no-op (handler disabled)",
+		"aggregate_id", aggregateID, "event", eventType)
+	return nil
 }
 
 // runMediaSweepTicker — периодически удаляет orphan-объекты из S3

@@ -13,6 +13,9 @@ import (
 type FeedVideoDoc struct {
 	VideoID        string    `json:"video_id"`
 	VideoURL       string    `json:"video_url"`
+	// PreviewURL — маленький 480p ~500KB вариант для autoplay в фиде.
+	// Пусто, если preview_status != 'ready' (фронт фолбэчит на VideoURL).
+	PreviewURL     string    `json:"preview_url,omitempty"`
 	ThumbURL       string    `json:"thumb_url,omitempty"`
 	Title          string    `json:"title,omitempty"`
 	Description    string    `json:"description,omitempty"`
@@ -48,6 +51,7 @@ func (r *Repo) LoadFeedVideoDocs(ctx context.Context, userID uuid.UUID) ([]FeedV
 SELECT
   pi.id::text,
   COALESCE(pi.video_url, ''),
+  COALESCE(pi.preview_url, ''),
   COALESCE(pi.thumbnail_url, ''),
   pi.title,
   pi.description,
@@ -86,7 +90,7 @@ ORDER BY pi.sort_order, pi.created_at DESC`
 		var d FeedVideoDoc
 		var dur *int
 		if err := rows.Scan(
-			&d.VideoID, &d.VideoURL, &d.ThumbURL,
+			&d.VideoID, &d.VideoURL, &d.PreviewURL, &d.ThumbURL,
 			&d.Title, &d.Description,
 			&dur, &d.Aspect,
 			&d.VideoCreatedAt, &d.CategoryCodes,

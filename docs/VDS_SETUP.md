@@ -23,7 +23,8 @@
 | Домен | Любой регистратор; нужен поддомен `app.<домен>` под VDS IP |
 | Yandex Cloud Service Account | console.cloud.yandex.ru — нужен ключ к S3 для медиа |
 | Anthropic API key (опционально) | console.anthropic.com — LLM-фичи (summarize/clarify) |
-| Unisender Go API key | unisender.com — транзакционные письма |
+| SMTP-аккаунт `noreply@<домен>` | reg.ru hosting — отправка verify/reset писем (через n8n) |
+| SMTP-аккаунт `info@<домен>` | reg.ru hosting — приём обращений из футера UI |
 | Telegram bot token (опционально) | @BotFather — n8n-нотификации |
 | Grafana Cloud free tier (опционально) | grafana.com — метрики + логи |
 | **Для сценария B**: tar-бекапы со старой VDS | `backups/marketpclce-*.sql.gz` и `backups/n8n/n8n-*.tar.gz` |
@@ -58,7 +59,7 @@
 | opensearch | ~700 MB | ~1.0 GB | Java heap 512m + off-heap |
 | redis | ~30 MB | ~100 MB | rate-limit окна + кэш summarize |
 | api (Go) | ~50 MB | ~200 MB | пулы pgx/redis/es |
-| worker (Go) | ~50 MB | ~200 MB | outbox loop + s3 sweep |
+| worker (Go) | ~50 MB | ~250 MB | outbox loop + s3 sweep + ffmpeg-транскод |
 | web (Caddy + статика) | ~30 MB | ~50 MB | проксирует /api |
 | n8n (Node.js) | ~250 MB | ~500 MB | + workflows под нагрузкой |
 | node-exporter + alloy | ~80 MB | ~150 MB | observability агент |
@@ -72,7 +73,7 @@
 
 | Что | Старт | Через год (~100 проектов) | Через 3 года (~1000 проектов) |
 |---|---|---|---|
-| Docker-images (api/web/postgres/opensearch/redis/n8n) | ~4 GB | ~4 GB | ~5 GB |
+| Docker-images (api/web/postgres/opensearch/redis/n8n) | ~4.2 GB | ~4.2 GB | ~5.2 GB |
 | Postgres data | ~50 MB | ~500 MB | ~3 GB |
 | OpenSearch index | ~20 MB | ~150 MB | ~1 GB |
 | n8n volume (workflows + execution log) | ~10 MB | ~200 MB | ~1 GB |
@@ -167,7 +168,7 @@ nano .env.prod
 | `JWT_SECRET` | `openssl rand -hex 32` |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | Yandex Cloud → Service Account → Static access key |
 | `LLM_API_KEY` | console.anthropic.com (опционально) |
-| `N8N_WEBHOOK_URL` / `N8N_EMAIL_WEBHOOK_URL` | пока пустое (заполним в шаге 7) |
+| `N8N_WEBHOOK_URL` / `N8N_EMAIL_WEBHOOK_URL` / `N8N_SUPPORT_WEBHOOK_URL` | пока пустое (заполним в шаге 7) |
 
 `CORS_ORIGINS` оставь пустым — фронт и API под одним доменом, CORS не нужен.
 
@@ -286,7 +287,7 @@ curl -fsSL https://app.<домен>/api/v1/specialists | head -c 200
 
 ```bash
 # Зарегистрируйся через UI: https://app.<домен>/registration
-# Подтверди email (письмо от Unisender).
+# Подтверди email (письмо от noreply@<домен>, через n8n SMTP).
 # Затем в Postgres:
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
   exec postgres psql -U marketpclce -d marketpclce \
@@ -297,7 +298,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod \
 
 ---
 
-## 7. n8n + Telegram (опционально, для CRM-нотификаций)
+## 7. n8n (нотификации: Telegram, Email через reg.ru SMTP)
 
 n8n живёт в отдельном контейнере (вне нашего compose'а — управляется
 руками или через отдельный compose, см. `docker-compose.n8n.yml` если
@@ -324,28 +325,43 @@ docker run -d \
 
 1. Открой `https://n8n.<домен>` — экран **Owner Setup**.
 2. Заведи email/пароль (минимум 8 символов, 1 заглавная, 1 цифра).
-3. **Импортируй версионированные workflows из git** (3 штуки лежат
+3. **Импортируй версионированные workflows из git** (4 штуки лежат
    в `deploy/n8n/workflows/`):
    ```bash
    cd /opt/marketpclce/api
    make n8n-import
    ```
-   Появятся: `CRM project events → Telegram`, `CRM weekly digest → Telegram`,
-   `CRM email notifications`. Все деактивированы.
-4. **Создай credentials в n8n UI** (Settings → Credentials → New):
-   - `Telegram CRM bot` (Telegram API) — bot token от @BotFather, chat_id
-     группы менеджеров. Перепривяжи credential к нодам Telegram в обоих
-     Telegram-workflows.
-   - `UniSender Go X-API-KEY` (HTTP Header Auth) — Name = `X-API-KEY`,
-     Value = `UNISENDER_API_KEY` из `.env.prod`. Привяжи к ноде
-     `UniSender Go send` в email-workflow.
-   - `Postgres CRM` (Postgres) — host=`postgres`, port=5432, db=`marketpclce`,
-     user/password из `.env.prod`. Привяжи к ноде в digest-workflow.
-5. Скопируй **Production URL** Webhook node'ов:
-   - `https://n8n.<домен>/webhook/project-events` → в `N8N_WEBHOOK_URL`
-   - `https://n8n.<домен>/webhook/email-events`   → в `N8N_EMAIL_WEBHOOK_URL`
+   Появятся 4 деактивированных workflow:
+   - `CRM project events → Telegram` (новые брифы, назначения, споры)
+   - `CRM email notifications (verify + reset)` (письма от noreply@)
+   - `CRM weekly digest → Telegram` (дайджест в понедельник 9:00)
+   - `CRM support → Telegram + Email` (футер /support)
+4. **Создай credentials в n8n UI** (левый сайдбар → **Credentials** → `Create
+   Credential`; в n8n 2.x они не в Settings, а отдельным пунктом):
+
+   | Имя | Тип | Поля |
+   |---|---|---|
+   | `Telegram CRM bot` | Telegram API | Access Token от @BotFather |
+   | `reg.ru SMTP noreply` | SMTP | Host=`mail.hosting.reg.ru`, Port=`465` (SSL) или `587` (TLS), User=`noreply@wayprmarket.com`, Password=из reg.ru |
+   | `Postgres CRM` | Postgres | Host=`postgres`, Port=`5432`, DB=`marketpclce`, User/Password из `.env.prod` |
+
+   После создания каждого credential — открой workflows и перепривяжи
+   ноды (Telegram, Send via reg.ru SMTP, Email → info@, Postgres stats),
+   у каждой в выпадашке `Credential to connect with` выбери новый
+   credential.
+5. Скопируй **Production URL** Webhook-нод и вставь в `.env.prod`:
+   ```
+   N8N_WEBHOOK_URL=https://n8n.<домен>/webhook/project-events
+   N8N_EMAIL_WEBHOOK_URL=https://n8n.<домен>/webhook/email-events
+   N8N_SUPPORT_WEBHOOK_URL=https://n8n.<домен>/webhook/support-events
+   ```
 6. `make deploy` → перезапустит worker с включёнными диспатчерами.
-7. **Активируй workflows** в n8n (тумблер справа сверху на каждом).
+   В логах должно быть три строки `n8n ... webhook ready`.
+7. **Активируй каждый workflow** в n8n (тумблер `Active` справа сверху).
+8. Проверь email:
+   - `mail.hosting.reg.ru` MX-запись на твой домен (через reg.ru cabinet)
+   - SPF/DKIM на домен для noreply@wayprmarket.com — иначе письма
+     уедут в спам у клиентов.
 
 ### Изменение workflows (dev → git → prod)
 
@@ -430,6 +446,24 @@ make redeploy      # zero-downtime: graceful restart, Caddy ретраит /api/
 - `SKIP_MIGRATE=1` — без goose (например, restore из дампа)
 - `SKIP_BACKUP=1` — без pre-migrate backup (опасно — только для безопасных миграций)
 
+### Видео-транскод preview'ев (с 06.2026)
+
+В `Dockerfile` runtime-стейдж теперь устанавливает `ffmpeg` через
+`apk add` (см. `docs/VIDEO_TRANSCODING.md` про сам пайплайн). Это
+добавляет ~70 МБ к образу. После обновления — обязательно `make deploy`
+с rebuild'ом (т.е. без `SKIP_*`), иначе образ старый и worker логирует
+`transcode disabled (ffmpeg not available)` при старте.
+
+Конфиг (env, optional):
+- `FFMPEG_PATH` — путь к бинарю. Пустой → `exec.LookPath("ffmpeg")`.
+- `TRANSCODE_TIMEOUT` — потолок на один transcode (по умолчанию 90s).
+- `TRANSCODE_TEMP_DIR` — куда worker кладёт оригиналы/preview во время
+  обработки (по умолчанию `/tmp/transcode`, очищается автоматически).
+
+Pipeline идёт async через outbox (`portfolio.video_uploaded`).
+Если кластерная нагрузка вырастет — можно поднять CPU на VDS либо
+выкатить второй worker (lease-and-release из P3 разводит работу).
+
 ---
 
 ## Troubleshooting
@@ -465,6 +499,29 @@ docker exec marketplace-api-n8n-1 n8n user-management:reset
 **`make backup-n8n` пустой (< 1KB)**
 Volume `marketplace-api_n8n-data` не существует или контейнер первый
 раз не стартовал. `docker volume ls | grep n8n`.
+
+**Воркер логирует `transcode disabled (ffmpeg not available)`**
+После обновления на версию с транскод-пайплайном нужно ребилднуть
+образ — старый alpine без ffmpeg. `make deploy` (без `SKIP_*`) или
+`docker compose -f docker-compose.prod.yml --env-file .env.prod build worker`.
+Чек: `docker exec marketplace-api-worker-1 ffmpeg -version` должен
+вывести `ffmpeg version 6.x.x`.
+
+**Preview не появляется через ~3 минуты после аплоада**
+Глянь outbox и preview_status:
+```bash
+docker exec marketplace-api-postgres-1 psql -U marketpclce -d marketpclce -c "
+  SELECT id, preview_status, preview_error, preview_generated_at, updated_at
+  FROM portfolio_items
+  WHERE preview_status IN ('processing','failed','pending')
+  ORDER BY updated_at DESC LIMIT 10;"
+```
+- `pending` старше 5 минут — outbox-event потерялся или ffmpeg недоступен;
+  глянь логи воркера (`docker logs marketplace-api-worker-1 | grep transcode`).
+- `failed` — `preview_error` содержит причину (битый файл / неподдерж. кодек / S3 404).
+- `processing` старше 15 минут — handler крашится; смотри
+  `outbox_dead` метрику или вручную:
+  `SELECT * FROM outbox WHERE aggregate='portfolio' AND dead_at IS NOT NULL ORDER BY dead_at DESC;`
 
 **LLM-эндпоинты возвращают 404**
 `LLM_API_KEY` пустой — `/search/summarize` и `/clarify` не маунтятся

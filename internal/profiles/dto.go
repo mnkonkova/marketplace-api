@@ -44,6 +44,11 @@ type PortfolioItem struct {
 	SortOrder     int       `json:"sort_order"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	// Preview-видео (480p, 5-10 сек, ~500KB) для autoplay в фиде.
+	// Генерируется worker'ом async (см. docs/VIDEO_TRANSCODING.md).
+	// Пока PreviewStatus != "ready", фронт должен фолбэчить на VideoURL.
+	PreviewURL    string `json:"preview_url,omitempty"`
+	PreviewStatus string `json:"preview_status"` // pending|processing|ready|failed
 }
 
 type PublicProfile struct {
