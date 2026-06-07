@@ -1,0 +1,117 @@
+{
+  "id": "crmSupport",
+  "name": "CRM support → Telegram + Email",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-events",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        304
+      ],
+      "webhookId": "crm-support-events"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Готовит сообщение для Telegram (дамп в чат) и для email (тред в info@).\n// Payload (см. internal/support/service.go): {message_id, from_email,\n// from_name, topic, message, source_url, user_id?}.\nconst raw = $input.first().json;\nconst e = raw.body || raw;\nconst d = e.data || {};\n\nconst esc = (s) => String(s ?? '').replace(/([_*`])/g, '\\\\$1');\nconst topics = { payment: '💸 Оплата', bug: '🐛 Баг', feature: '✨ Идея', other: '❓ Другое' };\nconst topic = topics[d.topic] || `❓ ${esc(d.topic || 'other')}`;\nconst from = d.from_name\n  ? `${esc(d.from_name)} (${esc(d.from_email)})`\n  : esc(d.from_email || '—');\nconst src = d.source_url ? `\\n🔗 ${esc(d.source_url)}` : '';\nconst auth = d.user_id ? ` · uid=\\`${String(d.user_id).slice(0,8)}\\`` : ' · гость';\n\nconst tgText = `📨 *Поддержка: ${topic}*${auth}\\n\\n` +\n               `*От:* ${from}\\n\\n` +\n               `${esc(d.message || '')}` +\n               src;\n\nconst emailSubject = `[Поддержка/${d.topic || 'other'}] от ${d.from_email || 'guest'}`;\nconst emailText = `Тип: ${d.topic}\\n` +\n                  `От: ${d.from_name ? d.from_name + ' <' + d.from_email + '>' : d.from_email}\\n` +\n                  `User: ${d.user_id || 'гость'}\\n` +\n                  `Страница: ${d.source_url || '—'}\\n\\n` +\n                  `${d.message || ''}`;\nconst emailHtml = `<p><strong>Тип:</strong> ${d.topic}</p>` +\n                  `<p><strong>От:</strong> ${d.from_name ? d.from_name + ' &lt;' + d.from_email + '&gt;' : d.from_email}</p>` +\n                  `<p><strong>User:</strong> ${d.user_id || 'гость'}</p>` +\n                  `<p><strong>Страница:</strong> ${d.source_url || '—'}</p>` +\n                  `<hr>` +\n                  `<p>${String(d.message || '').replace(/\\n/g,'<br>')}</p>`;\n\nreturn [{ json: {\n  tgText,\n  emailSubject, emailText, emailHtml,\n  replyTo: d.from_email || ''\n}}];"
+      },
+      "id": "node-format",
+      "name": "Format message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "-1003870426167",
+        "text": "={{$json.tgText}}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "node-telegram",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        688,
+        192
+      ],
+      "credentials": {
+        "telegramApi": {
+          "name": "Telegram CRM bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@wayprmarket.com",
+        "toEmail": "info@wayprmarket.com",
+        "subject": "={{$json.emailSubject}}",
+        "html": "={{$json.emailHtml}}",
+        "text": "={{$json.emailText}}",
+        "options": {
+          "replyTo": "={{$json.replyTo}}"
+        }
+      },
+      "id": "node-email",
+      "name": "Email → info@",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        688,
+        416
+      ],
+      "credentials": {
+        "smtp": {
+          "name": "reg.ru SMTP noreply"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Format message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format message": {
+      "main": [
+        [
+          {
+            "node": "Telegram",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email → info@",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

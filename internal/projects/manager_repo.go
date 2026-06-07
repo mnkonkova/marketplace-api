@@ -545,9 +545,21 @@ VALUES ($1, NULL, $2, 'human', 'assigned', $3)`,
 		mustJSON(map[string]string{"manager_user_id": managerID.String()})); err != nil {
 		return fmt.Errorf("insert assigned event: %w", err)
 	}
-	if err := emit(ctx, tx, projectID, nil, managerID, "project.assigned",
-		map[string]string{"project_id": projectID.String(), "manager_user_id": managerID.String()},
-	); err != nil {
+	payload := map[string]any{
+		"project_id":      projectID.String(),
+		"manager_user_id": managerID.String(),
+	}
+	var email string
+	if err := tx.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, managerID).Scan(&email); err == nil && email != "" {
+		payload["manager_email"] = email
+		if at := strings.IndexByte(email, '@'); at > 0 {
+			payload["manager_display_name"] = email[:at]
+		} else {
+			payload["manager_display_name"] = email
+		}
+	}
+	enrichProjectPayload(ctx, tx, projectID, payload)
+	if err := emit(ctx, tx, projectID, nil, managerID, "project.assigned", payload); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

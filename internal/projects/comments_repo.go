@@ -94,6 +94,22 @@ VALUES ($1, NULL, $2, 'human', 'comment', $3, $4)`,
 		}
 	}
 
+	// Внешний комментарий — событие в outbox (для n8n → Telegram «новое
+	// сообщение в проекте»). Внутренние не нотифицируем — клиент их не
+	// видит, менеджерская переписка не должна спамить общий канал.
+	if !isInternal {
+		payload := map[string]any{
+			"project_id":  projectID.String(),
+			"comment_id":  c.ID.String(),
+			"author_id":   authorID.String(),
+			"body":        body,
+		}
+		enrichProjectPayload(ctx, tx, projectID, payload)
+		if err := emit(ctx, tx, projectID, nil, authorID, "project.comment_added", payload); err != nil {
+			return Comment{}, fmt.Errorf("emit comment event: %w", err)
+		}
+	}
+
 	if _, err := tx.Exec(ctx,
 		`UPDATE projects SET updated_at = now() WHERE id = $1`, projectID); err != nil {
 		return Comment{}, fmt.Errorf("bump project: %w", err)

@@ -26,6 +26,7 @@ import (
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
+	"marketpclce/internal/support"
 )
 
 type Deps struct {
@@ -50,6 +51,7 @@ type Deps struct {
 	Productions *productions.Handler
 	Pipelines   *pipelines.Handler
 	Projects    *projects.Handler
+	Support     *support.Handler
 	Admin       *admin.Handler
 
 	CORSOrigins []string
@@ -133,6 +135,16 @@ func NewRouter(d Deps) http.Handler {
 			r.Use(RateLimit(d.Limiter, "leads", d.LeadsWindows))
 			r.Post("/leads", d.Leads.Create)
 		})
+
+		// Support: открыт гостям, JWT опционален. Под тем же rate-limit что
+		// leads — 5/мин per IP, защита от спама из футера.
+		if d.Support != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.OptionalMiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
+				r.Use(RateLimit(d.Limiter, "leads", d.LeadsWindows))
+				r.Post("/support/messages", d.Support.Create)
+			})
+		}
 
 		// Публичный redeem_invite — magic-link обмен на JWT.
 		// Под rate-limit "auth" группой: тот же лимит что register/login

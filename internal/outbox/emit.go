@@ -43,6 +43,7 @@ const (
 	EventProjectAssigned         = "project.assigned"
 	EventProjectDisputed         = "project.disputed"
 	EventProjectCompleted        = "project.completed"
+	EventProjectCommentAdded     = "project.comment_added"
 
 	EventSupportMessageReceived = "support.message_received"
 
