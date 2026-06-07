@@ -271,3 +271,60 @@ groups:
         annotations:
           summary: "Transcode: queue > 0 but no successes for 10m"
           description: "Очередь {{ with query \"transcode_queue_depth\" }}{{ . | first | value }}{{ end }} ждёт, но pipeline стоит. Проверь worker логи + статус последних строк в portfolio_items (preview_status='processing' с старым updated_at)."
+
+  # ── n8n availability ────────────────────────────────────────────────
+  # n8n shipping в проде делает email + Telegram. Down = ни verify-email,
+  # ни нотификаций. Алерт жёсткий (page) — без писем юзеры не регистрируются.
+  - name: marketpclce-n8n
+    interval: 1m
+    rules:
+      - alert: N8nDown
+        expr: up{job="marketpclce-n8n"} == 0
+        for: 3m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "n8n container не отвечает на /healthz 3+ минуты"
+          description: "Проверь `docker ps | grep n8n` и `docker logs marketplace-api-n8n-1`. Без n8n не уходят email-верификации и Telegram-нотификации (worker квитирует events как obs, но шаблоны не рендерятся)."
+
+      - alert: N8nWebhookFailureRate
+        expr: |
+          sum(rate(outbox_handler_errors_total{aggregate=~"project|user|support"}[10m]))
+          /
+          (sum(rate(outbox_handler_processed_total{aggregate=~"project|user|support"}[10m])) > 0)
+          > 0.1
+        for: 10m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "n8n webhook delivery > 10% failures (10m)"
+          description: "Worker не может доставить events в n8n (HTTP не-2xx). Чаще всего — n8n workflow деактивирован или credential отвалился."
+
+  # ── Бизнес-метрики (sanity) ─────────────────────────────────────────
+  # Алерты не на «мало брифов = бизнес умер», а на технические аномалии:
+  # если БЫЛИ заявки и они вдруг пропали — наверняка форма брифа сломалась.
+  - name: marketpclce-business
+    interval: 5m
+    rules:
+      - alert: LeadsStopped
+        # leads_created_24h резко обнулилось (раньше >5 в день, сейчас 0)
+        expr: |
+          leads_created_24h == 0
+          and
+          avg_over_time(leads_created_24h[7d]) > 5
+        for: 3h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Лиды перестали приходить — 0 за 24h при норме > 5"
+          description: "POST /leads не доходит до БД ИЛИ форма брифа сломалась. Чек: HTTP-дашборд `RPS by route` для /leads, error rate на POST."
+
+      - alert: LeadToProjectConversionLow
+        # Lead'ы есть, но проектов из них не создаётся (StartFromLead падает).
+        # Норма ≈1:1 (каждый lead с logged-in клиентом → project).
+        expr: |
+          (projects_created_24h / leads_created_24h) < 0.3
+          and
+          leads_created_24h > 10
+        for: 3h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Конверсия lead→project упала ниже 30% (норма ~100%)"
+          description: "StartFromLead падает в API. Глянь api.log на `leads: StartFromLead failed`. Возможно default-pipeline пропал или enrichProjectPayload ломает tx."

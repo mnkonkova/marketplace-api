@@ -321,6 +321,7 @@ func main() {
 	// циклом что и outbox-gauges. Партиальный индекс
 	// portfolio_items_pending_preview_idx делает count дешёвым.
 	go runTranscodeGaugeTicker(rootCtx, pool, 30*time.Second, logger)
+	go runBusinessGaugeTicker(rootCtx, pool, 5*time.Minute, logger)
 
 	// /metrics для alloy. Отдельный listener, чтобы не путать с api:8080 и
 	// чтобы worker оставался без бизнес-API. /healthz нужен compose'у — без
@@ -394,6 +395,30 @@ var transcodeNoOpHandler outbox.Handler = func(_ context.Context, _ int64, aggre
 	slog.Info("transcode no-op (handler disabled)",
 		"aggregate_id", aggregateID, "event", eventType)
 	return nil
+}
+
+// runBusinessGaugeTicker — фоновое обновление бизнес-gauge'ов проектов/
+// лидов/комментариев/юзеров. Интервал 5 минут — достаточно для дашборда,
+// нагрузка минимальна (~7 SELECT с индексами). interval<=0 → выкл.
+func runBusinessGaugeTicker(ctx context.Context, db *pgxpool.Pool, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	if err := projects.RefreshBusinessGauges(ctx, db); err != nil {
+		logger.Warn("business gauge initial refresh", "err", err)
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := projects.RefreshBusinessGauges(ctx, db); err != nil {
+				logger.Warn("business gauge refresh", "err", err)
+			}
+		}
+	}
 }
 
 // runTranscodeGaugeTicker — фоновое обновление transcode_queue_depth.
