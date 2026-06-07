@@ -382,12 +382,19 @@ func (w *Worker) runGaugeRefresh(ctx context.Context) {
 }
 
 func (w *Worker) refreshGauges(ctx context.Context) {
-	var pending, dead int64
+	var pending, dead, lockable int64
+	// Все три count'а покрыты partial-индексами:
+	// - pending → outbox_pending_idx (00007): processed_at IS NULL AND dead_at IS NULL
+	// - dead    → outbox_dead_idx (00007): dead_at IS NOT NULL
+	// - lockable → тот же outbox_pending_idx (PG умеет +AND next_attempt_at <= now() поверх).
 	if err := w.db.QueryRow(ctx, `
 SELECT
   (SELECT COUNT(*) FROM outbox WHERE processed_at IS NULL AND dead_at IS NULL),
-  (SELECT COUNT(*) FROM outbox WHERE dead_at IS NOT NULL)
-`).Scan(&pending, &dead); err != nil {
+  (SELECT COUNT(*) FROM outbox WHERE dead_at IS NOT NULL),
+  (SELECT COUNT(*) FROM outbox
+    WHERE processed_at IS NULL AND dead_at IS NULL
+      AND (next_attempt_at IS NULL OR next_attempt_at <= now()))
+`).Scan(&pending, &dead, &lockable); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			w.logger.Warn("outbox refresh gauges", "err", err)
 		}
@@ -395,6 +402,7 @@ SELECT
 	}
 	pendingGauge.Set(float64(pending))
 	deadGauge.Set(float64(dead))
+	lockableGauge.Set(float64(lockable))
 }
 
 func DecodePayload(raw []byte, into any) error {

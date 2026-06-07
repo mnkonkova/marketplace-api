@@ -32,6 +32,17 @@ type ErrStatus struct {
 func (e *ErrStatus) Error() string { return fmt.Sprintf("opensearch %d: %s", e.Status, e.Body) }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	// Инструментация: op резолвится из path/method (см. opFromPath). Если
+	// запрос упал до получения статуса (сеть/таймаут) — пишем "error"
+	// в status_class, чтобы такие срывы было видно на дашборде отдельно
+	// от 5xx.
+	op := opFromPath(method, path)
+	start := time.Now()
+	status := -1
+	defer func() {
+		esRequestDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
+		esRequestsTotal.WithLabelValues(op, statusClass(status)).Inc()
+	}()
 	var rdr io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -52,6 +63,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		return fmt.Errorf("opensearch %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
@@ -63,6 +75,38 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		}
 	}
 	return nil
+}
+
+// opFromPath — резолвит high-level имя операции из chi-like path и
+// метода. Кардинальность ограничена: 8-10 уникальных значений.
+// Используется как Prometheus label.
+func opFromPath(method, path string) string {
+	switch {
+	case strings.HasPrefix(path, "/_bulk"):
+		return "bulk"
+	case strings.HasPrefix(path, "/_cluster"):
+		return "cluster_health"
+	case strings.Contains(path, "/_search"):
+		return "search"
+	case strings.Contains(path, "/_count"):
+		return "count"
+	case strings.Contains(path, "/_delete_by_query"):
+		return "delete_by_query"
+	case strings.Contains(path, "/_doc/"):
+		if method == http.MethodDelete {
+			return "delete_doc"
+		}
+		return "index_doc"
+	default:
+		// CreateIndex/IndexExists — оба бьются в "/{name}" корнем.
+		if method == http.MethodHead {
+			return "index_exists"
+		}
+		if method == http.MethodPut {
+			return "create_index"
+		}
+		return "other"
+	}
 }
 
 func (c *Client) IndexExists(ctx context.Context, name string) (bool, error) {
@@ -123,6 +167,12 @@ func (c *Client) BulkIndex(ctx context.Context, index string, docs []BulkDoc) er
 	if len(docs) == 0 {
 		return nil
 	}
+	start := time.Now()
+	status := -1
+	defer func() {
+		esRequestDuration.WithLabelValues("bulk").Observe(time.Since(start).Seconds())
+		esRequestsTotal.WithLabelValues("bulk", statusClass(status)).Inc()
+	}()
 	var buf bytes.Buffer
 	for _, d := range docs {
 		action := map[string]any{
@@ -153,6 +203,7 @@ func (c *Client) BulkIndex(ctx context.Context, index string, docs []BulkDoc) er
 		return fmt.Errorf("opensearch bulk: %w", err)
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		return &ErrStatus{Status: resp.StatusCode, Body: string(respBody)}

@@ -19,6 +19,20 @@ var (
 		Help: "Outbox entries quarantined after exceeding max attempts (dead_at IS NOT NULL).",
 	})
 
+	// lockableGauge — события, которые worker может выбрать в ближайший
+	// tick (next_attempt_at IS NULL или ≤ now()). pending - lockable =
+	// "запланированное в будущем": либо leased в Phase 1 (P3, на 10
+	// минут), либо ждёт backoff после ошибки handler'a.
+	//
+	// Алерт OutboxLeaseLeak строится поверх этой пары: если pending
+	// высокий, а lockable=0 длительное время — значит lease не
+	// освобождается (воркер крашится между Phase 2 и Phase 3 или handler
+	// вечно зависает), и при следующем тике не за что хвататься.
+	lockableGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "outbox_lockable",
+		Help: "Outbox entries available for immediate processing (next_attempt_at IS NULL or <= now()).",
+	})
+
 	handlerErrorsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "outbox_handler_errors_total",

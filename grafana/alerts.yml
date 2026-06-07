@@ -1,0 +1,223 @@
+# Prometheus alert rules для marketpclce. Импортируется в Grafana Cloud:
+#   1. Grafana → Alerts & IRM → Alert rules → New rule → Mimir managed alerts.
+#   2. Импорт из файла: paste содержимое (формат — стандартный Prometheus
+#      rule group). Group "marketpclce" станет видимым в UI.
+#
+# Для локального деплоя через Alloy: добавь в alloy/config.alloy компонент
+# `mimir.rules.local` или копируй файл в /etc/alloy/rules.yml.
+#
+# Соглашения по labels:
+#   severity = page | warn  (page = разбудить, warn = разобраться днём)
+#   team     = backend
+#
+# Все алерты "for"-длительности подобраны так, чтобы не реагировать на
+# одиночные шипы (обычные деплои и редкие сбои). На проде поднять/опустить
+# можно прямо здесь — Mimir перечитает rules при следующем sync.
+
+groups:
+  # ── HTTP API ────────────────────────────────────────────────────────
+  - name: marketpclce-http
+    interval: 1m
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="marketpclce-api",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="marketpclce-api"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "API 5xx error rate > 5% (5m)"
+          description: "Текущая доля 5xx: {{ $value | humanizePercentage }}. Загляни в 'Errors by route' на дашборде marketpclce-http."
+
+      - alert: APIp95LatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="marketpclce-api"}[5m]))
+          ) > 2
+        for: 10m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "API p95 > 2s overall"
+          description: "p95 = {{ $value | humanizeDuration }}. Проверь медленные route'ы и upstream'ы (LLM, OS, PG)."
+
+  # ── Кабинеты по ролям (CRM) ─────────────────────────────────────────
+  - name: marketpclce-crm-cabinets
+    interval: 1m
+    rules:
+      - alert: ManagerCabinet5xxSpike
+        expr: |
+          sum(rate(http_requests_total{job="marketpclce-api",route=~".*/manager/.*",status=~"5.."}[5m])) > 0.1
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Manager cabinet 5xx > 0.1 rps"
+          description: "Менеджерские endpoints начали сыпаться. Посмотри 'CRM cabinets by role / 5xx error rate'."
+
+      - alert: AdminCabinet5xxSpike
+        expr: |
+          sum(rate(http_requests_total{job="marketpclce-api",route=~".*/admin/.*",status=~"5.."}[5m])) > 0.05
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Admin cabinet 5xx > 0.05 rps"
+          description: "Админка падает — нужна экстренная починка."
+
+      - alert: ClientCabinet5xxSpike
+        expr: |
+          sum(rate(http_requests_total{job="marketpclce-api",route=~".*/me/projects.*|.*/me/leads.*",status=~"5.."}[5m])) > 0.5
+        for: 5m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Client cabinet 5xx > 0.5 rps"
+          description: "Клиентский кабинет лагает. Это видно пользователям — приоритет высокий."
+
+  # ── Outbox / async pipeline ────────────────────────────────────────
+  - name: marketpclce-outbox
+    interval: 1m
+    rules:
+      - alert: OutboxPendingBacklog
+        expr: outbox_pending > 1000
+        for: 10m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Outbox pending > 1000 events (sustained)"
+          description: "Текущий backlog: {{ $value }}. n8n или один из handler'ов отстаёт."
+
+      - alert: OutboxLeaseLeak
+        # P3: pending растёт, но lockable = 0 длительное время → события
+        # "заперты" в lease, handler крашится между Phase 2 и Phase 3.
+        # При нормальной работе lockable почти всегда > 0 (новые events
+        # appear ≥ 1/min). Lease истекает через 10 мин, так что for=15m
+        # отсекает обычные пиковые ситуации.
+        expr: outbox_pending > 50 and outbox_lockable == 0
+        for: 15m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Outbox lease leak — pending > 50, lockable == 0 for 15m"
+          description: "События застряли в lease (10 мин на каждый), но lockable=0 >15м. Скорее всего воркер крашится в Phase 2 (handler/network) и не доводит до Phase 3 mark-tx. Проверь worker логи."
+
+      - alert: OutboxDeadLetterBacklog
+        expr: outbox_dead > 0
+        for: 5m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Outbox has dead-lettered entries"
+          description: "{{ $value }} событий в DLQ. Это требует ручного разбора: либо payload bug (P4 permanent), либо n8n был долго недоступен. Запрос: SELECT aggregate, event_type, last_error FROM outbox WHERE dead_at IS NOT NULL ORDER BY dead_at DESC LIMIT 20;"
+
+      - alert: OutboxDeadLetterRising
+        # P4: 4xx → ErrPermanent → сразу DLQ. Один битый payload — окей,
+        # но >5/час значит чья-то интеграция сломалась системно.
+        expr: sum(increase(outbox_dead_total[1h])) > 5
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Outbox dead-letter rate > 5/hour"
+          description: "Темп DLQ: {{ $value }}/час. Похоже на системную поломку (новый event_type с неверным payload или 4xx от n8n workflow)."
+
+      - alert: OutboxHandlerErrorSpike
+        expr: |
+          sum by (aggregate, event_type) (rate(outbox_handler_errors_total[5m])) > 0.5
+        for: 5m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Outbox handler error rate > 0.5 rps for {{ $labels.aggregate }}/{{ $labels.event_type }}"
+          description: "Конкретный handler стабильно валится. Если это webhook → проверь n8n. Если specialist/email — проверь OS/Unisender."
+
+  # ── LLM endpoints ──────────────────────────────────────────────────
+  - name: marketpclce-llm
+    interval: 1m
+    rules:
+      - alert: LLMHandlerP95High
+        # P5: deadline 25-30s. p95 > 20s = провайдер тяжело отвечает,
+        # пользователи видят таймауты на грани.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, route) (rate(http_request_duration_seconds_bucket{job="marketpclce-api",route=~".*/(search/summarize|clarify|me/profile/check)"}[5m]))
+          ) > 20
+        for: 10m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "LLM endpoint p95 > 20s for {{ $labels.route }}"
+          description: "Claude/Deepseek тормозит. Проверь статусную страницу провайдера. Если устойчиво — возможно переключить effort с medium на low."
+
+      - alert: LLM5xxSpike
+        # 502 = LLM-провайдер ошибся, 503 = fail-CLOSED (P8, Redis лёг).
+        expr: |
+          sum by (route) (rate(http_requests_total{job="marketpclce-api",route=~".*/(search/summarize|clarify|me/profile/check)",status=~"5.."}[5m])) > 0.1
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "LLM 5xx > 0.1 rps for {{ $labels.route }}"
+          description: "LLM endpoint падает. 502 = провайдер; 503 = Redis лежит (см. RateLimitFailClosed)."
+
+  # ── Rate limit / brute-force ──────────────────────────────────────
+  - name: marketpclce-ratelimit
+    interval: 1m
+    rules:
+      - alert: RateLimitFailClosedActive
+        # P8: 503 на expensive route — Redis нет, защита включилась.
+        # Это нормально работает (защищает биллинг), но юзеры в полной
+        # темноте, и надо чинить Redis срочно.
+        expr: |
+          sum(rate(http_requests_total{job="marketpclce-api",status="503",route=~".*/(search/summarize|clarify|leads|auth/.*)"}[5m])) > 0
+        for: 2m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Rate limit fail-CLOSED active (P8) — Redis is likely down"
+          description: "Юзеры получают 503 на дорогих endpoint'ах. Redis недоступен → подними его, проверь network."
+
+      - alert: AuthBruteForceLikely
+        # 429 на /auth/* = кто-то долбит логин/регистрацию.
+        expr: |
+          sum(rate(http_requests_total{job="marketpclce-api",route=~".*/auth/.*",status="429"}[5m])) > 1
+        for: 5m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Auth 429 rate > 1 rps (brute-force?)"
+          description: "Кто-то перебирает auth-endpoint'ы. Глянь access-логи по IP, при необходимости — IP-бан в Caddy."
+
+  # ── OpenSearch backend ────────────────────────────────────────────
+  - name: marketpclce-opensearch
+    interval: 1m
+    rules:
+      - alert: ESLatencyHigh
+        # bulk и search — критичные операции. Search > 2s ломает /search UX.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, op) (rate(es_request_duration_seconds_bucket{op=~"search|bulk"}[5m]))
+          ) > 2
+        for: 10m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "OpenSearch p95 > 2s for {{ $labels.op }}"
+          description: "OS тормозит. Если bulk — outbox-handler застревает; если search — каталог лагает у юзеров. Проверь JVM heap / disk на OS-инстансе."
+
+      - alert: ESErrorRateHigh
+        expr: |
+          (
+            sum by (op) (rate(es_requests_total{status_class!="2xx"}[5m]))
+            /
+            sum by (op) (rate(es_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "OpenSearch error rate > 5% for {{ $labels.op }}"
+          description: "Каждый 20-й запрос валится. Mapping mismatch (4xx), кластер падает (5xx) или сеть рвётся (status_class=error)."
+
+      - alert: ESDown
+        # Уверенная проверка через Ping в /readyz: но если она долго не
+        # работает, http_requests_total на /readyz уйдёт в 5xx. Альтернатива
+        # — отсутствие es_requests_total за 5 минут (никто не ходит в OS).
+        # Считаем: ноль успешных search-запросов за 10 минут = подозрение.
+        expr: |
+          sum(rate(es_requests_total{op="search",status_class="2xx"}[5m])) == 0
+          and on() sum(rate(es_requests_total{op="search"}[5m])) > 0
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "OpenSearch: no successful search responses for 5m+"
+          description: "Search-запросы идут, но 0 успешных. Скорее всего OS-кластер недоступен."
