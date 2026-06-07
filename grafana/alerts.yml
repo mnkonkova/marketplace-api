@@ -221,3 +221,53 @@ groups:
         annotations:
           summary: "OpenSearch: no successful search responses for 5m+"
           description: "Search-запросы идут, но 0 успешных. Скорее всего OS-кластер недоступен."
+
+  # ── Video transcoding pipeline ────────────────────────────────────
+  - name: marketpclce-transcode
+    interval: 1m
+    rules:
+      - alert: TranscodeQueueBacklog
+        # queue_depth > 50 устойчиво = воркер не успевает обрабатывать
+        # новые видео. 30m выбрано чтобы не алертить на нормальные пики
+        # после backfill'a.
+        expr: transcode_queue_depth > 50
+        for: 30m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Transcode queue depth > 50 (sustained)"
+          description: "Текущая очередь: {{ $value }}. Либо ffmpeg отвалился (логи воркера 'transcode disabled'), либо нагрузка превышает 1 CPU. Поднять параллельность или vCPU."
+
+      - alert: TranscodeErrorSpike
+        # > 0.5 ошибок/сек в любом reason = массовая поломка. Часто
+        # одна из двух: ffmpeg крашится на новом кодеке / S3 не отвечает.
+        expr: |
+          sum by (reason) (rate(transcode_errors_total[5m])) > 0.5
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Transcode error spike: reason={{ $labels.reason }}"
+          description: "{{ $value }} ошибок/сек. reason=permanent → битые payload'ы; network → S3 лагает; timeout → ffmpeg не успевает (CPU перегружен или видео слишком большое); other → смотри логи воркера."
+
+      - alert: TranscodeDurationP95High
+        # p95 > 60s = pipeline тяжелит outbox-lease. Lease у нас 10 минут,
+        # но 60s+ на превью = что-то не так (нормально 10-30s на 480p).
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(transcode_duration_seconds_bucket[10m]))) > 60
+        for: 15m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Transcode p95 duration > 60s"
+          description: "p95 = {{ $value | humanizeDuration }}. CPU перегружен или ffmpeg застрял на ретре. Глянь node CPU + transcode логи."
+
+      - alert: TranscodeNoSuccessButHasQueue
+        # Очередь не пустая, но за последние 10 мин нет ни одного success.
+        # Это либо ffmpeg/S3 лежит, либо worker крашится в Phase 2 lease.
+        # Дополняет OutboxLeaseLeak с другой стороны.
+        expr: |
+          transcode_queue_depth > 0
+          and sum(rate(transcode_success_total[10m])) == 0
+        for: 10m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Transcode: queue > 0 but no successes for 10m"
+          description: "Очередь {{ with query \"transcode_queue_depth\" }}{{ . | first | value }}{{ end }} ждёт, но pipeline стоит. Проверь worker логи + статус последних строк в portfolio_items (preview_status='processing' с старым updated_at)."

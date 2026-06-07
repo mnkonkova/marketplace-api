@@ -292,6 +292,7 @@ func videoFromDoc(d search.FeedVideoDoc) Video {
 	return Video{
 		ID:          id,
 		URL:         d.VideoURL,
+		PreviewURL:  d.PreviewURL,
 		Thumb:       d.ThumbURL,
 		Title:       d.Title,
 		Description: d.Description,

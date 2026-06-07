@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -314,6 +315,11 @@ func main() {
 		slog.Info("worker: s3 sweep disabled (S3_SWEEP_* keys not set)")
 	}
 
+	// transcode_queue_depth gauge — обновляется раз в 30 сек тем же
+	// циклом что и outbox-gauges. Партиальный индекс
+	// portfolio_items_pending_preview_idx делает count дешёвым.
+	go runTranscodeGaugeTicker(rootCtx, pool, 30*time.Second, logger)
+
 	// /metrics для alloy. Отдельный listener, чтобы не путать с api:8080 и
 	// чтобы worker оставался без бизнес-API. /healthz нужен compose'у — без
 	// него health-check'и не зацепятся.
@@ -386,6 +392,29 @@ var transcodeNoOpHandler outbox.Handler = func(_ context.Context, _ int64, aggre
 	slog.Info("transcode no-op (handler disabled)",
 		"aggregate_id", aggregateID, "event", eventType)
 	return nil
+}
+
+// runTranscodeGaugeTicker — фоновое обновление transcode_queue_depth.
+// Аналог outbox.refreshGauges, но для очереди преvью. interval<=0 → выкл.
+func runTranscodeGaugeTicker(ctx context.Context, db *pgxpool.Pool, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	if err := transcode.RefreshQueueDepth(ctx, db); err != nil {
+		logger.Warn("transcode gauge initial refresh", "err", err)
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := transcode.RefreshQueueDepth(ctx, db); err != nil {
+				logger.Warn("transcode gauge refresh", "err", err)
+			}
+		}
+	}
 }
 
 // runMediaSweepTicker — периодически удаляет orphan-объекты из S3

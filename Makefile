@@ -45,6 +45,19 @@ run-worker:
 seed:
 	go run ./cmd/seed
 
+# backfill-previews — эмитит outbox-событие portfolio.video_uploaded для
+# всех portfolio_items.preview_status='pending'. Нужно после миграции 00020
+# чтобы для существующих видео сгенерился preview (новые делают эмит сами
+# в profiles.AddPortfolioVideo). Idempotent — handler в worker'е игнорит
+# уже processing/ready записи.
+backfill-previews:
+	go run ./cmd/backfill-previews
+
+# Прод-вариант: запускает уже собранный binary в контейнере worker.
+# Использовать после deploy'a с миграцией 00020.
+prod-backfill-previews:
+	docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm worker backfill-previews
+
 # goose тянет драйверы под все БД по умолчанию (ClickHouse/MySQL/MSSQL/SQLite/…).
 # Нам нужен только postgres — исключаем остальные через build tags, чтобы не
 # раздувать Docker-образ и module cache.

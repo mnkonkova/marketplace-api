@@ -9,9 +9,16 @@ import (
 // Video — то, что играется в плеере. Держим только то, что реально нужно
 // фронту в ленте; описание/категории портфолио-айтема в overlay'е не
 // показываем (там уже есть bio спеца).
+//
+// PreviewURL — облегчённая версия (480p, ~500KB, 5-10 сек, loop) для
+// autoplay в карточке. Фронт сначала смотрит preview_url; если пусто —
+// фолбэк на url (это значит preview ещё не сгенерился или провалился,
+// см. docs/VIDEO_TRANSCODING.md). При клике на «развернуть» фронт
+// переключается на url с controls.
 type Video struct {
 	ID           uuid.UUID `json:"id"`
 	URL          string    `json:"url"`
+	PreviewURL   string    `json:"preview_url,omitempty"`
 	Thumb        string    `json:"thumb,omitempty"`
 	Title        string    `json:"title,omitempty"`
 	Description  string    `json:"description,omitempty"`

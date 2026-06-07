@@ -149,6 +149,8 @@ func (s *Service) Process(ctx context.Context, payload []byte) error {
 		return fmt.Errorf("mark ready: %w", err)
 	}
 
+	successTotal.Inc()
+	durationSeconds.Observe(time.Since(start).Seconds())
 	s.logger.Info("transcode complete",
 		"item_id", itemID,
 		"user_id", userID,
@@ -213,9 +215,24 @@ WHERE id = $1 AND preview_status = 'processing'`, itemID, reason); err != nil {
 func (s *Service) handlePipelineErr(ctx context.Context, itemID uuid.UUID, stage string, err error) error {
 	if errors.Is(err, ErrPermanent) {
 		s.markFailed(ctx, itemID, stage+": "+err.Error())
+		errorsTotal.WithLabelValues("permanent").Inc()
 		return fmt.Errorf("%s: %w", stage, err)
 	}
 	// Транзиентная ошибка: оставляем processing, lease сам откатит запись.
+	// Классификация по фразе stage — грубая, но для алертинга достаточно:
+	// timeout/network → проблема снаружи, "ffmpeg" → возможно перегруз CPU.
+	reason := "other"
+	switch stage {
+	case "download original", "upload preview":
+		reason = "network"
+	case "ffmpeg make preview":
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			reason = "timeout"
+		} else {
+			reason = "other"
+		}
+	}
+	errorsTotal.WithLabelValues(reason).Inc()
 	return fmt.Errorf("%s: %w", stage, err)
 }
 

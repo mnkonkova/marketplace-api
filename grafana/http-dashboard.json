@@ -895,11 +895,169 @@
         "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
         "tooltip": { "mode": "multi", "sort": "desc" }
       }
+    },
+
+    {
+      "type": "row",
+      "title": "Video transcoding (preview pipeline)",
+      "id": 80,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 87 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Transcode queue depth",
+      "description": "portfolio_items с preview_status='pending'. После backfill'a может скакнуть до 100+ — нормально, оседает обратно за минуты. Устойчивый рост → воркер не успевает.",
+      "id": 81,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 88 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "transcode_queue_depth", "legendFormat": "queue" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 200 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Success rate (10m)",
+      "description": "success / (success + errors) за 10 минут. < 80% — pipeline нестабилен.",
+      "id": 82,
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 88 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(transcode_success_total[10m])) / (sum(rate(transcode_success_total[10m])) + sum(rate(transcode_errors_total[10m])))",
+          "legendFormat": "success"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.8 },
+              { "color": "green", "value": 0.95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Transcode throughput (5m)",
+      "description": "Успешно сгенерированных preview в секунду. На 4 vCPU должно быть до 0.5-1 ops при насыщении.",
+      "id": 83,
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 88 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(transcode_success_total[5m]))", "legendFormat": "ops" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 } }
+    },
+    {
+      "type": "stat",
+      "title": "Transcode p95 duration",
+      "description": "p95 длительности pipeline'a (download + ffmpeg + upload). > 60s = алерт. Норма 10-30s на 480p × 8 сек.",
+      "id": 84,
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 88 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(transcode_duration_seconds_bucket[10m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "red", "value": 60 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Transcode errors by reason",
+      "description": "permanent — битые видео / unsupported codec / S3 404 (сразу в DLQ). network — S3 GET/PUT упал. timeout — ffmpeg не уложился в 90s. other — что-то ещё.",
+      "id": 85,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 92 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(transcode_errors_total[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": { "mode": "normal" }
+          }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["marketpclce", "http", "outbox", "llm", "crm", "opensearch"],
+  "tags": ["marketpclce", "http", "outbox", "llm", "crm", "opensearch", "transcode"],
   "templating": {
     "list": [
       {
@@ -928,8 +1086,8 @@
   "time": { "from": "now-15m", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "marketpclce — HTTP + Outbox + LLM + CRM + OS",
+  "title": "marketpclce — HTTP + Outbox + LLM + CRM + OS + Transcode",
   "uid": "marketpclce-http",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

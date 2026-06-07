@@ -11,10 +11,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/api          ./cmd/api && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/worker       ./cmd/worker && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/seed         ./cmd/seed && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/seed-videos  ./cmd/seed-videos && \
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/api                ./cmd/api && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/worker             ./cmd/worker && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/seed               ./cmd/seed && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/seed-videos        ./cmd/seed-videos && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/backfill-previews  ./cmd/backfill-previews && \
     CGO_ENABLED=0 GOOS=linux go install \
         -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' \
         github.com/pressly/goose/v3/cmd/goose@latest
@@ -34,6 +35,7 @@ COPY --from=build /out/api    /usr/local/bin/api
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/seed   /usr/local/bin/seed
 COPY --from=build /out/seed-videos /usr/local/bin/seed-videos
+COPY --from=build /out/backfill-previews /usr/local/bin/backfill-previews
 COPY --from=build /go/bin/goose /usr/local/bin/goose
 COPY --chown=app:app migrations/ ./migrations/
 
