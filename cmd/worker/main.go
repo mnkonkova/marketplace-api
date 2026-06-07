@@ -228,6 +228,7 @@ func main() {
 			Region:    cfg.S3Region,
 			UseSSL:    cfg.S3UseSSL,
 			PublicURL: cfg.S3PublicURL,
+			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
 			slog.Error("transcode s3 client init failed", "err", err)
@@ -300,6 +301,7 @@ func main() {
 			Region:    cfg.S3Region,
 			UseSSL:    cfg.S3UseSSL,
 			PublicURL: cfg.S3PublicURL,
+			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
 			slog.Warn("worker: s3 sweep disabled", "err", err)

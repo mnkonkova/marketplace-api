@@ -24,13 +24,20 @@ type Config struct {
 	Bucket      string
 	Region      string // YC: ru-central1; AWS — свой
 	UseSSL      bool
-	PublicURL   string // опциональный CNAME, иначе берём ${endpoint}/${bucket}
+	PublicURL   string // опциональный CNAME bucket'a (origin); иначе берём ${endpoint}/${bucket}
+	// CDNBaseURL — публичный URL Yandex CDN resource'a, который проксирует
+	// origin (Object Storage). Пустой → читаем напрямую с PublicURL.
+	// Заполнен → PublicURL(key) возвращает CDN URL для отдачи юзерам
+	// (presigned PUT'ы всё равно идут в origin через minio-go SDK).
+	// Подробнее: docs/CDN_SETUP.md.
+	CDNBaseURL  string
 }
 
 type Client struct {
-	mc        *minio.Client
-	bucket    string
-	publicURL string // без trailing /
+	mc         *minio.Client
+	bucket     string
+	publicURL  string // origin: bucket public URL без trailing /
+	cdnBaseURL string // CDN: пустой = CDN выключен, читаем с origin
 }
 
 // New поднимает клиент. Возвращает nil-клиент (но с ошибкой), если ключи пусты —
@@ -67,7 +74,12 @@ func New(cfg Config) (*Client, error) {
 		pub = fmt.Sprintf("%s://%s/%s", scheme, host, cfg.Bucket)
 	}
 
-	return &Client{mc: mc, bucket: cfg.Bucket, publicURL: pub}, nil
+	return &Client{
+		mc:         mc,
+		bucket:     cfg.Bucket,
+		publicURL:  pub,
+		cdnBaseURL: strings.TrimRight(cfg.CDNBaseURL, "/"),
+	}, nil
 }
 
 // PresignPut — выдаёт URL для прямой загрузки PUT'ом из браузера.
@@ -90,10 +102,23 @@ func (c *Client) PresignPut(
 	return u.String(), nil
 }
 
-// PublicURL — возвращает URL, по которому объект доступен на чтение
-// (для public-read бакета). В private-режиме нужно отдельно генерить
-// signed GET — пока не поддерживается.
+// PublicURL — URL для отдачи юзерам. Если CDN настроен (cdnBaseURL не
+// пустой) — возвращаем CDN URL: юзеры качают через edge-кеш, S3 видит
+// только miss'ы. Без CDN — direct origin как раньше.
+//
+// Важно: presigned PUT'ы (PresignPut) уходят в origin через minio-go
+// SDK независимо от этой настройки — CDN не умеет писать.
 func (c *Client) PublicURL(key string) string {
+	if c.cdnBaseURL != "" {
+		return c.cdnBaseURL + "/" + strings.TrimLeft(key, "/")
+	}
+	return c.publicURL + "/" + strings.TrimLeft(key, "/")
+}
+
+// OriginURL — direct URL в origin (Object Storage), минуя CDN. Нужен в
+// редких случаях, когда хочется обойти CDN-кеш (например, sweep сам
+// читает только origin), либо для логирования.
+func (c *Client) OriginURL(key string) string {
 	return c.publicURL + "/" + strings.TrimLeft(key, "/")
 }
 
@@ -106,9 +131,16 @@ func (c *Client) Download(ctx context.Context, key, localPath string) error {
 
 // Upload заливает локальный файл в S3. contentType пишется в metadata.
 // Multipart переключается автоматически (minio-go выбирает по размеру).
+//
+// Cache-Control: immutable max-age=1 год. Файлы content-addressable
+// (имя = uuid содержимого), при правке грузится новая запись с новым
+// ключом, старая попадает в s3-sweep — поэтому CDN/браузер можно
+// научить кешировать максимально агрессивно. Без этого header'a
+// Yandex CDN ставит дефолт (часы), что бессмысленно для immutable.
 func (c *Client) Upload(ctx context.Context, key, localPath, contentType string) error {
 	_, err := c.mc.FPutObject(ctx, c.bucket, key, localPath, minio.PutObjectOptions{
-		ContentType: contentType,
+		ContentType:  contentType,
+		CacheControl: "public, max-age=31536000, immutable",
 	})
 	return err
 }
@@ -217,19 +249,28 @@ func (c *Client) AbortMultipart(ctx context.Context, key, uploadID string) error
 	return nil
 }
 
-// KeyFromURL — обратное от PublicURL: восстанавливает S3-ключ из публичного
-// URL. Если URL не принадлежит нашему bucket'у (внешние ссылки на YouTube,
-// Vimeo и т.п.) — возвращает "". Используется в sweep'е, чтобы собрать
-// referenced-set по avatar_url / video_url / thumbnail_url.
+// KeyFromURL — обратное от PublicURL. Поддерживает оба варианта:
+// CDN URL (новые записи после включения CDN) и origin URL (старые
+// записи + при выключенном CDN). Если URL не принадлежит нашему
+// bucket'у (внешние ссылки на YouTube/Vimeo) — возвращает "".
+// Используется в sweep'е, чтобы собрать referenced-set по
+// avatar_url / video_url / thumbnail_url + в profiles.AddPortfolioVideo
+// чтобы понять, есть ли S3-ключ для эмита transcode-события.
 func (c *Client) KeyFromURL(rawURL string) string {
 	if rawURL == "" {
 		return ""
 	}
-	prefix := c.publicURL + "/"
-	if !strings.HasPrefix(rawURL, prefix) {
-		return ""
+	if c.cdnBaseURL != "" {
+		cdnPrefix := c.cdnBaseURL + "/"
+		if strings.HasPrefix(rawURL, cdnPrefix) {
+			return strings.TrimPrefix(rawURL, cdnPrefix)
+		}
 	}
-	return strings.TrimPrefix(rawURL, prefix)
+	prefix := c.publicURL + "/"
+	if strings.HasPrefix(rawURL, prefix) {
+		return strings.TrimPrefix(rawURL, prefix)
+	}
+	return ""
 }
 
 // parseEndpoint вычленяет host и решает про SSL: если в endpoint есть схема,

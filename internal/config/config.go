@@ -31,10 +31,16 @@ type Config struct {
 	S3Bucket    string `env:"S3_BUCKET" envDefault:"marketpclce"`
 	S3Region    string `env:"S3_REGION" envDefault:"us-east-1"`
 	S3UseSSL    bool   `env:"S3_USE_SSL" envDefault:"false"`
-	// Опциональный публичный домен для отдачи объектов: если задан, public_url
-	// собирается как `${S3_PUBLIC_URL}/${key}` (CNAME, CDN). Иначе —
+	// Опциональный публичный домен origin'a (bucket CNAME): если задан,
+	// origin URL собирается как `${S3_PUBLIC_URL}/${key}`. Иначе —
 	// `${S3_ENDPOINT}/${S3_BUCKET}/${key}` (path-style на YC по умолчанию).
 	S3PublicURL string `env:"S3_PUBLIC_URL"`
+	// CDN_BASE_URL — Yandex Cloud CDN перед bucket'ом. Пусто = CDN
+	// выключен, юзеры читают напрямую с origin. Заполнен → s3.Client.
+	// PublicURL(key) возвращает CDN URL, отдача идёт через edge-кеш,
+	// бэкенд видит только miss'ы. Setup-гайд: docs/CDN_SETUP.md.
+	// Формат: https://cdn-xxx.yandexcloud.net ИЛИ свой CNAME без trailing /.
+	CDNBaseURL string `env:"CDN_BASE_URL"`
 
 	LLMProvider  string        `env:"LLM_PROVIDER" envDefault:"anthropic"`
 	LLMAPIKey    string        `env:"LLM_API_KEY"`

@@ -30,6 +30,7 @@ import (
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/projects"
+	"marketpclce/internal/support"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
@@ -131,6 +132,7 @@ func main() {
 			Region:    cfg.S3Region,
 			UseSSL:    cfg.S3UseSSL,
 			PublicURL: cfg.S3PublicURL,
+			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
 			slog.Warn("s3 disabled", "err", err)
@@ -242,6 +244,7 @@ func main() {
 		Productions:  productionsHandler,
 		Pipelines:    pipelinesHandler,
 		Projects:     projectsHandler,
+		Support:      support.NewHandler(support.NewService(pool)),
 		Admin:        adminHandler,
 		CORSOrigins:  cfg.CORSOrigins,
 		Limiter:     limiter,
