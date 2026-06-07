@@ -68,12 +68,12 @@ func RequireRoles(repo IdentityLoader, roles ...string) func(http.Handler) http.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			uid, ok := UserIDFrom(r.Context())
 			if !ok {
-				httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+				httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 				return
 			}
 			role, isApproved, isActive, err := repo.LoadIdentity(r.Context(), uid)
 			if err != nil {
-				httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+				httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 				return
 			}
 			if !isActive {
@@ -109,13 +109,13 @@ func MiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker) func(h
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := r.Header.Get("Authorization")
 			if !strings.HasPrefix(h, "Bearer ") {
-				http.Error(w, `{"error":"missing_bearer"}`, http.StatusUnauthorized)
+				httpx.WriteErrMsg(w, http.StatusUnauthorized, "missing_bearer", "Требуется авторизация")
 				return
 			}
 			token := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 			c, err := issuer.Parse(token, TokenAccess)
 			if err != nil {
-				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+				httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 				return
 			}
 			if rev != nil && c.IssuedAt != nil {
@@ -125,7 +125,7 @@ func MiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker) func(h
 					// токен, отзыв которого мы не смогли проверить
 					// (fail-closed). Чек идёт по индексу users.id PK —
 					// при недоступности БД API всё равно нерабоч.
-					http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+					httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 					return
 				}
 			}
@@ -152,13 +152,13 @@ func OptionalMiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker
 			token := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 			c, err := issuer.Parse(token, TokenAccess)
 			if err != nil {
-				http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+				httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 				return
 			}
 			if rev != nil && c.IssuedAt != nil {
 				revoked, rerr := rev.IsTokenRevoked(r.Context(), c.UserID, c.IssuedAt.Time)
 				if rerr != nil || revoked {
-					http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+					httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 					return
 				}
 			}

@@ -158,7 +158,7 @@ func (h *Handler) AdminAssignSpecialist(w http.ResponseWriter, r *http.Request) 
 	}
 	actor, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return
 	}
 	var in adminAssignSpecReq

@@ -88,7 +88,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	pair, err := h.svc.Login(r.Context(), in.Login, in.Password)
 	switch {
 	case errors.Is(err, ErrBadCredentials):
-		httpx.WriteErr(w, http.StatusUnauthorized, "bad_credentials")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "bad_credentials", "Неверный логин или пароль")
 		return
 	case errors.Is(err, ErrInactive):
 		httpx.WriteErr(w, http.StatusForbidden, "inactive")
@@ -121,7 +121,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	pair, err := h.svc.Refresh(r.Context(), in.RefreshToken)
 	if err != nil {
-		httpx.WriteErr(w, http.StatusUnauthorized, "invalid_token")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, pair)
@@ -155,7 +155,7 @@ type meResp struct {
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return
 	}
 	u, err := h.svc.GetUser(r.Context(), uid)
@@ -221,7 +221,7 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return
 	}
 	err := h.svc.ResendVerification(r.Context(), uid)

@@ -19,7 +19,7 @@ import (
 func (h *Handler) GetClient(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return
 	}
 	cp, err := h.svc.GetClientProfile(r.Context(), uid)
@@ -42,7 +42,7 @@ func (h *Handler) GetClient(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PatchClient(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return
 	}
 	var in ClientProfilePatch

@@ -18,7 +18,7 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 func clientFrom(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return uuid.Nil, false
 	}
 	return uid, true

@@ -19,7 +19,7 @@ import (
 func (h *Handler) SpecialistList(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return
 	}
 	items, err := h.svc.ListBySpecialist(r.Context(), uid)
@@ -41,7 +41,7 @@ func (h *Handler) SpecialistList(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SpecialistGetFunnel(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
-		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 		return
 	}
 	pid, err := uuid.Parse(chiURLParam(r, "id"))
