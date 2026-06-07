@@ -126,10 +126,6 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?DOMAIN is required, e.g. wayprmarket.ru (apex without subdomain)}
       API_UPSTREAM: api:8080
-      # Basic Auth перед n8n.<DOMAIN> (защита от ботов перед login-формой
-      # n8n). Сгенерировать хэш: `docker exec marketplace-api-web-1 caddy
-      # hash-password`. Если пусто — Caddy откажет в доступе на n8n.*
-      N8N_BASIC_AUTH_HASH: ${N8N_BASIC_AUTH_HASH:-}
     volumes:
       - caddydata:/data
       - caddyconfig:/config
