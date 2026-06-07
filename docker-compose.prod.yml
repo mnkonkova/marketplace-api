@@ -104,7 +104,11 @@ services:
       opensearch:
         condition: service_healthy
     command: ["worker"]
-    mem_limit: 128m
+    # 1g — для ffmpeg-транскода 480p H.264 preview'ев (см. docs/VIDEO_TRANSCODING.md).
+    # Было 128m, что мало для libx264 thread-pools'ов — cgroup-OOM убивал
+    # ffmpeg до первого кадра. Базовое потребление worker'а ~150-250MB,
+    # peak с ffmpeg ~500-700MB, 1g даёт запас.
+    mem_limit: 1g
 
   # Фронт + reverse-proxy. Образ собирается из соседнего клона
   # marketplace-web (../web). На VDS оба репо живут рядом:
