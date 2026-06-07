@@ -124,7 +124,7 @@ services:
       - "443:443"
       - "443:443/udp"
     environment:
-      DOMAIN: ${DOMAIN:?DOMAIN is required, e.g. wayprmarket.com (apex without subdomain)}
+      DOMAIN: ${DOMAIN:?DOMAIN is required, e.g. wayprmarket.ru (apex without subdomain)}
       API_UPSTREAM: api:8080
     volumes:
       - caddydata:/data

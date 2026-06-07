@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "fromEmail": "noreply@wayprmarket.com",
+        "fromEmail": "noreply@wayprmarket.ru",
         "toEmail": "={{$json.to}}",
         "subject": "={{$json.subject}}",
         "html": "={{$json.html}}",

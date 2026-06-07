@@ -58,8 +58,8 @@
     },
     {
       "parameters": {
-        "fromEmail": "noreply@wayprmarket.com",
-        "toEmail": "info@wayprmarket.com",
+        "fromEmail": "noreply@wayprmarket.ru",
+        "toEmail": "info@wayprmarket.ru",
         "subject": "={{$json.emailSubject}}",
         "html": "={{$json.emailHtml}}",
         "text": "={{$json.emailText}}",

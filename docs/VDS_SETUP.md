@@ -349,7 +349,7 @@ marketplace-api-n8n-1:5678`).
    | Имя | Тип | Поля |
    |---|---|---|
    | `Telegram CRM bot` | Telegram API | Access Token от @BotFather |
-   | `reg.ru SMTP noreply` | SMTP | Host=`mail.hosting.reg.ru`, Port=`465` (SSL) или `587` (TLS), User=`noreply@wayprmarket.com`, Password=из reg.ru |
+   | `reg.ru SMTP noreply` | SMTP | Host=`mail.hosting.reg.ru`, Port=`465` (SSL) или `587` (TLS), User=`noreply@wayprmarket.ru`, Password=из reg.ru |
    | `Postgres CRM` | Postgres | Host=`postgres`, Port=`5432`, DB=`marketpclce`, User/Password из `.env.prod` |
 
    После создания каждого credential — открой workflows и перепривяжи
@@ -367,7 +367,7 @@ marketplace-api-n8n-1:5678`).
 7. **Активируй каждый workflow** в n8n (тумблер `Active` справа сверху).
 8. Проверь email:
    - `mail.hosting.reg.ru` MX-запись на твой домен (через reg.ru cabinet)
-   - SPF/DKIM на домен для noreply@wayprmarket.com — иначе письма
+   - SPF/DKIM на домен для noreply@wayprmarket.ru — иначе письма
      уедут в спам у клиентов.
 
 ### Изменение workflows (dev → git → prod)
