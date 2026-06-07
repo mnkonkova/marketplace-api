@@ -13,7 +13,10 @@
     "list": [
       {
         "builtIn": 1,
-        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -33,8 +36,16 @@
       "type": "stat",
       "title": "Total RPS",
       "id": 1,
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -43,7 +54,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area",
         "textMode": "auto"
@@ -52,13 +67,24 @@
         "defaults": {
           "unit": "reqps",
           "decimals": 2,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "red", "value": 200 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
             ]
           }
         }
@@ -68,8 +94,16 @@
       "type": "stat",
       "title": "p95 latency (overall)",
       "id": 2,
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -78,7 +112,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -86,13 +124,24 @@
         "defaults": {
           "unit": "s",
           "decimals": 3,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.5 },
-              { "color": "red", "value": 2 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
             ]
           }
         }
@@ -102,8 +151,16 @@
       "type": "stat",
       "title": "Error rate (5xx %)",
       "id": 3,
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -112,7 +169,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -120,13 +181,24 @@
         "defaults": {
           "unit": "percentunit",
           "decimals": 2,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.01 },
-              { "color": "red", "value": 0.05 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
             ]
           }
         }
@@ -136,8 +208,16 @@
       "type": "stat",
       "title": "Total requests (since start)",
       "id": 4,
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -146,7 +226,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "none"
       },
@@ -154,7 +238,10 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "color": { "mode": "fixed", "fixedColor": "blue" }
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
         }
       }
     },
@@ -162,8 +249,16 @@
       "type": "timeseries",
       "title": "RPS by route",
       "id": 5,
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -180,21 +275,41 @@
             "fillOpacity": 10,
             "showPoints": "never",
             "spanNulls": false,
-            "stacking": { "mode": "none" }
+            "stacking": {
+              "mode": "none"
+            }
           }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "timeseries",
       "title": "p95 latency by route",
       "id": 6,
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -215,16 +330,34 @@
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "timeseries",
       "title": "Errors (4xx + 5xx) by route",
       "id": 7,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -244,16 +377,34 @@
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "piechart",
       "title": "Status code distribution",
       "id": 8,
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -263,19 +414,36 @@
       ],
       "options": {
         "pieType": "donut",
-        "displayLabels": ["name", "percent"],
-        "legend": { "displayMode": "list", "placement": "right" }
+        "displayLabels": [
+          "name",
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
       },
       "fieldConfig": {
-        "defaults": { "unit": "reqps", "decimals": 2 }
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2
+        }
       }
     },
     {
       "type": "table",
       "title": "Top routes by traffic (1h)",
       "id": 9,
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -289,24 +457,40 @@
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "Time": true },
-            "renameByName": { "Value": "requests/1h" }
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "requests/1h"
+            }
           }
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "decimals": 0 }
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        }
       },
       "options": {
-        "sortBy": [{ "displayName": "requests/1h", "desc": true }]
+        "sortBy": [
+          {
+            "displayName": "requests/1h",
+            "desc": true
+          }
+        ]
       }
     },
-
     {
       "type": "row",
       "title": "Async / Outbox (worker → n8n, search-index)",
       "id": 20,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
       "collapsed": false,
       "panels": []
     },
@@ -315,13 +499,29 @@
       "title": "Outbox pending",
       "description": "Entries waiting for handler (processed_at IS NULL AND dead_at IS NULL). Норма — близко к 0 при работающем воркере; устойчиво растущий — индикатор тормозов handler'a или лежащего n8n.",
       "id": 21,
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
-        { "refId": "A", "expr": "outbox_pending", "legendFormat": "pending" }
+        {
+          "refId": "A",
+          "expr": "outbox_pending",
+          "legendFormat": "pending"
+        }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -329,13 +529,24 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 100 },
-              { "color": "red", "value": 1000 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
             ]
           }
         }
@@ -346,13 +557,29 @@
       "title": "Outbox dead-lettered",
       "description": "Entries в карантине (dead_at IS NOT NULL). Любое значение > 0 заслуживает внимания: либо ядовитый payload (P4 — 4xx сразу в DLQ), либо превышен maxAttempts (n8n надолго лежал).",
       "id": 22,
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
-        { "refId": "A", "expr": "outbox_dead", "legendFormat": "dead" }
+        {
+          "refId": "A",
+          "expr": "outbox_dead",
+          "legendFormat": "dead"
+        }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -360,12 +587,20 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
             ]
           }
         }
@@ -376,8 +611,16 @@
       "title": "Handler success rate (5m)",
       "description": "Доля успехов от общего объёма обработки (success / (success + errors)) за 5 минут.",
       "id": 23,
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -386,7 +629,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -394,13 +641,24 @@
         "defaults": {
           "unit": "percentunit",
           "decimals": 2,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 0.9 },
-              { "color": "green", "value": 0.99 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.9
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
             ]
           }
         }
@@ -411,8 +669,16 @@
       "title": "Dead-letters / hour",
       "description": "Скорость попадания событий в DLQ. > 0 устойчиво — либо n8n лежит, либо новая интеграция шлёт битые payload'ы (4xx → P4 permanent).",
       "id": 24,
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -421,7 +687,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -429,13 +699,24 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 10 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
             ]
           }
         }
@@ -446,8 +727,16 @@
       "title": "Handler throughput by aggregate (5m rate)",
       "description": "Скорость успешной обработки по каждому аггрегату (specialist=индексация в OS, email=письма через n8n, project=CRM нотификации, support=обращения в поддержку).",
       "id": 25,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -463,13 +752,25 @@
             "lineWidth": 1,
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal" }
+            "stacking": {
+              "mode": "normal"
+            }
           }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
@@ -477,8 +778,16 @@
       "title": "Handler errors by aggregate + event_type (5m rate)",
       "description": "Сюда смотрят первыми при подозрении на лежащий downstream. Каждая серия — конкретное событие, по подъёму сразу видно какой webhook ломается.",
       "id": 26,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -498,16 +807,30 @@
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "LLM endpoints (summarize / clarify / profile-check)",
       "id": 30,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
       "collapsed": false,
       "panels": []
     },
@@ -516,8 +839,16 @@
       "title": "LLM p95 latency",
       "description": "p95 по дорогим LLM-эндпоинтам. P5: хендлеры ограничены context.WithTimeout 25-30s, более длинные запросы обрезаются. Резкий рост = LLM-провайдер лагает, ждём первых 502/timeout.",
       "id": 31,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -537,16 +868,35 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 10 },
-              { "color": "red", "value": 25 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 25
+              }
             ]
           }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
@@ -554,8 +904,16 @@
       "title": "LLM RPS + error rate",
       "description": "Левая шкала: rate по статусам (2xx/4xx/5xx). 502 — LLM-провайдер вернул ошибку или таймаут. 429 здесь не должно быть (ratelimit отдельной средой), 503 — fail-CLOSED при недоступном Redis (P8).",
       "id": 32,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -575,16 +933,30 @@
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "Rate limiting (429 / 503)",
       "id": 40,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
       "collapsed": false,
       "panels": []
     },
@@ -593,8 +965,16 @@
       "title": "429 rate_limited by route",
       "description": "Юзер уперся в лимит окна (auth/leads/clarify/summarize/read/crm). Скачки на /auth/* — потенциальный брутфорс.",
       "id": 41,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -614,8 +994,18 @@
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
@@ -623,8 +1013,16 @@
       "title": "503 rate_limit_unavailable (P8 fail-CLOSED)",
       "description": "Появляется когда Redis недоступен И route — expensive (summarize/clarify/leads/auth). Любые ненулевые значения = Redis сейчас лежит. Без P8 эти запросы бы прошли неограниченно (LLM-биллинг!).",
       "id": 42,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -641,20 +1039,37 @@
             "fillOpacity": 10,
             "showPoints": "never"
           },
-          "color": { "mode": "fixed", "fixedColor": "red" }
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "Outbox lease (P3): lockable vs scheduled",
       "id": 50,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
       "collapsed": false,
       "panels": []
     },
@@ -663,12 +1078,32 @@
       "title": "Outbox: pending / lockable / scheduled",
       "description": "pending = всё что не processed и не dead. lockable = доступно к выборке прямо сейчас (next_attempt_at IS NULL OR <= now()). scheduled = pending - lockable: либо leased в Phase 1 (P3, на 10 минут), либо retry-backoff. Если pending стабильно высокий, а lockable=0 длительное время — lease leak (handler крашится, lease истекает через 10 мин), включается алерт OutboxLeaseLeak.",
       "id": 51,
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 53 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
-        { "refId": "A", "expr": "outbox_pending", "legendFormat": "pending" },
-        { "refId": "B", "expr": "outbox_lockable", "legendFormat": "lockable" },
-        { "refId": "C", "expr": "outbox_pending - outbox_lockable", "legendFormat": "scheduled (lease + backoff)" }
+        {
+          "refId": "A",
+          "expr": "outbox_pending",
+          "legendFormat": "pending"
+        },
+        {
+          "refId": "B",
+          "expr": "outbox_lockable",
+          "legendFormat": "lockable"
+        },
+        {
+          "refId": "C",
+          "expr": "outbox_pending - outbox_lockable",
+          "legendFormat": "scheduled (lease + backoff)"
+        }
       ],
       "fieldConfig": {
         "defaults": {
@@ -683,16 +1118,31 @@
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "lastNotNull"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "CRM cabinets by role (manager / admin / client / specialist)",
       "id": 60,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 61 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
       "collapsed": false,
       "panels": []
     },
@@ -701,8 +1151,16 @@
       "title": "RPS by cabinet role",
       "description": "Разделение нагрузки по кабинетам. /manager/* — менеджерская часть CRM, /admin/* — административка, /me/projects + /me/leads — клиентский кабинет, /me/specialist/* — спец-кабинет. Если уронит только клиентскую часть — на агрегатном RPS не увидишь, а тут — сразу.",
       "id": 61,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 62 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -733,13 +1191,25 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal" }
+            "stacking": {
+              "mode": "normal"
+            }
           }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
@@ -747,8 +1217,16 @@
       "title": "5xx error rate by cabinet role",
       "description": "Тот же split но только 5xx. Если у конкретной роли сервер начинает падать (например, менеджер уронил админский endpoint) — сразу видно.",
       "id": 62,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 62 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 62
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -780,20 +1258,36 @@
             "fillOpacity": 5,
             "showPoints": "never"
           },
-          "color": { "mode": "palette-classic" }
+          "color": {
+            "mode": "palette-classic"
+          }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "OpenSearch backend (es_request_duration_seconds)",
       "id": 70,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 70 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 70
+      },
       "collapsed": false,
       "panels": []
     },
@@ -802,8 +1296,16 @@
       "title": "ES RPS by operation",
       "description": "Запросы в OpenSearch с разбивкой по типу: search (поиск каталога), bulk (P7: feed-индексация одним батчем), index_doc (одиночные апдейты), delete_by_query, count, cluster_health, index_exists, create_index. На bulk особо смотри — он идёт внутри outbox tick'a.",
       "id": 71,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 71 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -819,13 +1321,25 @@
             "lineWidth": 1,
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal" }
+            "stacking": {
+              "mode": "normal"
+            }
           }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
@@ -833,8 +1347,16 @@
       "title": "ES p95 latency by operation",
       "description": "p95 латентность OS. Пороги: yellow 1s, red 5s. На bulk эти пороги критичны — он сидит внутри outbox-handler'a и удлиняет lease. Search обычно <100ms.",
       "id": 72,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 71 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -854,16 +1376,35 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 5 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
             ]
           }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
@@ -871,8 +1412,16 @@
       "title": "ES error rate by operation (4xx + 5xx + network)",
       "description": "Доля не-2xx ответов по операциям. status_class=\"error\" — сетевые сбои/таймауты до получения ответа. status_class=\"4xx\" — клиентская ошибка (mapping mismatch, битый запрос). status_class=\"5xx\" — OS пострадал.",
       "id": 73,
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 79 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -892,16 +1441,30 @@
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "Video transcoding (preview pipeline)",
       "id": 80,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 87 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 87
+      },
       "collapsed": false,
       "panels": []
     },
@@ -910,13 +1473,29 @@
       "title": "Transcode queue depth",
       "description": "portfolio_items с preview_status='pending'. После backfill'a может скакнуть до 100+ — нормально, оседает обратно за минуты. Устойчивый рост → воркер не успевает.",
       "id": 81,
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 88 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
-        { "refId": "A", "expr": "transcode_queue_depth", "legendFormat": "queue" }
+        {
+          "refId": "A",
+          "expr": "transcode_queue_depth",
+          "legendFormat": "queue"
+        }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -924,13 +1503,24 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 50 },
-              { "color": "red", "value": 200 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
             ]
           }
         }
@@ -941,8 +1531,16 @@
       "title": "Success rate (10m)",
       "description": "success / (success + errors) за 10 минут. < 80% — pipeline нестабилен.",
       "id": 82,
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 88 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -951,7 +1549,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -959,13 +1561,24 @@
         "defaults": {
           "unit": "percentunit",
           "decimals": 2,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 0.8 },
-              { "color": "green", "value": 0.95 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.8
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
             ]
           }
         }
@@ -976,25 +1589,54 @@
       "title": "Transcode throughput (5m)",
       "description": "Успешно сгенерированных preview в секунду. На 4 vCPU должно быть до 0.5-1 ops при насыщении.",
       "id": 83,
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 88 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(transcode_success_total[5m]))", "legendFormat": "ops" }
+        {
+          "refId": "A",
+          "expr": "sum(rate(transcode_success_total[5m]))",
+          "legendFormat": "ops"
+        }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
-      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        }
+      }
     },
     {
       "type": "stat",
       "title": "Transcode p95 duration",
       "description": "p95 длительности pipeline'a (download + ffmpeg + upload). > 60s = алерт. Норма 10-30s на 480p × 8 сек.",
       "id": 84,
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 88 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 88
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -1003,7 +1645,11 @@
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "colorMode": "value",
         "graphMode": "area"
       },
@@ -1011,13 +1657,24 @@
         "defaults": {
           "unit": "s",
           "decimals": 1,
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 30 },
-              { "color": "red", "value": 60 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
             ]
           }
         }
@@ -1028,8 +1685,16 @@
       "title": "Transcode errors by reason",
       "description": "permanent — битые видео / unsupported codec / S3 404 (сразу в DLQ). network — S3 GET/PUT упал. timeout — ffmpeg не уложился в 90s. other — что-то ещё.",
       "id": 85,
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 92 },
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "targets": [
         {
           "refId": "A",
@@ -1045,19 +1710,39 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal" }
+            "stacking": {
+              "mode": "normal"
+            }
           }
         }
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["marketpclce", "http", "outbox", "llm", "crm", "opensearch", "transcode"],
+  "tags": [
+    "marketpclce",
+    "http",
+    "outbox",
+    "llm",
+    "crm",
+    "opensearch",
+    "transcode"
+  ],
   "templating": {
     "list": [
       {
@@ -1072,18 +1757,32 @@
         "name": "route",
         "type": "query",
         "label": "Route",
-        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
         "query": "label_values(http_requests_total{job=\"marketpclce-api\"}, route)",
         "multi": true,
         "includeAll": true,
         "allValue": ".+",
-        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
         "refresh": 2,
         "sort": 1
       }
     ]
   },
-  "time": { "from": "now-15m", "to": "now" },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "marketpclce — HTTP + Outbox + LLM + CRM + OS + Transcode",
