@@ -54,10 +54,18 @@ var ErrPermanent = errors.New("transcode: permanent failure")
 var ErrSkipped = errors.New("transcode: skipped")
 
 type Config struct {
-	FFmpeg   FFmpeg
-	Storage  Storage
-	TempDir  string // /tmp/transcode по дефолту, создаётся если нет
-	DB       *pgxpool.Pool
+	FFmpeg  FFmpeg
+	Storage Storage
+	TempDir string // /tmp/transcode по дефолту, создаётся если нет
+	DB      *pgxpool.Pool
+	// StuckRecoveryAfter — auto-recovery от записей залипших в
+	// preview_status='processing' (worker крашнулся между claim и
+	// markReady/markFailed, lease на outbox-событие выпал, но статус
+	// строки остался processing). Если за это время записи не дождались
+	// markReady, повторный claim переводит их обратно в processing и
+	// гонит pipeline заново. Должно быть ≥ outbox leaseDuration (10 мин),
+	// иначе два воркера могут одновременно процессить. Default 15 мин.
+	StuckRecoveryAfter time.Duration
 }
 
 type Service struct {
@@ -78,8 +86,21 @@ func NewService(cfg Config, logger *slog.Logger) (*Service, error) {
 	if cfg.TempDir == "" {
 		cfg.TempDir = "/tmp/transcode"
 	}
+	if cfg.StuckRecoveryAfter <= 0 {
+		cfg.StuckRecoveryAfter = 15 * time.Minute
+	}
 	if err := os.MkdirAll(cfg.TempDir, 0o755); err != nil {
 		return nil, fmt.Errorf("transcode: mkdir tempdir: %w", err)
+	}
+	// Startup cleanup: при крэше предыдущего инстанса в tempdir могли
+	// остаться .mp4-сироты (download был, но defer не успел). Чистим их
+	// чтобы диск не утекал. ReadDir по dir в /tmp дешёвый.
+	if entries, err := os.ReadDir(cfg.TempDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				_ = os.Remove(filepath.Join(cfg.TempDir, e.Name()))
+			}
+		}
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -145,8 +166,11 @@ func (s *Service) Process(ctx context.Context, payload []byte) error {
 		return s.handlePipelineErr(ctx, itemID, "upload preview", err)
 	}
 	previewURL := s.cfg.Storage.PublicURL(previewKey)
-	if err := s.markReady(ctx, itemID, previewURL); err != nil {
-		return fmt.Errorf("mark ready: %w", err)
+	// T2 fix: markReady + reindex-emit одной tx. Раньше markReady был
+	// commit'ом, а emitReindex — отдельной tx после него; crash между
+	// ними оставлял preview готовым, но OS feed_videos без preview_url.
+	if err := s.commitReady(ctx, itemID, userID, previewURL); err != nil {
+		return fmt.Errorf("commit ready: %w", err)
 	}
 
 	successTotal.Inc()
@@ -157,17 +181,19 @@ func (s *Service) Process(ctx context.Context, payload []byte) error {
 		"preview_url", previewURL,
 		"dur", time.Since(start),
 	)
-
-	// Параллельный outbox-event: после готовности preview переиндексировать
-	// feed_videos в OS, чтобы preview_url улетел туда (фид использует его).
-	// Не критично если этот UPDATE упадёт — preview всё равно отдаётся
-	// напрямую через /me/portfolio и публичную ручку профиля.
-	return s.emitReindex(ctx, userID)
+	return nil
 }
 
 // claim — атомарно перевести запись в processing. true = взяли, false =
-// уже занято/готово/удалено. Допускаем pending → processing и
-// failed → processing (повторная попытка вручную или после patch'a).
+// уже занято/готово/удалено. Допускаем:
+//   pending  → processing (новая запись)
+//   failed   → processing (ручной retry или backfill)
+//   processing с updated_at < now - StuckRecoveryAfter → processing
+//     (auto-recovery: предыдущий handler крашнулся между claim и markReady,
+//     запись осталась залипшей — иначе она навсегда заблокирована).
+//
+// StuckRecoveryAfter > outbox.leaseDuration (10м), поэтому два воркера
+// не могут одновременно claim'нуть один и тот же item.
 func (s *Service) claim(ctx context.Context, itemID uuid.UUID) (bool, error) {
 	tag, err := s.cfg.DB.Exec(ctx, `
 UPDATE portfolio_items
@@ -175,26 +201,46 @@ SET preview_status = 'processing',
     preview_error  = NULL,
     updated_at     = now()
 WHERE id = $1
-  AND preview_status IN ('pending', 'failed')`, itemID)
+  AND (
+        preview_status IN ('pending', 'failed')
+        OR (preview_status = 'processing' AND updated_at < now() - $2::interval)
+      )`, itemID, s.cfg.StuckRecoveryAfter.String())
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
 }
 
-// markReady — финальный UPDATE: ready + preview_url. Защищаемся через
-// WHERE preview_status='processing' от перезаписи ручного revert'a
-// админа.
-func (s *Service) markReady(ctx context.Context, itemID uuid.UUID, previewURL string) error {
-	_, err := s.cfg.DB.Exec(ctx, `
+// commitReady — финальная атомарная операция: ставит preview_url + ready,
+// и тем же commit'ом эмитит specialist.upserted для переиндексации
+// feed_videos в OS. Защищаемся через WHERE preview_status='processing' от
+// перезаписи ручного revert'a админа (Row уехал не туда → markReady no-op,
+// outbox event тоже не эмитим, потому что tx сериализован).
+//
+// Если RowsAffected=0 (row удалили / статус сменили) — outbox event
+// всё равно эмитим: feed_videos должен переиндекситься (preview_url
+// мог уйти в S3 как orphan, sweep его подберёт).
+func (s *Service) commitReady(ctx context.Context, itemID, userID uuid.UUID, previewURL string) error {
+	tx, err := s.cfg.DB.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
 UPDATE portfolio_items
-SET preview_url           = $2,
-    preview_status        = 'ready',
-    preview_error         = NULL,
-    preview_generated_at  = now(),
-    updated_at            = now()
-WHERE id = $1 AND preview_status = 'processing'`, itemID, previewURL)
-	return err
+SET preview_url          = $2,
+    preview_status       = 'ready',
+    preview_error        = NULL,
+    preview_generated_at = now(),
+    updated_at           = now()
+WHERE id = $1 AND preview_status = 'processing'`, itemID, previewURL); err != nil {
+		return fmt.Errorf("mark ready: %w", err)
+	}
+	if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+		outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+		return fmt.Errorf("emit reindex: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // markFailed — статус failed + сохранение причины. Не валит handler
@@ -234,22 +280,6 @@ func (s *Service) handlePipelineErr(ctx context.Context, itemID uuid.UUID, stage
 	}
 	errorsTotal.WithLabelValues(reason).Inc()
 	return fmt.Errorf("%s: %w", stage, err)
-}
-
-// emitReindex шлёт specialist.upserted чтобы feed_videos в OS подхватил
-// новый preview_url. Best-effort: ошибка не валит pipeline.
-func (s *Service) emitReindex(ctx context.Context, userID uuid.UUID) error {
-	tx, err := s.cfg.DB.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return nil // best-effort
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-		outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
-		return nil
-	}
-	_ = tx.Commit(ctx)
-	return nil
 }
 
 // previewKeyFor превращает portfolio/<user>/<item>.mp4 в

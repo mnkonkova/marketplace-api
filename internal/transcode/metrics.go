@@ -33,20 +33,36 @@ var (
 
 	queueDepth = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "transcode_queue_depth",
-		Help: "Portfolio items waiting for preview (preview_status='pending').",
+		Help: "Portfolio items waiting for preview: status='pending' + stuck 'processing' (updated_at > 15m ago).",
+	})
+
+	// stuckProcessing — отдельный gauge только для застрявших processing'ов.
+	// Высокий и устойчивый = воркер крашится между claim и commitReady;
+	// auto-recovery в claim() (E1/T1) их перехватит, но gauge даёт
+	// раннее предупреждение.
+	stuckProcessing = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "transcode_stuck_processing",
+		Help: "Portfolio items in 'processing' state longer than 15 min (worker crash residue).",
 	})
 )
 
-// RefreshQueueDepth — обновляет gauge transcode_queue_depth. Вызывается
-// периодически воркером (см. cmd/worker/main.go). Партиальный индекс
-// portfolio_items_pending_preview_idx (00020) держит запрос дешёвым:
-// count проходит по индексу размером десятки записей.
+// RefreshQueueDepth — обновляет transcode_queue_depth и
+// transcode_stuck_processing. Вызывается периодически воркером
+// (см. cmd/worker/main.go). Партиальный индекс
+// portfolio_items_pending_preview_idx (00020) ускоряет pending-запрос;
+// stuck-processing запрос проходит по основной B-tree (мало строк).
 func RefreshQueueDepth(ctx context.Context, db *pgxpool.Pool) error {
-	var n int64
-	if err := db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM portfolio_items WHERE preview_status = 'pending'`).Scan(&n); err != nil {
+	var pending, stuck int64
+	if err := db.QueryRow(ctx, `
+SELECT
+  (SELECT COUNT(*) FROM portfolio_items WHERE preview_status = 'pending'),
+  (SELECT COUNT(*) FROM portfolio_items
+    WHERE preview_status = 'processing'
+      AND updated_at < now() - INTERVAL '15 minutes')
+`).Scan(&pending, &stuck); err != nil {
 		return err
 	}
-	queueDepth.Set(float64(n))
+	queueDepth.Set(float64(pending + stuck))
+	stuckProcessing.Set(float64(stuck))
 	return nil
 }
