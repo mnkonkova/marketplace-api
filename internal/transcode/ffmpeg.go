@@ -63,6 +63,12 @@ func (f *FFmpegBin) MakePreview(ctx context.Context, input, output string) error
 		"-an",                               // без звука
 		"-movflags", "+faststart",
 		"-fs", "1500K",                      // hard cap (если CRF дал больше)
+		// -threads 2: libx264 по дефолту цепляет все ядра CPU (на 6-vCPU
+		// VDS — это 12 потоков с lookahead'ом), spawn'ает 12 thread-pool'ов
+		// + аллоцирует context на каждый → пик памяти при инициализации
+		// сжирает cgroup-лимит контейнера → SIGKILL ещё до первого кадра.
+		// 2 потока дают 95% throughput без OOM-разгона.
+		"-threads", "2",
 		output,
 	}
 
