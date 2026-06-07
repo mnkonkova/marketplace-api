@@ -347,22 +347,36 @@ grafana-dashboards-push:
 	  fi; \
 	done
 
-# Залить grafana/alerts.yml в Grafana Cloud Mimir. Требует mimirtool:
-#   brew install grafana/grafana/mimirtool
-# или: go install github.com/grafana/mimir/cmd/mimirtool@latest
-#
-# Mimir Rules API:
-#   POST {prom_url%/api/prom/push}/api/v1/rules/{namespace}
-#   namespace = "marketpclce" (единый для всех групп из alerts.yml)
+# Залить grafana/alerts.yml в Grafana Cloud через Ruler API.
+# Использует тот же Bearer-токен что и grafana-dashboards-push (без
+# mimirtool — он segfault'ит на arm64 в некоторых средах). Каждый
+# rule-group из YAML конвертируется в JSON и POST'ится отдельно
+# в namespace "marketpclce" — UI показывает группы внутри этого namespace.
+GRAFANA_RULES_DS ?= grafanacloud-prom
+GRAFANA_RULES_NAMESPACE ?= marketpclce
 grafana-rules-push:
-	@test -n "$(GRAFANA_PROM_URL)" || (echo "GRAFANA_CLOUD_PROM_URL пуст в .env.prod"; exit 1)
-	@test -n "$(GRAFANA_PROM_USER)" || (echo "GRAFANA_CLOUD_PROM_USER пуст"; exit 1)
-	@test -n "$(GRAFANA_PROM_KEY)" || (echo "GRAFANA_CLOUD_PROM_KEY пуст"; exit 1)
-	@command -v mimirtool >/dev/null || (echo "mimirtool не установлен. См. https://grafana.com/docs/mimir/latest/manage/tools/mimirtool/"; exit 1)
-	@PROM_BASE=$$(echo "$(GRAFANA_PROM_URL)" | sed 's|/api/prom/push||'); \
-	 echo "[mimir] sync rules → $$PROM_BASE"; \
-	 mimirtool rules sync \
-	   --address="$$PROM_BASE" \
-	   --id="$(GRAFANA_PROM_USER)" \
-	   --key="$(GRAFANA_PROM_KEY)" \
-	   grafana/alerts.yml
+	@test -n "$(GRAFANA_URL)" || (echo "GRAFANA_URL пуст. Заполни в .env.prod"; exit 1)
+	@test -n "$(GRAFANA_TOKEN)" || (echo "GRAFANA_TOKEN пуст"; exit 1)
+	@python3 -c "import yaml" 2>/dev/null || (echo "python3-yaml не установлен: pip install pyyaml"; exit 1)
+	@python3 -c "$$GRAFANA_RULES_PY" "$(GRAFANA_URL)" "$(GRAFANA_TOKEN)" "$(GRAFANA_RULES_DS)" "$(GRAFANA_RULES_NAMESPACE)" grafana/alerts.yml
+
+# inline Python ниже — заливает каждую группу через POST с Content-Type
+# application/json. 202 success = rule прокомпилировался и записан.
+define GRAFANA_RULES_PY
+import sys, yaml, json, urllib.request
+url, token, ds, ns, fp = sys.argv[1].rstrip('/'), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+ep = f"{url}/api/ruler/{ds}/api/v1/rules/{ns}"
+with open(fp) as f: data = yaml.safe_load(f)
+ok = fail = 0
+for grp in data['groups']:
+    req = urllib.request.Request(ep, data=json.dumps(grp).encode(), method='POST',
+        headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            print(f"  ok {grp['name']:35s} HTTP {r.status}"); ok += 1
+    except urllib.error.HTTPError as e:
+        print(f"  fail {grp['name']:35s} HTTP {e.code}: {e.read().decode()[:120]}"); fail += 1
+print(f"\n{ok}/{ok+fail} rule-groups uploaded to {ns}")
+sys.exit(0 if fail==0 else 1)
+endef
+export GRAFANA_RULES_PY
