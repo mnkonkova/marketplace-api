@@ -20,7 +20,7 @@
 
 | | Где взять |
 |---|---|
-| Домен | Любой регистратор; нужен поддомен `app.<домен>` под VDS IP |
+| Домен | Любой регистратор; нужен поддомен `<домен>` под VDS IP |
 | Yandex Cloud Service Account | console.cloud.yandex.ru — нужен ключ к S3 для медиа |
 | Anthropic API key (опционально) | console.anthropic.com — LLM-фичи (summarize/clarify) |
 | SMTP-аккаунт `noreply@<домен>` | reg.ru hosting — отправка verify/reset писем (через n8n) |
@@ -127,10 +127,10 @@ sysctl -p
 
 ## 3. Поддомен и DNS
 
-A-запись `app.<домен>` → `<IP VDS>`, TTL 300.
+A-запись `<домен>` → `<IP VDS>`, TTL 300.
 
 ```bash
-dig app.<домен> +short    # должен показать IP VDS
+dig <домен> +short    # должен показать IP VDS
 ```
 
 **Без работающего DNS Caddy не получит TLS-сертификат** (Let's Encrypt
@@ -161,7 +161,7 @@ nano .env.prod
 
 | Поле | Как получить / задать |
 |---|---|
-| `DOMAIN` | `app.<домен>` |
+| `DOMAIN` | `<домен>` |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 16` |
 | `DATABASE_URL` | `postgres://marketpclce:<password>@postgres:5432/marketpclce?sslmode=disable` |
 | `OPENSEARCH_PASSWORD` | `openssl rand -base64 24` (≥10 символов, спец-символы) |
@@ -195,8 +195,8 @@ make deploy
 Проверь:
 ```bash
 make prod-ps              # все сервисы healthy
-curl -fsSL https://app.<домен>/healthz
-curl -fsSL https://app.<домен>/
+curl -fsSL https://<домен>/healthz
+curl -fsSL https://<домен>/
 ```
 
 (Опционально) заливка демо-данных:
@@ -273,8 +273,8 @@ make prod-seed-videos       # mp4 в S3
 Проверь:
 ```bash
 make prod-ps                                  # все healthy
-curl -fsSL https://app.<домен>/healthz
-curl -fsSL https://app.<домен>/api/v1/specialists | head -c 200
+curl -fsSL https://<домен>/healthz
+curl -fsSL https://<домен>/api/v1/specialists | head -c 200
 ```
 
 Если в ответе есть данные со старой VDS — миграция прошла.
@@ -286,7 +286,7 @@ curl -fsSL https://app.<домен>/api/v1/specialists | head -c 200
 В сценарии B админ перенёсся вместе с дампом. В A — создать вручную:
 
 ```bash
-# Зарегистрируйся через UI: https://app.<домен>/registration
+# Зарегистрируйся через UI: https://<домен>/registration
 # Подтверди email (письмо от noreply@<домен>, через n8n SMTP).
 # Затем в Postgres:
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
@@ -294,7 +294,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod \
   -c "UPDATE users SET is_admin = TRUE, is_approved = TRUE WHERE email = '<твой email>';"
 ```
 
-Теперь `https://app.<домен>/admin` доступен.
+Теперь `https://<домен>/admin` доступен.
 
 ---
 
@@ -470,7 +470,7 @@ Pipeline идёт async через outbox (`portfolio.video_uploaded`).
 
 **Caddy: `failed to obtain certificate`**
 DNS A-запись не резолвится на IP сервера или порт 80 закрыт.
-`dig app.<домен> +short` и `ufw status`.
+`dig <домен> +short` и `ufw status`.
 
 **OpenSearch падает: `max virtual memory areas vm.max_map_count`**
 Не выполнил sysctl из шага 2. `sysctl -w vm.max_map_count=262144` и
