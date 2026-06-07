@@ -1,0 +1,265 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Бизнес: проекты / лиды / клиенты (24h)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Активные проекты (active+on_hold+dispute)",
+      "id": 2,
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1},
+      "targets": [{
+        "expr": "sum(projects_total{status=~\"active|on_hold|dispute\"})",
+        "refId": "A"
+      }],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "reduceOptions": {"calcs": ["lastNotNull"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        }
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "stat",
+      "title": "Лиды за 24h",
+      "id": 3,
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 1},
+      "targets": [{
+        "expr": "leads_created_24h",
+        "refId": "A"
+      }],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {"calcs": ["lastNotNull"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "green", "value": 5}
+          ]}
+        }
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "stat",
+      "title": "Новые проекты за 24h",
+      "id": 4,
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 1},
+      "targets": [{
+        "expr": "projects_created_24h",
+        "refId": "A"
+      }],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {"calcs": ["lastNotNull"]}
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "stat",
+      "title": "Конверсия Lead → Project",
+      "id": 5,
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 1},
+      "targets": [{
+        "expr": "100 * (projects_created_24h / clamp_min(leads_created_24h, 1))",
+        "refId": "A"
+      }],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 30},
+            {"color": "green", "value": 80}
+          ]}
+        }
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Динамика 24h окон",
+      "id": 6,
+      "gridPos": {"h": 8, "w": 16, "x": 0, "y": 5},
+      "targets": [
+        {"expr": "leads_created_24h", "refId": "A", "legendFormat": "Лиды"},
+        {"expr": "projects_created_24h", "refId": "B", "legendFormat": "Новые проекты"},
+        {"expr": "projects_completed_24h", "refId": "C", "legendFormat": "Завершённые"},
+        {"expr": "project_comments_created_24h", "refId": "D", "legendFormat": "Комментарии"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10}
+        }
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "piechart",
+      "title": "Проекты по статусам",
+      "id": 7,
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 5},
+      "targets": [{
+        "expr": "projects_total",
+        "refId": "A",
+        "legendFormat": "{{status}}"
+      }],
+      "options": {"pieType": "donut", "legend": {"placement": "right", "showLegend": true}},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "row",
+      "title": "Юзеры",
+      "id": 8,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Регистрации за 24h",
+      "id": 9,
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 14},
+      "targets": [{"expr": "users_registered_24h", "refId": "A"}],
+      "options": {
+        "colorMode": "value", "graphMode": "area",
+        "reduceOptions": {"calcs": ["lastNotNull"]}
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "piechart",
+      "title": "Юзеры по kind",
+      "id": 10,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 14},
+      "targets": [{
+        "expr": "users_total",
+        "refId": "A",
+        "legendFormat": "{{kind}}"
+      }],
+      "options": {"pieType": "pie", "legend": {"placement": "right", "showLegend": true}},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "stat",
+      "title": "Всего юзеров",
+      "id": 11,
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 14},
+      "targets": [{"expr": "sum(users_total)", "refId": "A"}],
+      "options": {
+        "colorMode": "background", "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"]}
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "row",
+      "title": "n8n",
+      "id": 12,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22},
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "n8n health (1 = up)",
+      "id": 13,
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 23},
+      "targets": [{"expr": "up{job=\"marketpclce-n8n\"}", "refId": "A"}],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "reduceOptions": {"calcs": ["lastNotNull"]}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}}},
+            {"type": "value", "options": {"1": {"text": "UP", "color": "green"}}}
+          ],
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "green", "value": 1}
+          ]}
+        }
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    },
+    {
+      "type": "timeseries",
+      "title": "n8n webhook: успешные доставки vs ошибки (rate 5m)",
+      "id": 14,
+      "gridPos": {"h": 8, "w": 18, "x": 6, "y": 23},
+      "targets": [
+        {
+          "expr": "sum by (aggregate) (rate(outbox_handler_processed_total{aggregate=~\"project|user|support\",status=\"ok\"}[5m]))",
+          "refId": "A",
+          "legendFormat": "ok / {{aggregate}}"
+        },
+        {
+          "expr": "sum by (aggregate) (rate(outbox_handler_errors_total{aggregate=~\"project|user|support\"}[5m]))",
+          "refId": "B",
+          "legendFormat": "err / {{aggregate}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "line", "fillOpacity": 10}
+        }
+      },
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["marketpclce", "business"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "marketpclce — Бизнес + n8n",
+  "uid": "marketpclce-business",
+  "version": 1,
+  "weekStart": ""
+}
