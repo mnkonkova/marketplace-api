@@ -309,17 +309,24 @@ n8n живёт в отдельном контейнере (вне нашего c
 ```bash
 docker run -d \
   --name marketplace-api-n8n-1 \
+  --network marketplace-api_default \
   --restart unless-stopped \
   -p 5678:5678 \
   -v marketplace-api_n8n-data:/home/node/.n8n \
   -e N8N_HOST=n8n.<домен> \
   -e N8N_PORT=5678 \
   -e WEBHOOK_URL=https://n8n.<домен>/ \
+  -e N8N_PROXY_HOPS=1 \
   n8nio/n8n
 ```
 
-Заведи A-запись `n8n.<домен>` → IP VDS и прокинь через Caddy (см.
-`Caddyfile` в репо `web`).
+`--network marketplace-api_default` обязательно — иначе Caddy в `web`
+контейнере не достучится до n8n. Имя контейнера `marketplace-api-n8n-1`
+является DNS-именем в этой сети (см. `Caddyfile`: `reverse_proxy
+marketplace-api-n8n-1:5678`).
+
+Заведи A-запись `n8n.<домен>` → IP VDS до запуска `make deploy`,
+чтобы Caddy выписал TLS на этот поддомен через HTTP-01 challenge.
 
 ### Сценарий A — настройка с нуля
 
