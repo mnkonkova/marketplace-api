@@ -1,6 +1,7 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test test-db-up test-db-reset test-integration lint fmt swag \
         deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos \
-        backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n n8n-import n8n-export
+        backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n n8n-import n8n-export \
+        grafana-dashboards-push grafana-rules-push
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -306,3 +307,62 @@ backup-db:
 	 fi; \
 	 echo "[backup-dev] OK: $$(numfmt --to=iec $$SIZE 2>/dev/null || echo $$SIZE bytes)"; \
 	 find $(BACKUP_DIR) -name "$${PG_DB}-*.sql.gz" -type f -mtime +$(BACKUP_KEEP_DAYS) -print -delete
+
+# ── Grafana Cloud: дашборды и алерты через API ──────────────────────
+# Авторизация:
+# - GRAFANA_URL — https://<твой-стек>.grafana.net (из cabinet → My Account)
+# - GRAFANA_TOKEN — Service Account token с правами:
+#     • Dashboards: Admin (для grafana-dashboards-push)
+#     • Rules: Editor (для grafana-rules-push)
+#   Создать: Grafana Cloud UI → Administration → Service accounts → New.
+# - Для rules: нужен GRAFANA_CLOUD_PROM_USER + GRAFANA_CLOUD_PROM_URL
+#   (тот же что в .env.prod для alloy push) — Mimir-API живёт на этом же
+#   домене. Имя rule-group берётся из YAML (groups[].name).
+GRAFANA_URL ?= $$(grep -E '^GRAFANA_URL=' .env.prod 2>/dev/null | cut -d= -f2-)
+GRAFANA_TOKEN ?= $$(grep -E '^GRAFANA_TOKEN=' .env.prod 2>/dev/null | cut -d= -f2-)
+GRAFANA_PROM_URL ?= $$(grep -E '^GRAFANA_CLOUD_PROM_URL=' .env.prod 2>/dev/null | cut -d= -f2-)
+GRAFANA_PROM_USER ?= $$(grep -E '^GRAFANA_CLOUD_PROM_USER=' .env.prod 2>/dev/null | cut -d= -f2-)
+GRAFANA_PROM_KEY ?= $$(grep -E '^GRAFANA_CLOUD_PROM_KEY=' .env.prod 2>/dev/null | cut -d= -f2-)
+
+# Залить все дашборды из grafana/*-dashboard.json в Grafana Cloud.
+# Использует POST /api/dashboards/db с overwrite=true — обновит существующий
+# по uid'у, либо создаст новый. Папка default — корневая.
+grafana-dashboards-push:
+	@test -n "$(GRAFANA_URL)" || (echo "GRAFANA_URL пуст. Заполни в .env.prod"; exit 1)
+	@test -n "$(GRAFANA_TOKEN)" || (echo "GRAFANA_TOKEN пуст. Создай Service Account → Generate token"; exit 1)
+	@for f in grafana/*-dashboard.json; do \
+	  name=$$(basename $$f .json); \
+	  echo "[grafana] → $$name"; \
+	  body=$$(jq -n --slurpfile d $$f '{dashboard: $$d[0], overwrite: true, folderId: 0}'); \
+	  resp=$$(curl -s -w "\n%{http_code}" -X POST "$(GRAFANA_URL)/api/dashboards/db" \
+	    -H "Authorization: Bearer $(GRAFANA_TOKEN)" \
+	    -H "Content-Type: application/json" \
+	    -d "$$body"); \
+	  code=$$(echo "$$resp" | tail -1); \
+	  if [ "$$code" = "200" ]; then \
+	    url=$$(echo "$$resp" | head -n-1 | jq -r '.url // ""'); \
+	    echo "  ✓ $(GRAFANA_URL)$$url"; \
+	  else \
+	    echo "  ✗ HTTP $$code: $$(echo "$$resp" | head -n-1)"; exit 1; \
+	  fi; \
+	done
+
+# Залить grafana/alerts.yml в Grafana Cloud Mimir. Требует mimirtool:
+#   brew install grafana/grafana/mimirtool
+# или: go install github.com/grafana/mimir/cmd/mimirtool@latest
+#
+# Mimir Rules API:
+#   POST {prom_url%/api/prom/push}/api/v1/rules/{namespace}
+#   namespace = "marketpclce" (единый для всех групп из alerts.yml)
+grafana-rules-push:
+	@test -n "$(GRAFANA_PROM_URL)" || (echo "GRAFANA_CLOUD_PROM_URL пуст в .env.prod"; exit 1)
+	@test -n "$(GRAFANA_PROM_USER)" || (echo "GRAFANA_CLOUD_PROM_USER пуст"; exit 1)
+	@test -n "$(GRAFANA_PROM_KEY)" || (echo "GRAFANA_CLOUD_PROM_KEY пуст"; exit 1)
+	@command -v mimirtool >/dev/null || (echo "mimirtool не установлен. См. https://grafana.com/docs/mimir/latest/manage/tools/mimirtool/"; exit 1)
+	@PROM_BASE=$$(echo "$(GRAFANA_PROM_URL)" | sed 's|/api/prom/push||'); \
+	 echo "[mimir] sync rules → $$PROM_BASE"; \
+	 mimirtool rules sync \
+	   --address="$$PROM_BASE" \
+	   --id="$(GRAFANA_PROM_USER)" \
+	   --key="$(GRAFANA_PROM_KEY)" \
+	   grafana/alerts.yml
