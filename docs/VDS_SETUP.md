@@ -359,10 +359,30 @@ docker run -d \
    | `reg.ru SMTP noreply` | SMTP | Host=`mail.hosting.reg.ru`, Port=`465` (SSL) или `587` (TLS), User=`noreply@wayprmarket.ru`, Password=из reg.ru |
    | `Postgres CRM` | Postgres | Host=`postgres`, Port=`5432`, DB=`marketpclce`, User/Password из `.env.prod` |
 
-   После создания каждого credential — открой workflows и перепривяжи
-   ноды (Telegram, Send via reg.ru SMTP, Email → info@, Postgres stats),
-   у каждой в выпадашке `Credential to connect with` выбери новый
-   credential.
+   ⚠️ **Привязать credentials к нодам вручную.** `make n8n-import` кладёт
+   в workflow ссылку на credential по **имени** (`Telegram CRM bot`), а
+   n8n матчит их по **внутреннему id**. У credential'а, который ты только
+   что создала, id новый, поэтому workflow жалуется *«Credential not
+   configured»* при попытке активации. Нужно открыть каждую такую ноду и
+   выбрать credential из выпадашки `Credential to connect with` → **Save**.
+   Привязка сохраняется в БД n8n.
+
+   Список нод, которые надо перепривязать:
+
+   | Workflow | Нода | Credential |
+   |---|---|---|
+   | crmTgEventsV1 | Telegram | Telegram CRM bot |
+   | crmSupport | Telegram | Telegram CRM bot |
+   | crmSupport | Email → info@ | reg.ru SMTP noreply |
+   | crmEmailNotify | Send via reg.ru SMTP | reg.ru SMTP noreply |
+   | crmWeeklyDigest | Telegram | Telegram CRM bot |
+   | crmWeeklyDigest | Postgres stats | Postgres CRM |
+
+   После повторного `make n8n-import` (например, после изменений
+   workflow'а) — связки слетят, и нужно будет перепривязать заново.
+   Для disaster-recovery без этого ручного шага — использовать
+   `make restore-n8n` из tarball'а (там credentials с теми же id уже
+   есть, n8n восстановит связки автоматически).
 5. Скопируй **Production URL** Webhook-нод и вставь в `.env.prod`:
    ```
    N8N_WEBHOOK_URL=https://n8n.<домен>/webhook/project-events
