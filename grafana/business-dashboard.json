@@ -601,7 +601,7 @@
     },
     {
       "type": "stat",
-      "title": "n8n health (1 = up)",
+      "title": "n8n health (probe_success)",
       "id": 13,
       "gridPos": {
         "h": 4,
@@ -611,7 +611,7 @@
       },
       "targets": [
         {
-          "expr": "up{job=\"marketpclce-n8n\"}",
+          "expr": "probe_success{job=\"marketpclce-n8n\"}",
           "refId": "A"
         }
       ],
