@@ -277,8 +277,15 @@ func (c *Client) Search(ctx context.Context, index string, query any) (*SearchRe
 
 // DeleteByQuery — массовое удаление по запросу. Используется feed-индексером
 // чтобы при reconcile одного спеца снести все его видео-доки одной командой.
+//
+// conflicts=proceed — игнорировать version_conflict (409). Когда несколько
+// событий specialist.upserted приходят подряд для одного user_id (типично
+// при батч-обновлении профиля), delete сканит snapshot v=N, в это время
+// bulk index пишет v=N+1 → delete падает 409 при попытке удалить старую
+// версию. С proceed просто пропускаем конфликтные документы — следующий
+// bulk index в ReconcileVideos их перезапишет, eventual consistency.
 func (c *Client) DeleteByQuery(ctx context.Context, index string, query any) error {
-	return c.do(ctx, http.MethodPost, "/"+index+"/_delete_by_query?refresh=false", query, nil)
+	return c.do(ctx, http.MethodPost, "/"+index+"/_delete_by_query?refresh=false&conflicts=proceed", query, nil)
 }
 
 // CountDocs — сколько документов в индексе. Используется при bootstrap'е
