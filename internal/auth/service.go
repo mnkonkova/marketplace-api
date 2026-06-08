@@ -125,19 +125,19 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 		return RegisterResult{}, err
 	}
 	if utf8.RuneCountInString(in.Password) < 8 {
-		return RegisterResult{}, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
+		return RegisterResult{}, fmt.Errorf("%w: пароль должен быть не короче 8 символов", ErrInvalidInput)
 	}
 	switch in.Kind {
 	case KindClient, KindSpecialist:
 	default:
-		return RegisterResult{}, fmt.Errorf("%w: kind must be client or specialist", ErrInvalidInput)
+		return RegisterResult{}, fmt.Errorf("%w: тип аккаунта должен быть client или specialist", ErrInvalidInput)
 	}
 	// CRM-роль теперь не приходит из регистрации: manager/admin промоутит
 	// только админ. Через /auth/register создаётся обычный юзер (kind задаёт
 	// маркетплейс-идентичность), is_manager/is_admin остаются FALSE.
 	needsProfile := in.Kind == KindSpecialist
 	if needsProfile && in.DisplayName == "" {
-		return RegisterResult{}, fmt.Errorf("%w: display_name is required for specialists", ErrInvalidInput)
+		return RegisterResult{}, fmt.Errorf("%w: укажите имя для отображения", ErrInvalidInput)
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
@@ -418,24 +418,24 @@ func HashToken(raw string) string {
 // равен input после lower).
 func ValidateEmail(s string) (string, error) {
 	if s == "" {
-		return "", fmt.Errorf("%w: email is required", ErrInvalidInput)
+		return "", fmt.Errorf("%w: укажите email", ErrInvalidInput)
 	}
 	if len(s) > emailMaxLen {
-		return "", fmt.Errorf("%w: email too long", ErrInvalidInput)
+		return "", fmt.Errorf("%w: email слишком длинный", ErrInvalidInput)
 	}
 	addr, err := mail.ParseAddress(s)
 	if err != nil {
-		return "", fmt.Errorf("%w: bad email format", ErrInvalidInput)
+		return "", fmt.Errorf("%w: некорректный формат email", ErrInvalidInput)
 	}
 	// Запрещаем форму "Name <a@b>" — фронт должен слать чистый адрес.
 	normalized := strings.ToLower(strings.TrimSpace(addr.Address))
 	if normalized != strings.ToLower(s) {
-		return "", fmt.Errorf("%w: email must be a plain address, not 'Name <addr>'", ErrInvalidInput)
+		return "", fmt.Errorf("%w: email должен быть без имени, только адрес", ErrInvalidInput)
 	}
 	if !strings.Contains(normalized, ".") {
 		// ParseAddress пропускает "user@localhost". Для маркетплейса требуем
 		// домен с точкой — отсекает явные опечатки и тестовые значения.
-		return "", fmt.Errorf("%w: email domain must contain a dot", ErrInvalidInput)
+		return "", fmt.Errorf("%w: домен email должен содержать точку", ErrInvalidInput)
 	}
 	return normalized, nil
 }

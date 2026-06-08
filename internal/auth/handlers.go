@@ -48,14 +48,19 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		DisplayName: in.DisplayName,
 	})
 	switch {
-	// ErrAlreadyExists и ErrInvalidInput возвращаем одним статусом и кодом,
-	// чтобы атакующий не мог по 409 vs 400 перебирать список зарегистрированных
-	// email'ов. Конкретика (формат, длина пароля, занято) уходит во внутренний
-	// лог, наружу — generic invalid_input. Anti-enumeration частичная: 201 vs
-	// 400 различимы при корректном вводе, поэтому работает в паре с RL на
-	// /auth/* (10/мин per IP).
-	case errors.Is(err, ErrInvalidInput), errors.Is(err, ErrAlreadyExists):
-		httpx.WriteErr(w, http.StatusBadRequest, "invalid_input")
+	// Раньше ErrAlreadyExists и ErrInvalidInput возвращались с пустым
+	// message для anti-enumeration (атакующий не отличит «email занят»
+	// от «битый ввод»). На практике эта защита всё равно частичная —
+	// 201 vs 400 различимы при корректном вводе — а UX страдал: юзер
+	// видел `invalid_input` без подсказки что не так с паролем/email'ом.
+	// Сейчас отдаём конкретную причину, защиту от enumeration оставляем
+	// на rate-limit `auth` (10/мин per IP).
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+		return
+	case errors.Is(err, ErrAlreadyExists):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input",
+			"Пользователь с таким email уже зарегистрирован")
 		return
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
