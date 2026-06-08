@@ -123,12 +123,36 @@ def delete_existing_in_namespace(namespace="marketpclce"):
         print(f"  rm mimir {group_name}: HTTP {code}")
 
 
+def delete_existing_grafana_managed(folder_uid):
+    """Удаляет все Grafana-managed rules в folder перед re-import'ом,
+    чтобы не плодить дубли при повторных запусках. Сохраняет isPaused
+    flag по-title для последующего восстановления."""
+    code, body = _api("/api/v1/provisioning/alert-rules", method="GET")
+    if code != 200 or not isinstance(body, list):
+        return {}
+    paused = {}
+    deleted = 0
+    for r in body:
+        if r.get("folderUID") == folder_uid:
+            if r.get("isPaused"):
+                paused[r["title"]] = True
+            _api(f"/api/v1/provisioning/alert-rules/{r['uid']}", method="DELETE")
+            deleted += 1
+    print(f"  removed {deleted} existing Grafana-managed rules in folder {folder_uid}")
+    if paused:
+        print(f"  was-paused: {list(paused.keys())}")
+    return paused
+
+
 def main(fp):
     with open(fp) as f:
         data = yaml.safe_load(f)
 
     print(f"== Delete existing Mimir rules in 'marketpclce' namespace ==")
     delete_existing_in_namespace("marketpclce")
+
+    print(f"\n== Delete existing Grafana-managed rules in folder ==")
+    paused = delete_existing_grafana_managed(FOLDER_UID)
 
     print(f"\n== Create Grafana-managed rules ==")
     ok = fail = 0
@@ -137,6 +161,8 @@ def main(fp):
             if "alert" not in r:
                 continue
             rule = to_grafana_rule(r, grp["name"])
+            if r["alert"] in paused:
+                rule["isPaused"] = True
             code, resp = _api(
                 "/api/v1/provisioning/alert-rules", method="POST", body=rule
             )

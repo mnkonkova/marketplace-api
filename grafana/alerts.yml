@@ -328,3 +328,62 @@ groups:
         annotations:
           summary: "Конверсия lead→project упала ниже 30% (норма ~100%)"
           description: "StartFromLead падает в API. Глянь api.log на `leads: StartFromLead failed`. Возможно default-pipeline пропал или enrichProjectPayload ломает tx."
+
+  # ── Host & API basic (ручные алерты, default-1m в Grafana UI) ──────
+  # Простые boolean-проверки на critical-уровень: API не отвечает,
+  # диск кончается, OOM близко. Эти алерты выживают даже если
+  # http_requests_total отвалится (используют up{} вместо метрик
+  # бизнес-логики). Pace 1 минута для быстрого реагирования.
+  - name: default-1m
+    interval: 1m
+    rules:
+      - alert: APIDown
+        expr: up{job="marketpclce-api"} < 1
+        for: 1m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "API контейнер не отвечает на /metrics"
+          description: "alloy не может скрейпить marketpclce-api:8080/metrics. Контейнер упал ИЛИ alloy потерял сеть."
+
+      - alert: DiskNearFull
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+          /
+          node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+          < 0.15
+        for: 1m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Диск < 15% свободного"
+          description: "На корневом разделе осталось мало места. Чисти Docker images/volumes/logs (см. docs/VDS_SETUP.md §1.4 Disk-бюджет)."
+
+      - alert: OOMRisk
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1
+        for: 1m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "RAM available < 10%"
+          description: "Скоро OOM-killer. Контейнеры с mem_limit могут начать падать. Проверь самых жирных через `docker stats`."
+
+      - alert: ErrorRate5xxBurst
+        # Дублирует HighErrorRate (5m), но с for=1m — для более резкой реакции.
+        # Срабатывает быстрее если внезапная пиковая ошибка.
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(http_requests_total[5m])), 1)
+          > 0.05
+        for: 1m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "API 5xx > 5% (1m, быстрая реакция)"
+          description: "Burst ошибок. См. http-dashboard → Errors by route."
+
+      - alert: APINotScraped
+        # Двойная страховка к APIDown: проверяем что метрики вообще приходят.
+        # Если alloy сам упал — up{} становится stale, эта проверка пробьёт.
+        expr: absent(up{job="marketpclce-api"})
+        for: 2m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Метрика up{marketpclce-api} отсутствует 2+ мин"
+          description: "Alloy не пушит scrape-метрики. Проверь `docker compose logs alloy` и GRAFANA_CLOUD_PROM_* в .env.prod."

@@ -1,7 +1,7 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test test-db-up test-db-reset test-integration lint fmt swag \
         deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos \
         backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n n8n-import n8n-export \
-        grafana-dashboards-push grafana-rules-push
+        grafana-dashboards-push grafana-rules-push grafana-alerts-push
 
 DC ?= docker compose
 DSN ?= $$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')
@@ -380,3 +380,15 @@ print(f"\n{ok}/{ok+fail} rule-groups uploaded to {ns}")
 sys.exit(0 if fail==0 else 1)
 endef
 export GRAFANA_RULES_PY
+
+# Залить grafana/alerts.yml как Grafana-managed alerts (не Mimir-managed).
+# Mimir-managed в Grafana Cloud free tier не маршрутизируются через наш
+# Contact Point (у Mimir свой внутренний AM), поэтому Telegram-notifs
+# приходят только от Grafana-managed. Скрипт удаляет старые rules
+# в folder marketpclce + создаёт новые, сохраняя isPaused flag.
+grafana-alerts-push:
+	@test -n "$(GRAFANA_URL)" || (echo "GRAFANA_URL пуст в .env.prod"; exit 1)
+	@test -n "$(GRAFANA_TOKEN)" || (echo "GRAFANA_TOKEN пуст"; exit 1)
+	@python3 -c "import yaml" 2>/dev/null || (echo "python3-yaml: pip install pyyaml"; exit 1)
+	GRAFANA_URL="$(GRAFANA_URL)" GRAFANA_TOKEN="$(GRAFANA_TOKEN)" \
+	  python3 scripts/convert-alerts.py grafana/alerts.yml
