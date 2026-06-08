@@ -98,6 +98,122 @@
       "description": "Все firing-алерты прямо из Prometheus ALERTS{}. Не требует включения manageAlerts на datasource. Пустая таблица = всё хорошо."
     },
     {
+      "type": "state-timeline",
+      "title": "📊 Состояние алертов (0 = OK, 1 = FIRING)",
+      "id": 100,
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_requests_total{job=\"marketpclce-api\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{job=\"marketpclce-api\"}[5m])),1)) > bool 0.05",
+          "refId": "A",
+          "legendFormat": "HighErrorRate"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"marketpclce-api\"}[5m]))) > bool 2",
+          "refId": "B",
+          "legendFormat": "APIp95LatencyHigh"
+        },
+        {
+          "expr": "max(outbox_pending) > bool 100",
+          "refId": "C",
+          "legendFormat": "OutboxPendingBacklog"
+        },
+        {
+          "expr": "max(outbox_dead) > bool 0",
+          "refId": "D",
+          "legendFormat": "OutboxDeadLetterBacklog"
+        },
+        {
+          "expr": "(1 - max(up{job=\"marketpclce-n8n\"} or vector(1)))",
+          "refId": "E",
+          "legendFormat": "N8nDown"
+        },
+        {
+          "expr": "(leads_created_24h == bool 0) * (avg_over_time(leads_created_24h[7d]) > bool 5)",
+          "refId": "F",
+          "legendFormat": "LeadsStopped"
+        },
+        {
+          "expr": "(1 - max(up{job=\"marketpclce-api\"} or vector(1)))",
+          "refId": "G",
+          "legendFormat": "ESDown"
+        },
+        {
+          "expr": "max(transcode_queue_depth) > bool 20",
+          "refId": "H",
+          "legendFormat": "TranscodeQueueBacklog"
+        }
+      ],
+      "options": {
+        "showValue": "never",
+        "mergeValues": true,
+        "alignValue": "left",
+        "rowHeight": 0.95,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OK",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "FIRING",
+                  "color": "red"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 0
+          }
+        }
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "description": "Полоса состояния каждого ключевого алерта во времени. Зелёное = OK, красное = FIRING. Время в правой части — самое свежее состояние."
+    },
+    {
       "type": "row",
       "title": "Бизнес: проекты / лиды / клиенты (24h)",
       "gridPos": {
