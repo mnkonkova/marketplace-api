@@ -37,13 +37,12 @@ prometheus.scrape "worker" {
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
-// ── n8n availability через scrape /healthz ─────────────────────────
-// n8n не отдаёт Prometheus metrics, но /healthz возвращает 200 + JSON.
-// Прямой prometheus.scrape не парсит JSON, но up{} метрика будет 1
-// если scrape успешен (HTTP 2xx) и 0 если нет — этого достаточно
-// для probe-up алерта. Контейнер в сети api_default,
-// доступен по DNS-имени marketplace-api-n8n-1.
-prometheus.scrape "n8n_healthz" {
+// ── n8n availability через scrape /metrics ─────────────────────────
+// n8n отдаёт Prometheus metrics на /metrics если контейнер запущен
+// с env N8N_METRICS=true (см. docs/VDS_SETUP.md §7 — `docker run`
+// для n8n должен включать `-e N8N_METRICS=true`). Без этого endpoint
+// возвращает 404 или другой формат → up=0 даже когда n8n живой.
+prometheus.scrape "n8n_metrics" {
 	targets = [
 		{
 			__address__ = "marketplace-api-n8n-1:5678",
@@ -51,7 +50,7 @@ prometheus.scrape "n8n_healthz" {
 			job         = "marketpclce-n8n",
 		},
 	]
-	metrics_path    = "/healthz"
+	metrics_path    = "/metrics"
 	scrape_interval = "1m"
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }

@@ -324,8 +324,12 @@ docker run -d \
   -e N8N_PORT=5678 \
   -e WEBHOOK_URL=https://n8n.<домен>/ \
   -e N8N_PROXY_HOPS=1 \
+  -e N8N_METRICS=true \
   n8nio/n8n
 ```
+
+`N8N_METRICS=true` включает Prometheus-метрики на `/metrics` — без
+этого alloy не сможет скрейпить healthcheck (получит 404 → up=0).
 
 `--network api_default` (или твой реальный имя сети из `docker network ls`)
 — обязательно, иначе Caddy в `web` контейнере не достучится до n8n.
