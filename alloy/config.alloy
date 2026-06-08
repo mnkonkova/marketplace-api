@@ -37,23 +37,22 @@ prometheus.scrape "worker" {
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
-// ── n8n availability через /healthz prober ─────────────────────────
-// n8n не отдаёт Prometheus metrics, но имеет /healthz. Скрейпим как
-// blackbox-up: успех = up=1, иначе up=0. Контейнер в сети api_default,
+// ── n8n availability через scrape /healthz ─────────────────────────
+// n8n не отдаёт Prometheus metrics, но /healthz возвращает 200 + JSON.
+// Прямой prometheus.scrape не парсит JSON, но up{} метрика будет 1
+// если scrape успешен (HTTP 2xx) и 0 если нет — этого достаточно
+// для probe-up алерта. Контейнер в сети api_default,
 // доступен по DNS-имени marketplace-api-n8n-1.
-prometheus.exporter.blackbox "n8n" {
-	target {
-		name    = "n8n-healthz"
-		address = "http://marketplace-api-n8n-1:5678/healthz"
-		module  = "http_2xx"
-	}
-	config_file = ""
-}
-
-prometheus.scrape "n8n_probe" {
-	targets         = prometheus.exporter.blackbox.n8n.targets
+prometheus.scrape "n8n_healthz" {
+	targets = [
+		{
+			__address__ = "marketplace-api-n8n-1:5678",
+			service     = "n8n",
+			job         = "marketpclce-n8n",
+		},
+	]
+	metrics_path    = "/healthz"
 	scrape_interval = "1m"
-	job_name        = "marketpclce-n8n"
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
