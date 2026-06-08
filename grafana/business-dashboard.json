@@ -102,7 +102,7 @@
       "title": "📊 Состояние алертов (0 = OK, 1 = FIRING)",
       "id": 100,
       "gridPos": {
-        "h": 10,
+        "h": 14,
         "w": 24,
         "x": 0,
         "y": 8
@@ -147,6 +147,31 @@
           "expr": "max(transcode_queue_depth) > bool 20",
           "refId": "H",
           "legendFormat": "TranscodeQueueBacklog"
+        },
+        {
+          "expr": "(up{job=\"marketpclce-api\"} < bool 1)",
+          "refId": "I",
+          "legendFormat": "APIDown"
+        },
+        {
+          "expr": "(node_filesystem_avail_bytes{mountpoint=\"/\", fstype!~\"tmpfs|overlay\"}/node_filesystem_size_bytes{mountpoint=\"/\", fstype!~\"tmpfs|overlay\"} < bool 0.15)",
+          "refId": "J",
+          "legendFormat": "DiskNearFull"
+        },
+        {
+          "expr": "(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < bool 0.1)",
+          "refId": "K",
+          "legendFormat": "OOMRisk"
+        },
+        {
+          "expr": "(sum(rate(http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total[5m])),1) > bool 0.05)",
+          "refId": "L",
+          "legendFormat": "ErrorRate5xxBurst"
+        },
+        {
+          "expr": "(absent(up{job=\"marketpclce-api\"}) == bool 1)",
+          "refId": "M",
+          "legendFormat": "APINotScraped"
         }
       ],
       "options": {
