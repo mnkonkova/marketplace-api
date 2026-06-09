@@ -33,6 +33,10 @@ func TestNewService_RequiresAllDeps(t *testing.T) {
 type stubFFmpeg struct{}
 
 func (stubFFmpeg) MakePreview(_ context.Context, _, _ string) error { return nil }
+func (stubFFmpeg) MakeAnimatedWebP(_ context.Context, _, _ string, _ transcode.GifParams) error {
+	return nil
+}
+func (stubFFmpeg) ProbeDuration(_ context.Context, _ string) (float64, error) { return 0, nil }
 
 type stubStorage struct{}
 
