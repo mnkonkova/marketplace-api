@@ -362,3 +362,137 @@ Discrete spurts, чтобы можно было катить инкремент�
   `_preview.mp4`-ключ в обход воркера.
 - P4 `ErrPermanent` — путь для битых файлов / удалённых оригиналов.
 - P7 `BulkIndex` — переиндексация feed_videos после готовности preview.
+
+---
+
+## 11. Animated WebP «гифки» (v2, после base preview работает)
+
+### Проблема
+
+`_preview.mp4` решает размер (500KB вместо 30MB), но не решает iOS
+**Low Power Mode**: при включённой энергоэкономии Safari блокирует
+autoplay для ВСЕХ `<video>` тегов, даже muted+playsinline+правильно
+аттрибутированных. Юзер на iPhone в LPM видит постер с нативной
+иконкой плей, должен тапнуть.
+
+Также: на главной странице у нас 6-8 видео-плиток одновременно
+(`hero-mosaic` + `works-grid`) — iOS имеет soft-limit ~4 параллельных
+`<video>` элементов с autoplay; лишние не стартуют.
+
+### Решение
+
+Добавить **animated WebP** (или AVIF) рядом с `_preview.mp4`. WebP
+анимация:
+- Грузится через `<img src="...webp">` — **autoplay работает даже в
+  Low Power Mode и без лимитов** (это технически картинка, не видео)
+- ~30-100 KB на 4 сек 240p (в 5-10 раз меньше mp4-preview)
+- 95%+ браузеров поддерживает (caniuse: 96% global)
+
+Сценарий — **WebP применяем ТОЛЬКО на главной странице**, не везде:
+
+| Место | Тег | Source | Почему |
+|---|---|---|---|
+| Главная: `hero-mosaic` (4-6 плиток сверху) | `<img>` | `animated_thumb.webp` | autoplay в LPM, маленькие файлы, 6 видео одновременно |
+| Главная: `works-grid` (рекомендуемые работы) | `<img>` | `animated_thumb.webp` | то же |
+| Feed (`/feed`, Reels-mode) | `<video>` | `preview_url` или `video_url` | юзер на 1 видео в момент, нужен звук + плеер |
+| Карточка спеца (`/specialist/:id`) | `<video>` | `preview_url` | engaged-просмотр, аккуратное качество |
+| Portfolio-grid внутри спеца | `<video controls>` | `video_url` | юзер кликает чтобы развернуть, autoplay не нужен |
+
+«Гифки» решают проблему массового autoplay на главной (где 6+ плиток).
+В feed/cabinet их не нужно — там на экране всегда 1 видео, и юзер
+явно сюда пришёл.
+
+### S3 layout (расширенный)
+
+```
+portfolio/
+  <user_uuid>/
+    <item_uuid>.mp4              # оригинал
+    <item_uuid>_preview.mp4      # 480p, ~500KB
+    <item_uuid>_preview.webp     # 240p × 4 сек, ~50KB ← новое
+    <item_uuid>_thumb.jpg        # первый кадр для poster (опц.)
+```
+
+### FFmpeg для animated WebP
+
+```bash
+ffmpeg -y \
+  -ss 00:00:02 \
+  -i <input> \
+  -t 4 \                            # 4 сек хватает для GIF-эстетики
+  -vf "fps=12,scale=240:-2:flags=lanczos" \
+  -loop 0 \                         # бесконечный loop
+  -c:v libwebp \
+  -compression_level 6 \
+  -quality 70 \                     # 60-75 баланс размер/качество
+  -an \
+  <output>.webp
+```
+
+Целевой размер: **30-100 KB**. Hard cap `-fs 150k` с откатом на
+`-quality 55`.
+
+### DB схема (миграция 00022)
+
+```sql
+ALTER TABLE portfolio_items
+    ADD COLUMN animated_thumb_url TEXT;
+-- preview_status общий для обоих формат: ffmpeg делает оба за один
+-- handler-call (download оригинала один раз).
+```
+
+Поле опциональное: если транскод-handler сгенерил только mp4 (а webp
+упал) — animated_thumb_url остаётся NULL, фронт фолбэчит на postеr+mp4.
+
+### Frontend контракт
+
+В hero/works заменить:
+```html
+<!-- было -->
+<video src="{{ preview_url }}" autoplay muted loop playsinline>
+
+<!-- стало (animated WebP, autoplay везде) -->
+<img src="{{ animated_thumb_url }}" alt="" loading="lazy">
+
+<!-- если animated_thumb_url пустой — fallback на video как раньше -->
+```
+
+В feed-view (полноэкран) остаётся `<video>` — там размер уже не
+критичен, и нужен звук + контроль.
+
+### План работ (когда возьмём)
+
+1. Расширить ffmpeg pipeline двумя выходами (mp4 + webp). Sequential —
+   сначала mp4, потом webp с нуля (peak RAM не растёт, см. §11.6).
+2. Добавить колонку `animated_thumb_url`.
+3. Backend: отдавать `animated_thumb_url` в `/feed` и `portfolio_items`.
+4. Backfill через `make backfill-previews` (там уже инфраструктура есть).
+5. **Frontend ТОЛЬКО на главной** (hero + works grid) поменять
+   `<video>` → `<img>`. Feed/specialist/portfolio не трогаем.
+6. Добавить метрику `transcode_peak_rss_bytes` чтобы мониторить —
+   если хоть один раз > 800MB на 1G лимите, поднять worker до 1.5g.
+
+### OOM-анализ
+
+Транскод **последовательный** (один worker handler за раз,
+TranscodeMaxParallel нет). После mp4-pass'a `ffmpeg.go` через
+`exec.Cmd.Wait()` ждёт завершения процесса, RAM освобождается.
+Webp-pass запускается отдельным `exec.Command` с нуля.
+
+| Pass | Peak RAM | Длительность |
+|---|---|---|
+| mp4 (480p libx264) | 500-700 MB | 8-15 сек |
+| webp (240p libwebp) | 200-300 MB | 4-8 сек |
+| **Worker peak** (sequential) | **~500-700 MB** | без изменений |
+
+Worker `mem_limit: 1g` — запас ~30-50%. Если в метриках после релиза
+увидим spike'и >800MB — поднять до `1.5g` в docker-compose.prod.yml.
+
+### Альтернативы
+
+| Вариант | Почему нет |
+|---|---|
+| **Animated GIF** | На порядок больше WebP при том же качестве, без прозрачности нет смысла. |
+| **AVIF animated** | Лучше компрессия чем WebP, но поддержка в Safari пока неполная (16.4+), фолбэков больше. Дойдём через год. |
+| **APNG** | Безопасный, но 2-3x больше WebP. |
+| **MP4 через `<img>` (CSS image-rendering)** | Не работает: `<img>` парсит только image-форматы. |
