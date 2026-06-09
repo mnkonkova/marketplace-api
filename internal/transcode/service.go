@@ -242,9 +242,9 @@ WHERE id = $1
 // Логика выбора параметров — ChooseGifParams(duration). Если ffprobe не
 // дал длительность, fallback на 15-сек бакет (середина).
 //
-// После первого pass'a проверяем размер: > 150KB → второй pass с
+// После первого pass'a проверяем размер: > 300KB → второй pass с
 // quality-10. Если и второй не вошёл — оставляем что есть (всё равно
-// меньше mp4).
+// меньше mp4). Порог 300 КБ — под новый потолок -fs 350K (2026-06 tune-up).
 func (s *Service) makeAnimatedThumb(ctx context.Context, itemID uuid.UUID, input, output, key string) string {
 	dur, err := s.cfg.FFmpeg.ProbeDuration(ctx, input)
 	if err != nil {
@@ -266,11 +266,13 @@ func (s *Service) makeAnimatedThumb(ctx context.Context, itemID uuid.UUID, input
 			"item_id", itemID, "size", info.Size())
 		return ""
 	}
-	// Второй pass если > 150KB.
-	if info.Size() > 150*1024 {
-		params.Quality -= 10
-		if params.Quality < 50 {
-			params.Quality = 50
+	// Второй pass если > 300KB. Quality не опускаем ниже 70 — иначе теряем
+	// смысл tune-апа (2026-06): подняли качество чтобы гифки выглядели
+	// как нормальное видео, а не как блёкленький превью.
+	if info.Size() > 300*1024 {
+		params.Quality -= 8
+		if params.Quality < 70 {
+			params.Quality = 70
 		}
 		if err := s.cfg.FFmpeg.MakeAnimatedWebP(ctx, input, output, params); err != nil {
 			s.logger.Warn("animated_thumb: second pass failed, keeping first",

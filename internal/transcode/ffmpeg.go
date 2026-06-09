@@ -125,19 +125,21 @@ type GifParams struct {
 
 // ChooseGifParams — выбор параметров под длительность оригинала.
 //
-//	≤ 5 сек     → 0..весь × fps 12 × q 75 (≈40-60 кадров)
-//	5-15 сек    → 2..весь-2 × fps 12 × q 70 (≈60-120 кадров)
-//	> 15 сек    → 2..10 × fps 10 × q 65 (100 кадров)
+//	≤ 5 сек     → 0..весь × fps 15 × q 85 (≈60-80 кадров)
+//	5-15 сек    → 2..весь-2 × fps 15 × q 82 (≈75-150 кадров)
+//	> 15 сек    → 2..10 × fps 12 × q 78 (≈100 кадров)
 //
-// Цель: 50-120 кадров суммарно держат размер 50-150 KB при 240p.
+// После tune-апа (2026-06): scale 320 (было 240), fps и quality подняты,
+// потолок -fs 350K (было 200K). Размер ~180-280 KB вместо 80-150 KB.
+// На главной 4 hero-ролика = ~1 МБ суммарно. См. docs/VIDEO_TRANSCODING.md §11.
 func ChooseGifParams(durationSec float64) GifParams {
 	switch {
 	case durationSec <= 5:
-		return GifParams{OffsetSec: 0, DurationSec: 0, FPS: 12, Quality: 75}
+		return GifParams{OffsetSec: 0, DurationSec: 0, FPS: 15, Quality: 85}
 	case durationSec <= 15:
-		return GifParams{OffsetSec: 2, DurationSec: 0, FPS: 12, Quality: 70}
+		return GifParams{OffsetSec: 2, DurationSec: 0, FPS: 15, Quality: 82}
 	default:
-		return GifParams{OffsetSec: 2, DurationSec: 10, FPS: 10, Quality: 65}
+		return GifParams{OffsetSec: 2, DurationSec: 10, FPS: 12, Quality: 78}
 	}
 }
 
@@ -167,13 +169,13 @@ func (f *FFmpegBin) MakeAnimatedWebP(ctx context.Context, input, output string, 
 		args = append(args, "-t", fmt.Sprintf("%d", p.DurationSec))
 	}
 	args = append(args,
-		"-vf", fmt.Sprintf("fps=%d,scale=240:-2:flags=lanczos", p.FPS),
+		"-vf", fmt.Sprintf("fps=%d,scale=320:-2:flags=lanczos", p.FPS),
 		"-loop", "0",
 		"-c:v", "libwebp",
 		"-compression_level", "6",
 		"-quality", fmt.Sprintf("%d", p.Quality),
 		"-an",
-		"-fs", "200K",
+		"-fs", "350K",
 		"-threads", "2",
 		output,
 	)
