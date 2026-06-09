@@ -196,11 +196,24 @@ groups:
           description: "OS тормозит. Если bulk — outbox-handler застревает; если search — каталог лагает у юзеров. Проверь JVM heap / disk на OS-инстансе."
 
       - alert: ESErrorRateHigh
+        # delete_doc и delete_by_query исключены: их 404 (документа нет —
+        # ничего страшного, наш end-state достигнут) и 409 (external_gte
+        # version_conflict — конкурентный writer уже записал более свежую
+        # версию, наша операция была бы регрессом) клиент проглатывает как
+        # success в DeleteDocVer (см. internal/platform/es/client.go).
+        # НО метрика es_requests_total{status_class="4xx"} инкрементируется
+        # в defer ДО swallow, поэтому raw-счётчик показывает «ошибки»
+        # которые семантически не ошибки.
+        #
+        # Реальные delete-проблемы видны через outbox_handler_errors_total
+        # (alert OutboxHandlerErrorSpike выше) — если delete'ы массово
+        # реально валятся (5xx, network, неподдерживаемый 4xx), handler
+        # вернёт ошибку и outbox это засчитает.
         expr: |
           (
-            sum by (op) (rate(es_requests_total{status_class!="2xx"}[5m]))
+            sum by (op) (rate(es_requests_total{op!~"delete_doc|delete_by_query",status_class!="2xx"}[5m]))
             /
-            sum by (op) (rate(es_requests_total[5m]))
+            clamp_min(sum by (op) (rate(es_requests_total{op!~"delete_doc|delete_by_query"}[5m])), 0.01)
           ) > 0.05
         for: 5m
         labels: { severity: page, team: backend }
