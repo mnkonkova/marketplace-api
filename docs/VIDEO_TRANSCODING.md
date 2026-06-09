@@ -415,22 +415,35 @@ portfolio/
 
 ### FFmpeg для animated WebP
 
+Длительность гифки **динамическая до 10 сек**. Логика:
+
+| Оригинал | offset (`-ss`) | duration (`-t`) | fps | quality |
+|---|---|---|---|---|
+| ≤ 5 сек | 0 | весь | 12 | 75 |
+| 5-15 сек | 2 | весь − 2 | 12 | 70 |
+| > 15 сек | 2 | 10 | 10 | 65 |
+
+Параметры выбираются `ffprobe`-ом ДО transcode-pass'a (мы и так делаем
+probe в текущем pipeline). Идея: суммарные frame-count'ы держим в
+коридоре 50-120 кадров — это держит размер 50-150 KB при 240p.
+
 ```bash
 ffmpeg -y \
-  -ss 00:00:02 \
+  -ss <OFFSET> \
   -i <input> \
-  -t 4 \                            # 4 сек хватает для GIF-эстетики
-  -vf "fps=12,scale=240:-2:flags=lanczos" \
+  -t <DURATION> \
+  -vf "fps=<FPS>,scale=240:-2:flags=lanczos" \
   -loop 0 \                         # бесконечный loop
   -c:v libwebp \
   -compression_level 6 \
-  -quality 70 \                     # 60-75 баланс размер/качество
+  -quality <Q> \                    # 65-75 баланс размер/качество
   -an \
   <output>.webp
 ```
 
-Целевой размер: **30-100 KB**. Hard cap `-fs 150k` с откатом на
-`-quality 55`.
+Целевой размер: **30-150 KB**. Hard cap `-fs 200k`; если первый pass
+дал >150KB — второй pass с `quality -10` (мин 50). Если и это не
+вошло — отдаём 4-секундный fallback (старая логика).
 
 ### DB схема (миграция 00022)
 
