@@ -716,19 +716,31 @@ LIMIT 20`, userID)
 	return out, rows.Err()
 }
 
-// LoadReferencedMediaURLs возвращает все непустые avatar_url, video_url и
-// thumbnail_url из БД одним UNION-запросом. Используется orphan-sweep'ом:
-// всё что не в этом списке (после извлечения ключа) — кандидат на удаление
-// из bucket'а. Внешние URL (youtube и т.п.) тоже в выдаче — каллер их
-// отфильтрует через s3.Client.KeyFromURL → "".
+// LoadReferencedMediaURLs возвращает все непустые URL медиа из БД одним
+// UNION-запросом. Используется orphan-sweep'ом: всё что не в этом списке
+// (после извлечения ключа) — кандидат на удаление из bucket'а. Внешние
+// URL (youtube и т.п.) тоже в выдаче — каллер их отфильтрует через
+// s3.Client.KeyFromURL → "".
+//
+// ВАЖНО: при добавлении нового медиа-поля в portfolio_items / specialist_profiles
+// нужно добавить его сюда, иначе sweep сожрёт продакшен-файлы. Сейчас покрыты:
+//   - specialist_profiles.avatar_url
+//   - portfolio_items.video_url       (оригинал)
+//   - portfolio_items.thumbnail_url   (превью-картинка)
+//   - portfolio_items.preview_url     (480p MP4 — docs/VIDEO_TRANSCODING.md)
+//   - portfolio_items.animated_thumb_url (animated WebP «гифка» — §11 docs)
 func (r *Repo) LoadReferencedMediaURLs(ctx context.Context) ([]string, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT url FROM (
-  SELECT avatar_url    AS url FROM specialist_profiles WHERE avatar_url    IS NOT NULL AND avatar_url    <> ''
+  SELECT avatar_url         AS url FROM specialist_profiles WHERE avatar_url         IS NOT NULL AND avatar_url         <> ''
   UNION ALL
-  SELECT video_url     AS url FROM portfolio_items     WHERE video_url     IS NOT NULL AND video_url     <> ''
+  SELECT video_url          AS url FROM portfolio_items     WHERE video_url          IS NOT NULL AND video_url          <> ''
   UNION ALL
-  SELECT thumbnail_url AS url FROM portfolio_items     WHERE thumbnail_url IS NOT NULL AND thumbnail_url <> ''
+  SELECT thumbnail_url      AS url FROM portfolio_items     WHERE thumbnail_url      IS NOT NULL AND thumbnail_url      <> ''
+  UNION ALL
+  SELECT preview_url        AS url FROM portfolio_items     WHERE preview_url        IS NOT NULL AND preview_url        <> ''
+  UNION ALL
+  SELECT animated_thumb_url AS url FROM portfolio_items     WHERE animated_thumb_url IS NOT NULL AND animated_thumb_url <> ''
 ) t`)
 	if err != nil {
 		return nil, fmt.Errorf("load referenced media: %w", err)
