@@ -35,11 +35,12 @@
     },
     {
       "parameters": {
-        "chatId": "-1003870426167",
+        "chatId": "-1003414312576",
         "text": "={{$json.tgText}}",
         "additionalFields": {
           "parse_mode": "Markdown",
-          "disable_web_page_preview": true
+          "disable_web_page_preview": true,
+          "message_thread_id": 22
         }
       },
       "id": "node-telegram",
