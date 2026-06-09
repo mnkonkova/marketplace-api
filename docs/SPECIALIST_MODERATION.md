@@ -351,6 +351,47 @@ is_published=TRUE`. Если потом захотим пере-промодер
 
 ---
 
+## 5a. n8n: уведомление админу в Telegram
+
+При переходе спеца в `pending_review` backend эмитит outbox-событие
+`moderation.specialist_pending` с payload `{user_id, email, display_name,
+reason}`. Worker через `N8N_WEBHOOK_URL` (тот же CRM webhook, что у
+`project.*`) шлёт его в n8n.
+
+Версионированный workflow — `deploy/n8n/workflows/crmTgEventsV1.json`,
+case добавлен в существующий Code-node `Format message`. Деплой на проде:
+
+```bash
+ssh root@<vds>
+cd /opt/marketpclce/api
+git pull
+make n8n-import   # подтянет crmTgEventsV1.json в работающий n8n
+```
+
+В n8n UI workflow остаётся **Active** — пере-привязки credentials не
+нужно, т.к. меняется только jsCode внутри ноды.
+
+Формат сообщения в Telegram:
+```
+🔍 Новая заявка на модерацию
+<display_name>
+<email>
+Причина: первая публикация / повторная попытка
+[Открыть карточку] → {app_base_url}/admin/moderation/{user_id}
+```
+
+`reason` приходит из backend:
+- `publish_requested` — спец впервые нажал «Опубликовать» или повторно
+  после reject'a (→ «первая публикация / повторная попытка»);
+- `content_changed` — был approved, поменял профиль (→ «изменения
+  после одобрения»).
+
+Если нужен отдельный чат (не туда, где CRM `project.*`) — заведи
+второй workflow + Webhook и новый env `N8N_MODERATION_WEBHOOK_URL`
+по аналогии с `N8N_SUPPORT_WEBHOOK_URL` (см. cmd/worker/main.go).
+
+---
+
 ## 6. Метрики (Grafana)
 
 Добавить в `internal/profiles/metrics.go` (новый):
