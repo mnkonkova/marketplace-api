@@ -303,7 +303,7 @@ WHERE id = $1 AND preview_status = 'processing'`, itemID, previewURL, animatedTh
 		return fmt.Errorf("mark ready: %w", err)
 	}
 	if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-		outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+		outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
 		return fmt.Errorf("emit reindex: %w", err)
 	}
 	return tx.Commit(ctx)

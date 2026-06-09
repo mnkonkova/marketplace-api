@@ -289,7 +289,7 @@ func (s *Service) PatchFull(ctx context.Context, userID uuid.UUID, in PatchFullI
 			return err
 		}
 		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
 			return err
 		}
 		if bumped {
@@ -379,7 +379,7 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 			return err
 		}
 		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			event, map[string]any{"user_id": userID.String()}); err != nil {
+			event, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
 			return err
 		}
 		// Если спец встал в очередь модерации именно этим publish'ом —
@@ -524,7 +524,7 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		// Outbox-событие: воркер переиндексирует ES-документ спеца,
 		// в т.ч. last_video_at — это критично для /feed ранжирования.
 		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
 			return err
 		}
 		// portfolio.video_uploaded → транскод-пайплайн в воркере (см.
@@ -564,7 +564,7 @@ func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.U
 			return err
 		}
 		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
 			return err
 		}
 		if bumped {
@@ -606,7 +606,7 @@ func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uui
 			return err
 		}
 		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
 			return err
 		}
 		if bumped {

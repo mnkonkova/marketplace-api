@@ -187,7 +187,7 @@ func (s *Service) ApproveSpecialist(ctx context.Context, userID, actorID uuid.UU
 			return err
 		}
 		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()})
 	})
 }
 
@@ -210,7 +210,7 @@ func (s *Service) RejectSpecialist(ctx context.Context, userID, actorID uuid.UUI
 			return err
 		}
 		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()})
 	})
 }
 

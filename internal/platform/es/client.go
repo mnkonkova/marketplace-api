@@ -149,6 +149,28 @@ func (c *Client) IndexDoc(ctx context.Context, index, id string, doc any) error 
 	return c.do(ctx, http.MethodPut, "/"+index+"/_doc/"+id+"?refresh=false", doc, nil)
 }
 
+// IndexDocVer — то же что IndexDoc, но с external_gte версией. Если в индексе
+// уже есть документ с версией ≥ переданной — OS вернёт 409, который мы
+// проглатываем как nil: значит конкурентный воркер уже записал более свежее
+// состояние, наша запись была бы регрессом. version=0 → fallback на IndexDoc
+// (без version-check, для обратной совместимости).
+//
+// version обычно = source.updated_at.UnixMicro() в caller'е. Микросекунды
+// дают монотонность в пределах одной PG-строки (PG now() строго возрастает)
+// и достаточный headroom: 2^63 = ~292 тыс лет.
+func (c *Client) IndexDocVer(ctx context.Context, index, id string, doc any, version int64) error {
+	if version <= 0 {
+		return c.IndexDoc(ctx, index, id, doc)
+	}
+	path := fmt.Sprintf("/%s/_doc/%s?refresh=false&version=%d&version_type=external_gte", index, id, version)
+	err := c.do(ctx, http.MethodPut, path, doc, nil)
+	var es *ErrStatus
+	if errors.As(err, &es) && es.Status == http.StatusConflict {
+		return nil // newer state already in ES, end state achieved
+	}
+	return err
+}
+
 // BulkDoc — пара (id, doc) для пакетной индексации.
 type BulkDoc struct {
 	ID  string
@@ -241,6 +263,26 @@ func (c *Client) DeleteDoc(ctx context.Context, index, id string) error {
 	err := c.do(ctx, http.MethodDelete, "/"+index+"/_doc/"+id, nil, nil)
 	var es *ErrStatus
 	if errors.As(err, &es) && es.Status == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
+// DeleteDocVer — то же что DeleteDoc, но с external_gte версией. 409 (текущая
+// в индексе версия ≥ нашей) проглатываем как nil: end state, к которому мы
+// стремимся (удалить устаревшую версию), уже достигнут более свежей записью
+// от конкурентного worker'а. 404 (документа нет) тоже nil. version=0 →
+// fallback на DeleteDoc.
+//
+// version обычно = updated_at.UnixMicro() источника. См. IndexDocVer.
+func (c *Client) DeleteDocVer(ctx context.Context, index, id string, version int64) error {
+	if version <= 0 {
+		return c.DeleteDoc(ctx, index, id)
+	}
+	path := fmt.Sprintf("/%s/_doc/%s?version=%d&version_type=external_gte", index, id, version)
+	err := c.do(ctx, http.MethodDelete, path, nil, nil)
+	var es *ErrStatus
+	if errors.As(err, &es) && (es.Status == http.StatusNotFound || es.Status == http.StatusConflict) {
 		return nil
 	}
 	return err

@@ -83,19 +83,26 @@ func main() {
 		}
 	}
 
-	specialistHandler := func(ctx context.Context, _ int64, aggregateID, eventType string, _ []byte) error {
+	specialistHandler := func(ctx context.Context, _ int64, aggregateID, eventType string, payload []byte) error {
 		uid, err := uuid.Parse(aggregateID)
 		if err != nil {
 			return err
 		}
+		// version_micro — внешняя версия (updated_at.UnixMicro() emitter'a)
+		// для external_gte OCC в OpenSearch. Старые события без поля → 0,
+		// indexer фолбэкается на безверсионный путь (как раньше).
+		var p struct {
+			VersionMicro int64 `json:"version_micro"`
+		}
+		_ = json.Unmarshal(payload, &p) // невалидный payload = version 0
 		switch eventType {
 		case outbox.EventSpecialistDeleted:
-			if err := indexer.Delete(ctx, uid); err != nil {
+			if err := indexer.Delete(ctx, uid, p.VersionMicro); err != nil {
 				return err
 			}
 			return feedIndexer.DeleteByUser(ctx, uid)
 		default:
-			if err := indexer.Reconcile(ctx, uid); err != nil {
+			if err := indexer.Reconcile(ctx, uid, p.VersionMicro); err != nil {
 				return err
 			}
 			return feedIndexer.ReconcileVideos(ctx, uid)
