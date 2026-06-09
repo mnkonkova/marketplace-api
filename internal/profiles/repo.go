@@ -32,7 +32,8 @@ SELECT p.user_id, p.display_name, p.bio,
        p.is_published, p.rating_avg, p.reviews_count,
        COALESCE(p.contact_email, ''), COALESCE(p.contact_phone, ''),
        p.updated_at,
-       p.production_id, p.is_freelance
+       p.production_id, p.is_freelance,
+       p.moderation_status, COALESCE(p.moderation_reason, ''), p.moderation_reviewed_at
 FROM specialist_profiles p
 WHERE p.user_id = $1`
 	var p Profile
@@ -44,6 +45,7 @@ WHERE p.user_id = $1`
 		&p.ContactEmail, &p.ContactPhone,
 		&p.UpdatedAt,
 		&p.ProductionID, &p.IsFreelance,
+		&p.ModerationStatus, &p.ModerationReason, &p.ModerationReviewedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{}, ErrNotFound
@@ -273,12 +275,110 @@ FOR UPDATE`, userID).Scan(&productionID, &isFreelance, &bio, &displayName)
 	return nil
 }
 
-func (r *Repo) SetPublishedInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, published bool) error {
-	tag, err := tx.Exec(ctx,
-		`UPDATE specialist_profiles SET is_published = $2, updated_at = now() WHERE user_id = $1`,
-		userID, published)
+// SetPublishedInTx — переключает is_published.
+//
+// При published=true модерация устроена так:
+//   - был rejected      → переводим в pending_review (новая попытка пройти модерацию)
+//   - был approved      → оставляем approved (это «включить обратно видимость» без правок профиля)
+//   - был pending_review → остаётся pending_review
+//
+// При published=false — moderation_status не трогается. Юзер просто выводит
+// себя из каталога; одобрение «висит» до следующей публикации.
+//
+// Возвращает needsAdminNotify=true если результат UPDATE'a — спец встал
+// в очередь модерации и админу нужно прислать уведомление. Условие:
+// published=true И итоговый status='pending_review' И (до этого
+// is_published было false ИЛИ status был не pending_review). Это покрывает
+// первую публикацию (default-pending) и retry после rejection. Уже-pending
+// спец, который ещё раз дёрнул publish, не флапает уведомлениями.
+func (r *Repo) SetPublishedInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, published bool) (needsAdminNotify bool, err error) {
+	const q = `
+WITH before AS (
+  SELECT is_published AS prev_pub, moderation_status AS prev_status
+  FROM specialist_profiles WHERE user_id = $1 FOR UPDATE
+), upd AS (
+  UPDATE specialist_profiles SET
+    is_published      = $2,
+    moderation_status = CASE
+      WHEN $2 AND moderation_status = 'rejected' THEN 'pending_review'
+      ELSE moderation_status
+    END,
+    updated_at = now()
+  WHERE user_id = $1
+  RETURNING is_published AS now_pub, moderation_status AS now_status
+)
+SELECT
+  (SELECT prev_pub    FROM before),
+  (SELECT prev_status FROM before),
+  (SELECT now_pub     FROM upd),
+  (SELECT now_status  FROM upd)`
+	var prevPub *bool
+	var prevStatus *string
+	var nowPub *bool
+	var nowStatus *string
+	if err := tx.QueryRow(ctx, q, userID, published).Scan(&prevPub, &prevStatus, &nowPub, &nowStatus); err != nil {
+		return false, fmt.Errorf("update published: %w", err)
+	}
+	if nowStatus == nil || nowPub == nil {
+		return false, ErrNotFound
+	}
+	if !*nowPub || *nowStatus != "pending_review" {
+		return false, nil
+	}
+	prevPubVal := false
+	if prevPub != nil {
+		prevPubVal = *prevPub
+	}
+	prevStatusVal := ""
+	if prevStatus != nil {
+		prevStatusVal = *prevStatus
+	}
+	return !prevPubVal || prevStatusVal != "pending_review", nil
+}
+
+// BumpModerationToPendingIfApprovedInTx — если профиль approved, переводит
+// его в pending_review. Используется во всех ручках, которые меняют контент,
+// видимый в каталоге (профиль, категории, навыки, портфолио). После такой
+// мутации спец временно исчезает из поиска до повторного одобрения админом.
+// Идемпотентно; если status != approved — никаких действий.
+//
+// Возвращает changed=true если переход реально произошёл (был approved).
+// Service использует это, чтобы эмитить уведомление админу.
+func (r *Repo) BumpModerationToPendingIfApprovedInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (changed bool, err error) {
+	tag, err := tx.Exec(ctx, `
+UPDATE specialist_profiles
+SET moderation_status = 'pending_review',
+    moderation_reason = NULL,
+    moderation_reviewed_at = NULL,
+    moderation_reviewed_by = NULL,
+    updated_at = now()
+WHERE user_id = $1 AND moderation_status = 'approved'`,
+		userID)
 	if err != nil {
-		return fmt.Errorf("update published: %w", err)
+		return false, fmt.Errorf("bump moderation: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// SetModerationDecisionInTx — verdict админа: approved / rejected.
+// reason обязателен для rejected (валидация на стороне сервиса).
+// reviewedBy — id админа, чтобы был аудит-трейл.
+func (r *Repo) SetModerationDecisionInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, status string, reason string, reviewedBy uuid.UUID) error {
+	var reasonArg *string
+	if reason != "" {
+		reasonArg = &reason
+	}
+	tag, err := tx.Exec(ctx, `
+UPDATE specialist_profiles
+SET moderation_status      = $2,
+    moderation_reason      = $3,
+    moderation_reviewed_at = now(),
+    moderation_reviewed_by = $4,
+    updated_at             = now()
+WHERE user_id = $1`,
+		userID, status, reasonArg, reviewedBy)
+	if err != nil {
+		return fmt.Errorf("set moderation: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
@@ -331,7 +431,9 @@ SELECT p.user_id, p.display_name, p.bio,
        COALESCE(pr.name, ''), p.is_freelance
 FROM specialist_profiles p
 LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
-WHERE p.user_id = $1 AND p.is_published = TRUE`
+WHERE p.user_id = $1
+  AND p.is_published = TRUE
+  AND p.moderation_status = 'approved'`
 	var p PublicProfile
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&p.UserID, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
@@ -421,7 +523,7 @@ func (r *Repo) listPortfolio(ctx context.Context, userID uuid.UUID) ([]Portfolio
 SELECT id, title, description,
        COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
        category_codes, sort_order, created_at, updated_at,
-       COALESCE(preview_url, ''), preview_status
+       COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status
 FROM portfolio_items
 WHERE user_id = $1
 ORDER BY sort_order, created_at DESC`, userID)
@@ -436,7 +538,7 @@ ORDER BY sort_order, created_at DESC`, userID)
 			&p.ID, &p.Title, &p.Description,
 			&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 			&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
-			&p.PreviewURL, &p.PreviewStatus,
+			&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -490,7 +592,7 @@ VALUES (
 RETURNING id, title, description,
           COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
           category_codes, sort_order, created_at, updated_at,
-          COALESCE(preview_url, ''), preview_status`
+          COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status`
 	var p PortfolioItem
 	cats := in.CategoryCodes
 	if cats == nil {
@@ -514,7 +616,7 @@ RETURNING id, title, description,
 		&p.ID, &p.Title, &p.Description,
 		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
-		&p.PreviewURL, &p.PreviewStatus,
+		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
 	)
 	if err != nil {
 		return PortfolioItem{}, fmt.Errorf("insert portfolio: %w", err)
@@ -631,6 +733,174 @@ SELECT url FROM (
 		out = append(out, url)
 	}
 	return out, rows.Err()
+}
+
+// ModerationQueueItem — карточка спеца в админ-очереди модерации.
+// Достаточно того, что админ видит сходу, чтобы понять кто это.
+type ModerationQueueItem struct {
+	UserID          uuid.UUID  `json:"user_id"`
+	Email           string     `json:"email,omitempty"`
+	DisplayName     string     `json:"display_name"`
+	AvatarURL       string     `json:"avatar_url,omitempty"`
+	Bio             string     `json:"bio"`
+	City            string     `json:"city,omitempty"`
+	PrimaryCategory string     `json:"primary_category,omitempty"`
+	IsFreelance     bool       `json:"is_freelance"`
+	ProductionName  string     `json:"production_name,omitempty"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	Status          string     `json:"moderation_status"`
+	Reason          string     `json:"moderation_reason,omitempty"`
+}
+
+// ListModerationQueue — очередь модерации. status="pending_review" (default)
+// — все ожидающие админа. status="rejected" — отклонённые (для retrospect).
+// status="approved" — одобренные (для аудита). status=""|"all" — все.
+//
+// Сортировка FIFO по updated_at (старые сверху) — «никого не забыли». Cursor-
+// пагинация была бы overkill: pending'ов на проде десятки, не миллионы.
+func (r *Repo) ListModerationQueue(ctx context.Context, status string, limit, offset int) ([]ModerationQueueItem, int, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var (
+		filter  string
+		args    []any
+		argIdx  = 1
+	)
+	switch status {
+	case "", "all":
+		filter = "WHERE p.is_published = TRUE"
+	case "pending_review", "approved", "rejected":
+		filter = "WHERE p.is_published = TRUE AND p.moderation_status = $1"
+		args = append(args, status)
+		argIdx = 2
+	default:
+		return nil, 0, fmt.Errorf("invalid moderation status: %q", status)
+	}
+
+	var total int
+	countQ := `SELECT count(*) FROM specialist_profiles p ` + filter
+	if err := r.db.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count moderation queue: %w", err)
+	}
+
+	listQ := `
+SELECT p.user_id,
+       COALESCE(u.email::text, ''),
+       p.display_name,
+       COALESCE(p.avatar_url, ''),
+       COALESCE(p.bio, ''),
+       COALESCE(p.city, ''),
+       COALESCE((SELECT category_code FROM specialist_categories
+                 WHERE user_id = p.user_id AND is_primary LIMIT 1), ''),
+       p.is_freelance,
+       COALESCE(pr.name, ''),
+       p.updated_at,
+       p.moderation_status,
+       COALESCE(p.moderation_reason, '')
+FROM specialist_profiles p
+JOIN users u ON u.id = p.user_id
+LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
+` + filter + fmt.Sprintf(`
+ORDER BY p.updated_at ASC
+LIMIT $%d OFFSET $%d`, argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := r.db.Query(ctx, listQ, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list moderation queue: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ModerationQueueItem, 0, limit)
+	for rows.Next() {
+		var it ModerationQueueItem
+		if err := rows.Scan(
+			&it.UserID, &it.Email,
+			&it.DisplayName, &it.AvatarURL, &it.Bio, &it.City,
+			&it.PrimaryCategory, &it.IsFreelance, &it.ProductionName,
+			&it.UpdatedAt, &it.Status, &it.Reason,
+		); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, it)
+	}
+	return out, total, rows.Err()
+}
+
+// LoadModerationNotifyInfo — компактный набор полей для уведомления
+// админа (email + display_name) в одной выборке внутри tx.
+func (r *Repo) LoadModerationNotifyInfo(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (email, displayName string, err error) {
+	err = tx.QueryRow(ctx, `
+SELECT COALESCE(u.email::text, ''), COALESCE(p.display_name, '')
+FROM specialist_profiles p
+JOIN users u ON u.id = p.user_id
+WHERE p.user_id = $1`, userID).Scan(&email, &displayName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", ErrNotFound
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("load notify info: %w", err)
+	}
+	return email, displayName, nil
+}
+
+// CountPendingModeration — счётчик для бейджа в админ-навигации. Возвращает
+// число pending_review, у которых is_published=TRUE.
+func (r *Repo) CountPendingModeration(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRow(ctx, `
+SELECT count(*) FROM specialist_profiles
+WHERE is_published = TRUE AND moderation_status = 'pending_review'`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count pending: %w", err)
+	}
+	return n, nil
+}
+
+// GetForModeration — полная карточка спеца для admin'ского просмотра,
+// без фильтра is_published / moderation_status. Возвращает то же самое,
+// что и GetPublic, но видит и pending, и rejected.
+func (r *Repo) GetForModeration(ctx context.Context, userID uuid.UUID) (PublicProfile, error) {
+	const q = `
+SELECT p.user_id, p.display_name, p.bio,
+       COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
+       p.rate_min, p.rate_max, p.currency,
+       p.rating_avg, p.reviews_count,
+       COALESCE(pr.name, ''), p.is_freelance
+FROM specialist_profiles p
+LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
+WHERE p.user_id = $1`
+	var p PublicProfile
+	err := r.db.QueryRow(ctx, q, userID).Scan(
+		&p.UserID, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
+		&p.RateMin, &p.RateMax, &p.Currency, &p.RatingAvg, &p.ReviewsCount,
+		&p.ProductionName, &p.IsFreelance,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PublicProfile{}, ErrNotFound
+	}
+	if err != nil {
+		return PublicProfile{}, fmt.Errorf("query moderation profile: %w", err)
+	}
+	cats, err := r.listCategoriesWithTitles(ctx, userID)
+	if err != nil {
+		return PublicProfile{}, err
+	}
+	p.Categories = cats
+	skills, err := r.listSkillsWithTitles(ctx, userID)
+	if err != nil {
+		return PublicProfile{}, err
+	}
+	p.Skills = skills
+	portfolio, err := r.listPortfolio(ctx, userID)
+	if err != nil {
+		return PublicProfile{}, err
+	}
+	p.Portfolio = portfolio
+	return p, nil
 }
 
 func (r *Repo) ValidSkillIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {

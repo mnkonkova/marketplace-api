@@ -290,10 +290,11 @@ func InterleaveByUser(docs []search.FeedVideoDoc) []search.FeedVideoDoc {
 func videoFromDoc(d search.FeedVideoDoc) Video {
 	id, _ := uuid.Parse(d.VideoID) // битый id невозможен (мы сами писали из portfolio_items.id UUID)
 	return Video{
-		ID:          id,
-		URL:         d.VideoURL,
-		PreviewURL:  d.PreviewURL,
-		Thumb:       d.ThumbURL,
+		ID:               id,
+		URL:              d.VideoURL,
+		PreviewURL:       d.PreviewURL,
+		AnimatedThumbURL: d.AnimatedThumbURL,
+		Thumb:            d.ThumbURL,
 		Title:       d.Title,
 		Description: d.Description,
 		DurationSec: d.DurationSec,

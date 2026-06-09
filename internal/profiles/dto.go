@@ -47,8 +47,9 @@ type PortfolioItem struct {
 	// Preview-видео (480p, 5-10 сек, ~500KB) для autoplay в фиде.
 	// Генерируется worker'ом async (см. docs/VIDEO_TRANSCODING.md).
 	// Пока PreviewStatus != "ready", фронт должен фолбэчить на VideoURL.
-	PreviewURL    string `json:"preview_url,omitempty"`
-	PreviewStatus string `json:"preview_status"` // pending|processing|ready|failed
+	PreviewURL       string `json:"preview_url,omitempty"`
+	AnimatedThumbURL string `json:"animated_thumb_url,omitempty"`
+	PreviewStatus    string `json:"preview_status"` // pending|processing|ready|failed
 }
 
 type PublicProfile struct {
@@ -104,6 +105,14 @@ type Profile struct {
 	// выбор ещё не сделан (фронт показывает приглашение выбрать).
 	ProductionID *uuid.UUID `json:"production_id,omitempty"`
 	IsFreelance  bool       `json:"is_freelance"`
+	// ModerationStatus — статус модерации публикации админом
+	// (см. docs/SPECIALIST_MODERATION.md). В каталог попадает только
+	// is_published=TRUE AND moderation_status='approved'. Возвращается
+	// только владельцу профиля (через /me/profile) — публичная PublicProfile
+	// этот статус не отдаёт.
+	ModerationStatus     string     `json:"moderation_status"` // pending_review|approved|rejected
+	ModerationReason     string     `json:"moderation_reason,omitempty"`
+	ModerationReviewedAt *time.Time `json:"moderation_reviewed_at,omitempty"`
 }
 
 type PatchInput struct {

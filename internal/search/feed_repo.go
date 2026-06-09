@@ -16,6 +16,9 @@ type FeedVideoDoc struct {
 	// PreviewURL — маленький 480p ~500KB вариант для autoplay в фиде.
 	// Пусто, если preview_status != 'ready' (фронт фолбэчит на VideoURL).
 	PreviewURL     string    `json:"preview_url,omitempty"`
+	// AnimatedThumbURL — animated WebP «гифка» (~50-150KB) для autoplay
+	// на главной через <img>. Решает iOS LPM-блокировку. См. §11 docs.
+	AnimatedThumbURL string  `json:"animated_thumb_url,omitempty"`
 	ThumbURL       string    `json:"thumb_url,omitempty"`
 	Title          string    `json:"title,omitempty"`
 	Description    string    `json:"description,omitempty"`
@@ -52,6 +55,7 @@ SELECT
   pi.id::text,
   COALESCE(pi.video_url, ''),
   COALESCE(pi.preview_url, ''),
+  COALESCE(pi.animated_thumb_url, ''),
   COALESCE(pi.thumbnail_url, ''),
   pi.title,
   pi.description,
@@ -75,6 +79,7 @@ JOIN portfolio_items pi ON pi.user_id = p.user_id
 LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1
   AND p.is_published = TRUE
+  AND p.moderation_status = 'approved'
   AND pi.kind = 'video'
   AND pi.video_url IS NOT NULL AND pi.video_url <> ''
 ORDER BY pi.sort_order, pi.created_at DESC`
@@ -90,7 +95,7 @@ ORDER BY pi.sort_order, pi.created_at DESC`
 		var d FeedVideoDoc
 		var dur *int
 		if err := rows.Scan(
-			&d.VideoID, &d.VideoURL, &d.PreviewURL, &d.ThumbURL,
+			&d.VideoID, &d.VideoURL, &d.PreviewURL, &d.AnimatedThumbURL, &d.ThumbURL,
 			&d.Title, &d.Description,
 			&dur, &d.Aspect,
 			&d.VideoCreatedAt, &d.CategoryCodes,
@@ -111,11 +116,12 @@ ORDER BY pi.sort_order, pi.created_at DESC`
 }
 
 // LoadPublishedSpecialistIDs — для bootstrap'а индекса feed_videos: список
-// всех опубликованных спецов. Worker дёргает ReconcileVideos для каждого
-// при первом запуске, если индекс пуст.
+// всех опубликованных И ОДОБРЕННЫХ спецов. Worker дёргает ReconcileVideos
+// для каждого при первом запуске, если индекс пуст.
 func (r *Repo) LoadPublishedSpecialistIDs(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT user_id FROM specialist_profiles WHERE is_published = TRUE`)
+		`SELECT user_id FROM specialist_profiles
+		 WHERE is_published = TRUE AND moderation_status = 'approved'`)
 	if err != nil {
 		return nil, fmt.Errorf("load published ids: %w", err)
 	}

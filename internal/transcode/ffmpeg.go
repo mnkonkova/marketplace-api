@@ -89,6 +89,112 @@ func (f *FFmpegBin) MakePreview(ctx context.Context, input, output string) error
 	return nil
 }
 
+// ProbeDuration возвращает длительность видео в секундах через ffprobe
+// (стандартный binary рядом с ffmpeg). 0, err → нет ffprobe / битый файл;
+// caller'у решать (можно использовать дефолтные gif-params для среднего
+// бакета). Минимальная зависимость: ffprobe идёт в большинстве дистрибов
+// в одном пакете с ffmpeg, на VDS уже есть.
+func (f *FFmpegBin) ProbeDuration(ctx context.Context, input string) (float64, error) {
+	ffprobe := strings.TrimSuffix(f.bin, "ffmpeg") + "ffprobe"
+	cmd := exec.CommandContext(ctx, ffprobe,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		input,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe: %w", err)
+	}
+	s := strings.TrimSpace(string(out))
+	var d float64
+	if _, err := fmt.Sscanf(s, "%f", &d); err != nil {
+		return 0, fmt.Errorf("parse duration %q: %w", s, err)
+	}
+	return d, nil
+}
+
+// GifParams — параметры animated WebP «гифки», выбираемые по длительности
+// оригинала. См. docs/VIDEO_TRANSCODING.md §11.
+type GifParams struct {
+	OffsetSec   int // -ss
+	DurationSec int // -t (0 = весь файл)
+	FPS         int // fps в -vf
+	Quality     int // libwebp -quality (0-100)
+}
+
+// ChooseGifParams — выбор параметров под длительность оригинала.
+//
+//	≤ 5 сек     → 0..весь × fps 12 × q 75 (≈40-60 кадров)
+//	5-15 сек    → 2..весь-2 × fps 12 × q 70 (≈60-120 кадров)
+//	> 15 сек    → 2..10 × fps 10 × q 65 (100 кадров)
+//
+// Цель: 50-120 кадров суммарно держат размер 50-150 KB при 240p.
+func ChooseGifParams(durationSec float64) GifParams {
+	switch {
+	case durationSec <= 5:
+		return GifParams{OffsetSec: 0, DurationSec: 0, FPS: 12, Quality: 75}
+	case durationSec <= 15:
+		return GifParams{OffsetSec: 2, DurationSec: 0, FPS: 12, Quality: 70}
+	default:
+		return GifParams{OffsetSec: 2, DurationSec: 10, FPS: 10, Quality: 65}
+	}
+}
+
+// MakeAnimatedWebP — pipeline для «гифки»:
+//
+//	-ss <OFFSET> -i <input> -t <DUR> -vf "fps=<FPS>,scale=240:-2"
+//	-loop 0 -c:v libwebp -compression_level 6 -quality <Q> -an
+//	-fs 200K
+//
+// Sequential к MakePreview (mp4) — peak RAM не растёт. DurationSec=0
+// означает «весь оставшийся файл после OffsetSec».
+//
+// Caller (service.go) после успешного pass'а делает os.Stat output'a;
+// если размер > 150KB, повторно вызывает MakeAnimatedWebP с
+// `params.Quality - 10`. Это даёт chance уложиться без увеличения
+// сложности обёртки.
+func (f *FFmpegBin) MakeAnimatedWebP(ctx context.Context, input, output string, p GifParams) error {
+	ctx, cancel := context.WithTimeout(ctx, f.timeout)
+	defer cancel()
+
+	args := []string{"-y"}
+	if p.OffsetSec > 0 {
+		args = append(args, "-ss", fmt.Sprintf("%d", p.OffsetSec))
+	}
+	args = append(args, "-i", input)
+	if p.DurationSec > 0 {
+		args = append(args, "-t", fmt.Sprintf("%d", p.DurationSec))
+	}
+	args = append(args,
+		"-vf", fmt.Sprintf("fps=%d,scale=240:-2:flags=lanczos", p.FPS),
+		"-loop", "0",
+		"-c:v", "libwebp",
+		"-compression_level", "6",
+		"-quality", fmt.Sprintf("%d", p.Quality),
+		"-an",
+		"-fs", "200K",
+		"-threads", "2",
+		output,
+	)
+
+	cmd := exec.CommandContext(ctx, f.bin, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		stderrText := stderr.String()
+		if isPermanentFFmpegError(stderrText) {
+			return fmt.Errorf("%w: %s", ErrPermanent, summarizeFFmpegError(stderrText))
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("ffmpeg webp timeout after %s: %s", f.timeout, summarizeFFmpegError(stderrText))
+		}
+		return fmt.Errorf("ffmpeg webp failed: %w: %s", err, summarizeFFmpegError(stderrText))
+	}
+	return nil
+}
+
 // isPermanentFFmpegError — эвристика по stderr. Покрывает основные
 // «битый файл / неподдерживаемый формат» сигналы. Не покрывает таймауты
 // и временные I/O ошибки — те ретраимся.

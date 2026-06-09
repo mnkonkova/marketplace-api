@@ -19,6 +19,10 @@ type Video struct {
 	ID           uuid.UUID `json:"id"`
 	URL          string    `json:"url"`
 	PreviewURL   string    `json:"preview_url,omitempty"`
+	// AnimatedThumbURL — animated WebP для главной (hero + works grid).
+	// Autoplay через <img> даже в iOS Low Power Mode (не <video>).
+	// Если пусто — фронт фолбэчит на <video preview_url>. См. §11 docs.
+	AnimatedThumbURL string `json:"animated_thumb_url,omitempty"`
 	Thumb        string    `json:"thumb,omitempty"`
 	Title        string    `json:"title,omitempty"`
 	Description  string    `json:"description,omitempty"`
