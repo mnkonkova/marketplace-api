@@ -258,8 +258,16 @@ func (s *Service) makeAnimatedThumb(ctx context.Context, itemID uuid.UUID, input
 			"item_id", itemID, "err", err)
 		return ""
 	}
+	info, statErr := os.Stat(output)
+	// Sanity-check: ffmpeg может вернуть exit 0 с dummy-файлом (<1KB)
+	// на пограничных входах. Не загружаем такой в S3.
+	if statErr != nil || info.Size() < 1024 {
+		s.logger.Warn("animated_thumb: output too small or missing, skipping upload",
+			"item_id", itemID, "size", info.Size())
+		return ""
+	}
 	// Второй pass если > 150KB.
-	if info, err := os.Stat(output); err == nil && info.Size() > 150*1024 {
+	if info.Size() > 150*1024 {
 		params.Quality -= 10
 		if params.Quality < 50 {
 			params.Quality = 50
