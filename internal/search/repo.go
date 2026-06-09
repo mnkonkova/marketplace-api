@@ -33,6 +33,11 @@ type IndexDoc struct {
 	RatingAvg       float64    `json:"rating_avg"`
 	ReviewsCount    int        `json:"reviews_count"`
 	IsPublished     bool       `json:"is_published"`
+	// ModerationStatus — pending_review|approved|rejected. В каталог попадают
+	// только approved (см. Indexer.Reconcile). Это поле НЕ уезжает в ES
+	// (json:"-") — проверка делается на Go-уровне сразу после загрузки из
+	// БД, mapping.go не трогаем.
+	ModerationStatus string    `json:"-"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	// LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.
 	// Используется /feed для tie-breaker'а после rating_avg.
@@ -58,7 +63,7 @@ SELECT
   COALESCE((SELECT string_agg(s.title, ' ') FROM specialist_skills ss JOIN skills s ON s.id = ss.skill_id WHERE ss.user_id = p.user_id), ''),
   p.rate_min, p.rate_max, p.currency,
   p.rating_avg, p.reviews_count,
-  p.is_published, p.updated_at,
+  p.is_published, p.moderation_status, p.updated_at,
   (SELECT MAX(created_at) FROM portfolio_items
      WHERE user_id = p.user_id AND kind = 'video'
        AND video_url IS NOT NULL AND video_url <> ''),
@@ -73,7 +78,7 @@ WHERE p.user_id = $1`
 		&d.SkillSlugs, &d.SkillTitles,
 		&d.RateMin, &d.RateMax, &d.Currency,
 		&d.RatingAvg, &d.ReviewsCount,
-		&d.IsPublished, &d.UpdatedAt,
+		&d.IsPublished, &d.ModerationStatus, &d.UpdatedAt,
 		&d.LastVideoAt,
 		&d.ProductionName, &d.IsFreelance,
 	)

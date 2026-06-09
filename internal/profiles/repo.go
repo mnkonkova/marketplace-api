@@ -363,7 +363,13 @@ WHERE user_id = $1 AND moderation_status = 'approved'`,
 // SetModerationDecisionInTx — verdict админа: approved / rejected.
 // reason обязателен для rejected (валидация на стороне сервиса).
 // reviewedBy — id админа, чтобы был аудит-трейл.
-func (r *Repo) SetModerationDecisionInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, status string, reason string, reviewedBy uuid.UUID) error {
+//
+// expectedUpdatedAt — optimistic-lock: версия профиля, которую видел админ
+// в момент открытия карточки. Если спец параллельно успел отредактировать
+// (updated_at сменился), возвращается ErrConflict — фронт должен перезагрузить
+// карточку и попросить админа пересмотреть. Без этого admin одобряет V1, а
+// в каталог попадает V2 (race из docs/SPECIALIST_MODERATION.md §5.C).
+func (r *Repo) SetModerationDecisionInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, status string, reason string, reviewedBy uuid.UUID, expectedUpdatedAt *time.Time) error {
 	var reasonArg *string
 	if reason != "" {
 		reasonArg = &reason
@@ -375,12 +381,16 @@ SET moderation_status      = $2,
     moderation_reviewed_at = now(),
     moderation_reviewed_by = $4,
     updated_at             = now()
-WHERE user_id = $1`,
-		userID, status, reasonArg, reviewedBy)
+WHERE user_id = $1
+  AND ($5::timestamptz IS NULL OR updated_at = $5)`,
+		userID, status, reasonArg, reviewedBy, expectedUpdatedAt)
 	if err != nil {
 		return fmt.Errorf("set moderation: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
+		if expectedUpdatedAt != nil {
+			return ErrConflict
+		}
 		return ErrNotFound
 	}
 	return nil
@@ -860,47 +870,65 @@ WHERE is_published = TRUE AND moderation_status = 'pending_review'`).Scan(&n)
 	return n, nil
 }
 
+// ModerationDetail — детальная карточка для admin-просмотра. Поверх
+// публичных полей PublicProfile содержит updated_at (для optimistic-lock'a
+// на Approve/Reject) и moderation_status + reason для UI.
+type ModerationDetail struct {
+	PublicProfile
+	UpdatedAt        time.Time  `json:"updated_at"`
+	ModerationStatus string     `json:"moderation_status"`
+	ModerationReason string     `json:"moderation_reason,omitempty"`
+	Email            string     `json:"email,omitempty"`
+}
+
 // GetForModeration — полная карточка спеца для admin'ского просмотра,
 // без фильтра is_published / moderation_status. Возвращает то же самое,
-// что и GetPublic, но видит и pending, и rejected.
-func (r *Repo) GetForModeration(ctx context.Context, userID uuid.UUID) (PublicProfile, error) {
+// что и GetPublic, плюс updated_at и текущий moderation_status (фронт
+// использует updated_at как optimistic-lock версию).
+func (r *Repo) GetForModeration(ctx context.Context, userID uuid.UUID) (ModerationDetail, error) {
 	const q = `
 SELECT p.user_id, p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
        p.rating_avg, p.reviews_count,
-       COALESCE(pr.name, ''), p.is_freelance
+       COALESCE(pr.name, ''), p.is_freelance,
+       p.updated_at, p.moderation_status,
+       COALESCE(p.moderation_reason, ''),
+       COALESCE(u.email::text, '')
 FROM specialist_profiles p
+JOIN users u ON u.id = p.user_id
 LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1`
-	var p PublicProfile
+	var d ModerationDetail
 	err := r.db.QueryRow(ctx, q, userID).Scan(
-		&p.UserID, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
-		&p.RateMin, &p.RateMax, &p.Currency, &p.RatingAvg, &p.ReviewsCount,
-		&p.ProductionName, &p.IsFreelance,
+		&d.UserID, &d.DisplayName, &d.Bio, &d.AvatarURL, &d.City,
+		&d.RateMin, &d.RateMax, &d.Currency, &d.RatingAvg, &d.ReviewsCount,
+		&d.ProductionName, &d.IsFreelance,
+		&d.UpdatedAt, &d.ModerationStatus, &d.ModerationReason,
+		&d.Email,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return PublicProfile{}, ErrNotFound
+		return ModerationDetail{}, ErrNotFound
 	}
 	if err != nil {
-		return PublicProfile{}, fmt.Errorf("query moderation profile: %w", err)
+		return ModerationDetail{}, fmt.Errorf("query moderation profile: %w", err)
 	}
 	cats, err := r.listCategoriesWithTitles(ctx, userID)
 	if err != nil {
-		return PublicProfile{}, err
+		return ModerationDetail{}, err
 	}
-	p.Categories = cats
+	d.Categories = cats
 	skills, err := r.listSkillsWithTitles(ctx, userID)
 	if err != nil {
-		return PublicProfile{}, err
+		return ModerationDetail{}, err
 	}
-	p.Skills = skills
+	d.Skills = skills
 	portfolio, err := r.listPortfolio(ctx, userID)
 	if err != nil {
-		return PublicProfile{}, err
+		return ModerationDetail{}, err
 	}
-	p.Portfolio = portfolio
-	return p, nil
+	d.Portfolio = portfolio
+	return d, nil
 }
 
 func (r *Repo) ValidSkillIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {

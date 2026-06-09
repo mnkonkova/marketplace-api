@@ -8,14 +8,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"marketpclce/internal/auth"
+	"marketpclce/internal/outbox"
+	"marketpclce/internal/profiles"
 )
 
 var ErrInvalidInput = errors.New("invalid input")
 
+// ErrModerationReasonRequired — reject без причины запрещён: спец должен
+// видеть, что именно поправить.
+var ErrModerationReasonRequired = errors.New("moderation reason required")
+
+const moderationReasonMaxLen = 500
+
 type Service struct {
 	repo            *Repo
+	profiles        *profiles.Repo // для очереди модерации специалистов
 	appBaseURL      string
 	inviteTTL       time.Duration
 	tokens          *auth.TokenIssuer
@@ -122,6 +132,86 @@ func (s *Service) PromoteToManager(
 		URL:       s.appBaseURL + "/auth/invite?token=" + raw,
 		ExpiresAt: expiresAt,
 	}, nil
+}
+
+// WithProfilesRepo подключает profiles.Repo для модерационных endpoint'ов
+// (см. docs/SPECIALIST_MODERATION.md). nil-safe: без вызова админские
+// /admin/moderation/* ручки отдают 503/пустоту.
+func (s *Service) WithProfilesRepo(p *profiles.Repo) *Service {
+	s.profiles = p
+	return s
+}
+
+// ListPendingSpecialists — очередь модерации для админ-кабинета.
+// status: "pending_review" (default), "approved", "rejected", "" / "all".
+func (s *Service) ListPendingSpecialists(ctx context.Context, status string, limit, offset int) ([]profiles.ModerationQueueItem, int, error) {
+	if s.profiles == nil {
+		return nil, 0, errors.New("profiles repo not configured")
+	}
+	if status == "" {
+		status = "pending_review"
+	}
+	return s.profiles.ListModerationQueue(ctx, status, limit, offset)
+}
+
+// CountPendingSpecialists — счётчик для бейджа в навигации.
+func (s *Service) CountPendingSpecialists(ctx context.Context) (int, error) {
+	if s.profiles == nil {
+		return 0, nil
+	}
+	return s.profiles.CountPendingModeration(ctx)
+}
+
+// GetSpecialistForModeration — детальная карточка для admin'ского просмотра
+// (включая pending/rejected — публичная GetPublic их не отдаёт).
+func (s *Service) GetSpecialistForModeration(ctx context.Context, userID uuid.UUID) (profiles.ModerationDetail, error) {
+	if s.profiles == nil {
+		return profiles.ModerationDetail{}, errors.New("profiles repo not configured")
+	}
+	return s.profiles.GetForModeration(ctx, userID)
+}
+
+// ApproveSpecialist — одобряет публикацию. Под одной транзакцией:
+// SetModerationDecision('approved') + outbox.Emit(EventSpecialistUpserted).
+// После коммита worker зальёт документ в OpenSearch — спец появится в каталоге.
+//
+// expectedUpdatedAt — optimistic-lock версия профиля. Защита от race'a:
+// спец параллельно отредактировал профиль между admin GET и admin POST.
+// nil = без проверки (legacy/тесты).
+func (s *Service) ApproveSpecialist(ctx context.Context, userID, actorID uuid.UUID, expectedUpdatedAt *time.Time) error {
+	if s.profiles == nil {
+		return errors.New("profiles repo not configured")
+	}
+	return s.profiles.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.profiles.SetModerationDecisionInTx(ctx, tx, userID, "approved", "", actorID, expectedUpdatedAt); err != nil {
+			return err
+		}
+		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+	})
+}
+
+// RejectSpecialist — отклоняет публикацию с обязательной причиной.
+// Эмитит specialist.upserted: indexer.Reconcile увидит status!=approved
+// и снесёт документ из ES (если он там был — обычно нет, pending не индексируется).
+func (s *Service) RejectSpecialist(ctx context.Context, userID, actorID uuid.UUID, reason string, expectedUpdatedAt *time.Time) error {
+	if s.profiles == nil {
+		return errors.New("profiles repo not configured")
+	}
+	reason = strings.TrimSpace(reason)
+	if len(reason) < 3 {
+		return ErrModerationReasonRequired
+	}
+	if len(reason) > moderationReasonMaxLen {
+		return fmt.Errorf("%w: причина слишком длинная (макс %d символов)", ErrInvalidInput, moderationReasonMaxLen)
+	}
+	return s.profiles.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.profiles.SetModerationDecisionInTx(ctx, tx, userID, "rejected", reason, actorID, expectedUpdatedAt); err != nil {
+			return err
+		}
+		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+	})
 }
 
 // RedeemInvite — публичный эндпоинт. Обменивает токен на пару tokens

@@ -280,8 +280,22 @@ func (s *Service) PatchFull(ctx context.Context, userID uuid.UUID, in PatchFullI
 				return err
 			}
 		}
-		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+		// Любое изменение профиля (поля / категории / навыки) для уже-approved
+		// спеца переводит его обратно в pending_review — изменения должен
+		// увидеть админ до повторного попадания в каталог.
+		// См. docs/SPECIALIST_MODERATION.md §2.
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
 	})
 	if err != nil {
 		return Profile{}, err
@@ -360,11 +374,20 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 				return err
 			}
 		}
-		if err := s.repo.SetPublishedInTx(ctx, tx, userID, published); err != nil {
+		notify, err := s.repo.SetPublishedInTx(ctx, tx, userID, published)
+		if err != nil {
 			return err
 		}
-		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			event, map[string]any{"user_id": userID.String()})
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			event, map[string]any{"user_id": userID.String()}); err != nil {
+			return err
+		}
+		// Если спец встал в очередь модерации именно этим publish'ом —
+		// шлём уведомление админу через n8n (см. docs/SPECIALIST_MODERATION.md §6).
+		if notify {
+			return s.emitModerationPending(ctx, tx, userID, "publish_requested")
+		}
+		return nil
 	})
 	if err != nil {
 		return Profile{}, err
@@ -493,6 +516,11 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		if txErr != nil {
 			return txErr
 		}
+		// Контент-апдейт у approved-спеца возвращает его в очередь модерации.
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
 		// Outbox-событие: воркер переиндексирует ES-документ спеца,
 		// в т.ч. last_video_at — это критично для /feed ранжирования.
 		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
@@ -505,13 +533,18 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		// принимает, но на всякий случай) транскода нет.
 		if s.media != nil {
 			if key := s.media.KeyFromURL(in.VideoURL); key != "" {
-				return outbox.Emit(ctx, tx, outbox.AggregatePortfolio, item.ID.String(),
+				if err := outbox.Emit(ctx, tx, outbox.AggregatePortfolio, item.ID.String(),
 					outbox.EventPortfolioVideoUploaded, outbox.PortfolioVideoUploadedPayload{
 						ItemID: item.ID.String(),
 						UserID: userID.String(),
 						S3Key:  key,
-					})
+					}); err != nil {
+					return err
+				}
 			}
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
 		}
 		return nil
 	})
@@ -526,8 +559,18 @@ func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.U
 		if err := s.repo.DeletePortfolioItemInTx(ctx, tx, userID, itemID); err != nil {
 			return err
 		}
-		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
 	})
 }
 
@@ -558,8 +601,18 @@ func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uui
 		if txErr != nil {
 			return txErr
 		}
-		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
-			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()})
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]string{"user_id": userID.String()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
 	})
 	if err != nil {
 		return PortfolioItem{}, err
@@ -925,4 +978,29 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// emitModerationPending — эмит outbox-события «спец встал в очередь
+// модерации». Воркер пробрасывает его в n8n, чтобы админ получил
+// telegram/email и пошёл одобрять. См. docs/SPECIALIST_MODERATION.md §6.
+//
+// Никогда не ломаем основной transaction если notify info не загружается —
+// уведомление это нотификация, не источник истины. Поэтому: если профиль
+// исчез между UPDATE'ом и SELECT'ом (что почти невозможно), молча скипаем.
+func (s *Service) emitModerationPending(ctx context.Context, tx pgx.Tx, userID uuid.UUID, reason string) error {
+	email, displayName, err := s.repo.LoadModerationNotifyInfo(ctx, tx, userID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return outbox.Emit(ctx, tx, outbox.AggregateModeration, userID.String(),
+		outbox.EventModerationSpecialistPending,
+		outbox.ModerationSpecialistPendingPayload{
+			UserID:      userID.String(),
+			Email:       email,
+			DisplayName: displayName,
+			Reason:      reason,
+		})
 }

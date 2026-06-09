@@ -56,8 +56,8 @@ func (i *FeedIndexer) ReconcileVideos(ctx context.Context, userID uuid.UUID) err
 }
 
 // DeleteByUser — снимает все видео-доки спеца. Вызывается при специальном
-// удалении профиля; при unpublish ReconcileVideos сам зачистит (LoadFeedVideoDocs
-// фильтрует по is_published=TRUE).
+// удалении профиля; при unpublish/rejection/pending ReconcileVideos сам
+// зачистит (LoadFeedVideoDocs фильтрует по is_published AND moderation_status='approved').
 func (i *FeedIndexer) DeleteByUser(ctx context.Context, userID uuid.UUID) error {
 	return i.deleteByUser(ctx, userID)
 }

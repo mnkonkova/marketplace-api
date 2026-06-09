@@ -28,7 +28,9 @@ func (i *Indexer) Reconcile(ctx context.Context, userID uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("load doc: %w", err)
 	}
-	if !doc.IsPublished {
+	// В каталог попадают только опубликованные И одобренные админом.
+	// Pending/rejected — снимаются из ES; см. docs/SPECIALIST_MODERATION.md.
+	if !doc.IsPublished || doc.ModerationStatus != "approved" {
 		return i.es.DeleteDoc(ctx, i.index, userID.String())
 	}
 	return i.es.IndexDoc(ctx, i.index, userID.String(), doc)

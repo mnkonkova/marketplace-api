@@ -21,6 +21,10 @@ const (
 	// Portfolio — события portfolio_items. Сейчас один event:
 	// video_uploaded → воркер транскодит превью (см. docs/VIDEO_TRANSCODING.md).
 	AggregatePortfolio = "portfolio"
+	// Moderation — события модерации публикаций спецов админом.
+	// Сейчас один event: specialist_pending → воркер уведомляет n8n,
+	// чтобы админу пришла нотификация. См. docs/SPECIALIST_MODERATION.md.
+	AggregateModeration = "moderation"
 
 	EventSpecialistUpserted  = "specialist.upserted"
 	EventSpecialistPublished = "specialist.published"
@@ -52,7 +56,26 @@ const (
 	// оригинал из S3, гонит через ffmpeg (480p H.264, 5-10 сек) и пишет
 	// preview_url в portfolio_items. payload — PortfolioVideoUploadedPayload.
 	EventPortfolioVideoUploaded = "portfolio.video_uploaded"
+
+	// EventModerationSpecialistPending — спец встал в очередь модерации
+	// (запросил публикацию или поменял профиль будучи approved). payload —
+	// ModerationSpecialistPendingPayload. Воркер дёргает n8n, чтобы админ
+	// получил уведомление (telegram/email/...) и пошёл в кабинет одобрять.
+	EventModerationSpecialistPending = "moderation.specialist_pending"
 )
+
+// ModerationSpecialistPendingPayload — payload для admin-уведомления:
+// что именно встало в очередь, чтобы n8n мог сразу собрать ссылку
+// {base_url}/admin/moderation/{user_id}.
+type ModerationSpecialistPendingPayload struct {
+	UserID      string `json:"user_id"`
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	// Reason: "publish_requested" — спец нажал «Опубликовать»;
+	//         "content_changed"   — approved-спец отредактировал профиль.
+	Reason  string `json:"reason"`
+	BaseURL string `json:"base_url,omitempty"`
+}
 
 // EmailVerifyPayload — структура payload для EventEmailVerifySend.
 // Объявлено в outbox, чтобы и emitter (auth.Service) и handler (cmd/worker)

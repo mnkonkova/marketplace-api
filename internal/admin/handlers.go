@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"marketpclce/internal/auth"
 	"marketpclce/internal/httpx"
+	"marketpclce/internal/profiles"
 )
 
 type Handler struct{ svc *Service }
@@ -31,8 +34,14 @@ func writeServiceErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrInvalidInput):
 		// data-sec D12: см. writeManagerErr в projects/handlers_manager.go.
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrModerationReasonRequired):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "reason_required",
+			"Укажите причину отклонения (минимум 3 символа).")
+	case errors.Is(err, ErrNotFound), errors.Is(err, profiles.ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Пользователь не найден.")
+	case errors.Is(err, profiles.ErrConflict):
+		httpx.WriteErrMsg(w, http.StatusConflict, "conflict",
+			"Специалист отредактировал профиль с момента открытия — перезагрузите карточку и проверьте изменения.")
 	case errors.Is(err, ErrNotManager):
 		httpx.WriteErrMsg(w, http.StatusConflict, "not_manager",
 			"Этот пользователь не имеет роли менеджера.")
@@ -263,6 +272,164 @@ func (h *Handler) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		UserID: userID.String(),
 		Tokens: pair,
 	})
+}
+
+// ─── Модерация специалистов ──────────────────────────────────────────────
+// См. docs/SPECIALIST_MODERATION.md
+
+type moderationListResp struct {
+	Items []profiles.ModerationQueueItem `json:"items"`
+	Total int                            `json:"total"`
+}
+
+// AdminListPendingSpecialists godoc
+// @Summary  Очередь модерации специалистов
+// @Tags     admin-moderation
+// @Produce  json
+// @Security BearerAuth
+// @Param    status query string false "pending_review (default) | approved | rejected | all"
+// @Param    limit  query int    false "1-100, default 20"
+// @Param    offset query int    false "default 0"
+// @Success  200 {object} moderationListResp
+// @Router   /admin/moderation/specialists [get]
+func (h *Handler) AdminListPendingSpecialists(w http.ResponseWriter, r *http.Request) {
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	items, total, err := h.svc.ListPendingSpecialists(r.Context(), status, limit, offset)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, moderationListResp{Items: items, Total: total})
+}
+
+type moderationCountResp struct {
+	PendingCount int `json:"pending_count"`
+}
+
+// AdminPendingModerationCount godoc
+// @Summary  Счётчик заявок на модерации (для бейджа в навигации)
+// @Tags     admin-moderation
+// @Produce  json
+// @Security BearerAuth
+// @Success  200 {object} moderationCountResp
+// @Router   /admin/moderation/specialists/count [get]
+func (h *Handler) AdminPendingModerationCount(w http.ResponseWriter, r *http.Request) {
+	n, err := h.svc.CountPendingSpecialists(r.Context())
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, moderationCountResp{PendingCount: n})
+}
+
+// AdminGetSpecialistForModeration godoc
+// @Summary  Полная карточка спеца для admin'ского просмотра
+// @Description В отличие от /specialists/{id} (только approved+published),
+// @Description эта ручка отдаёт и pending, и rejected — чтобы админ мог
+// @Description принимать решение.
+// @Tags     admin-moderation
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "user id"
+// @Success  200 {object} profiles.PublicProfile
+// @Router   /admin/moderation/specialists/{id} [get]
+func (h *Handler) AdminGetSpecialistForModeration(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	p, err := h.svc.GetSpecialistForModeration(r.Context(), id)
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, p)
+}
+
+type approveReq struct {
+	// ExpectedUpdatedAt — optimistic-lock версия профиля, которую видел
+	// админ при открытии карточки. Если null — без проверки (для тестов
+	// или legacy-CLI). См. docs/SPECIALIST_MODERATION.md §5.C.
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+}
+
+// AdminApproveSpecialist godoc
+// @Summary  Одобрить публикацию специалиста (попадает в каталог)
+// @Tags     admin-moderation
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "user id"
+// @Param    body body approveReq false "expected_updated_at для optimistic lock"
+// @Success  204
+// @Failure  409 {object} errorResponse "conflict — спец отредактировал, перезагрузить"
+// @Router   /admin/moderation/specialists/{id}/approve [post]
+func (h *Handler) AdminApproveSpecialist(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
+		return
+	}
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	var in approveReq
+	// Тело опционально (legacy-клиенты без updated_at).
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+			return
+		}
+	}
+	if err := h.svc.ApproveSpecialist(r.Context(), id, actor, in.ExpectedUpdatedAt); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type rejectReq struct {
+	Reason            string     `json:"reason"`
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at,omitempty"`
+}
+
+// AdminRejectSpecialist godoc
+// @Summary  Отклонить публикацию специалиста с указанием причины
+// @Tags     admin-moderation
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path string     true "user id"
+// @Param    body body rejectReq true "причина (3-500 симв) + expected_updated_at"
+// @Success  204
+// @Failure  409 {object} errorResponse "conflict — спец отредактировал, перезагрузить"
+// @Router   /admin/moderation/specialists/{id}/reject [post]
+func (h *Handler) AdminRejectSpecialist(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
+		return
+	}
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	var in rejectReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	if err := h.svc.RejectSpecialist(r.Context(), id, actor, in.Reason, in.ExpectedUpdatedAt); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // типы для swaggo

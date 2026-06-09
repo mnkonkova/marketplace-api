@@ -208,7 +208,8 @@ func main() {
 	// TTL инвайта возьмём от EmailVerifyTokenTTL — те же 24h по умолчанию,
 	// для длинных временно поднимем в env.
 	adminRepo := admin.NewRepo(pool)
-	adminSvc := admin.NewService(adminRepo, tokenIssuer, cfg.AppBaseURL, cfg.EmailVerifyTokenTTL)
+	adminSvc := admin.NewService(adminRepo, tokenIssuer, cfg.AppBaseURL, cfg.EmailVerifyTokenTTL).
+		WithProfilesRepo(profilesRepo)
 	adminHandler := admin.NewHandler(adminSvc)
 
 	var summarizeCache *summarize.Cache

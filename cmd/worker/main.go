@@ -182,6 +182,23 @@ func main() {
 		})
 	}
 
+	// moderation.specialist_pending → n8n уведомление админу о новой заявке
+	// на одобрение публикации. Использует тот же CRM webhook (N8N_WEBHOOK_URL).
+	// При выключенном webhook'е — no-op (событие квитируется).
+	moderationHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
+		if n8nDispatcher == nil {
+			return nil
+		}
+		return n8nDispatcher.Send(ctx, notifications.Payload{
+			EventID:     strconv.FormatInt(outboxID, 10),
+			Aggregate:   outbox.AggregateModeration,
+			AggregateID: aggregateID,
+			EventType:   eventType,
+			Data:        payload,
+			OccurredAt:  time.Now().UTC(),
+		})
+	}
+
 	// support.message_received → отдельный workflow (дамп в Telegram).
 	n8nSupportDispatcher := notifications.NewWebhookDispatcher(cfg.N8nSupportWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
 	if n8nSupportDispatcher == nil {
@@ -259,11 +276,12 @@ func main() {
 
 	worker := outbox.NewWorker(pool, logger,
 		map[string]outbox.Handler{
-			outbox.AggregateSpecialist: specialistHandler,
-			outbox.AggregateEmail:      emailHandler,
-			outbox.AggregateProject:    projectHandler,
-			outbox.AggregateSupport:    supportHandler,
-			outbox.AggregatePortfolio:  portfolioHandler,
+			outbox.AggregateSpecialist:  specialistHandler,
+			outbox.AggregateEmail:       emailHandler,
+			outbox.AggregateProject:     projectHandler,
+			outbox.AggregateSupport:     supportHandler,
+			outbox.AggregatePortfolio:   portfolioHandler,
+			outbox.AggregateModeration:  moderationHandler,
 		},
 		outbox.Config{
 			MaxAttempts:     cfg.OutboxMaxAttempts,

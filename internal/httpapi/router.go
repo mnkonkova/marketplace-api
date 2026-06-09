@@ -293,6 +293,13 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/users", d.Admin.AdminCreateClient)
 					r.Post("/admin/users/{id}/generate_invite", d.Admin.AdminGenerateInvite)
 					r.Get("/admin/users/search", d.Admin.AdminSearchUsers)
+
+					// Модерация публикаций специалистов — docs/SPECIALIST_MODERATION.md
+					r.Get("/admin/moderation/specialists", d.Admin.AdminListPendingSpecialists)
+					r.Get("/admin/moderation/specialists/count", d.Admin.AdminPendingModerationCount)
+					r.Get("/admin/moderation/specialists/{id}", d.Admin.AdminGetSpecialistForModeration)
+					r.Post("/admin/moderation/specialists/{id}/approve", d.Admin.AdminApproveSpecialist)
+					r.Post("/admin/moderation/specialists/{id}/reject", d.Admin.AdminRejectSpecialist)
 				}
 				if d.Projects != nil {
 					r.Get("/admin/projects", d.Projects.AdminListProjects)
