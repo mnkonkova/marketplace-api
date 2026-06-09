@@ -26,6 +26,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-marketpclce}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Проброс только на loopback VDS — наружу 5432 НЕ торчит, ни в каком
+    # случае не убирай 127.0.0.1: префикс. Используется для DBeaver через
+    # SSH-туннель: на машине разработчика `ssh -L 5433:localhost:5432 root@<vds>`,
+    # дальше DBeaver идёт на localhost:5433.
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
