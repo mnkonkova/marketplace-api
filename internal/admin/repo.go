@@ -157,6 +157,13 @@ func (r *Repo) ListAllUsers(ctx context.Context, p ListAllUsersParams) ([]UserLi
 	if p.Offset < 0 {
 		p.Offset = 0
 	}
+	// Cap на offset — защита от больших OFFSET, которые в PG дорого
+	// (ему нужно скипнуть offset строк ДО применения LIMIT). 10k @ 20/стр =
+	// 500-я страница, что нереалистично для UI. Запрос с большим offset —
+	// либо ошибка фронта, либо попытка нагрузить.
+	if p.Offset > 10000 {
+		return nil, 0, fmt.Errorf("invalid offset: max 10000 (используйте поиск/фильтры)")
+	}
 	if p.Kind != "" && p.Kind != "client" && p.Kind != "specialist" {
 		return nil, 0, fmt.Errorf("invalid kind %q", p.Kind)
 	}

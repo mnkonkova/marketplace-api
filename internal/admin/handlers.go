@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,16 @@ import (
 	"marketpclce/internal/httpx"
 	"marketpclce/internal/profiles"
 )
+
+// auditLog — единый паттерн для audit-логов админских мутаций. Пишет в
+// дефолтный slog (он же → Alloy → Loki). actor берётся из ctx, цель явно.
+// Лог нужен чтобы потом «кто кого деактивировал в среду» отвечалось grep'ом.
+func auditLog(r *http.Request, action string, target uuid.UUID, extra ...any) {
+	actor, _ := auth.UserIDFrom(r.Context())
+	args := []any{"actor", actor.String(), "target", target.String()}
+	args = append(args, extra...)
+	slog.Info("admin."+action, args...)
+}
 
 type Handler struct{ svc *Service }
 
@@ -179,6 +190,7 @@ func (h *Handler) AdminPromoteToManager(w http.ResponseWriter, r *http.Request) 
 		writeServiceErr(w, err)
 		return
 	}
+	auditLog(r, "user.promote_manager", userID, "send_invite", in.SendInvite)
 	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
@@ -199,6 +211,7 @@ func (h *Handler) AdminApproveManager(w http.ResponseWriter, r *http.Request) {
 		writeServiceErr(w, err)
 		return
 	}
+	auditLog(r, "user.approve_manager", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -219,6 +232,7 @@ func (h *Handler) AdminRevokeManager(w http.ResponseWriter, r *http.Request) {
 		writeServiceErr(w, err)
 		return
 	}
+	auditLog(r, "user.revoke_manager", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -241,6 +255,7 @@ func (h *Handler) AdminDeactivateUser(w http.ResponseWriter, r *http.Request) {
 		writeServiceErr(w, err)
 		return
 	}
+	auditLog(r, "user.deactivate", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -261,6 +276,7 @@ func (h *Handler) AdminActivateUser(w http.ResponseWriter, r *http.Request) {
 		writeServiceErr(w, err)
 		return
 	}
+	auditLog(r, "user.activate", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -282,6 +298,7 @@ func (h *Handler) AdminVerifyEmail(w http.ResponseWriter, r *http.Request) {
 		writeServiceErr(w, err)
 		return
 	}
+	auditLog(r, "user.verify_email", id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
