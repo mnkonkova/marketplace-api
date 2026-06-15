@@ -55,19 +55,24 @@ type UserSearchResult struct {
 }
 
 // UserListItem — строка для полного admin-листинга /admin/users.
-// Объединяет users + LEFT JOIN на оба профиля для display_name.
+// Объединяет users + LEFT JOIN на оба профиля для display_name +
+// specialist_profiles.moderation_status (только для спецов).
 type UserListItem struct {
-	UserID        uuid.UUID `json:"user_id"`
-	Email         string    `json:"email,omitempty"`
-	Phone         string    `json:"phone,omitempty"`
-	DisplayName   string    `json:"display_name,omitempty"`
-	Kind          string    `json:"kind"`
-	IsAdmin       bool      `json:"is_admin"`
-	IsManager     bool      `json:"is_manager"`
-	IsApproved    bool      `json:"is_approved"`
-	IsActive      bool      `json:"is_active"`
-	EmailVerified bool      `json:"email_verified"`
-	CreatedAt     time.Time `json:"created_at"`
+	UserID           uuid.UUID `json:"user_id"`
+	Email            string    `json:"email,omitempty"`
+	Phone            string    `json:"phone,omitempty"`
+	DisplayName      string    `json:"display_name,omitempty"`
+	Kind             string    `json:"kind"`
+	IsAdmin          bool      `json:"is_admin"`
+	IsManager        bool      `json:"is_manager"`
+	IsApproved       bool      `json:"is_approved"`
+	IsActive         bool      `json:"is_active"`
+	EmailVerified    bool      `json:"email_verified"`
+	CreatedAt        time.Time `json:"created_at"`
+	// ModerationStatus — pending_review|approved|rejected. NULL для клиентов
+	// (у них нет specialist_profile). omitempty в JSON: пустая строка =
+	// «нет статуса» (клиент или спец без профиля).
+	ModerationStatus string `json:"moderation_status,omitempty"`
 }
 
 // ListAllUsersParams — фильтры и пагинация для /admin/users.

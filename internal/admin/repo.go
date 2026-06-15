@@ -227,7 +227,8 @@ SELECT u.id, COALESCE(u.email::text,''), COALESCE(u.phone,''),
        COALESCE(NULLIF(cp.display_name,''), NULLIF(sp.display_name,''), ''),
        u.kind, u.is_admin, u.is_manager, u.is_approved, u.is_active,
        u.email_verified_at IS NOT NULL,
-       u.created_at
+       u.created_at,
+       COALESCE(sp.moderation_status, '')
 %s
 ORDER BY u.created_at DESC
 LIMIT $%d OFFSET $%d`, base, len(args)-1, len(args))
@@ -244,7 +245,7 @@ LIMIT $%d OFFSET $%d`, base, len(args)-1, len(args))
 		if err := rows.Scan(
 			&u.UserID, &u.Email, &u.Phone, &u.DisplayName,
 			&u.Kind, &u.IsAdmin, &u.IsManager, &u.IsApproved, &u.IsActive,
-			&u.EmailVerified, &u.CreatedAt,
+			&u.EmailVerified, &u.CreatedAt, &u.ModerationStatus,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan user: %w", err)
 		}
