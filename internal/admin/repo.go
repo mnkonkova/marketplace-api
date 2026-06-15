@@ -140,6 +140,112 @@ LIMIT 20`
 	return out, rows.Err()
 }
 
+// ListAllUsers — полный листинг с пагинацией для /admin/users.
+// Возвращает (items, total). total — общее число строк под фильтрами
+// (без limit/offset) для отрисовки пагинатора на фронте.
+//
+// Фильтры:
+//   - q: ILIKE по email/phone/display_name, < 2 символов = игнор.
+//   - kind: client | specialist (пусто = без фильтра).
+//   - role: manager | admin | regular (regular = !is_manager AND !is_admin).
+//
+// Сортировка: created_at DESC (новые сверху).
+func (r *Repo) ListAllUsers(ctx context.Context, p ListAllUsersParams) ([]UserListItem, int, error) {
+	if p.Limit <= 0 || p.Limit > 100 {
+		p.Limit = 20
+	}
+	if p.Offset < 0 {
+		p.Offset = 0
+	}
+	if p.Kind != "" && p.Kind != "client" && p.Kind != "specialist" {
+		return nil, 0, fmt.Errorf("invalid kind %q", p.Kind)
+	}
+	if p.Role != "" && p.Role != "manager" && p.Role != "admin" && p.Role != "regular" {
+		return nil, 0, fmt.Errorf("invalid role %q", p.Role)
+	}
+
+	// data-sec D11: escape LIKE-метасимволов, аналогично SearchUsers выше.
+	likeEsc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	q := strings.TrimSpace(p.Q)
+
+	// Условия и аргументы собираем динамически — limit/offset идут в конце.
+	args := []any{}
+	conds := []string{}
+
+	if len(q) >= 2 {
+		pattern := "%" + likeEsc.Replace(q) + "%"
+		args = append(args, pattern)
+		idx := len(args)
+		conds = append(conds, fmt.Sprintf(`(
+			u.email::text ILIKE $%d ESCAPE '\'
+			OR u.phone ILIKE $%d ESCAPE '\'
+			OR cp.display_name ILIKE $%d ESCAPE '\'
+			OR sp.display_name ILIKE $%d ESCAPE '\'
+		)`, idx, idx, idx, idx))
+	}
+	if p.Kind != "" {
+		args = append(args, p.Kind)
+		conds = append(conds, fmt.Sprintf("u.kind = $%d", len(args)))
+	}
+	switch p.Role {
+	case "manager":
+		conds = append(conds, "u.is_manager = TRUE AND u.is_admin = FALSE")
+	case "admin":
+		conds = append(conds, "u.is_admin = TRUE")
+	case "regular":
+		conds = append(conds, "u.is_manager = FALSE AND u.is_admin = FALSE")
+	}
+
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+
+	base := fmt.Sprintf(`
+FROM users u
+LEFT JOIN client_profiles     cp ON cp.user_id = u.id
+LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
+%s`, where)
+
+	// total под фильтрами — один отдельный COUNT, чтобы фронт мог нарисовать
+	// пагинатор. Дешёвый запрос, т.к. фильтры ILIKE используют тот же план.
+	var total int
+	if err := r.db.QueryRow(ctx, "SELECT COUNT(*) "+base, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+
+	args = append(args, p.Limit, p.Offset)
+	listQ := fmt.Sprintf(`
+SELECT u.id, COALESCE(u.email::text,''), COALESCE(u.phone,''),
+       COALESCE(NULLIF(cp.display_name,''), NULLIF(sp.display_name,''), ''),
+       u.kind, u.is_admin, u.is_manager, u.is_approved, u.is_active,
+       u.email_verified_at IS NOT NULL,
+       u.created_at
+%s
+ORDER BY u.created_at DESC
+LIMIT $%d OFFSET $%d`, base, len(args)-1, len(args))
+
+	rows, err := r.db.Query(ctx, listQ, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]UserListItem, 0, p.Limit)
+	for rows.Next() {
+		var u UserListItem
+		if err := rows.Scan(
+			&u.UserID, &u.Email, &u.Phone, &u.DisplayName,
+			&u.Kind, &u.IsAdmin, &u.IsManager, &u.IsApproved, &u.IsActive,
+			&u.EmailVerified, &u.CreatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan user: %w", err)
+		}
+		items = append(items, u)
+	}
+	return items, total, rows.Err()
+}
+
 // PromoteToManager — выставляет is_manager=TRUE и is_approved=TRUE.
 // Используется в /admin/managers/promote: админ нашёл юзера по email/имени,
 // делает его менеджером без отдельного approve-шага. Идемпотентно.
@@ -177,6 +283,60 @@ func (r *Repo) SetApproved(ctx context.Context, userID uuid.UUID, approved bool)
 			return fmt.Errorf("probe user: %w", perr)
 		}
 		return ErrNotManager
+	}
+	return nil
+}
+
+// SetActive — деактивировать/реактивировать юзера. is_active=false
+// блокирует логин и пропускает юзера из публичной выдачи (search, feed).
+// Не удаляет данные — мягкое отключение. Идемпотентно.
+//
+// data-sec: запрещаем деактивировать админов через этот endpoint (защита
+// от случайного «выстрела в ногу»). Если очень надо — через psql.
+func (r *Repo) SetActive(ctx context.Context, userID uuid.UUID, active bool) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE users SET is_active = $2, updated_at = now()
+		 WHERE id = $1 AND is_admin = FALSE`,
+		userID, active)
+	if err != nil {
+		return fmt.Errorf("set active: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// либо юзера нет, либо он админ — диагностируем через probe.
+		var isAdmin bool
+		if perr := r.db.QueryRow(ctx,
+			`SELECT is_admin FROM users WHERE id = $1`, userID).Scan(&isAdmin); perr != nil {
+			if errors.Is(perr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("probe user: %w", perr)
+		}
+		if isAdmin {
+			return fmt.Errorf("%w: нельзя деактивировать админа через UI", ErrInvalidInputRepo)
+		}
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ErrInvalidInputRepo — repo-уровневая «битый ввод» ошибка. Маппится в
+// admin.ErrInvalidInput в service.go, чтобы handler отдал 400.
+var ErrInvalidInputRepo = errors.New("invalid input")
+
+// VerifyEmail — ручная пометка email подтверждённым (для админского заноса
+// клиента). Если email_verified_at уже не NULL — no-op (идемпотентно).
+// Возвращает ErrNotFound если юзер не существует.
+func (r *Repo) VerifyEmail(ctx context.Context, userID uuid.UUID) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()),
+		                  updated_at = now()
+		 WHERE id = $1`,
+		userID)
+	if err != nil {
+		return fmt.Errorf("verify email: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }

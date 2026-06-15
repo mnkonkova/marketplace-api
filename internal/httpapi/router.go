@@ -290,8 +290,12 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/managers/promote", d.Admin.AdminPromoteToManager)
 					r.Post("/admin/managers/{id}/approve", d.Admin.AdminApproveManager)
 					r.Post("/admin/managers/{id}/revoke", d.Admin.AdminRevokeManager)
+					r.Get("/admin/users", d.Admin.AdminListAllUsers)
 					r.Post("/admin/users", d.Admin.AdminCreateClient)
 					r.Post("/admin/users/{id}/generate_invite", d.Admin.AdminGenerateInvite)
+					r.Post("/admin/users/{id}/verify_email", d.Admin.AdminVerifyEmail)
+					r.Post("/admin/users/{id}/deactivate", d.Admin.AdminDeactivateUser)
+					r.Post("/admin/users/{id}/activate", d.Admin.AdminActivateUser)
 					r.Get("/admin/users/search", d.Admin.AdminSearchUsers)
 
 					// Модерация публикаций специалистов — docs/SPECIALIST_MODERATION.md

@@ -53,3 +53,38 @@ type UserSearchResult struct {
 	Kind        string    `json:"kind"`
 	DisplayName string    `json:"display_name,omitempty"`
 }
+
+// UserListItem — строка для полного admin-листинга /admin/users.
+// Объединяет users + LEFT JOIN на оба профиля для display_name.
+type UserListItem struct {
+	UserID        uuid.UUID `json:"user_id"`
+	Email         string    `json:"email,omitempty"`
+	Phone         string    `json:"phone,omitempty"`
+	DisplayName   string    `json:"display_name,omitempty"`
+	Kind          string    `json:"kind"`
+	IsAdmin       bool      `json:"is_admin"`
+	IsManager     bool      `json:"is_manager"`
+	IsApproved    bool      `json:"is_approved"`
+	IsActive      bool      `json:"is_active"`
+	EmailVerified bool      `json:"email_verified"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ListAllUsersParams — фильтры и пагинация для /admin/users.
+// Все поля опциональны. Limit принудительно clamp'ится 1..100.
+type ListAllUsersParams struct {
+	Q      string // поиск ILIKE по email/phone/display_name; <2 символов игнорируется
+	Kind   string // "client" | "specialist" | "" (без фильтра)
+	Role   string // "manager" | "admin" | "regular" | "" (regular = !is_manager && !is_admin)
+	Limit  int
+	Offset int
+}
+
+// UserListResult — ответ пагинированного листинга. Total — общее количество
+// под текущими фильтрами (без limit/offset), для отрисовки пагинатора.
+type UserListResult struct {
+	Items  []UserListItem `json:"items"`
+	Total  int            `json:"total"`
+	Limit  int            `json:"limit"`
+	Offset int            `json:"offset"`
+}

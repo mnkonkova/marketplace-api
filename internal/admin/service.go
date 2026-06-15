@@ -58,6 +58,29 @@ func (s *Service) SearchUsers(ctx context.Context, q, kind string) ([]UserSearch
 	return s.repo.SearchUsers(ctx, q, kind)
 }
 
+// ListAllUsers — полный листинг всех юзеров с пагинацией. Для /admin/users.
+// Repo сам clamp'ит limit (1..100) и валидирует kind/role.
+func (s *Service) ListAllUsers(ctx context.Context, p ListAllUsersParams) (UserListResult, error) {
+	items, total, err := s.repo.ListAllUsers(ctx, p)
+	if err != nil {
+		// repo возвращает обычную ошибку для invalid kind/role — оборачиваем
+		// в ErrInvalidInput, чтобы handler отдал 400, а не 500.
+		if strings.HasPrefix(err.Error(), "invalid ") {
+			return UserListResult{}, fmt.Errorf("%w: %s", ErrInvalidInput, err.Error())
+		}
+		return UserListResult{}, err
+	}
+	limit := p.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	offset := p.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	return UserListResult{Items: items, Total: total, Limit: limit, Offset: offset}, nil
+}
+
 func (s *Service) ApproveManager(ctx context.Context, userID uuid.UUID) error {
 	return s.repo.SetApproved(ctx, userID, true)
 }
@@ -66,6 +89,24 @@ func (s *Service) ApproveManager(ctx context.Context, userID uuid.UUID) error {
 // is_approved=FALSE. Role() после этого вернёт client/specialist по kind.
 func (s *Service) RevokeManager(ctx context.Context, userID uuid.UUID) error {
 	return s.repo.DemoteFromManager(ctx, userID)
+}
+
+// VerifyEmail — админский bypass email-верификации. Используется для
+// ручного заноса клиента (когда у клиента нет доступа к ящику или
+// уже сверены контакты офлайн). Идемпотентно.
+func (s *Service) VerifyEmail(ctx context.Context, userID uuid.UUID) error {
+	return s.repo.VerifyEmail(ctx, userID)
+}
+
+// SetActive — деактивировать/реактивировать юзера. Repo возвращает
+// ErrInvalidInputRepo если попали на админа — оборачиваем в admin
+// ErrInvalidInput, чтобы handler отдал 400.
+func (s *Service) SetActive(ctx context.Context, userID uuid.UUID, active bool) error {
+	err := s.repo.SetActive(ctx, userID, active)
+	if errors.Is(err, ErrInvalidInputRepo) {
+		return fmt.Errorf("%w: %s", ErrInvalidInput, strings.TrimPrefix(err.Error(), "invalid input: "))
+	}
+	return err
 }
 
 // ---- Клиенты ----

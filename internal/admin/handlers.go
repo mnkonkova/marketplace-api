@@ -78,6 +78,41 @@ func (h *Handler) AdminListManagers(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, managersListResp{Items: items})
 }
 
+// AdminListAllUsers godoc
+// @Summary  Полный листинг всех юзеров с пагинацией (admin UI)
+// @Description Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),
+// @Description kind (client|specialist), role (manager|admin|regular).
+// @Description Сортировка created_at DESC. limit 1..100, default 20.
+// @Tags     admin-users
+// @Produce  json
+// @Security BearerAuth
+// @Param    q      query string false "часть email/phone/имени, мин 2 симв"
+// @Param    kind   query string false "client | specialist"
+// @Param    role   query string false "manager | admin | regular"
+// @Param    limit  query int    false "1-100, default 20"
+// @Param    offset query int    false "default 0"
+// @Success  200 {object} UserListResult
+// @Router   /admin/users [get]
+func (h *Handler) AdminListAllUsers(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	res, err := h.svc.ListAllUsers(r.Context(), ListAllUsersParams{
+		Q:      strings.TrimSpace(r.URL.Query().Get("q")),
+		Kind:   strings.TrimSpace(r.URL.Query().Get("kind")),
+		Role:   strings.TrimSpace(r.URL.Query().Get("role")),
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, res)
+}
+
 // AdminSearchUsers godoc
 // @Summary  Поиск юзеров (для лукапов в CRM)
 // @Description ILIKE по email/phone/display_name. Только активные,
@@ -181,6 +216,69 @@ func (h *Handler) AdminRevokeManager(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.RevokeManager(r.Context(), id); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminDeactivateUser godoc
+// @Summary  Деактивировать юзера (мягкое отключение)
+// @Description is_active=FALSE — юзер не может логиниться, не светится в выдаче.
+// @Description Админов через UI деактивировать нельзя (400 invalid_input).
+// @Tags     admin-users
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "user id"
+// @Success  204
+// @Router   /admin/users/{id}/deactivate [post]
+func (h *Handler) AdminDeactivateUser(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.svc.SetActive(r.Context(), id, false); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminActivateUser godoc
+// @Summary  Реактивировать ранее деактивированного юзера
+// @Tags     admin-users
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "user id"
+// @Success  204
+// @Router   /admin/users/{id}/activate [post]
+func (h *Handler) AdminActivateUser(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.svc.SetActive(r.Context(), id, true); err != nil {
+		writeServiceErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminVerifyEmail godoc
+// @Summary  Подтвердить email юзера вручную (для админского заноса)
+// @Description Идемпотентно. Если email уже подтверждён — 204 без изменений.
+// @Tags     admin-users
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "user id"
+// @Success  204
+// @Router   /admin/users/{id}/verify_email [post]
+func (h *Handler) AdminVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.svc.VerifyEmail(r.Context(), id); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
