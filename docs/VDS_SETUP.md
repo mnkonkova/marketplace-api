@@ -325,8 +325,15 @@ docker run -d \
   -e WEBHOOK_URL=https://n8n.<домен>/ \
   -e N8N_PROXY_HOPS=1 \
   -e N8N_METRICS=true \
+  -e TG_PROXY_URL=https://tg-proxy.<твой-аккаунт>.workers.dev \
+  -e TG_PROXY_SECRET=<значение из CF Worker> \
   n8nio/n8n
 ```
+
+`TG_PROXY_URL` / `TG_PROXY_SECRET` — для того, чтобы Telegram-ноды (на
+самом деле HTTP Request) ходили через Cloudflare Worker, а не напрямую
+к `api.telegram.org`. Прямой путь из РФ нестабилен (RKN-блокировки).
+Подробнее — см. ниже «Cloudflare Worker как прокси к Telegram».
 
 `N8N_METRICS=true` включает Prometheus-метрики на `/metrics` — без
 этого alloy не сможет скрейпить healthcheck (получит 404 → up=0).
@@ -359,9 +366,12 @@ docker run -d \
 
    | Имя | Тип | Поля |
    |---|---|---|
-   | `Telegram CRM bot` | Telegram API | Access Token от @BotFather |
    | `reg.ru SMTP noreply` | SMTP | Host=`mail.hosting.reg.ru`, Port=`465` (SSL) или `587` (TLS), User=`noreply@wayprmarket.ru`, Password=из reg.ru |
    | `Postgres CRM` | Postgres | Host=`postgres`, Port=`5432`, DB=`marketpclce`, User/Password из `.env.prod` |
+
+   > Telegram credential **не нужен** — workflow'ы шлют через Cloudflare
+   > Worker (HTTP Request ноды читают URL/секрет из `TG_PROXY_URL` /
+   > `TG_PROXY_SECRET` env-vars контейнера). Bot token хранится в CF.
 
    ⚠️ **Привязать credentials к нодам вручную.** `make n8n-import` кладёт
    в workflow ссылку на credential по **имени** (`Telegram CRM bot`), а
@@ -375,12 +385,12 @@ docker run -d \
 
    | Workflow | Нода | Credential |
    |---|---|---|
-   | crmTgEventsV1 | Telegram | Telegram CRM bot |
-   | crmSupport | Telegram | Telegram CRM bot |
    | crmSupport | Email → info@ | reg.ru SMTP noreply |
    | crmEmailNotify | Send via reg.ru SMTP | reg.ru SMTP noreply |
-   | crmWeeklyDigest | Telegram | Telegram CRM bot |
    | crmWeeklyDigest | Postgres stats | Postgres CRM |
+
+   > Ноды `Telegram (via CF proxy)` — без credential'а, читают
+   > `TG_PROXY_URL` и `TG_PROXY_SECRET` из env через `{{ $env.* }}`.
 
    После повторного `make n8n-import` (например, после изменений
    workflow'а) — связки слетят, и нужно будет перепривязать заново.
@@ -400,6 +410,63 @@ docker run -d \
    - `mail.hosting.reg.ru` MX-запись на твой домен (через reg.ru cabinet)
    - SPF/DKIM на домен для noreply@wayprmarket.ru — иначе письма
      уедут в спам у клиентов.
+
+### Cloudflare Worker как прокси к Telegram
+
+Прямой `api.telegram.org` из РФ ходит нестабильно (RKN). Workflow'ы
+шлют сообщения через бесплатный Cloudflare Worker, который форвардит
+запросы в Telegram. Worker лежит на CF-edge, который из РФ работает
+надёжно.
+
+**Setup (один раз):**
+
+1. https://dash.cloudflare.com → **Workers & Pages → Create Worker**.
+   Имя: например `tg-proxy-marketpclce` (станет URL'ом
+   `<name>.<account>.workers.dev`).
+2. **Edit code** → залить:
+   ```js
+   export default {
+     async fetch(req, env) {
+       if (req.method !== 'POST') return new Response('POST only', { status: 405 });
+       if (req.headers.get('x-proxy-secret') !== env.PROXY_SECRET) {
+         return new Response('forbidden', { status: 403 });
+       }
+       const body = await req.text();
+       const r = await fetch(
+         `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`,
+         { method: 'POST', headers: { 'content-type': 'application/json' }, body },
+       );
+       return new Response(await r.text(), { status: r.status });
+     },
+   };
+   ```
+3. **Deploy** → **Settings → Variables and Secrets → Add (Type=Secret):**
+   - `BOT_TOKEN` = `<token от @BotFather>`
+   - `PROXY_SECRET` = `openssl rand -hex 32` (любая длинная строка)
+4. **Deploy** ещё раз (после секретов).
+5. На VDS прописать в `docker run` для n8n:
+   ```bash
+   -e TG_PROXY_URL=https://tg-proxy-marketpclce.<account>.workers.dev \
+   -e TG_PROXY_SECRET=<значение PROXY_SECRET из CF>
+   ```
+6. Smoke-тест:
+   ```bash
+   curl -X POST https://tg-proxy-marketpclce.<account>.workers.dev \
+     -H "x-proxy-secret: <secret>" \
+     -H "content-type: application/json" \
+     -d '{"chat_id": -1003414312576, "message_thread_id": 22, "text": "🧪 ok"}'
+   ```
+   Ожидаем `{"ok":true,"result":{...}}`.
+
+**Свободный потолок CF Worker:** 100k запросов/день. У нас десятки
+нотификаций в день — потолок недостижим.
+
+**Если бот-токен утёк** — перевыпускать в @BotFather и обновить в CF
+Worker → Settings → Secrets. На VDS ничего менять не надо (токен в CF).
+
+**Если PROXY_SECRET утёк** — поменять в CF и в `TG_PROXY_SECRET` на
+VDS (через docker compose down + run). Иначе любой по URL'у сможет
+жечь твой Telegram rate-limit.
 
 ### Изменение workflows (dev → git → prod)
 

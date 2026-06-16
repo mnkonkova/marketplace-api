@@ -34,28 +34,34 @@
     },
     {
       "parameters": {
-        "chatId": "-1003414312576",
-        "text": "={{$json.text}}",
-        "additionalFields": {
-          "disable_web_page_preview": true,
-          "parse_mode": "Markdown",
-          "message_thread_id": 22
-        }
+        "method": "POST",
+        "url": "={{ $env.TG_PROXY_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-proxy-secret",
+              "value": "={{ $env.TG_PROXY_SECRET }}"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": -1003414312576,\n  \"message_thread_id\": 22,\n  \"text\": {{ JSON.stringify($json.text) }},\n  \"parse_mode\": \"Markdown\",\n  \"disable_web_page_preview\": true\n}",
+        "options": {}
       },
       "id": "node-telegram",
-      "name": "Telegram",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.2,
+      "name": "Telegram (via CF proxy)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         688,
         304
-      ],
-      "webhookId": "6a21c82a-614a-49df-9124-062f995d7660",
-      "credentials": {
-        "telegramApi": {
-          "name": "Telegram account"
-        }
-      }
+      ]
     }
   ],
   "connections": {
@@ -74,7 +80,7 @@
       "main": [
         [
           {
-            "node": "Telegram",
+            "node": "Telegram (via CF proxy)",
             "type": "main",
             "index": 0
           }
