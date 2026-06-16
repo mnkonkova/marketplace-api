@@ -325,6 +325,7 @@ docker run -d \
   -e WEBHOOK_URL=https://n8n.<домен>/ \
   -e N8N_PROXY_HOPS=1 \
   -e N8N_METRICS=true \
+  -e N8N_BLOCK_ENV_ACCESS_IN_NODE=false \
   -e TG_PROXY_URL=https://tg-proxy.<твой-аккаунт>.workers.dev \
   -e TG_PROXY_SECRET=<значение из CF Worker> \
   n8nio/n8n
@@ -334,6 +335,12 @@ docker run -d \
 самом деле HTTP Request) ходили через Cloudflare Worker, а не напрямую
 к `api.telegram.org`. Прямой путь из РФ нестабилен (RKN-блокировки).
 Подробнее — см. ниже «Cloudflare Worker как прокси к Telegram».
+
+`N8N_BLOCK_ENV_ACCESS_IN_NODE=false` **обязателен** — n8n 1.x по
+умолчанию запрещает `{{ $env.* }}` в expression-полях нод (security
+hardening для multi-tenant сценариев). Без этого флага HTTP Request
+ноды вернут `access to env vars denied` вместо реального URL/секрета.
+У нас single-tenant — выключаем без рисков.
 
 `N8N_METRICS=true` включает Prometheus-метрики на `/metrics` — без
 этого alloy не сможет скрейпить healthcheck (получит 404 → up=0).
