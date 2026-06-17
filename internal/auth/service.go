@@ -243,7 +243,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	// отозванным. Закрывает сценарий «атакующий с украденным паролем → юзер
 	// сделал reset → refresh атакующего продолжает работать до своего TTL».
 	// Access не проверяем — его TTL короткий (минуты), переживёт сам.
-	if c.IssuedAt != nil && c.IssuedAt.Time.Before(u.PasswordChangedAt) {
+	//
+	// JWT iat имеет секундную точность (RFC 7519), а users.password_changed_at
+	// — микросекундную (TIMESTAMPTZ). Без огрубления pwd_changed свежий
+	// токен, выпущенный в ту же секунду что и регистрация, считается
+	// отозванным (iat=Xs.000 < pwd=Xs.789). Сравниваем на секундах.
+	if c.IssuedAt != nil && c.IssuedAt.Time.Before(u.PasswordChangedAt.Truncate(time.Second)) {
 		return TokenPair{}, ErrInvalidToken
 	}
 	return s.tokens.Issue(u.ID, s.now())

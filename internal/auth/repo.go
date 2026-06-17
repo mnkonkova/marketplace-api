@@ -178,7 +178,12 @@ func (r *Repo) IsTokenRevoked(ctx context.Context, userID uuid.UUID, issuedAt ti
 	if err != nil {
 		return false, fmt.Errorf("load password_changed_at: %w", err)
 	}
-	return issuedAt.Before(pwdChanged), nil
+	// JWT iat имеет секундную точность (RFC 7519 NumericDate), а
+	// users.password_changed_at — TIMESTAMPTZ с микросекундами. При свежей
+	// регистрации (всё в одну секунду) iat=14:32:15.000, pwd_changed=
+	// 14:32:15.789 — token «отзывается» сразу же. Огрубляем pwd_changed
+	// до секунды, чтобы сравнивать одинаково с iat.
+	return issuedAt.Before(pwdChanged.Truncate(time.Second)), nil
 }
 
 // InvalidatePrevVerificationsInTx — гасит все непогашенные токены этого
