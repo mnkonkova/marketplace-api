@@ -73,6 +73,11 @@ type UserListItem struct {
 	// (у них нет specialist_profile). omitempty в JSON: пустая строка =
 	// «нет статуса» (клиент или спец без профиля).
 	ModerationStatus string `json:"moderation_status,omitempty"`
+	// IsPublished — флаг is_published у specialist_profile. Нужен фронту
+	// чтобы отличить «pending_review до клика "Опубликовать"» (= черновик,
+	// модерации не ждёт) от «pending_review после публикации» (= висит в
+	// очереди /admin/moderation).
+	IsPublished bool `json:"is_published"`
 }
 
 // ListAllUsersParams — фильтры и пагинация для /admin/users.
