@@ -7,22 +7,37 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+
+	"marketpclce/internal/httpx"
+	"marketpclce/internal/ratelimit"
 )
 
 func slogRequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+			ctx, rl := httpx.WithReqLog(r.Context())
+			r = r.WithContext(ctx)
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			defer func() {
-				logger.Info("http",
+				args := []any{
 					"method", r.Method,
 					"path", r.URL.Path,
 					"status", ww.Status(),
 					"bytes", ww.BytesWritten(),
 					"dur_ms", time.Since(start).Milliseconds(),
 					"req_id", middleware.GetReqID(r.Context()),
-				)
+					"remote_ip", ratelimit.ClientIP(r),
+				}
+				// user_id и reason пишут downstream-middleware (auth) и
+				// handlers через httpx.SetReq*. Добавляем только если есть.
+				if rl.UserID != "" {
+					args = append(args, "user_id", rl.UserID)
+				}
+				if rl.Reason != "" {
+					args = append(args, "reason", rl.Reason)
+				}
+				logger.Info("http", args...)
 			}()
 			next.ServeHTTP(ww, r)
 		})

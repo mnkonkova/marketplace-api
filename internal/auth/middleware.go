@@ -68,23 +68,28 @@ func RequireRoles(repo IdentityLoader, roles ...string) func(http.Handler) http.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			uid, ok := UserIDFrom(r.Context())
 			if !ok {
+				httpx.SetReqReason(r.Context(), "no_user")
 				httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 				return
 			}
 			role, isApproved, isActive, err := repo.LoadIdentity(r.Context(), uid)
 			if err != nil {
+				httpx.SetReqReason(r.Context(), "no_user_load_err")
 				httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", "Сессия истекла — войдите снова")
 				return
 			}
 			if !isActive {
+				httpx.SetReqReason(r.Context(), "inactive")
 				httpx.WriteErr(w, http.StatusForbidden, "inactive")
 				return
 			}
 			if _, ok := allowed[role]; !ok {
+				httpx.SetReqReason(r.Context(), "forbidden_role")
 				httpx.WriteErr(w, http.StatusForbidden, "forbidden_role")
 				return
 			}
 			if role == RoleManager && !isApproved {
+				httpx.SetReqReason(r.Context(), "forbidden_unapproved")
 				httpx.WriteErrMsg(w, http.StatusForbidden, "forbidden_unapproved",
 					"Менеджер ещё не аппрувлен админом — доступ к кабинету закрыт.")
 				return
@@ -109,15 +114,20 @@ func MiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker) func(h
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := r.Header.Get("Authorization")
 			if !strings.HasPrefix(h, "Bearer ") {
+				httpx.SetReqReason(r.Context(), "missing_bearer")
 				httpx.WriteErrMsg(w, http.StatusUnauthorized, "missing_bearer", "Требуется авторизация")
 				return
 			}
 			token := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 			c, err := issuer.Parse(token, TokenAccess)
 			if err != nil {
+				httpx.SetReqReason(r.Context(), "invalid_token_parse")
 				httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 				return
 			}
+			// user_id известен с этого момента — пишем в лог, даже если
+			// ниже окажется revoked (полезно для аудита: «чей токен отозван»).
+			httpx.SetReqUserID(r.Context(), c.UserID.String())
 			if rev != nil && c.IssuedAt != nil {
 				revoked, rerr := rev.IsTokenRevoked(r.Context(), c.UserID, c.IssuedAt.Time)
 				if rerr != nil || revoked {
@@ -125,6 +135,11 @@ func MiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker) func(h
 					// токен, отзыв которого мы не смогли проверить
 					// (fail-closed). Чек идёт по индексу users.id PK —
 					// при недоступности БД API всё равно нерабоч.
+					if rerr != nil {
+						httpx.SetReqReason(r.Context(), "invalid_token_revoke_check_err")
+					} else {
+						httpx.SetReqReason(r.Context(), "invalid_token_revoked")
+					}
 					httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 					return
 				}
@@ -152,12 +167,19 @@ func OptionalMiddlewareWithRevocation(issuer *TokenIssuer, rev RevocationChecker
 			token := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 			c, err := issuer.Parse(token, TokenAccess)
 			if err != nil {
+				httpx.SetReqReason(r.Context(), "invalid_token_parse")
 				httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 				return
 			}
+			httpx.SetReqUserID(r.Context(), c.UserID.String())
 			if rev != nil && c.IssuedAt != nil {
 				revoked, rerr := rev.IsTokenRevoked(r.Context(), c.UserID, c.IssuedAt.Time)
 				if rerr != nil || revoked {
+					if rerr != nil {
+						httpx.SetReqReason(r.Context(), "invalid_token_revoke_check_err")
+					} else {
+						httpx.SetReqReason(r.Context(), "invalid_token_revoked")
+					}
 					httpx.WriteErrMsg(w, http.StatusUnauthorized, "invalid_token", "Сессия истекла — войдите снова")
 					return
 				}
