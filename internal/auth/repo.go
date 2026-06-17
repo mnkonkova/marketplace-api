@@ -184,10 +184,12 @@ func (r *Repo) IsTokenRevoked(ctx context.Context, userID uuid.UUID, issuedAt ti
 	// (pwd=Xs.900, iat=X+1.000) ложно «отзывается».
 	//
 	// Считаем токен отозванным только если он выпущен СТРОГО БОЛЬШЕ
-	// чем на 1 секунду ДО pwd_changed. 1с покрывает precision +
-	// clock-skew между PG и Go. Trade-off: украденный токен получает
-	// до 1 сек grace после reset — меньше сетевой задержки.
-	return issuedAt.Add(time.Second).Before(pwdChanged), nil
+	// чем на 1.5 секунды ДО pwd_changed. Покрывает precision-mismatch
+	// + clock-skew PG/Go + сетевые задержки на /auth/refresh (где
+	// access выдаётся уже после того как pwd_changed был прочитан в
+	// service.Refresh). Trade-off: украденный токен получает до 1.5
+	// сек grace после reset — меньше сетевой задержки.
+	return issuedAt.Add(1500 * time.Millisecond).Before(pwdChanged), nil
 }
 
 // InvalidatePrevVerificationsInTx — гасит все непогашенные токены этого

@@ -244,11 +244,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	// сделал reset → refresh атакующего продолжает работать до своего TTL».
 	// Access не проверяем — его TTL короткий (минуты), переживёт сам.
 	//
-	// 1с tolerance: токен отозван только если iat + 1s < pwd_changed.
+	// 1.5s tolerance: токен отозван только если iat + 1.5s < pwd_changed.
 	// Покрывает precision-mismatch JWT (секунды) vs PG TIMESTAMPTZ
-	// (микросекунды) + границы секунд (iat=X+1.000 vs pwd=X.900).
-	// См. подробности в repo.IsTokenRevoked.
-	if c.IssuedAt != nil && c.IssuedAt.Time.Add(time.Second).Before(u.PasswordChangedAt) {
+	// (микросекунды) + сетевые задержки. См. repo.IsTokenRevoked.
+	if c.IssuedAt != nil && c.IssuedAt.Time.Add(1500*time.Millisecond).Before(u.PasswordChangedAt) {
 		return TokenPair{}, ErrInvalidToken
 	}
 	return s.tokens.Issue(u.ID, s.now())
