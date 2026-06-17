@@ -223,19 +223,26 @@ func (h *Handler) PortfolioList(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
 	if !ok {
+		httpx.SetReqReason(r.Context(), "no_user")
 		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
 		return
 	}
 	var in PortfolioCreateInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.SetReqReason(r.Context(), "bad_json")
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
 		return
 	}
 	item, err := h.svc.AddPortfolioVideo(r.Context(), uid, in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
+		// Полный текст ошибки валидации в reason — Loki сразу покажет
+		// какое из правил сорвалось (video_url not in bucket / title empty /
+		// category mismatch и т.п.).
+		httpx.SetReqReason(r.Context(), httpx.InvalidInputMessage(err))
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case err != nil:
+		httpx.SetReqReason(r.Context(), "internal:"+err.Error())
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
 	default:
 		httpx.WriteJSON(w, http.StatusCreated, item)
