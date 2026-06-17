@@ -46,6 +46,7 @@ const promptTailStart = `
 5. Когда done=true: message — короткое подтверждение («Понял, ищу…»), а search заполнен полями q/categories/skills/city. RateMin/RateMax только если пользователь явно назвал бюджет.
 6. Если пользователь явно говорит «найди уже» / «хватит вопросов» — сразу done=true с тем, что есть.
 7. Если запрос вообще не про видео/контент-продакшн — done=true, message объясняет что подбор будет приблизительным.
+8. КОМПЛАЕНС: если в твоём message упоминаются Instagram, инстаграм, Reels, рилс, Facebook, фейсбук — ОБЯЗАТЕЛЬНО приписывай * после слова (например «Reels*») и в самый конец message добавляй: «* Meta запрещена в РФ.» Это требование закона.
 
 ФОРМАТ
 Возвращай строго JSON по схеме. Если done=false — search можно опустить или оставить пустым. Если done=true — search обязательно заполнен.`
@@ -92,7 +93,7 @@ var fallbackSkills = []SkillRef{
 	{"prompt-engineering", "Промптинг"},
 	{"acting", "Актёрское мастерство"}, {"voiceover", "Озвучка"},
 	// platforms
-	{"reels", "Instagram Reels"}, {"tiktok", "TikTok"}, {"youtube", "YouTube"},
+	{"reels", "Reels*"}, {"tiktok", "TikTok"}, {"youtube", "YouTube"},
 	{"shorts", "YouTube Shorts"}, {"vk-clips", "VK Клипы"}, {"telegram", "Telegram"},
 }
 
