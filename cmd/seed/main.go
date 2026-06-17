@@ -152,6 +152,24 @@ var seeds = []seedSpec{
 		Rating:          4.6, Reviews: 12,
 	},
 
+	// director (полный цикл production: концепция → площадка → сдача)
+	{
+		Email: "mikhail.director@example.com", DisplayName: "Михаил Орлов",
+		Bio:             "Рекламная режиссура для брендов: концепция, кастинг, режиссура на площадке, контроль постпродакшна. Опыт со студиями federal-уровня.",
+		City:            "Москва", RateMin: 80000, RateMax: 300000, Currency: "RUB",
+		PrimaryCategory: "director", Categories: []string{"director"},
+		SkillSlugs:      []string{"premiere"},
+		Rating:          4.8, Reviews: 17,
+	},
+	{
+		Email: "anya.director@example.com", DisplayName: "Аня Соколова",
+		Bio:             "Снимаю короткие игровые форматы для соцсетей: TikTok, Reels. От сценария до финального ролика. Студийная и натурная съёмка.",
+		City:            "Санкт-Петербург", RateMin: 40000, RateMax: 150000, Currency: "RUB",
+		PrimaryCategory: "director", Categories: []string{"director", "scriptwriter"},
+		SkillSlugs:      []string{"reels", "tiktok"},
+		Rating:          4.7, Reviews: 11,
+	},
+
 	// video_director
 	{
 		Email: "alina.director@example.com", DisplayName: "Алина Маслова",
