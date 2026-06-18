@@ -231,6 +231,12 @@ type PortfolioCreateInput struct {
 	CategoryCodes []string `json:"category_codes,omitempty"`
 	DurationSec   int      `json:"duration_sec,omitempty"`
 	Aspect        string   `json:"aspect,omitempty"`
+	// ProfileCategories — текущий form-state категорий профиля с фронта.
+	// Используется для валидации video.CategoryCodes когда юзер только что
+	// зарегистрировался и форма с категориями ещё не сохранена в БД.
+	// Если поле есть — backend проверяет CategoryCodes ⊆ ProfileCategories.
+	// Если nil/пустое — fallback на profile.Categories из БД (старое поведение).
+	ProfileCategories []string `json:"profile_categories,omitempty"`
 }
 
 // PortfolioSetCategoriesInput — обновление списка категорий у видео.

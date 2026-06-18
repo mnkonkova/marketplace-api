@@ -473,23 +473,40 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		return PortfolioItem{}, fmt.Errorf("%w: description too long", ErrInvalidInput)
 	}
 	in.CategoryCodes = DedupStrings(in.CategoryCodes)
+	in.ProfileCategories = DedupStrings(in.ProfileCategories)
+
 	// Категории видео должны быть подмножеством категорий профиля. Если юзер
 	// не выбрал — по дефолту ставим primary (видео должно где-то «жить»).
+	//
+	// Источник profile-категорий для валидации:
+	//   • Приоритет — поле request.ProfileCategories (form-state с фронта).
+	//     Нужно для регистрационного flow'a: спец только что выбрал в форме
+	//     категорию, но ещё не нажал «Сохранить» — в БД её нет, но в
+	//     запросе уже есть.
+	//   • Fallback — profile.Categories из БД (сохранённое состояние).
 	profile, err := s.repo.Get(ctx, userID)
 	if err != nil {
 		return PortfolioItem{}, err
 	}
+	allowedCats := in.ProfileCategories
+	if len(allowedCats) == 0 {
+		allowedCats = profile.Categories
+	}
 	if len(in.CategoryCodes) == 0 {
+		// Default-категория: primary из request если есть, иначе из БД.
+		// Если ни там ни там нет — оставляем пусто (видео без категории).
 		if profile.PrimaryCategory != "" {
 			in.CategoryCodes = []string{profile.PrimaryCategory}
+		} else if len(allowedCats) > 0 {
+			in.CategoryCodes = []string{allowedCats[0]}
 		}
 	} else {
-		profileSet := make(map[string]struct{}, len(profile.Categories))
-		for _, c := range profile.Categories {
-			profileSet[c] = struct{}{}
+		allowedSet := make(map[string]struct{}, len(allowedCats))
+		for _, c := range allowedCats {
+			allowedSet[c] = struct{}{}
 		}
 		for _, c := range in.CategoryCodes {
-			if _, ok := profileSet[c]; !ok {
+			if _, ok := allowedSet[c]; !ok {
 				return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
 			}
 		}
