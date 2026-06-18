@@ -40,11 +40,16 @@ func NewFFmpegBin(binPath string, timeout time.Duration) (*FFmpegBin, error) {
 
 // MakePreview гонит pipeline:
 //   -ss 2 -t 8 -vf scale=-2:480 -c:v libx264 -profile:v baseline -level 3.0
-//   -preset veryfast -crf 28 -an -movflags +faststart
+//   -preset veryfast -crf 28 -c:a aac -b:a 64k -ac 1 -movflags +faststart
 //
 // Битый контейнер / "Invalid data found" в stderr → ErrPermanent.
 // Сам non-zero exit ffmpeg возвращает обычной ошибкой → транзиентно
 // (lease воркера откатит и попробует снова).
+//
+// Звук: AAC mono 64kbps — портфолио-видео могут быть UGC/showreel/реклама,
+// где звук = часть работы. 64kbps моно для 8 сек = ~50KB, общий размер
+// preview'a растёт с ~500KB до ~550KB. Видимости одного видео за раз
+// в feed-view достаточно — играет только active article, default muted.
 func (f *FFmpegBin) MakePreview(ctx context.Context, input, output string) error {
 	ctx, cancel := context.WithTimeout(ctx, f.timeout)
 	defer cancel()
@@ -60,7 +65,12 @@ func (f *FFmpegBin) MakePreview(ctx context.Context, input, output string) error
 		"-level", "3.0",
 		"-preset", "veryfast",
 		"-crf", "28",
-		"-an",                               // без звука
+		// Звук: AAC mono 64kbps. -ac 1 = моно (хватает для UGC/voice/music
+		// identification), -b:a 64k = достаточно для понятной речи без
+		// артефактов. Для 8 сек ≈ 50KB, общий preview ~550KB.
+		"-c:a", "aac",
+		"-b:a", "64k",
+		"-ac", "1",
 		"-movflags", "+faststart",
 		"-fs", "1500K",                      // hard cap (если CRF дал больше)
 		// -threads 2: libx264 по дефолту цепляет все ядра CPU (на 6-vCPU
