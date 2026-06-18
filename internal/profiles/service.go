@@ -473,35 +473,24 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		return PortfolioItem{}, fmt.Errorf("%w: description too long", ErrInvalidInput)
 	}
 	in.CategoryCodes = DedupStrings(in.CategoryCodes)
-	// Категории видео — должны существовать в каталоге specialty_categories.
-	// Раньше требовали ещё и подмножество profile.Categories — но новый спец
-	// при регистрации мог не успеть сохранить категории в БД, и upload
-	// портфолио сразу же фейлился. Теперь профиль-категории — отдельная
-	// зона ответственности юзера, видео-категории валидируем независимо.
+	// Категории видео должны быть подмножеством категорий профиля. Если юзер
+	// не выбрал — по дефолту ставим primary (видео должно где-то «жить»).
 	profile, err := s.repo.Get(ctx, userID)
 	if err != nil {
 		return PortfolioItem{}, err
 	}
 	if len(in.CategoryCodes) == 0 {
-		// Default: primary категория профиля если есть — видео должно где-то
-		// «жить» в фильтрах. Если профиль вообще без категорий — оставляем
-		// пустой массив (категория-фильтр это не подберёт, юзер потом
-		// выставит через SetPortfolioCategories).
 		if profile.PrimaryCategory != "" {
 			in.CategoryCodes = []string{profile.PrimaryCategory}
 		}
 	} else {
-		valid, err := s.repo.ValidCategoryCodes(ctx, in.CategoryCodes)
-		if err != nil {
-			return PortfolioItem{}, err
-		}
-		validSet := make(map[string]struct{}, len(valid))
-		for _, c := range valid {
-			validSet[c] = struct{}{}
+		profileSet := make(map[string]struct{}, len(profile.Categories))
+		for _, c := range profile.Categories {
+			profileSet[c] = struct{}{}
 		}
 		for _, c := range in.CategoryCodes {
-			if _, ok := validSet[c]; !ok {
-				return PortfolioItem{}, fmt.Errorf("%w: category %q does not exist", ErrInvalidInput, c)
+			if _, ok := profileSet[c]; !ok {
+				return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
 			}
 		}
 	}
@@ -592,26 +581,21 @@ func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.U
 // прислана фронтом из последнего GET. nil = без проверки.
 func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uuid.UUID, codes []string, expectedUpdatedAt *time.Time) (PortfolioItem, error) {
 	codes = DedupStrings(codes)
-	// Валидируем что коды существуют в specialty_categories (не требуем
-	// принадлежность профилю — синхронизация с профилем на ответственности
-	// юзера, см. комментарий в AddPortfolioVideo).
-	if len(codes) > 0 {
-		valid, err := s.repo.ValidCategoryCodes(ctx, codes)
-		if err != nil {
-			return PortfolioItem{}, err
-		}
-		validSet := make(map[string]struct{}, len(valid))
-		for _, c := range valid {
-			validSet[c] = struct{}{}
-		}
-		for _, c := range codes {
-			if _, ok := validSet[c]; !ok {
-				return PortfolioItem{}, fmt.Errorf("%w: category %q does not exist", ErrInvalidInput, c)
-			}
+	profile, err := s.repo.Get(ctx, userID)
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	profileSet := make(map[string]struct{}, len(profile.Categories))
+	for _, c := range profile.Categories {
+		profileSet[c] = struct{}{}
+	}
+	for _, c := range codes {
+		if _, ok := profileSet[c]; !ok {
+			return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
 		}
 	}
 	var item PortfolioItem
-	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
 		var txErr error
 		item, txErr = s.repo.UpdatePortfolioCategoriesInTx(ctx, tx, userID, itemID, codes, expectedUpdatedAt)
 		if txErr != nil {
