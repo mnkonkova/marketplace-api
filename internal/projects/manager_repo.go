@@ -930,6 +930,36 @@ func (r *Repo) GetByIDForManager(ctx context.Context, projectID, managerID uuid.
 // MoveProjectToStage — фактическая реализация лежит в move_stage.go ради
 // читаемости (отдельная история, отличная от advance_stage).
 
+// LoadSpecialistPrimaryCategoryTitles — батч title основной категории
+// для списка спец-юзеров. Используется как опознавательный знак карточки
+// проекта (например «Видеооператор» / «Дизайнер») когда у клиента
+// несколько проектов с разными спецами. Возвращает map user_id → title;
+// у тех у кого нет primary — пустая строка.
+func (r *Repo) LoadSpecialistPrimaryCategoryTitles(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]string{}, nil
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT sc.user_id, c.title
+FROM specialist_categories sc
+JOIN specialty_categories c ON c.code = sc.category_code
+WHERE sc.user_id = ANY($1) AND sc.is_primary = TRUE`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load primary category titles: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]string, len(ids))
+	for rows.Next() {
+		var id uuid.UUID
+		var title string
+		if err := rows.Scan(&id, &title); err != nil {
+			return nil, err
+		}
+		out[id] = title
+	}
+	return out, rows.Err()
+}
+
 // LoadClientDisplayNames — батч display_name для списка projects. Возвращает
 // map user_id → display_name с тем же фолбэк-ладдером, что и в комментариях:
 // specialist_profiles → client_profiles → префикс email. Где никаких источников

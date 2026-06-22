@@ -120,14 +120,19 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 		return nil, err
 	}
 	names := map[uuid.UUID]string{}
+	primaryCats := map[uuid.UUID]string{}
 	if len(specSet) > 0 {
 		specIDs := make([]uuid.UUID, 0, len(specSet))
 		for id := range specSet {
 			specIDs = append(specIDs, id)
 		}
-		// best-effort: имена специалистов нужны только для отображения.
+		// best-effort: имена и primary category — для отображения. Ошибки
+		// не валим запрос, карточка просто без опознавательного знака.
 		if n, err := s.repo.LoadClientDisplayNames(ctx, specIDs); err == nil {
 			names = n
+		}
+		if c, err := s.repo.LoadSpecialistPrimaryCategoryTitles(ctx, specIDs); err == nil {
+			primaryCats = c
 		}
 	}
 	views := make([]ProjectClientView, 0, len(projects))
@@ -135,6 +140,7 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 		view := buildClientView(p, stagesByProject[p.ID], stepsByProject[p.ID])
 		if p.SpecialistUserID != nil {
 			view.SpecialistDisplayName = names[*p.SpecialistUserID]
+			view.SpecialistPrimaryCategory = primaryCats[*p.SpecialistUserID]
 		}
 		views = append(views, view)
 	}

@@ -23,6 +23,7 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 type createReq struct {
 	ClientName     string   `json:"client_name"`
 	ClientContact  string   `json:"client_contact"`
+	Title          string   `json:"title,omitempty"`
 	Brief          string   `json:"brief"`
 	BudgetMin      *int     `json:"budget_min"`
 	BudgetMax      *int     `json:"budget_max"`
@@ -86,6 +87,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		ClientUserID:       clientUserID,
 		ClientName:         in.ClientName,
 		ClientContact:      in.ClientContact,
+		Title:              in.Title,
 		Brief:              in.Brief,
 		BudgetMin:          in.BudgetMin,
 		BudgetMax:          in.BudgetMax,

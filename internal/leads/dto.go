@@ -33,6 +33,7 @@ type CreateInput struct {
 	ClientUserID       *uuid.UUID
 	ClientName         string
 	ClientContact      string
+	Title              string // короткое название проекта (опционально, fallback на briefTitle)
 	Brief              string
 	BudgetMin          *int
 	BudgetMax          *int

@@ -163,6 +163,10 @@ type ProjectClientView struct {
 	// SpecialistDisplayName — имя исполнителя (если назначен). Пусто если
 	// specialist_user_id=nil или у юзера нет specialist_profile.
 	SpecialistDisplayName string `json:"specialist_display_name,omitempty"`
+	// SpecialistPrimaryCategory — title основной категории исполнителя
+	// («Видеооператор», «Дизайнер»). Опознавательный знак карточки
+	// проекта когда у клиента их несколько.
+	SpecialistPrimaryCategory string `json:"specialist_primary_category,omitempty"`
 	DisplayStatus ProjectDisplayStatus `json:"display_status"`
 	// Progress — взвешенный % выполнения по видимым клиенту шагам.
 	Progress float64 `json:"progress"`

@@ -154,7 +154,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	// чтобы быстро отдать каждому своего. N проектов = N независимых
 	// pipelines, каждый со своим proposed.
 	if in.ClientUserID != nil && s.projectStarter != nil {
-		title := briefTitle(in.Brief)
+		title := strings.TrimSpace(in.Title)
+		if title == "" {
+			title = briefTitle(in.Brief)
+		}
 		for _, sid := range valid {
 			specID := sid
 			if _, perr := s.projectStarter.StartFromLead(ctx, *in.ClientUserID, id, title, in.Brief, &specID); perr != nil {
