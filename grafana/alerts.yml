@@ -33,15 +33,19 @@ groups:
           description: "Текущая доля 5xx: {{ $value | humanizePercentage }}. Загляни в 'Errors by route' на дашборде marketpclce-http."
 
       - alert: APIp95LatencyHigh
+        # Exclude LLM-роуты: они ожидаемо 1-5s (anthropic/deepseek думает),
+        # под них есть отдельный LLMHandlerP95High с порогом 20s. Иначе
+        # общий p95 ловит false-positive каждый раз когда юзер публикует
+        # профиль / запускает clarify / summarize.
         expr: |
           histogram_quantile(0.95,
-            sum by (le) (rate(http_request_duration_seconds_bucket{job="marketpclce-api"}[5m]))
+            sum by (le) (rate(http_request_duration_seconds_bucket{job="marketpclce-api",route!~".*/(search/summarize|clarify|me/profile/check|me/profile/publish)"}[5m]))
           ) > 2
         for: 10m
         labels: { severity: warn, team: backend }
         annotations:
-          summary: "API p95 > 2s overall"
-          description: "p95 = {{ $value | humanizeDuration }}. Проверь медленные route'ы и upstream'ы (LLM, OS, PG)."
+          summary: "API p95 > 2s (без LLM)"
+          description: "p95 = {{ $value | humanizeDuration }}. LLM-роуты исключены. Проверь медленные route'ы и upstream'ы (OS, PG, S3)."
 
   # ── Кабинеты по ролям (CRM) ─────────────────────────────────────────
   - name: marketpclce-crm-cabinets
