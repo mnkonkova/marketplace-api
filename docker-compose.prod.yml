@@ -172,6 +172,13 @@ services:
     <<: *default-logging
     image: grafana/alloy:v1.4.2
     restart: unless-stopped
+    # Явный DNS: обходим хостовый resolver, который иногда отдаёт SERVFAIL
+    # на grafana.net (наблюдалось 2026-06-24 — `server misbehaving` от
+    # 127.0.0.11 в логах alloy, метрики не уезжали в Grafana Cloud).
+    # 1.1.1.1 Cloudflare + 8.8.8.8 Google как fallback.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
