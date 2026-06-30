@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,6 +18,13 @@ var (
 	// ErrConflict — клиент прислал PatchInput.UpdatedAt, не совпадающий
 	// с текущим в БД (кто-то параллельно успел сохранить).
 	ErrConflict = errors.New("profile updated_at mismatch")
+	// ErrUsernameTaken — username уже занят другим спецом (unique violation
+	// на specialist_profiles_username_idx).
+	ErrUsernameTaken = errors.New("username already taken")
+	// ErrInvalidUsername — username не прошёл CHECK constraint (формат /^[a-z0-9_-]{3,30}$/).
+	// Сервис обычно валидирует ДО UPDATE через ValidateUsername, но это страховка
+	// если в обход (например, тесты или прямой SQL).
+	ErrInvalidUsername = errors.New("username has invalid format")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -26,7 +35,7 @@ func (r *Repo) Pool() *pgxpool.Pool { return r.db }
 
 func (r *Repo) Get(ctx context.Context, userID uuid.UUID) (Profile, error) {
 	const q = `
-SELECT p.user_id, p.display_name, p.bio,
+SELECT p.user_id, COALESCE(p.username, ''), p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
        p.is_published, p.rating_avg, p.reviews_count,
@@ -38,7 +47,7 @@ FROM specialist_profiles p
 WHERE p.user_id = $1`
 	var p Profile
 	err := r.db.QueryRow(ctx, q, userID).Scan(
-		&p.UserID, &p.DisplayName, &p.Bio,
+		&p.UserID, &p.Username, &p.DisplayName, &p.Bio,
 		&p.AvatarURL, &p.City,
 		&p.RateMin, &p.RateMax, &p.Currency,
 		&p.IsPublished, &p.RatingAvg, &p.ReviewsCount,
@@ -68,6 +77,23 @@ WHERE p.user_id = $1`
 	p.SkillIDs = skills
 
 	return p, nil
+}
+
+// ResolveUserIDByUsername — поиск user_id по username для handle-роутинга
+// /specialists/{handle}. Возвращает ErrNotFound если username не существует.
+// username сравнивается case-insensitive (хранится в lowercase).
+func (r *Repo) ResolveUserIDByUsername(ctx context.Context, username string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT user_id FROM specialist_profiles WHERE username = lower($1)`,
+		username).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("resolve username: %w", err)
+	}
+	return id, nil
 }
 
 func (r *Repo) listCategories(ctx context.Context, userID uuid.UUID) ([]string, string, error) {
@@ -125,6 +151,18 @@ func (r *Repo) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 }
 
 func (r *Repo) PatchInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, in PatchInput) error {
+	// username: nil = не трогать, "" = NULL (сброс), любое другое = поставить.
+	// Используем тройку (setUsername, usernameVal, usernameIsEmpty) для UPDATE
+	// CASE — иначе COALESCE не отличит "не трогать" от "сбросить".
+	var setUsername bool
+	var usernameVal *string
+	if in.Username != nil {
+		setUsername = true
+		v := strings.TrimSpace(strings.ToLower(*in.Username))
+		if v != "" {
+			usernameVal = &v
+		}
+	}
 	const q = `
 UPDATE specialist_profiles SET
   display_name  = COALESCE($2, display_name),
@@ -138,6 +176,7 @@ UPDATE specialist_profiles SET
   contact_phone = COALESCE($12, contact_phone),
   production_id = CASE WHEN $14::boolean THEN $15 ELSE production_id END,
   is_freelance  = CASE WHEN $16::boolean THEN $17 ELSE is_freelance END,
+  username      = CASE WHEN $18::boolean THEN $19 ELSE username END,
   updated_at    = now()
 WHERE user_id = $1
   AND ($13::timestamptz IS NULL OR updated_at = $13)`
@@ -155,8 +194,19 @@ WHERE user_id = $1
 		in.UpdatedAt,
 		in.SetProduction, in.ProductionID,
 		in.SetIsFreelance, in.IsFreelance,
+		setUsername, usernameVal,
 	)
 	if err != nil {
+		// 23505 unique_violation на username — отдаём как ErrConflict,
+		// сервис мапит в 409 conflict с понятным сообщением.
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23505" &&
+			pgErr.ConstraintName == "specialist_profiles_username_idx" {
+			return ErrUsernameTaken
+		}
+		// 23514 check_violation на username CHECK constraint — невалидный формат.
+		if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23514" {
+			return ErrInvalidUsername
+		}
 		return fmt.Errorf("update profile: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
@@ -267,10 +317,10 @@ FOR UPDATE`, userID).Scan(&productionID, &isFreelance, &bio, &displayName)
 		return fmt.Errorf("%w: выберите студию или отметьте «фрилансер»", ErrPublishIncomplete)
 	}
 	if bio == "" {
-		return fmt.Errorf("%w: bio is empty", ErrPublishIncomplete)
+		return fmt.Errorf("%w: заполните «О себе» в профиле", ErrPublishIncomplete)
 	}
 	if displayName == "" {
-		return fmt.Errorf("%w: display_name is empty", ErrPublishIncomplete)
+		return fmt.Errorf("%w: заполните имя в профиле", ErrPublishIncomplete)
 	}
 	return nil
 }
@@ -433,22 +483,38 @@ func (r *Repo) ValidCategoryCodes(ctx context.Context, codes []string) ([]string
 }
 
 func (r *Repo) GetPublic(ctx context.Context, userID uuid.UUID) (PublicProfile, error) {
-	const q = `
-SELECT p.user_id, p.display_name, p.bio,
+	return r.getPublic(ctx, userID, true)
+}
+
+// GetPublicForOwner — preview для самого спеца (owner-mode): ВКЛЮЧАЕТ
+// неопубликованные и не-approved профили, чтобы юзер мог увидеть как его
+// видят клиенты до публикации/модерации. Handler выставляет IsPreview=true.
+func (r *Repo) GetPublicForOwner(ctx context.Context, userID uuid.UUID) (PublicProfile, error) {
+	return r.getPublic(ctx, userID, false)
+}
+
+func (r *Repo) getPublic(ctx context.Context, userID uuid.UUID, strict bool) (PublicProfile, error) {
+	var publishCond string
+	if strict {
+		publishCond = "AND p.is_published = TRUE AND p.moderation_status = 'approved'"
+	}
+	q := `
+SELECT p.user_id, COALESCE(p.username, ''), p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
        p.rate_min, p.rate_max, p.currency,
        p.rating_avg, p.reviews_count,
-       COALESCE(pr.name, ''), p.is_freelance
+       COALESCE(pr.name, ''), p.is_freelance,
+       p.is_published, p.moderation_status
 FROM specialist_profiles p
 LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1
-  AND p.is_published = TRUE
-  AND p.moderation_status = 'approved'`
+` + publishCond
 	var p PublicProfile
 	err := r.db.QueryRow(ctx, q, userID).Scan(
-		&p.UserID, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
+		&p.UserID, &p.Username, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
 		&p.RateMin, &p.RateMax, &p.Currency, &p.RatingAvg, &p.ReviewsCount,
 		&p.ProductionName, &p.IsFreelance,
+		&p.IsPublished, &p.ModerationStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublicProfile{}, ErrNotFound
@@ -530,7 +596,7 @@ ORDER BY s.kind, s.title`, userID)
 
 func (r *Repo) listPortfolio(ctx context.Context, userID uuid.UUID) ([]PortfolioItem, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT id, title, description,
+SELECT id, kind, title, description,
        COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
        category_codes, sort_order, created_at, updated_at,
        COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status
@@ -542,17 +608,77 @@ ORDER BY sort_order, created_at DESC`, userID)
 	}
 	defer rows.Close()
 	out := make([]PortfolioItem, 0, 8)
+	var imageItemIDs []uuid.UUID
 	for rows.Next() {
 		var p PortfolioItem
 		if err := rows.Scan(
-			&p.ID, &p.Title, &p.Description,
+			&p.ID, &p.Kind, &p.Title, &p.Description,
 			&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 			&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
 			&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
 		); err != nil {
 			return nil, err
 		}
+		if p.Kind == "image" {
+			imageItemIDs = append(imageItemIDs, p.ID)
+		}
 		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(imageItemIDs) > 0 {
+		byItem, err := r.loadImagesByItems(ctx, imageItemIDs)
+		if err != nil {
+			return nil, err
+		}
+		for i := range out {
+			if out[i].Kind == "image" {
+				out[i].Images = byItem[out[i].ID]
+			}
+		}
+	}
+	return out, nil
+}
+
+// loadImagesByItems — батч-загрузка кадров для нескольких photo-set'ов одним
+// запросом (избегает N+1 при ListPortfolio). Возвращает map item_id → []image.
+func (r *Repo) loadImagesByItems(ctx context.Context, itemIDs []uuid.UUID) (map[uuid.UUID][]PortfolioImage, error) {
+	return r.loadImagesByItemsQuerier(ctx, r.db, itemIDs)
+}
+
+// loadImagesByItemsInTx — та же выборка, но использует переданный tx. Нужен
+// в Append/Reorder, чтобы видеть свои же INSERT'ы/UPDATE'ы до коммита —
+// иначе caller получит устаревший список. (READ COMMITTED snapshot pool'a
+// не видит uncommitted writes в чужом connection'е.)
+func (r *Repo) loadImagesByItemsInTx(ctx context.Context, tx pgx.Tx, itemIDs []uuid.UUID) (map[uuid.UUID][]PortfolioImage, error) {
+	return r.loadImagesByItemsQuerier(ctx, tx, itemIDs)
+}
+
+// pgxQuerier — минимальный интерфейс, общий для *pgxpool.Pool и pgx.Tx.
+// Позволяет переиспользовать один SELECT с разных источников соединений.
+type pgxQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func (r *Repo) loadImagesByItemsQuerier(ctx context.Context, q pgxQuerier, itemIDs []uuid.UUID) (map[uuid.UUID][]PortfolioImage, error) {
+	rows, err := q.Query(ctx, `
+SELECT id, portfolio_item_id, image_url, sort_order, width, height, created_at
+FROM portfolio_images
+WHERE portfolio_item_id = ANY($1)
+ORDER BY portfolio_item_id, sort_order, created_at`, itemIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query portfolio images: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID][]PortfolioImage, len(itemIDs))
+	for rows.Next() {
+		var img PortfolioImage
+		var parent uuid.UUID
+		if err := rows.Scan(&img.ID, &parent, &img.ImageURL, &img.SortOrder, &img.Width, &img.Height, &img.CreatedAt); err != nil {
+			return nil, err
+		}
+		out[parent] = append(out[parent], img)
 	}
 	return out, rows.Err()
 }
@@ -580,6 +706,85 @@ func (r *Repo) CountVideosInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID)
 	return n, nil
 }
 
+// CountPhotoSetsInTx — число photo-set'ов спеца (kind='image') внутри tx.
+// Параллельно с CountVideosInTx: лимиты независимы, спец может иметь
+// 20 видео + 20 photo-set'ов.
+func (r *Repo) CountPhotoSetsInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (int, error) {
+	var n int
+	err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM portfolio_items
+		 WHERE user_id = $1 AND kind = 'image'`,
+		userID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count photo-sets: %w", err)
+	}
+	return n, nil
+}
+
+// CreatePortfolioPhotoSetInTx — создаёт photo-set: один portfolio_item
+// kind='image' + N кадров в portfolio_images. Возвращает item с заполненным
+// Images. Вызывающий код в той же tx эмитит outbox-событие.
+func (r *Repo) CreatePortfolioPhotoSetInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, in PortfolioPhotoSetCreateInput) (PortfolioItem, error) {
+	const qItem = `
+INSERT INTO portfolio_items (
+    user_id, title, description,
+    category_codes,
+    kind,
+    sort_order
+)
+VALUES (
+    $1, $2, $3,
+    $4,
+    'image',
+    COALESCE((SELECT MAX(sort_order)+1 FROM portfolio_items WHERE user_id = $1), 0)
+)
+RETURNING id, kind, title, description,
+          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
+          category_codes, sort_order, created_at, updated_at,
+          COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status`
+	var p PortfolioItem
+	cats := in.CategoryCodes
+	if cats == nil {
+		cats = []string{}
+	}
+	err := tx.QueryRow(ctx, qItem, userID, in.Title, in.Description, cats).Scan(
+		&p.ID, &p.Kind, &p.Title, &p.Description,
+		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
+		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
+		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
+	)
+	if err != nil {
+		return PortfolioItem{}, fmt.Errorf("insert photo-set item: %w", err)
+	}
+	const qImage = `
+INSERT INTO portfolio_images (portfolio_item_id, image_url, sort_order, width, height)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, image_url, sort_order, width, height, created_at`
+	images := make([]PortfolioImage, 0, len(in.Images))
+	for i, img := range in.Images {
+		var stored PortfolioImage
+		if err := tx.QueryRow(ctx, qImage, p.ID, img.ImageURL, i, img.Width, img.Height).Scan(
+			&stored.ID, &stored.ImageURL, &stored.SortOrder, &stored.Width, &stored.Height, &stored.CreatedAt,
+		); err != nil {
+			return PortfolioItem{}, fmt.Errorf("insert photo-image: %w", err)
+		}
+		// Денормализуем превью на родителя: первое фото = thumbnail_url.
+		// Удобно для cabinet-плиток и для feed-индексера (можно использовать
+		// как thumb если нужен fast hint без загрузки массива).
+		if i == 0 {
+			if _, err := tx.Exec(ctx,
+				`UPDATE portfolio_items SET thumbnail_url = $2 WHERE id = $1`,
+				p.ID, img.ImageURL); err != nil {
+				return PortfolioItem{}, fmt.Errorf("set thumbnail: %w", err)
+			}
+			p.ThumbnailURL = img.ImageURL
+		}
+		images = append(images, stored)
+	}
+	p.Images = images
+	return p, nil
+}
+
 // CreatePortfolioVideoInTx — добавляет видео-айтем внутри переданной
 // транзакции. Вызывающий код в одной tx эмитит outbox-событие, чтобы
 // ES-индекс спеца (last_video_at) обновился атомарно с записью в PG.
@@ -599,7 +804,7 @@ VALUES (
     'video', $7, $8,
     COALESCE((SELECT MAX(sort_order)+1 FROM portfolio_items WHERE user_id = $1), 0)
 )
-RETURNING id, title, description,
+RETURNING id, kind, title, description,
           COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
           category_codes, sort_order, created_at, updated_at,
           COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status`
@@ -623,7 +828,7 @@ RETURNING id, title, description,
 		cats,
 		dur, aspect,
 	).Scan(
-		&p.ID, &p.Title, &p.Description,
+		&p.ID, &p.Kind, &p.Title, &p.Description,
 		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
 		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
@@ -649,12 +854,12 @@ UPDATE portfolio_items
        updated_at     = now()
  WHERE id = $1 AND user_id = $2
    AND ($4::timestamptz IS NULL OR updated_at = $4)
-RETURNING id, title, description,
+RETURNING id, kind, title, description,
           COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
           category_codes, sort_order, created_at, updated_at`
 	var p PortfolioItem
 	err := tx.QueryRow(ctx, q, itemID, userID, codes, expectedUpdatedAt).Scan(
-		&p.ID, &p.Title, &p.Description,
+		&p.ID, &p.Kind, &p.Title, &p.Description,
 		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
 		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
 	)
@@ -672,6 +877,272 @@ RETURNING id, title, description,
 		return PortfolioItem{}, fmt.Errorf("update portfolio categories: %w", err)
 	}
 	return p, nil
+}
+
+// LoadItemUpdatedAtInTx — читает свежий updated_at parent'а в той же tx.
+// Нужен чтобы Append/Reorder/Delete-image могли вернуть фронту обновлённый
+// item.updated_at — без этого фронтовый snapshot станет stale и следующий
+// PATCH /me/portfolio/{id} (edit meta) получит 409.
+func (r *Repo) LoadItemUpdatedAtInTx(ctx context.Context, tx pgx.Tx, itemID uuid.UUID) (time.Time, error) {
+	var t time.Time
+	err := tx.QueryRow(ctx,
+		`SELECT updated_at FROM portfolio_items WHERE id = $1`, itemID).Scan(&t)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("load item updated_at: %w", err)
+	}
+	return t, nil
+}
+
+// AppendPortfolioImagesInTx — добавляет N фото в конец photo-set'а.
+// Гарантирует ownership через JOIN с user_id. Возвращает обновлённый список
+// всех кадров (для отрисовки cover/counter на фронте сразу).
+// Если parent kind != 'image' или не принадлежит юзеру — ErrNotFound.
+// Если len(after) > maxPerSet — ErrLimitExceeded.
+var ErrLimitExceeded = errors.New("photo-set limit exceeded")
+
+func (r *Repo) AppendPortfolioImagesInTx(ctx context.Context, tx pgx.Tx, userID, itemID uuid.UUID, urls []PortfolioPhotoRef, maxPerSet int) ([]PortfolioImage, error) {
+	// 1. lock parent + проверка ownership/kind
+	var ownerID uuid.UUID
+	var kind string
+	if err := tx.QueryRow(ctx,
+		`SELECT user_id, kind FROM portfolio_items WHERE id = $1 FOR UPDATE`, itemID,
+	).Scan(&ownerID, &kind); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("lock parent: %w", err)
+	}
+	if ownerID != userID || kind != "image" {
+		return nil, ErrNotFound
+	}
+	// 2. текущий count и max sort_order
+	var current int
+	var maxSort *int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*), MAX(sort_order) FROM portfolio_images WHERE portfolio_item_id = $1`,
+		itemID,
+	).Scan(&current, &maxSort); err != nil {
+		return nil, fmt.Errorf("count images: %w", err)
+	}
+	if current+len(urls) > maxPerSet {
+		return nil, ErrLimitExceeded
+	}
+	startOrder := 0
+	if maxSort != nil {
+		startOrder = *maxSort + 1
+	}
+	// 3. INSERT каждого нового
+	const qInsert = `
+INSERT INTO portfolio_images (portfolio_item_id, image_url, sort_order, width, height)
+VALUES ($1, $2, $3, $4, $5)`
+	for i, img := range urls {
+		if _, err := tx.Exec(ctx, qInsert, itemID, img.ImageURL, startOrder+i, img.Width, img.Height); err != nil {
+			return nil, fmt.Errorf("insert image: %w", err)
+		}
+	}
+	// 4. бампим parent.updated_at — фронт держит optimistic-lock версию на
+	//    portfolio_items.updated_at, после append она должна измениться,
+	//    иначе следующий PATCH meta получит 409.
+	if _, err := tx.Exec(ctx,
+		`UPDATE portfolio_items SET updated_at = now() WHERE id = $1`, itemID); err != nil {
+		return nil, fmt.Errorf("bump parent updated_at: %w", err)
+	}
+	// 5. перечитать весь набор для возврата фронту — через tx, иначе INSERT'ы
+	//    из этой же tx не видны (отдельный pool-connection идёт под своим snapshot).
+	byItem, err := r.loadImagesByItemsInTx(ctx, tx, []uuid.UUID{itemID})
+	if err != nil {
+		return nil, err
+	}
+	return byItem[itemID], nil
+}
+
+// ReorderPortfolioImagesInTx — переписывает sort_order у всех кадров photo-set'а
+// по списку imageIDs. Список ДОЛЖЕН содержать все текущие image_id'шки сета;
+// если не совпадает — ErrInvalidInput (страховка от потери кадра).
+// Также обновляет cover (thumbnail_url у parent'а) на новое первое фото.
+func (r *Repo) ReorderPortfolioImagesInTx(ctx context.Context, tx pgx.Tx, userID, itemID uuid.UUID, imageIDs []uuid.UUID) ([]PortfolioImage, error) {
+	// 1. lock parent + ownership/kind check
+	var ownerID uuid.UUID
+	var kind string
+	if err := tx.QueryRow(ctx,
+		`SELECT user_id, kind FROM portfolio_items WHERE id = $1 FOR UPDATE`, itemID,
+	).Scan(&ownerID, &kind); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("lock parent: %w", err)
+	}
+	if ownerID != userID || kind != "image" {
+		return nil, ErrNotFound
+	}
+	// 2. собрать current id'шки этого сета
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM portfolio_images WHERE portfolio_item_id = $1`, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("load current ids: %w", err)
+	}
+	currentSet := make(map[uuid.UUID]struct{})
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		currentSet[id] = struct{}{}
+	}
+	rows.Close()
+	// 3. валидация: длины совпадают + все id'шки запроса есть в current set'е
+	if len(imageIDs) != len(currentSet) {
+		return nil, fmt.Errorf("%w: image_ids count mismatch (got %d, want %d)",
+			ErrInvalidInput, len(imageIDs), len(currentSet))
+	}
+	for _, id := range imageIDs {
+		if _, ok := currentSet[id]; !ok {
+			return nil, fmt.Errorf("%w: image_id %s не принадлежит этому сету", ErrInvalidInput, id)
+		}
+	}
+	// 4. UPDATE sort_order для каждого
+	for i, id := range imageIDs {
+		if _, err := tx.Exec(ctx,
+			`UPDATE portfolio_images SET sort_order = $2 WHERE id = $1`, id, i); err != nil {
+			return nil, fmt.Errorf("update sort_order: %w", err)
+		}
+	}
+	// 5. обновить cover у parent (новое первое фото)
+	var coverURL string
+	if err := tx.QueryRow(ctx,
+		`SELECT image_url FROM portfolio_images WHERE id = $1`, imageIDs[0],
+	).Scan(&coverURL); err != nil {
+		return nil, fmt.Errorf("get new cover: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE portfolio_items SET thumbnail_url = $2, updated_at = now() WHERE id = $1`,
+		itemID, coverURL); err != nil {
+		return nil, fmt.Errorf("update cover: %w", err)
+	}
+	// 6. вернуть обновлённый порядок — через tx, иначе UPDATE'ы sort_order
+	//    из этой же tx не видны pool-connection'у.
+	byItem, err := r.loadImagesByItemsInTx(ctx, tx, []uuid.UUID{itemID})
+	if err != nil {
+		return nil, err
+	}
+	return byItem[itemID], nil
+}
+
+// UpdatePortfolioMetaInTx — частичный апдейт title/description одного айтема
+// (любой kind). Ownership проверяется через user_id=$2.
+// expectedUpdatedAt — optimistic-lock на portfolio_items.updated_at. nil = без
+// проверки. Возвращает ErrNotFound если айтема нет / чужой, ErrConflict если
+// версия не совпала.
+func (r *Repo) UpdatePortfolioMetaInTx(ctx context.Context, tx pgx.Tx, userID, itemID uuid.UUID, in PortfolioPatchInput) (PortfolioItem, error) {
+	const q = `
+UPDATE portfolio_items
+   SET title       = COALESCE($3, title),
+       description = COALESCE($4, description),
+       updated_at  = now()
+ WHERE id = $1 AND user_id = $2
+   AND ($5::timestamptz IS NULL OR updated_at = $5)
+RETURNING id, kind, title, description,
+          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
+          category_codes, sort_order, created_at, updated_at,
+          COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status`
+	var p PortfolioItem
+	err := tx.QueryRow(ctx, q, itemID, userID, in.Title, in.Description, in.UpdatedAt).Scan(
+		&p.ID, &p.Kind, &p.Title, &p.Description,
+		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
+		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
+		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if in.UpdatedAt != nil {
+			return PortfolioItem{}, ErrConflict
+		}
+		return PortfolioItem{}, ErrNotFound
+	}
+	if err != nil {
+		return PortfolioItem{}, fmt.Errorf("update portfolio meta: %w", err)
+	}
+	return p, nil
+}
+
+// DeletePortfolioImageInTx — удаляет одно фото из photo-set'а. Возвращает
+// (parentItemID, leftAfterDelete, coverImageURL, error). coverImageURL —
+// URL первого фото после удаления (по sort_order). Если фото не найдено
+// или не принадлежит юзеру — ErrNotFound.
+//
+// JOIN с portfolio_items нужен чтобы заодно проверить ownership: фронт
+// шлёт img_id, но мы не имеем item_id в URL, поэтому валидируем через
+// родителя в одном запросе.
+func (r *Repo) DeletePortfolioImageInTx(ctx context.Context, tx pgx.Tx, userID, imageID uuid.UUID) (parentItemID uuid.UUID, leftAfterDelete int, coverURL string, err error) {
+	// Lock parent item первым: сериализует delete с reorder/append/другим delete
+	// на этом же сете. Без lock'a параллельные delete'ы последних двух фото
+	// оба видели бы count=1 в своём READ COMMITTED snapshot'е и оба делали бы
+	// UPDATE cover вместо DELETE parent — сет оставался бы пустым.
+	const qLock = `
+SELECT pi.id FROM portfolio_items pi
+JOIN portfolio_images i ON i.portfolio_item_id = pi.id
+WHERE i.id = $1 AND pi.user_id = $2 AND pi.kind = 'image'
+FOR UPDATE OF pi`
+	if err := tx.QueryRow(ctx, qLock, imageID, userID).Scan(&parentItemID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, 0, "", ErrNotFound
+		}
+		return uuid.Nil, 0, "", fmt.Errorf("lock parent for delete: %w", err)
+	}
+	const qDelete = `
+DELETE FROM portfolio_images i
+USING portfolio_items pi
+WHERE i.id = $1
+  AND i.portfolio_item_id = pi.id
+  AND pi.user_id = $2
+  AND pi.kind = 'image'
+RETURNING pi.id`
+	if err := tx.QueryRow(ctx, qDelete, imageID, userID).Scan(&parentItemID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, 0, "", ErrNotFound
+		}
+		return uuid.Nil, 0, "", fmt.Errorf("delete portfolio image: %w", err)
+	}
+	const qCount = `
+SELECT count(*), COALESCE((
+    SELECT image_url FROM portfolio_images
+     WHERE portfolio_item_id = $1
+     ORDER BY sort_order, created_at
+     LIMIT 1
+), '')
+FROM portfolio_images WHERE portfolio_item_id = $1`
+	if err := tx.QueryRow(ctx, qCount, parentItemID).Scan(&leftAfterDelete, &coverURL); err != nil {
+		return uuid.Nil, 0, "", fmt.Errorf("count remaining images: %w", err)
+	}
+	return parentItemID, leftAfterDelete, coverURL, nil
+}
+
+// UpdatePortfolioCoverThumbnailInTx — синхронизирует portfolio_items.thumbnail_url
+// с первым кадром photo-set'а после удаления (или другой перестановки).
+// Без отдельной транзакции — вызывается изнутри tx.
+func (r *Repo) UpdatePortfolioCoverThumbnailInTx(ctx context.Context, tx pgx.Tx, itemID uuid.UUID, coverURL string) error {
+	_, err := tx.Exec(ctx,
+		`UPDATE portfolio_items SET thumbnail_url = NULLIF($2, ''), updated_at = now() WHERE id = $1`,
+		itemID, coverURL)
+	if err != nil {
+		return fmt.Errorf("update cover: %w", err)
+	}
+	return nil
+}
+
+// DeletePortfolioItemByIDInTx — удаляет portfolio_item без проверки ownership
+// (caller гарантирует это через предыдущие шаги, обычно после
+// DeletePortfolioImageInTx когда фото в сете не осталось).
+// CASCADE снесёт оставшиеся portfolio_images автоматически.
+func (r *Repo) DeletePortfolioItemByIDInTx(ctx context.Context, tx pgx.Tx, itemID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `DELETE FROM portfolio_items WHERE id = $1`, itemID)
+	if err != nil {
+		return fmt.Errorf("delete portfolio item: %w", err)
+	}
+	return nil
 }
 
 // DeletePortfolioItemInTx — удаляет видео внутри tx. Outbox-эмиссия в той же
@@ -741,6 +1212,8 @@ SELECT url FROM (
   SELECT preview_url        AS url FROM portfolio_items     WHERE preview_url        IS NOT NULL AND preview_url        <> ''
   UNION ALL
   SELECT animated_thumb_url AS url FROM portfolio_items     WHERE animated_thumb_url IS NOT NULL AND animated_thumb_url <> ''
+  UNION ALL
+  SELECT image_url           AS url FROM portfolio_images    WHERE image_url          IS NOT NULL AND image_url          <> ''
 ) t`)
 	if err != nil {
 		return nil, fmt.Errorf("load referenced media: %w", err)

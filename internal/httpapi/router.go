@@ -110,7 +110,12 @@ func NewRouter(d Deps) http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(RateLimit(d.Limiter, "read", d.ReadWindows))
-			r.Get("/specialists/{id}", d.Profiles.Public)
+			// /specialists/{id} оборачиваем в OptionalAuth: если caller
+			// прислал валидный Bearer-токен И он = owner профиля, handler
+			// отдаёт превью (даже если is_published=false или moderation
+			// не approved). Без токена / для чужих — публичный strict-фильтр.
+			r.With(auth.OptionalMiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation)).
+				Get("/specialists/{id}", d.Profiles.Public)
 			r.Get("/search", d.Search.Search)
 			r.Get("/categories/stats", d.Search.CategoryStats)
 			r.Get("/specialists/{id}/reviews", d.Reviews.ListBySpecialist)
@@ -177,6 +182,7 @@ func NewRouter(d Deps) http.Handler {
 
 			r.Get("/me/portfolio", d.Profiles.PortfolioList)
 			r.Post("/me/portfolio", d.Profiles.PortfolioCreate)
+			r.Post("/me/portfolio/photoset", d.Profiles.PortfolioPhotoSetCreate)
 			r.Post("/me/portfolio/upload-url", d.Profiles.PortfolioUploadURL)
 			// S3 multipart для крупного видео (> 5 МБ, до 200 МБ).
 			r.Post("/me/portfolio/multipart/start", d.Profiles.PortfolioMultipartStart)
@@ -184,7 +190,11 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/me/portfolio/multipart/complete", d.Profiles.PortfolioMultipartComplete)
 			r.Post("/me/portfolio/multipart/abort", d.Profiles.PortfolioMultipartAbort)
 			r.Put("/me/portfolio/{id}/categories", d.Profiles.PortfolioSetCategories)
+			r.Patch("/me/portfolio/{id}", d.Profiles.PortfolioUpdate)
+			r.Post("/me/portfolio/{id}/images", d.Profiles.PortfolioImagesAppend)
+			r.Put("/me/portfolio/{id}/images/order", d.Profiles.PortfolioImagesReorder)
 			r.Delete("/me/portfolio/{id}", d.Profiles.PortfolioDelete)
+			r.Delete("/me/portfolio/images/{img_id}", d.Profiles.PortfolioImageDelete)
 
 			// Аплоад картинки (аватар / превью к видео) — общий presigned PUT.
 			r.Post("/me/uploads/image", d.Profiles.ImageUploadURL)

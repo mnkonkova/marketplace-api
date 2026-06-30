@@ -26,10 +26,18 @@ func FeedVideoMapping() map[string]any {
 		},
 		"mappings": map[string]any{
 			"properties": map[string]any{
-				// видео
+				// айтем: kind='video' | 'image'. Имена полей video_* legacy
+				// сохранены (индекс называется feed_videos), семантически —
+				// item_id / item_url. Для kind='image' video_url пустой,
+				// карусель живёт в images[].
+				"kind":             map[string]any{"type": "keyword"},
 				"video_id":         map[string]any{"type": "keyword"},
 				"video_url":        map[string]any{"type": "keyword", "index": false},
 				"thumb_url":        map[string]any{"type": "keyword", "index": false},
+				"images": map[string]any{
+					"type": "object",
+					"enabled": false, // не индексируем, только хранение
+				},
 				"title":            map[string]any{"type": "text", "analyzer": "ru_en"},
 				"description":      map[string]any{"type": "text", "analyzer": "ru_en"},
 				"duration_sec":     map[string]any{"type": "integer"},

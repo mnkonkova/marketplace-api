@@ -137,8 +137,14 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 	for _, d := range interleaved {
 		idx := idxs[d.UserID]
 		idxs[d.UserID]++
+		kind := d.Kind
+		if kind == "" {
+			kind = "video" // back-compat для доков без поля (старые индексы)
+		}
 		items = append(items, Item{
+			Kind:       kind,
 			Video:      videoFromDoc(d),
+			Images:     imagesFromDoc(d),
 			Specialist: specFromFeedDoc(d),
 			VideoIdx:   idx,
 			VideoTotal: totals[d.UserID],
@@ -283,6 +289,17 @@ func InterleaveByUser(docs []search.FeedVideoDoc) []search.FeedVideoDoc {
 		if !advanced {
 			break
 		}
+	}
+	return out
+}
+
+func imagesFromDoc(d search.FeedVideoDoc) []Image {
+	if len(d.Images) == 0 {
+		return nil
+	}
+	out := make([]Image, 0, len(d.Images))
+	for _, im := range d.Images {
+		out = append(out, Image{URL: im.ImageURL, Width: im.Width, Height: im.Height})
 	}
 	return out
 }

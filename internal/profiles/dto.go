@@ -35,6 +35,9 @@ type Review struct {
 
 type PortfolioItem struct {
 	ID            uuid.UUID `json:"id"`
+	// Kind — 'video' | 'image' | 'external'. Фронт по нему выбирает рендер:
+	// video — плеер; image — карусель из Images; external — внешняя ссылка.
+	Kind          string    `json:"kind"`
 	Title         string    `json:"title"`
 	Description   string    `json:"description"`
 	VideoURL      string    `json:"video_url,omitempty"`
@@ -50,10 +53,27 @@ type PortfolioItem struct {
 	PreviewURL       string `json:"preview_url,omitempty"`
 	AnimatedThumbURL string `json:"animated_thumb_url,omitempty"`
 	PreviewStatus    string `json:"preview_status"` // pending|processing|ready|failed
+	// Images — для Kind='image' список фото в карусели (упорядочен по sort_order).
+	// Для других kind — nil/пусто.
+	Images []PortfolioImage `json:"images,omitempty"`
+}
+
+// PortfolioImage — один кадр photo-set'а. PortfolioItemID не отдаём (родитель
+// уже известен из контекста PortfolioItem.Images).
+type PortfolioImage struct {
+	ID        uuid.UUID `json:"id"`
+	ImageURL  string    `json:"image_url"`
+	SortOrder int       `json:"sort_order"`
+	Width     *int      `json:"width,omitempty"`
+	Height    *int      `json:"height,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type PublicProfile struct {
 	UserID       uuid.UUID       `json:"user_id"`
+	// Username — публичный handle для красивого URL /specialist/<username>.
+	// Пусто, если спец ещё не выбрал — фронт фолбэчит на user_id.
+	Username     string          `json:"username,omitempty"`
 	DisplayName  string          `json:"display_name"`
 	Bio          string          `json:"bio"`
 	AvatarURL    string          `json:"avatar_url,omitempty"`
@@ -73,10 +93,20 @@ type PublicProfile struct {
 	// is_freelance → «Фриланс»; оба пусты → ничего не показываем.
 	ProductionName string `json:"production_name,omitempty"`
 	IsFreelance    bool   `json:"is_freelance"`
+	// IsPreview=true означает что профиль возвращён в owner-preview режиме —
+	// спец сам смотрит свой профиль ещё до publish/approval, фронт показывает
+	// баннер «Это превью — клиенты увидят после публикации».
+	IsPreview      bool   `json:"is_preview,omitempty"`
+	// IsPublished — фактический статус. Нужен фронту в preview-режиме чтобы
+	// различить «черновик» (false) от «на модерации» (true + not approved).
+	IsPublished      bool   `json:"is_published"`
+	ModerationStatus string `json:"moderation_status,omitempty"`
 }
 
 type Profile struct {
 	UserID        uuid.UUID `json:"user_id"`
+	// Username — публичный handle. Пусто = не выбрал. См. PublicProfile.Username.
+	Username      string    `json:"username,omitempty"`
 	DisplayName   string    `json:"display_name"`
 	Bio           string    `json:"bio"`
 	AvatarURL     string    `json:"avatar_url,omitempty"`
@@ -117,6 +147,9 @@ type Profile struct {
 
 type PatchInput struct {
 	DisplayName  *string `json:"display_name"`
+	// Username — публичный handle. nil = не трогать; "" = сбросить в NULL;
+	// "newname" = валидируем (lowercase, a-z0-9_-, 3-30, unique) и ставим.
+	Username     *string `json:"username,omitempty"`
 	Bio          *string `json:"bio"`
 	AvatarURL    *string `json:"avatar_url"`
 	City         *string `json:"city"`
@@ -165,6 +198,9 @@ type SkillsPart struct {
 // повторных проверок.
 type PatchFullInput struct {
 	DisplayName  *string `json:"display_name"`
+	// Username — публичный handle. nil = не трогать; "" = сбросить в NULL;
+	// валидируется сервисом, см. ValidateUsername.
+	Username     *string `json:"username,omitempty"`
 	Bio          *string `json:"bio"`
 	AvatarURL    *string `json:"avatar_url"`
 	City         *string `json:"city"`
@@ -199,7 +235,7 @@ func (in PatchFullInput) hasProfileFields() bool {
 	return in.DisplayName != nil || in.Bio != nil || in.AvatarURL != nil ||
 		in.City != nil || in.RateMin != nil || in.RateMax != nil ||
 		in.Currency != nil || in.ContactEmail != nil || in.ContactPhone != nil ||
-		in.ProductionID != nil || in.IsFreelance != nil
+		in.ProductionID != nil || in.IsFreelance != nil || in.Username != nil
 }
 
 // toPatchInput — переиспользуем PatchInTx, который уже умеет COALESCE
@@ -216,6 +252,7 @@ func (in PatchFullInput) toPatchInput() PatchInput {
 		Currency:     in.Currency,
 		ContactEmail: in.ContactEmail,
 		ContactPhone: in.ContactPhone,
+		Username:     in.Username,
 		UpdatedAt:    in.UpdatedAt,
 	}
 }
@@ -237,6 +274,48 @@ type PortfolioCreateInput struct {
 	// Если поле есть — backend проверяет CategoryCodes ⊆ ProfileCategories.
 	// Если nil/пустое — fallback на profile.Categories из БД (старое поведение).
 	ProfileCategories []string `json:"profile_categories,omitempty"`
+}
+
+// PortfolioPhotoRef — одно фото при создании photo-set'а. Width/Height
+// опциональны: фронт может прислать после canvas-resize (нужны для
+// aspect-ratio контейнера, чтобы layout не прыгал).
+type PortfolioPhotoRef struct {
+	ImageURL string `json:"image_url"`
+	Width    *int   `json:"width,omitempty"`
+	Height   *int   `json:"height,omitempty"`
+}
+
+// PortfolioPhotoSetCreateInput — создание photo-set'а: один portfolio_item
+// kind='image' + N изображений. Категории/title аналогичны видео-кейсу.
+type PortfolioPhotoSetCreateInput struct {
+	Title             string              `json:"title"`
+	Description       string              `json:"description,omitempty"`
+	CategoryCodes     []string            `json:"category_codes,omitempty"`
+	ProfileCategories []string            `json:"profile_categories,omitempty"`
+	Images            []PortfolioPhotoRef `json:"images"`
+}
+
+// PortfolioImagesAppendInput — добавить N фото к существующему photo-set'у.
+// Total после добавления должен быть ≤ portfolioMaxImagesPerSet.
+type PortfolioImagesAppendInput struct {
+	Images []PortfolioPhotoRef `json:"images"`
+}
+
+// PortfolioImagesReorderInput — переписать sort_order у всех кадров photo-set'а.
+// ImageIDs — массив id'шек в желаемом порядке. Должен содержать ровно все
+// текущие image_id'шки сета (без пропусков и дубликатов) — иначе ErrInvalidInput.
+type PortfolioImagesReorderInput struct {
+	ImageIDs []string `json:"image_ids"`
+}
+
+// PortfolioPatchInput — частичное обновление title/description у portfolio_item
+// любого kind (video/image/external). nil-поля не трогаются.
+// UpdatedAt — optimistic-lock на portfolio_items.updated_at, защита от
+// одновременных правок (фронт инлайн-редактирует — может быть гонка).
+type PortfolioPatchInput struct {
+	Title       *string    `json:"title,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 // PortfolioSetCategoriesInput — обновление списка категорий у видео.

@@ -52,10 +52,25 @@ type Specialist struct {
 	IsFreelance     bool     `json:"is_freelance"`
 }
 
-// Item — одна позиция в ленте: видео + контекст специалиста + индекс этого
-// видео среди роликов спеца, чтобы показать «1/3» в overlay.
+// Image — один кадр photo-set'а в ленте. Минимальный набор для карусели.
+type Image struct {
+	URL    string `json:"url"`
+	Width  *int   `json:"width,omitempty"`
+	Height *int   `json:"height,omitempty"`
+}
+
+// Item — одна позиция в ленте: либо видео (Kind="video"), либо photo-set
+// (Kind="image") + контекст специалиста + индекс этого айтема среди работ
+// спеца, чтобы показать «1/3» в overlay.
+//
+// Для Kind="image" Video.URL/Preview/AnimatedThumb пустые, Images содержит
+// карусель кадров. Aspect/Title/Description/CreatedAt берутся из Video.
+// Это поточный компромисс: оставляем общую обвязку Video (title/category/
+// timestamps), отдельно докидываем Images когда они есть.
 type Item struct {
+	Kind       string     `json:"kind"`
 	Video      Video      `json:"video"`
+	Images     []Image    `json:"images,omitempty"`
 	Specialist Specialist `json:"specialist"`
 	VideoIdx   int        `json:"video_idx"`
 	VideoTotal int        `json:"video_total"`

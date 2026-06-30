@@ -12,3 +12,11 @@ conversation-*.txt
 node_modules/
 # pg_dump архивы от `make prod-backup-db` — лежат на проде, в git не нужны.
 backups/
+
+# Скомпилированные бинарники в корне репо (через `go build ./cmd/api` и т.п.).
+# В прод они собираются на VDS внутри Docker, локально могут случайно
+# оказаться рядом — в git не нужны.
+/api
+/worker
+/seed
+/backfill-previews

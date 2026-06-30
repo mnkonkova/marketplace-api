@@ -137,8 +137,20 @@ func (s *Service) Get(ctx context.Context, userID uuid.UUID) (Profile, error) {
 	return s.repo.Get(ctx, userID)
 }
 
+// ResolveUserIDByUsername — handler-resolver для красивых URL вида
+// /specialists/<username>. Тонкая обёртка над repo для слоя hand'lers.
+func (s *Service) ResolveUserIDByUsername(ctx context.Context, username string) (uuid.UUID, error) {
+	return s.repo.ResolveUserIDByUsername(ctx, strings.ToLower(strings.TrimSpace(username)))
+}
+
 func (s *Service) GetPublic(ctx context.Context, userID uuid.UUID) (PublicProfile, error) {
 	return s.repo.GetPublic(ctx, userID)
+}
+
+// GetPublicForOwner — preview-вариант, см. repo.GetPublicForOwner. Caller
+// (handler) проверяет что вызывающий — владелец, до того как звать этот метод.
+func (s *Service) GetPublicForOwner(ctx context.Context, userID uuid.UUID) (PublicProfile, error) {
+	return s.repo.GetPublicForOwner(ctx, userID)
 }
 
 // PatchFull — атомарный апдейт профиля + (опционально) категорий + (опционально)
@@ -164,6 +176,18 @@ func (s *Service) PatchFull(ctx context.Context, userID uuid.UUID, in PatchFullI
 		patch.ProductionID = got.ProductionID
 		patch.SetIsFreelance = got.SetIsFreelance
 		patch.IsFreelance = got.IsFreelance
+	}
+
+	// 0.5. Валидация username (если задан). Reserved-имена (login, api, admin,
+	// search) запрещены чтобы не маскировались под системные пути.
+	if patch.Username != nil {
+		v := strings.TrimSpace(strings.ToLower(*patch.Username))
+		if v != "" {
+			if err := ValidateUsername(v); err != nil {
+				return Profile{}, err
+			}
+		}
+		patch.Username = &v
 	}
 
 	// 1. Валидация profile-полей (если есть). Дублирует логику из Patch,
@@ -340,10 +364,10 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 		bio := strings.TrimSpace(p.Bio)
 		name := strings.TrimSpace(p.DisplayName)
 		if bio == "" {
-			return Profile{}, fmt.Errorf("%w: bio is empty", ErrPublishIncomplete)
+			return Profile{}, fmt.Errorf("%w: заполните «О себе» в профиле", ErrPublishIncomplete)
 		}
 		if name == "" {
-			return Profile{}, fmt.Errorf("%w: display_name is empty", ErrPublishIncomplete)
+			return Profile{}, fmt.Errorf("%w: заполните имя в профиле", ErrPublishIncomplete)
 		}
 		if s.checker != nil && s.checker.Available() {
 			title, _ := s.repo.CategoryTitle(ctx, p.PrimaryCategory)
@@ -403,6 +427,9 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 
 const (
 	portfolioMaxVideosPerUser   = 20
+	portfolioMaxPhotoSetsPerUser = 20
+	portfolioMaxImagesPerSet    = 10
+	portfolioMinImagesPerSet    = 1
 	portfolioMaxTitleLen        = 200
 	portfolioMaxDescriptionLen  = 1000
 
@@ -569,6 +596,321 @@ func (s *Service) AddPortfolioVideo(ctx context.Context, userID uuid.UUID, in Po
 		return PortfolioItem{}, err
 	}
 	return item, nil
+}
+
+// AddPortfolioPhotoSet — создаёт photo-set: один portfolio_item kind='image'
+// + N кадров. Лимиты: 1..10 фото на сет, ≤20 сетов на спеца (независимо
+// от лимита видео). Все image_url должны лежать в нашем bucket'е (data-sec D6).
+//
+// Категории: подмножество ProfileCategories из запроса (текущий form-state)
+// либо profile.Categories из БД — та же логика, что у AddPortfolioVideo.
+func (s *Service) AddPortfolioPhotoSet(ctx context.Context, userID uuid.UUID, in PortfolioPhotoSetCreateInput) (PortfolioItem, error) {
+	in.Title = strings.TrimSpace(in.Title)
+	in.Description = strings.TrimSpace(in.Description)
+
+	if in.Title == "" {
+		return PortfolioItem{}, fmt.Errorf("%w: title is required", ErrInvalidInput)
+	}
+	if len(in.Title) > portfolioMaxTitleLen {
+		return PortfolioItem{}, fmt.Errorf("%w: title too long", ErrInvalidInput)
+	}
+	if len(in.Description) > portfolioMaxDescriptionLen {
+		return PortfolioItem{}, fmt.Errorf("%w: description too long", ErrInvalidInput)
+	}
+	if len(in.Images) < portfolioMinImagesPerSet {
+		return PortfolioItem{}, fmt.Errorf("%w: at least %d image required", ErrInvalidInput, portfolioMinImagesPerSet)
+	}
+	if len(in.Images) > portfolioMaxImagesPerSet {
+		return PortfolioItem{}, fmt.Errorf("%w: max %d images per set", ErrInvalidInput, portfolioMaxImagesPerSet)
+	}
+
+	// data-sec D6: каждый image_url должен указывать на наш bucket.
+	// Также: trim + sanity check URL.
+	for i := range in.Images {
+		in.Images[i].ImageURL = strings.TrimSpace(in.Images[i].ImageURL)
+		if in.Images[i].ImageURL == "" {
+			return PortfolioItem{}, fmt.Errorf("%w: image_url is required", ErrInvalidInput)
+		}
+		if !IsHTTPURL(in.Images[i].ImageURL) {
+			return PortfolioItem{}, fmt.Errorf("%w: image_url must be http(s)", ErrInvalidInput)
+		}
+		if s.media != nil && s.media.KeyFromURL(in.Images[i].ImageURL) == "" {
+			return PortfolioItem{}, fmt.Errorf("%w: image_url должен указывать на наше хранилище", ErrInvalidInput)
+		}
+	}
+
+	in.CategoryCodes = DedupStrings(in.CategoryCodes)
+	in.ProfileCategories = DedupStrings(in.ProfileCategories)
+
+	profile, err := s.repo.Get(ctx, userID)
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	allowedCats := in.ProfileCategories
+	if len(allowedCats) == 0 {
+		allowedCats = profile.Categories
+	}
+	if len(in.CategoryCodes) == 0 {
+		if profile.PrimaryCategory != "" {
+			in.CategoryCodes = []string{profile.PrimaryCategory}
+		} else if len(allowedCats) > 0 {
+			in.CategoryCodes = []string{allowedCats[0]}
+		}
+	} else {
+		allowedSet := make(map[string]struct{}, len(allowedCats))
+		for _, c := range allowedCats {
+			allowedSet[c] = struct{}{}
+		}
+		for _, c := range in.CategoryCodes {
+			if _, ok := allowedSet[c]; !ok {
+				return PortfolioItem{}, fmt.Errorf("%w: category %q is not in profile categories", ErrInvalidInput, c)
+			}
+		}
+	}
+
+	var item PortfolioItem
+	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.LockProfileForUpdateInTx(ctx, tx, userID, nil); err != nil {
+			return err
+		}
+		n, err := s.repo.CountPhotoSetsInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if n >= portfolioMaxPhotoSetsPerUser {
+			return fmt.Errorf("%w: max %d photo sets", ErrInvalidInput, portfolioMaxPhotoSetsPerUser)
+		}
+		var txErr error
+		item, txErr = s.repo.CreatePortfolioPhotoSetInTx(ctx, tx, userID, in)
+		if txErr != nil {
+			return txErr
+		}
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		// Outbox: воркер переиндексирует ES-документы спеца (фид).
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
+	})
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	return item, nil
+}
+
+// AppendResult — результат append/reorder: новый список кадров + свежий
+// parent.updated_at чтобы фронт обновил optimistic-lock snapshot и не получил
+// 409 при следующем PATCH meta.
+type AppendResult struct {
+	Images    []PortfolioImage
+	UpdatedAt time.Time
+}
+
+// AppendPhotosToSet — добавить N новых фото к существующему photo-set'у.
+// Валидация: каждый image_url в нашем bucket'е, total ≤ 10. Lock на parent
+// сериализует параллельные append (нельзя превысить лимит).
+func (s *Service) AppendPhotosToSet(ctx context.Context, userID, itemID uuid.UUID, urls []PortfolioPhotoRef) (AppendResult, error) {
+	if len(urls) == 0 {
+		return AppendResult{}, fmt.Errorf("%w: images is empty", ErrInvalidInput)
+	}
+	for i := range urls {
+		urls[i].ImageURL = strings.TrimSpace(urls[i].ImageURL)
+		if urls[i].ImageURL == "" {
+			return AppendResult{}, fmt.Errorf("%w: image_url is required", ErrInvalidInput)
+		}
+		if !IsHTTPURL(urls[i].ImageURL) {
+			return AppendResult{}, fmt.Errorf("%w: image_url must be http(s)", ErrInvalidInput)
+		}
+		if s.media != nil && s.media.KeyFromURL(urls[i].ImageURL) == "" {
+			return AppendResult{}, fmt.Errorf("%w: image_url должен указывать на наше хранилище", ErrInvalidInput)
+		}
+	}
+	var out AppendResult
+	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		out.Images, txErr = s.repo.AppendPortfolioImagesInTx(ctx, tx, userID, itemID, urls, portfolioMaxImagesPerSet)
+		if errors.Is(txErr, ErrLimitExceeded) {
+			return fmt.Errorf("%w: максимум %d фото на кейс", ErrInvalidInput, portfolioMaxImagesPerSet)
+		}
+		if txErr != nil {
+			return txErr
+		}
+		t, err := s.repo.LoadItemUpdatedAtInTx(ctx, tx, itemID)
+		if err != nil {
+			return err
+		}
+		out.UpdatedAt = t
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
+	})
+	if err != nil {
+		return AppendResult{}, err
+	}
+	return out, nil
+}
+
+// ReorderSetPhotos — переписать sort_order фото в photo-set'е (drag-and-drop
+// порядок с фронта). Также обновляет thumbnail_url у parent'а на новое первое.
+func (s *Service) ReorderSetPhotos(ctx context.Context, userID, itemID uuid.UUID, imageIDs []uuid.UUID) (AppendResult, error) {
+	if len(imageIDs) == 0 {
+		return AppendResult{}, fmt.Errorf("%w: image_ids is empty", ErrInvalidInput)
+	}
+	var out AppendResult
+	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		out.Images, txErr = s.repo.ReorderPortfolioImagesInTx(ctx, tx, userID, itemID, imageIDs)
+		if txErr != nil {
+			return txErr
+		}
+		t, err := s.repo.LoadItemUpdatedAtInTx(ctx, tx, itemID)
+		if err != nil {
+			return err
+		}
+		out.UpdatedAt = t
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
+	})
+	if err != nil {
+		return AppendResult{}, err
+	}
+	return out, nil
+}
+
+// UpdatePortfolio — обновить title/description у portfolio_item. Валидация
+// длины полей; ownership через user_id. Approved-спецам бамп modeation в
+// pending — изменения контента должны быть пересмотрены.
+func (s *Service) UpdatePortfolio(ctx context.Context, userID, itemID uuid.UUID, in PortfolioPatchInput) (PortfolioItem, error) {
+	if in.Title != nil {
+		v := strings.TrimSpace(*in.Title)
+		if v == "" {
+			return PortfolioItem{}, fmt.Errorf("%w: title не может быть пустым", ErrInvalidInput)
+		}
+		if len(v) > portfolioMaxTitleLen {
+			return PortfolioItem{}, fmt.Errorf("%w: title слишком длинный", ErrInvalidInput)
+		}
+		in.Title = &v
+	}
+	if in.Description != nil {
+		v := strings.TrimSpace(*in.Description)
+		if len(v) > portfolioMaxDescriptionLen {
+			return PortfolioItem{}, fmt.Errorf("%w: description слишком длинный", ErrInvalidInput)
+		}
+		in.Description = &v
+	}
+	if in.Title == nil && in.Description == nil {
+		// Нечего обновлять — возвращаем текущее состояние без UPDATE'а.
+		items, err := s.repo.ListPortfolio(ctx, userID)
+		if err != nil {
+			return PortfolioItem{}, err
+		}
+		for _, it := range items {
+			if it.ID == itemID {
+				return it, nil
+			}
+		}
+		return PortfolioItem{}, ErrNotFound
+	}
+	var item PortfolioItem
+	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		item, txErr = s.repo.UpdatePortfolioMetaInTx(ctx, tx, userID, itemID, in)
+		if txErr != nil {
+			return txErr
+		}
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
+	})
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	return item, nil
+}
+
+// DeletePortfolioImage — удаляет один кадр из photo-set'а. Если после удаления
+// в сете не осталось фото — каскадом сносим сам portfolio_item (user явно
+// согласился с этим UX в плане: пустой сет бессмысленен).
+//
+// Если удалили обложку (первое фото) — обновляем thumbnail_url родителя
+// на новое первое (по sort_order).
+//
+// Concurrency: lock на parent portfolio_item берётся внутри DeletePortfolioImageInTx
+// через `SELECT ... FOR UPDATE`. Это решает сразу два race-сценария:
+//   1) параллельный DELETE последних двух фото — оба бы UPDATE cover вместо
+//      DELETE parent, сет остался бы с 0 фото (READ COMMITTED snapshot не
+//      видит uncommitted DELETE другой tx);
+//   2) рассинхрон с ReorderSetPhotos/AppendPhotosToSet — те тоже берут
+//      FOR UPDATE на parent item, теперь все три операции на одном сете
+//      сериализуются.
+func (s *Service) DeletePortfolioImage(ctx context.Context, userID, imageID uuid.UUID) error {
+	return s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		parentID, left, coverURL, err := s.repo.DeletePortfolioImageInTx(ctx, tx, userID, imageID)
+		if err != nil {
+			return err
+		}
+		if left == 0 {
+			// Сет опустел — сносим parent целиком (FK CASCADE уже снёс
+			// последний row из portfolio_images, но мы только что его удалили
+			// сами). Просто удаляем item.
+			if err := s.repo.DeletePortfolioItemByIDInTx(ctx, tx, parentID); err != nil {
+				return err
+			}
+		} else {
+			// Обновляем cover на новое первое фото (даже если удалили не первое —
+			// дешевле перезаписать чем сверять).
+			if err := s.repo.UpdatePortfolioCoverThumbnailInTx(ctx, tx, parentID, coverURL); err != nil {
+				return err
+			}
+		}
+		bumped, err := s.repo.BumpModerationToPendingIfApprovedInTx(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
+			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()}); err != nil {
+			return err
+		}
+		if bumped {
+			return s.emitModerationPending(ctx, tx, userID, "content_changed")
+		}
+		return nil
+	})
 }
 
 func (s *Service) DeletePortfolioItem(ctx context.Context, userID, itemID uuid.UUID) error {
@@ -894,6 +1236,53 @@ func (s *Service) CreateImageUploadURL(
 		Key:       key,
 		ExpiresIn: int(imageUploadExpiry.Seconds()),
 	}, nil
+}
+
+// reservedUsernames — нельзя занимать пути, которые могут конфликтовать с
+// фронт-роутингом или системными эндпойнтами. Lowercase. Расширяй список
+// если появятся новые системные слова.
+var reservedUsernames = map[string]struct{}{
+	"admin":         {},
+	"administrator": {},
+	"api":           {},
+	"auth":          {},
+	"cabinet":       {},
+	"client":        {},
+	"clients":       {},
+	"feed":          {},
+	"login":         {},
+	"logout":        {},
+	"manager":       {},
+	"me":            {},
+	"new":           {},
+	"profile":       {},
+	"register":      {},
+	"search":        {},
+	"settings":      {},
+	"specialist":    {},
+	"specialists":   {},
+	"support":       {},
+	"system":        {},
+	"verify":        {},
+}
+
+// ValidateUsername — формат username (a-z, 0-9, _, -, 3-30 символов) +
+// reserved-list. Возвращает ErrInvalidInput с конкретикой если не подошло.
+// Вызывать ПОСЛЕ ToLower+TrimSpace.
+func ValidateUsername(v string) error {
+	if len(v) < 3 || len(v) > 30 {
+		return fmt.Errorf("%w: username должен быть от 3 до 30 символов", ErrInvalidInput)
+	}
+	for _, c := range v {
+		ok := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+		if !ok {
+			return fmt.Errorf("%w: username может содержать только латиницу, цифры, _ и -", ErrInvalidInput)
+		}
+	}
+	if _, isReserved := reservedUsernames[v]; isReserved {
+		return fmt.Errorf("%w: username %q зарезервирован, выберите другой", ErrInvalidInput, v)
+	}
+	return nil
 }
 
 func IsHTTPURL(s string) bool {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -39,12 +40,44 @@ const (
 // @Success      200  {object}  PublicProfile
 // @Failure      400  {object}  errorResponse
 // @Failure      404  {object}  errorResponse
-// @Router       /specialists/{id} [get]
+// @Router       /specialists/{handle} [get]
+//
+// handle — либо UUID (user_id, для back-compat / direct links), либо
+// username (новый красивый URL). Парсим как UUID — если не удалось,
+// идём в ResolveUserIDByUsername.
 func (h *Handler) Public(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
-			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
+	handle := chi.URLParam(r, "id")
+	var id uuid.UUID
+	if u, err := uuid.Parse(handle); err == nil {
+		id = u
+	} else {
+		resolved, rerr := h.svc.ResolveUserIDByUsername(r.Context(), handle)
+		if errors.Is(rerr, ErrNotFound) {
+			httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Специалист не найден.")
+			return
+		}
+		if rerr != nil {
+			httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+			return
+		}
+		id = resolved
+	}
+	// Owner-preview: если caller авторизован И смотрит свой профиль —
+	// возвращаем независимо от publish/moderation статуса, отмечаем
+	// флагом IsPreview. Это даёт спецу «посмотреть как клиент» до publish.
+	// Сравнение через OptionalMiddleware: uid пуст если токена не было.
+	callerID, authed := auth.UserIDFrom(r.Context())
+	if authed && callerID == id {
+		p, err := h.svc.GetPublicForOwner(r.Context(), id)
+		switch {
+		case errors.Is(err, ErrNotFound):
+			httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Специалист не найден.")
+		case err != nil:
+			httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+		default:
+			p.IsPreview = !(p.IsPublished && p.ModerationStatus == "approved")
+			httpx.WriteJSON(w, http.StatusOK, p)
+		}
 		return
 	}
 	p, err := h.svc.GetPublic(r.Context(), id)
@@ -116,6 +149,12 @@ func (h *Handler) PatchFull(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrInvalidInput):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case errors.Is(err, ErrUsernameTaken):
+		httpx.WriteErrMsg(w, http.StatusConflict, "username_taken",
+			"Этот username уже занят, попробуйте другой.")
+	case errors.Is(err, ErrInvalidUsername):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_username",
+			"username: разрешены латиница, цифры, _ и - (3–30 символов).")
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "no_profile", msgNoProfile)
 	case errors.Is(err, ErrConflict):
@@ -170,7 +209,12 @@ func (h *Handler) setPublished(w http.ResponseWriter, r *http.Request, v bool) {
 			"check":   rejected.Result,
 		})
 	case errors.Is(err, ErrPublishIncomplete):
-		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "publish_incomplete", msgPublishInc)
+		// Сервис возвращает ошибку вида "publish incomplete: <русский детал>"
+		// (см. RevalidatePublishInTx и SetPublished). Отрезаем префикс и
+		// шлём конкретику фронту, чтобы юзер видел КАКОЕ поле не заполнено.
+		detail := strings.TrimPrefix(err.Error(), "publish incomplete: ")
+		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "publish_incomplete",
+			"Профиль не готов к публикации: "+detail+".")
 	case errors.Is(err, ErrEmailUnverified):
 		httpx.WriteErrMsg(w, http.StatusForbidden, "email_unverified", msgEmailUnverif)
 	case errors.Is(err, ErrUserInactive):
@@ -239,6 +283,45 @@ func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 		// Полный текст ошибки валидации в reason — Loki сразу покажет
 		// какое из правил сорвалось (video_url not in bucket / title empty /
 		// category mismatch и т.п.).
+		httpx.SetReqReason(r.Context(), httpx.InvalidInputMessage(err))
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case err != nil:
+		httpx.SetReqReason(r.Context(), "internal:"+err.Error())
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusCreated, item)
+	}
+}
+
+// PortfolioPhotoSetCreate godoc
+// @Summary      Добавить photo-set в портфолио (1..10 фото = одна карусель)
+// @Description  Создаёт portfolio_item kind='image' + N portfolio_images.
+//               Каждый image_url должен указывать на наш S3-bucket.
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioPhotoSetCreateInput  true  "title + images"
+// @Success      201   {object}  PortfolioItem
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Router       /me/portfolio/photoset [post]
+func (h *Handler) PortfolioPhotoSetCreate(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.SetReqReason(r.Context(), "no_user")
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	var in PortfolioPhotoSetCreateInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.SetReqReason(r.Context(), "bad_json")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	item, err := h.svc.AddPortfolioPhotoSet(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
 		httpx.SetReqReason(r.Context(), httpx.InvalidInputMessage(err))
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case err != nil:
@@ -527,6 +610,190 @@ func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request)
 	default:
 		httpx.WriteJSON(w, http.StatusOK, item)
 	}
+}
+
+// PortfolioUpdate godoc
+// @Summary      Обновить title/description элемента портфолио
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string               true  "portfolio item id"
+// @Param        body  body      PortfolioPatchInput  true  "patch fields"
+// @Success      200   {object}  PortfolioItem
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      404   {object}  errorResponse
+// @Failure      409   {object}  errorResponse
+// @Router       /me/portfolio/{id} [patch]
+func (h *Handler) PortfolioUpdate(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
+		return
+	}
+	var in PortfolioPatchInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	item, err := h.svc.UpdatePortfolio(r.Context(), uid, itemID, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case errors.Is(err, ErrNotFound):
+		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Элемент портфолио не найден.")
+	case errors.Is(err, ErrConflict):
+		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at", msgStale)
+	case err != nil:
+		httpx.SetReqReason(r.Context(), "internal:"+err.Error())
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusOK, item)
+	}
+}
+
+// PortfolioImagesAppend godoc
+// @Summary      Добавить N фото в существующий photo-set
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                       true  "portfolio item id"
+// @Param        body  body      PortfolioImagesAppendInput   true  "images to append"
+// @Success      200   {array}   PortfolioImage
+// @Failure      400   {object}  errorResponse
+// @Failure      404   {object}  errorResponse
+// @Router       /me/portfolio/{id}/images [post]
+func (h *Handler) PortfolioImagesAppend(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
+		return
+	}
+	var in PortfolioImagesAppendInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	res, err := h.svc.AppendPhotosToSet(r.Context(), uid, itemID, in.Images)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case errors.Is(err, ErrNotFound):
+		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Фото-кейс не найден.")
+	case err != nil:
+		httpx.SetReqReason(r.Context(), "internal:"+err.Error())
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"images":     res.Images,
+			"updated_at": res.UpdatedAt,
+		})
+	}
+}
+
+// PortfolioImagesReorder godoc
+// @Summary      Поменять порядок фото в photo-set'е (drag-and-drop)
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                         true  "portfolio item id"
+// @Param        body  body      PortfolioImagesReorderInput    true  "image_ids в желаемом порядке"
+// @Success      200   {array}   PortfolioImage
+// @Failure      400   {object}  errorResponse
+// @Failure      404   {object}  errorResponse
+// @Router       /me/portfolio/{id}/images/order [put]
+func (h *Handler) PortfolioImagesReorder(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
+		return
+	}
+	var in PortfolioImagesReorderInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(in.ImageIDs))
+	for _, raw := range in.ImageIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "image_ids: каждый должен быть UUID")
+			return
+		}
+		ids = append(ids, id)
+	}
+	res, err := h.svc.ReorderSetPhotos(r.Context(), uid, itemID, ids)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case errors.Is(err, ErrNotFound):
+		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Фото-кейс не найден.")
+	case err != nil:
+		httpx.SetReqReason(r.Context(), "internal:"+err.Error())
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"images":     res.Images,
+			"updated_at": res.UpdatedAt,
+		})
+	}
+}
+
+// PortfolioImageDelete godoc
+// @Summary      Удалить одно фото из photo-set'а
+// @Description  Если в сете остаётся 0 фото — каскадом удаляется сам элемент портфолио.
+// @Tags         portfolio
+// @Produce      json
+// @Security     BearerAuth
+// @Param        img_id  path      string  true  "portfolio image id"
+// @Success      204     "no content"
+// @Failure      401     {object}  errorResponse
+// @Failure      404     {object}  errorResponse
+// @Router       /me/portfolio/images/{img_id} [delete]
+func (h *Handler) PortfolioImageDelete(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	imageID, err := uuid.Parse(chi.URLParam(r, "img_id"))
+	if err != nil {
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "img_id", Message: "Должен быть UUID"})
+		return
+	}
+	if err := h.svc.DeletePortfolioImage(r.Context(), uid, imageID); err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Фото не найдено.")
+		default:
+			httpx.SetReqReason(r.Context(), "internal:"+err.Error())
+			httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // PortfolioDelete godoc
