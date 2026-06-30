@@ -178,6 +178,15 @@ func (s *Service) PatchFull(ctx context.Context, userID uuid.UUID, in PatchFullI
 		patch.IsFreelance = got.IsFreelance
 	}
 
+	// 0.4. Нормализация social_links (если заданы). Trim + max 200 chars
+	// на каждое поле — предотвращает запихивание JSON-документов в одно поле.
+	// URL'ы как таковые НЕ валидируем строго — спец может писать как угодно
+	// (handle, t.me URL, голый телефон для whatsapp). Фронт перед рендером
+	// нормализует в кликабельные ссылки.
+	if patch.SocialLinks != nil {
+		patch.SocialLinks = normalizeSocialLinks(patch.SocialLinks)
+	}
+
 	// 0.5. Валидация username (если задан). Reserved-имена (login, api, admin,
 	// search) запрещены чтобы не маскировались под системные пути.
 	if patch.Username != nil {
@@ -1264,6 +1273,35 @@ var reservedUsernames = map[string]struct{}{
 	"support":       {},
 	"system":        {},
 	"verify":        {},
+}
+
+const socialLinkMaxLen = 200
+
+// normalizeSocialLinks — trim + ограничение длины каждого поля. Поля
+// длиннее socialLinkMaxLen усекаются (защита от случайного запихивания
+// длинного JSON-документа). Возвращает новый объект (immutable).
+func normalizeSocialLinks(in *SocialLinks) *SocialLinks {
+	if in == nil {
+		return nil
+	}
+	trim := func(s string) string {
+		v := strings.TrimSpace(s)
+		if len(v) > socialLinkMaxLen {
+			v = v[:socialLinkMaxLen]
+		}
+		return v
+	}
+	return &SocialLinks{
+		Telegram:  trim(in.Telegram),
+		WhatsApp:  trim(in.WhatsApp),
+		VK:        trim(in.VK),
+		YouTube:   trim(in.YouTube),
+		Instagram: trim(in.Instagram),
+		TikTok:    trim(in.TikTok),
+		Behance:   trim(in.Behance),
+		Dribbble:  trim(in.Dribbble),
+		Website:   trim(in.Website),
+	}
 }
 
 // ValidateUsername — формат username (a-z, 0-9, _, -, 3-30 символов) +

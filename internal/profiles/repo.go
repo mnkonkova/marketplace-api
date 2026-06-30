@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -42,10 +43,12 @@ SELECT p.user_id, COALESCE(p.username, ''), p.display_name, p.bio,
        COALESCE(p.contact_email, ''), COALESCE(p.contact_phone, ''),
        p.updated_at,
        p.production_id, p.is_freelance,
-       p.moderation_status, COALESCE(p.moderation_reason, ''), p.moderation_reviewed_at
+       p.moderation_status, COALESCE(p.moderation_reason, ''), p.moderation_reviewed_at,
+       p.social_links
 FROM specialist_profiles p
 WHERE p.user_id = $1`
 	var p Profile
+	var socialJSON []byte
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&p.UserID, &p.Username, &p.DisplayName, &p.Bio,
 		&p.AvatarURL, &p.City,
@@ -55,7 +58,14 @@ WHERE p.user_id = $1`
 		&p.UpdatedAt,
 		&p.ProductionID, &p.IsFreelance,
 		&p.ModerationStatus, &p.ModerationReason, &p.ModerationReviewedAt,
+		&socialJSON,
 	)
+	if err == nil && len(socialJSON) > 0 {
+		// JSON Unmarshal безопасен — записываем туда только из самого нашего
+		// PatchInTx, формат под контролем. Если приходит мусор — берём пустую
+		// карту (не валим всю выборку профиля).
+		_ = json.Unmarshal(socialJSON, &p.SocialLinks)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{}, ErrNotFound
 	}
@@ -177,9 +187,21 @@ UPDATE specialist_profiles SET
   production_id = CASE WHEN $14::boolean THEN $15 ELSE production_id END,
   is_freelance  = CASE WHEN $16::boolean THEN $17 ELSE is_freelance END,
   username      = CASE WHEN $18::boolean THEN $19 ELSE username END,
+  social_links  = CASE WHEN $20::boolean THEN $21::jsonb ELSE social_links END,
   updated_at    = now()
 WHERE user_id = $1
   AND ($13::timestamptz IS NULL OR updated_at = $13)`
+	// social_links: nil = не трогать; не-nil = заменить полностью.
+	var setSocial bool
+	var socialJSON []byte
+	if in.SocialLinks != nil {
+		setSocial = true
+		var mErr error
+		socialJSON, mErr = json.Marshal(in.SocialLinks)
+		if mErr != nil {
+			return fmt.Errorf("marshal social_links: %w", mErr)
+		}
+	}
 	tag, err := tx.Exec(ctx, q,
 		userID,
 		in.DisplayName,
@@ -195,6 +217,7 @@ WHERE user_id = $1
 		in.SetProduction, in.ProductionID,
 		in.SetIsFreelance, in.IsFreelance,
 		setUsername, usernameVal,
+		setSocial, socialJSON,
 	)
 	if err != nil {
 		// 23505 unique_violation на username — отдаём как ErrConflict,
@@ -504,18 +527,24 @@ SELECT p.user_id, COALESCE(p.username, ''), p.display_name, p.bio,
        p.rate_min, p.rate_max, p.currency,
        p.rating_avg, p.reviews_count,
        COALESCE(pr.name, ''), p.is_freelance,
-       p.is_published, p.moderation_status
+       p.is_published, p.moderation_status,
+       p.social_links
 FROM specialist_profiles p
 LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1
 ` + publishCond
 	var p PublicProfile
+	var socialJSON []byte
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&p.UserID, &p.Username, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
 		&p.RateMin, &p.RateMax, &p.Currency, &p.RatingAvg, &p.ReviewsCount,
 		&p.ProductionName, &p.IsFreelance,
 		&p.IsPublished, &p.ModerationStatus,
+		&socialJSON,
 	)
+	if err == nil && len(socialJSON) > 0 {
+		_ = json.Unmarshal(socialJSON, &p.SocialLinks)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublicProfile{}, ErrNotFound
 	}

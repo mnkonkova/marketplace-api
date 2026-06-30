@@ -69,6 +69,30 @@ type PortfolioImage struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// SocialLinks — карта соцсетей спеца. Ключи фиксированные (фронт знает
+// список и рендерит иконки); значения — URL или handle (с @). Пустые
+// поля опускаются из JSON через omitempty.
+//
+// Семантика значений:
+//   • telegram — "@username" или "https://t.me/username"
+//   • whatsapp — телефон в международном формате или wa.me-ссылка
+//   • vk       — "https://vk.com/handle"
+//   • youtube  — channel/handle URL
+//   • instagram, tiktok — handle / URL (* запрещ. в РФ — фронт показывает)
+//   • behance, dribbble — портфолио-ссылки для дизайнеров
+//   • website  — произвольный URL личного сайта
+type SocialLinks struct {
+	Telegram  string `json:"telegram,omitempty"`
+	WhatsApp  string `json:"whatsapp,omitempty"`
+	VK        string `json:"vk,omitempty"`
+	YouTube   string `json:"youtube,omitempty"`
+	Instagram string `json:"instagram,omitempty"`
+	TikTok    string `json:"tiktok,omitempty"`
+	Behance   string `json:"behance,omitempty"`
+	Dribbble  string `json:"dribbble,omitempty"`
+	Website   string `json:"website,omitempty"`
+}
+
 type PublicProfile struct {
 	UserID       uuid.UUID       `json:"user_id"`
 	// Username — публичный handle для красивого URL /specialist/<username>.
@@ -101,6 +125,9 @@ type PublicProfile struct {
 	// различить «черновик» (false) от «на модерации» (true + not approved).
 	IsPublished      bool   `json:"is_published"`
 	ModerationStatus string `json:"moderation_status,omitempty"`
+	// SocialLinks — соцсети для прямого контакта (telegram/whatsapp/vk/etc).
+	// Если все пусты, фронт не рендерит блок.
+	SocialLinks SocialLinks `json:"social_links"`
 }
 
 type Profile struct {
@@ -143,6 +170,8 @@ type Profile struct {
 	ModerationStatus     string     `json:"moderation_status"` // pending_review|approved|rejected
 	ModerationReason     string     `json:"moderation_reason,omitempty"`
 	ModerationReviewedAt *time.Time `json:"moderation_reviewed_at,omitempty"`
+	// SocialLinks — заполняет сам спец из кабинета.
+	SocialLinks SocialLinks `json:"social_links"`
 }
 
 type PatchInput struct {
@@ -150,6 +179,9 @@ type PatchInput struct {
 	// Username — публичный handle. nil = не трогать; "" = сбросить в NULL;
 	// "newname" = валидируем (lowercase, a-z0-9_-, 3-30, unique) и ставим.
 	Username     *string `json:"username,omitempty"`
+	// SocialLinks — nil = не трогать; не-nil = полная замена. Frontend
+	// собирает текущее состояние всех 9 полей перед PATCH'ем.
+	SocialLinks  *SocialLinks `json:"social_links,omitempty"`
 	Bio          *string `json:"bio"`
 	AvatarURL    *string `json:"avatar_url"`
 	City         *string `json:"city"`
@@ -200,7 +232,8 @@ type PatchFullInput struct {
 	DisplayName  *string `json:"display_name"`
 	// Username — публичный handle. nil = не трогать; "" = сбросить в NULL;
 	// валидируется сервисом, см. ValidateUsername.
-	Username     *string `json:"username,omitempty"`
+	Username     *string      `json:"username,omitempty"`
+	SocialLinks  *SocialLinks `json:"social_links,omitempty"`
 	Bio          *string `json:"bio"`
 	AvatarURL    *string `json:"avatar_url"`
 	City         *string `json:"city"`
@@ -235,7 +268,8 @@ func (in PatchFullInput) hasProfileFields() bool {
 	return in.DisplayName != nil || in.Bio != nil || in.AvatarURL != nil ||
 		in.City != nil || in.RateMin != nil || in.RateMax != nil ||
 		in.Currency != nil || in.ContactEmail != nil || in.ContactPhone != nil ||
-		in.ProductionID != nil || in.IsFreelance != nil || in.Username != nil
+		in.ProductionID != nil || in.IsFreelance != nil || in.Username != nil ||
+		in.SocialLinks != nil
 }
 
 // toPatchInput — переиспользуем PatchInTx, который уже умеет COALESCE
@@ -253,6 +287,7 @@ func (in PatchFullInput) toPatchInput() PatchInput {
 		ContactEmail: in.ContactEmail,
 		ContactPhone: in.ContactPhone,
 		Username:     in.Username,
+		SocialLinks:  in.SocialLinks,
 		UpdatedAt:    in.UpdatedAt,
 	}
 }
