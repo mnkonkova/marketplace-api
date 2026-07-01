@@ -105,10 +105,13 @@ func (s *Service) Search(ctx context.Context, q Query) (Result, error) {
 		return Result{}, err
 	}
 
-	// Старый бродинг для пустой текстовой выдачи — оставляем для совместимости.
-	// Идёт последовательно, потому что нужен ровно когда основной=0
-	// (запускать его параллельно бессмысленно — в 95% случаев потратим зря).
-	if out.Total == 0 && q.Q != "" {
+	// Старый бродинг для пустой текстовой выдачи. Срабатывает ТОЛЬКО если
+	// нет ЛЮБЫХ фильтров: раньше при q=«моушн-дизайнер»+category=director
+	// (0 матчей) broadening выкидывал q и возвращал director-спецов —
+	// юзер получал НЕ тех кого искал. Если фильтры явно заданы — уважаем
+	// их и показываем пустой result корректно.
+	noFilters := len(relaxed) == 0 && len(q.Categories) == 0 && len(q.SkillSlugs) == 0
+	if out.Total == 0 && q.Q != "" && noFilters {
 		broadened := q
 		broadened.Q = ""
 		out2, err := s.runQuery(ctx, broadened, queryOpts{broadened: true})
