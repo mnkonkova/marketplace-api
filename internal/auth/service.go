@@ -109,7 +109,15 @@ type RegisterInput struct {
 	Password    string
 	Kind        string
 	DisplayName string
+	// Source — трэкинг откуда пришла регистрация. "landing_clients"
+	// авто-подтверждает email (см. Register): клиент с /for-clients
+	// нажал «Опубликовать первую заявку» и в форме сразу указал контакт —
+	// требовать ещё и клик по письму на этой стадии = ломать воронку.
+	Source string
 }
+
+// SourceLandingClients — регистрация с лендинга клиентов (без email-verify).
+const SourceLandingClients = "landing_clients"
 
 type RegisterResult struct {
 	UserID uuid.UUID
@@ -178,9 +186,13 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 				return err
 			}
 		}
-		// Если soft-gate выключен (локальный запуск без n8n) — сразу
-		// помечаем юзера verified и не плодим outbox-события: писем не будет.
-		if s.verificationOff {
+		// Авто-verify для двух случаев:
+		//   • soft-gate выключен глобально (локальный запуск без n8n);
+		//   • source = landing_clients — клиент прошёл через /for-clients
+		//     где следующий шаг = сразу бриф. Требовать клик по письму
+		//     между «зарегался» и «отправил заявку» = теряем конверсию,
+		//     а реальный контакт клиент дал в client_contact брифа.
+		if s.verificationOff || in.Source == SourceLandingClients {
 			if _, err := tx.Exec(ctx,
 				`UPDATE users SET email_verified_at = now() WHERE id = $1`, userID); err != nil {
 				return fmt.Errorf("auto-verify: %w", err)

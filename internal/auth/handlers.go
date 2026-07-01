@@ -17,6 +17,12 @@ type registerReq struct {
 	Password    string `json:"password"`
 	Kind        string `json:"kind"`
 	DisplayName string `json:"display_name"`
+	// Source — откуда пришла регистрация: "landing_clients" разрешает
+	// авто-подтверждение email'а (юзер сразу может создать бриф без
+	// клика по письму). Валидность source не проверяем — это UX-ярлык,
+	// не security-gate: клиент всё равно должен указать реальный контакт
+	// в самом брифе (client_contact), туда менеджер и напишет.
+	Source string `json:"source,omitempty"`
 }
 
 type registerResp struct {
@@ -46,6 +52,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		Password:    in.Password,
 		Kind:        in.Kind,
 		DisplayName: in.DisplayName,
+		Source:      in.Source,
 	})
 	switch {
 	// Раньше ErrAlreadyExists и ErrInvalidInput возвращались с пустым
