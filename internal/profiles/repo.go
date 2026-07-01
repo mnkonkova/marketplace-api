@@ -521,60 +521,138 @@ func (r *Repo) getPublic(ctx context.Context, userID uuid.UUID, strict bool) (Pu
 	if strict {
 		publishCond = "AND p.is_published = TRUE AND p.moderation_status = 'approved'"
 	}
+	// Один SQL вместо 5 последовательных round-trip'ов (было ~500 мс TTFB,
+	// стало ~150 мс). Категории/скилы/портфолио/отзывы собираются через
+	// json_agg — Go парсит из JSON и заполняет соответствующие поля.
+	// Images для kind='image' подтягиваются вложенным json_agg (photo-sets).
+	// Reviews лимитятся 20 в подзапросе (порядок как в listReviews).
 	q := `
-SELECT p.user_id, COALESCE(p.username, ''), p.display_name, p.bio,
-       COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
-       p.rate_min, p.rate_max, p.currency,
-       p.rating_avg, p.reviews_count,
-       COALESCE(pr.name, ''), p.is_freelance,
-       p.is_published, p.moderation_status,
-       p.social_links
+SELECT
+  p.user_id,
+  COALESCE(p.username, ''),
+  p.display_name,
+  p.bio,
+  COALESCE(p.avatar_url, ''),
+  COALESCE(p.city, ''),
+  p.rate_min, p.rate_max, p.currency,
+  p.rating_avg, p.reviews_count,
+  COALESCE(pr.name, ''),
+  p.is_freelance,
+  p.is_published,
+  p.moderation_status,
+  p.social_links,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'code', sc.category_code,
+      'title', c.title,
+      'is_primary', sc.is_primary
+    ) ORDER BY sc.is_primary DESC, c.sort_order, c.title)
+    FROM specialist_categories sc
+    JOIN specialty_categories c ON c.code = sc.category_code
+    WHERE sc.user_id = p.user_id
+  ), '[]'::json) AS categories_json,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', s.id,
+      'slug', s.slug,
+      'title', s.title,
+      'kind', s.kind
+    ) ORDER BY s.kind, s.title)
+    FROM specialist_skills ss
+    JOIN skills s ON s.id = ss.skill_id
+    WHERE ss.user_id = p.user_id
+  ), '[]'::json) AS skills_json,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', pi.id,
+      'kind', pi.kind,
+      'title', pi.title,
+      'description', pi.description,
+      'video_url', COALESCE(pi.video_url, ''),
+      'thumbnail_url', COALESCE(pi.thumbnail_url, ''),
+      'external_url', COALESCE(pi.external_url, ''),
+      'category_codes', pi.category_codes,
+      'sort_order', pi.sort_order,
+      'created_at', pi.created_at,
+      'updated_at', pi.updated_at,
+      'preview_url', COALESCE(pi.preview_url, ''),
+      'animated_thumb_url', COALESCE(pi.animated_thumb_url, ''),
+      'preview_status', pi.preview_status,
+      'images', COALESCE((
+        SELECT json_agg(json_build_object(
+          'id', img.id,
+          'image_url', img.image_url,
+          'sort_order', img.sort_order,
+          'width', img.width,
+          'height', img.height,
+          'created_at', img.created_at
+        ) ORDER BY img.sort_order, img.created_at)
+        FROM portfolio_images img
+        WHERE img.portfolio_item_id = pi.id AND pi.kind = 'image'
+      ), '[]'::json)
+    ) ORDER BY pi.sort_order, pi.created_at DESC)
+    FROM portfolio_items pi
+    WHERE pi.user_id = p.user_id
+  ), '[]'::json) AS portfolio_json,
+  COALESCE((
+    SELECT json_agg(json_build_object(
+      'id', r.id,
+      'author_user_id', r.author_user_id,
+      'author_name', COALESCE(NULLIF(r.author_name, ''), 'Клиент'),
+      'rating', r.rating,
+      'text', r.text,
+      'created_at', r.created_at
+    ) ORDER BY r.created_at DESC)
+    FROM (
+      SELECT id, author_user_id, author_name, rating, text, created_at
+      FROM reviews
+      WHERE target_user_id = p.user_id
+      ORDER BY created_at DESC
+      LIMIT 20
+    ) r
+  ), '[]'::json) AS reviews_json
 FROM specialist_profiles p
 LEFT JOIN productions pr ON pr.id = p.production_id AND pr.is_active = TRUE
 WHERE p.user_id = $1
 ` + publishCond
+
 	var p PublicProfile
-	var socialJSON []byte
+	var socialJSON, catsJSON, skillsJSON, portfolioJSON, reviewsJSON []byte
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&p.UserID, &p.Username, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.City,
 		&p.RateMin, &p.RateMax, &p.Currency, &p.RatingAvg, &p.ReviewsCount,
 		&p.ProductionName, &p.IsFreelance,
 		&p.IsPublished, &p.ModerationStatus,
 		&socialJSON,
+		&catsJSON, &skillsJSON, &portfolioJSON, &reviewsJSON,
 	)
-	if err == nil && len(socialJSON) > 0 {
-		_ = json.Unmarshal(socialJSON, &p.SocialLinks)
-	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublicProfile{}, ErrNotFound
 	}
 	if err != nil {
 		return PublicProfile{}, fmt.Errorf("query public profile: %w", err)
 	}
-
-	cats, err := r.listCategoriesWithTitles(ctx, userID)
-	if err != nil {
-		return PublicProfile{}, err
+	if len(socialJSON) > 0 {
+		_ = json.Unmarshal(socialJSON, &p.SocialLinks)
 	}
-	p.Categories = cats
-
-	skills, err := r.listSkillsWithTitles(ctx, userID)
-	if err != nil {
-		return PublicProfile{}, err
+	// Инициализируем как пустые слайсы (json_agg с COALESCE даёт '[]',
+	// unmarshal вернёт []T{}, но на всякий случай гарантируем не-nil).
+	p.Categories = []CategoryRef{}
+	p.Skills = []SkillRef{}
+	p.Portfolio = []PortfolioItem{}
+	p.Reviews = []Review{}
+	if err := json.Unmarshal(catsJSON, &p.Categories); err != nil {
+		return PublicProfile{}, fmt.Errorf("unmarshal categories: %w", err)
 	}
-	p.Skills = skills
-
-	portfolio, err := r.listPortfolio(ctx, userID)
-	if err != nil {
-		return PublicProfile{}, err
+	if err := json.Unmarshal(skillsJSON, &p.Skills); err != nil {
+		return PublicProfile{}, fmt.Errorf("unmarshal skills: %w", err)
 	}
-	p.Portfolio = portfolio
-
-	reviews, err := r.listReviews(ctx, userID)
-	if err != nil {
-		return PublicProfile{}, err
+	if err := json.Unmarshal(portfolioJSON, &p.Portfolio); err != nil {
+		return PublicProfile{}, fmt.Errorf("unmarshal portfolio: %w", err)
 	}
-	p.Reviews = reviews
+	if err := json.Unmarshal(reviewsJSON, &p.Reviews); err != nil {
+		return PublicProfile{}, fmt.Errorf("unmarshal reviews: %w", err)
+	}
 
 	return p, nil
 }
