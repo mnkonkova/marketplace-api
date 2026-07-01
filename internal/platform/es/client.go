@@ -134,6 +134,26 @@ func (c *Client) CreateIndex(ctx context.Context, name string, mapping any) erro
 	return c.do(ctx, http.MethodPut, "/"+name, mapping, nil)
 }
 
+// DeleteIndex — сносит индекс полностью (метадата + все документы).
+// Идемпотентно: если индекса нет — возвращает nil. Используется при
+// смене analyzer'a / маппинга через OPENSEARCH_REINDEX_ON_START=true.
+func (c *Client) DeleteIndex(ctx context.Context, name string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.base+"/"+name, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return &ErrStatus{Status: resp.StatusCode, Body: string(body)}
+}
+
 func (c *Client) EnsureIndex(ctx context.Context, name string, mapping any) error {
 	exists, err := c.IndexExists(ctx, name)
 	if err != nil {
@@ -141,6 +161,16 @@ func (c *Client) EnsureIndex(ctx context.Context, name string, mapping any) erro
 	}
 	if exists {
 		return nil
+	}
+	return c.CreateIndex(ctx, name, mapping)
+}
+
+// RecreateIndex — DeleteIndex + CreateIndex. Синхронный path'а для случая
+// «маппинг несовместим со старым индексом, но analyzer/synonyms поменялся».
+// Даунтайм поиска = время delete + create + reindex (bootstrap).
+func (c *Client) RecreateIndex(ctx context.Context, name string, mapping any) error {
+	if err := c.DeleteIndex(ctx, name); err != nil {
+		return fmt.Errorf("delete index: %w", err)
 	}
 	return c.CreateIndex(ctx, name, mapping)
 }

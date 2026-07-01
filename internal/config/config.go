@@ -20,6 +20,14 @@ type Config struct {
 	OpenSearchURL             string `env:"OPENSEARCH_URL" envDefault:"http://localhost:9200"`
 	OpenSearchIndexProfile    string `env:"OPENSEARCH_INDEX_SPECIALISTS" envDefault:"specialists"`
 	OpenSearchIndexFeedVideos string `env:"OPENSEARCH_INDEX_FEED_VIDEOS" envDefault:"feed_videos"`
+	// OpenSearchReindexOnStart — если true, worker при старте DROP'нет оба
+	// индекса и создаст заново с текущим маппингом, потом bootstrap'ом
+	// переиндексирует всех published-approved спецов. Используется при
+	// смене analyzer'a (например, добавили synonyms) — иначе старый индекс
+	// использует старые правила. Даунтайм поиска ~5-30 сек в зависимости
+	// от объёма. Ставить в true ночью на один запуск, потом обратно false.
+	// См. docs/DEPLOY.md → «Reindex на смене маппинга».
+	OpenSearchReindexOnStart bool `env:"OPENSEARCH_REINDEX_ON_START" envDefault:"false"`
 
 	RedisAddr     string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
 	RedisPassword string `env:"REDIS_PASSWORD"`

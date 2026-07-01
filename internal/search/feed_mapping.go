@@ -15,11 +15,21 @@ func FeedVideoMapping() map[string]any {
 			"number_of_shards":   1,
 			"number_of_replicas": 0,
 			"analysis": map[string]any{
+				"filter": map[string]any{
+					// Тот же список синонимов что и в основном IndexMapping
+					// (см. mapping.go::ruEnSynonyms) — один источник истины,
+					// чтобы кириллица↔латиница работало и в feed-поиске тоже
+					// (feed multi_match ищет по title/description/bio).
+					"ru_en_synonyms": map[string]any{
+						"type":     "synonym_graph",
+						"synonyms": ruEnSynonyms,
+					},
+				},
 				"analyzer": map[string]any{
 					"ru_en": map[string]any{
 						"type":      "custom",
 						"tokenizer": "standard",
-						"filter":    []string{"lowercase", "stop", "asciifolding"},
+						"filter":    []string{"lowercase", "stop", "asciifolding", "ru_en_synonyms"},
 					},
 				},
 			},

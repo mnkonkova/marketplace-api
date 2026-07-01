@@ -52,6 +52,28 @@ func main() {
 	defer pool.Close()
 
 	esClient := es.New(cfg.OpenSearchURL)
+
+	// Reindex-on-start: при смене analyzer'a / маппинга (например, добавили
+	// synonym_graph) старый индекс продолжает использовать старую конфигурацию,
+	// потому что settings.analysis нельзя менять in-place. Флаг заставляет
+	// снести оба индекса и создать заново — worker потом сам сделает bootstrap.
+	// Даунтайм поиска на время recreate + bootstrap (~5-30 сек в MVP-объёме).
+	//
+	// Правило деплоя: включить в .env.prod=true ночью → задеплоить → дождаться
+	// «bootstrapped» лога → вернуть в false в env → редеплой worker'a.
+	// См. docs/DEPLOY.md → «Reindex на смене маппинга».
+	if cfg.OpenSearchReindexOnStart {
+		slog.Warn("OPENSEARCH_REindex_ON_START=true — DROP both indices, will rebuild from scratch")
+		if err := esClient.DeleteIndex(rootCtx, cfg.OpenSearchIndexProfile); err != nil {
+			slog.Error("drop specialists index", "err", err)
+			os.Exit(1)
+		}
+		if err := esClient.DeleteIndex(rootCtx, cfg.OpenSearchIndexFeedVideos); err != nil {
+			slog.Error("drop feed_videos index", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	// EnsureIndex с ретраями: при холодном старте compose OS может быть ещё
 	// не готов, EOF/connection-reset — норма в первые секунды. Раньше worker
 	// падал os.Exit(1), оставляя outbox без обработчика. Ждём до 60 c
@@ -69,9 +91,10 @@ func main() {
 	indexer := search.NewIndexer(repo, esClient, cfg.OpenSearchIndexProfile)
 	feedIndexer := search.NewFeedIndexer(repo, esClient, cfg.OpenSearchIndexFeedVideos)
 
-	// Bootstrap: если feed_videos пустой (первый запуск после деплоя Stage 2
-	// или после ручного reset'а индекса) — прогоняем всех опубликованных спецов
-	// один раз. Дальше держим индекс актуальным через outbox-события.
+	// Bootstrap: если feed_videos пустой (первый запуск после деплоя Stage 2,
+	// после ручного reset'а или после OPENSEARCH_REINDEX_ON_START) — прогоняем
+	// всех опубликованных спецов один раз. Дальше держим индекс актуальным
+	// через outbox-события.
 	if empty, err := feedIndexer.IsEmpty(rootCtx); err != nil {
 		slog.Warn("feed_videos isEmpty check failed (skipping bootstrap)", "err", err)
 	} else if empty {
@@ -81,6 +104,14 @@ func main() {
 		} else {
 			slog.Info("feed_videos bootstrapped", "specialists", n)
 		}
+	}
+
+	// Bootstrap для specialists-индекса: при recreate он тоже пустой и надо
+	// прогнать всех published-approved спецов через Reconcile. Раньше это
+	// делалось только для feed_videos — при redirect-фикс'ах пришли к тому
+	// что тоже нужно для specialists (иначе SearchResultsPage пустой).
+	if err := bootstrapSpecialistsIfEmpty(rootCtx, esClient, cfg.OpenSearchIndexProfile, indexer, repo); err != nil {
+		slog.Warn("specialists bootstrap skipped", "err", err)
 	}
 
 	specialistHandler := func(ctx context.Context, _ int64, aggregateID, eventType string, payload []byte) error {
@@ -540,6 +571,36 @@ func runReviewAutoSkipTicker(ctx context.Context, svc *projects.Service, interva
 // На холодном старте docker compose OpenSearch ещё может не принимать
 // соединения; раньше worker падал с os.Exit(1) и outbox-события копились
 // без обработчика. 60 секунд (60×1 c) с запасом покрывают cold start.
+// bootstrapSpecialistsIfEmpty — если specialists-индекс пуст, прогоняет
+// Reconcile для всех published-approved спецов из PG. Симметрично bootstrap'у
+// feed_videos: нужен после reindex-on-start и при первом деплое.
+//
+// version=0 в Reconcile — фолбэк на безверсионный upsert (indexer.go
+// сам разрулит). Ошибки одного спеца логируем но не валим весь bootstrap.
+func bootstrapSpecialistsIfEmpty(ctx context.Context, esClient *es.Client, index string, indexer *search.Indexer, repo *search.Repo) error {
+	n, err := esClient.CountDocs(ctx, index)
+	if err != nil {
+		return fmt.Errorf("count specialists: %w", err)
+	}
+	if n > 0 {
+		return nil // индекс уже наполнен, не трогаем
+	}
+	ids, err := repo.LoadPublishedSpecialistIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("load ids: %w", err)
+	}
+	success := 0
+	for _, id := range ids {
+		if err := indexer.Reconcile(ctx, id, 0); err != nil {
+			slog.Warn("specialists bootstrap reconcile failed", "user_id", id, "err", err)
+			continue
+		}
+		success++
+	}
+	slog.Info("specialists bootstrapped", "total", len(ids), "indexed", success)
+	return nil
+}
+
 func ensureIndexWithRetry(ctx context.Context, esClient *es.Client, index string, mapping map[string]any, label string) error {
 	const maxAttempts = 60
 	var lastErr error
