@@ -207,6 +207,43 @@ func (f *FFmpegBin) MakeAnimatedWebP(ctx context.Context, input, output string, 
 	return nil
 }
 
+// ExtractThumbnail — один JPG-кадр на позиции offsetSec. Используется
+// регенерацией poster'ов (cmd/regen-thumbs): раньше фронт брал кадр
+// на 1.5с, часто попадал в чёрный fade-in. Теперь 2с — большинство
+// роликов уже открылись. -q:v 3 = высокое качество JPEG (2-4 — визуально
+// без артефактов, весит ~50-80 КБ на 720p).
+func (f *FFmpegBin) ExtractThumbnail(ctx context.Context, input, output string, offsetSec float64) error {
+	ctx, cancel := context.WithTimeout(ctx, f.timeout)
+	defer cancel()
+
+	args := []string{
+		"-y",
+		// -ss перед -i = fast seek по keyframes (менее точно, но за секунды
+		// не критично, и не декодит первые 2с зря).
+		"-ss", fmt.Sprintf("%.2f", offsetSec),
+		"-i", input,
+		"-frames:v", "1",
+		"-vf", "scale=-2:720:flags=lanczos",
+		"-q:v", "3",
+		"-threads", "2",
+		output,
+	}
+	cmd := exec.CommandContext(ctx, f.bin, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		text := stderr.String()
+		if isPermanentFFmpegError(text) {
+			return fmt.Errorf("%w: %s", ErrPermanent, summarizeFFmpegError(text))
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("ffmpeg thumb timeout after %s: %s", f.timeout, summarizeFFmpegError(text))
+		}
+		return fmt.Errorf("ffmpeg thumb failed: %w: %s", err, summarizeFFmpegError(text))
+	}
+	return nil
+}
+
 // isPermanentFFmpegError — эвристика по stderr. Покрывает основные
 // «битый файл / неподдерживаемый формат» сигналы. Не покрывает таймауты
 // и временные I/O ошибки — те ретраимся.
