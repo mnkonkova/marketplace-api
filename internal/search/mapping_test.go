@@ -57,6 +57,9 @@ func TestSynonyms_CriticalPairs(t *testing.T) {
 		"after effects", "афтер эффектс",
 		"ai", "ии",
 		"videographer", "видеограф",
+		"моушн", "motion", // категория motion + русское «моушн»
+		"монтажёр", "editor", // категория editor
+		"сценарист", "scriptwriter",
 	}
 	for _, s := range must {
 		if !strings.Contains(joined, s) {

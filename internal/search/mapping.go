@@ -43,6 +43,15 @@ var ruEnSynonyms = []string{
 	"фотограф, photographer",
 	"актёр, актер, actor",
 	"дизайнер, designer",
+	"монтажёр, монтажер, editor",
+	"моушн, моушн-дизайнер, моушн дизайнер, motion, motion designer, motion-designer",
+	"сценарист, scriptwriter, script writer",
+	"смм, smm, smm-менеджер, smm менеджер",
+	"таргет, таргетолог, ads seo, реклама",
+	"блогер, blogger",
+	"посевы, seeding",
+	"режиссёр, режиссер, director",
+	"видеоредактор, video director",
 
 	// Бренд площадки (люди пишут по-разному — упрощаем поиск себя же).
 	"wayprod, wayprodmarket, вейпрод, вейпродмаркет",
@@ -80,6 +89,12 @@ func IndexMapping() map[string]any {
 				"primary_category": map[string]any{"type": "keyword"},
 				"skill_slugs":      map[string]any{"type": "keyword"},
 				"skill_titles":     map[string]any{"type": "text", "analyzer": "ru_en"},
+				// category_titles — русские названия категорий спеца одной
+				// строкой («Монтажёр Моушн-дизайнер»), для multi_match'а.
+				// Без этого поля запрос «моушн-дизайнер» не находит спеца
+				// с category_code='motion' — категории в keyword ищутся
+				// только точным матчем по slug.
+				"category_titles": map[string]any{"type": "text", "analyzer": "ru_en"},
 				"rate_min":         map[string]any{"type": "integer"},
 				"rate_max":         map[string]any{"type": "integer"},
 				"currency":         map[string]any{"type": "keyword"},

@@ -27,6 +27,12 @@ type IndexDoc struct {
 	PrimaryCategory string     `json:"primary_category,omitempty"`
 	SkillSlugs      []string   `json:"skill_slugs"`
 	SkillTitles     string     `json:"skill_titles"`
+	// CategoryTitles — русские названия категорий спеца одной строкой
+	// («Монтажёр Моушн-дизайнер»). Индексируется под ru_en с synonyms,
+	// чтобы multi_match находил спецов по человеческому запросу вроде
+	// «моушн-дизайнер» / «сценарист» — категории в keyword'е ищутся
+	// только точным match'ем по slug'у.
+	CategoryTitles  string     `json:"category_titles"`
 	RateMin         *int       `json:"rate_min,omitempty"`
 	RateMax         *int       `json:"rate_max,omitempty"`
 	Currency        string     `json:"currency"`
@@ -78,6 +84,10 @@ SELECT
   COALESCE((SELECT category_code FROM specialist_categories WHERE user_id = p.user_id AND is_primary LIMIT 1), ''),
   COALESCE((SELECT array_agg(s.slug) FROM specialist_skills ss JOIN skills s ON s.id = ss.skill_id WHERE ss.user_id = p.user_id), ARRAY[]::text[]),
   COALESCE((SELECT string_agg(s.title, ' ') FROM specialist_skills ss JOIN skills s ON s.id = ss.skill_id WHERE ss.user_id = p.user_id), ''),
+  COALESCE((SELECT string_agg(sc.title, ' ')
+              FROM specialist_categories ss2
+              JOIN specialty_categories sc ON sc.code = ss2.category_code
+             WHERE ss2.user_id = p.user_id), ''),
   p.rate_min, p.rate_max, p.currency,
   p.rating_avg, p.reviews_count,
   p.is_published, p.moderation_status, p.updated_at,
@@ -109,7 +119,7 @@ WHERE p.user_id = $1`
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&d.UserID, &d.DisplayName, &d.Bio, &d.AvatarURL, &d.City,
 		&d.Categories, &d.PrimaryCategory,
-		&d.SkillSlugs, &d.SkillTitles,
+		&d.SkillSlugs, &d.SkillTitles, &d.CategoryTitles,
 		&d.RateMin, &d.RateMax, &d.Currency,
 		&d.RatingAvg, &d.ReviewsCount,
 		&d.IsPublished, &d.ModerationStatus, &d.UpdatedAt,

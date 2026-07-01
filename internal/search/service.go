@@ -324,10 +324,14 @@ func buildQuery(q Query, opts queryOpts) map[string]any {
 
 	var must any
 	if q.Q != "" {
+		// category_titles^2 — русские названия категорий («Моушн-дизайнер»)
+		// имеют высокий вес: юзер обычно ищет по «профессии», а не по
+		// абстрактному bio. display_name^3 остаётся сверху — точный
+		// матч имени спеца всегда выше.
 		must = map[string]any{
 			"multi_match": map[string]any{
 				"query":                q.Q,
-				"fields":               []string{"display_name^3", "bio", "skill_titles", "city.text"},
+				"fields":               []string{"display_name^3", "category_titles^2", "bio", "skill_titles", "city.text"},
 				"operator":             "or",
 				"type":                 "best_fields",
 				"minimum_should_match": "60%",
