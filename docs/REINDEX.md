@@ -12,11 +12,34 @@ OpenSearch не позволяет менять `settings.analysis` (анали�
 
 ## Как переиндексировать
 
-1. В `.env.prod` (или где хранишь env worker'a):
+### Быстрый путь (Recommended)
+
+На VDS:
+```bash
+cd /opt/marketpclce/api
+make prod-reindex
+```
+
+Эта команда:
+1. Ставит `OPENSEARCH_REINDEX_ON_START=true` в `.env.prod`
+2. Рестартует worker → DROP индексов + bootstrap
+3. Ждёт лог «specialists bootstrapped» (таймаут 5 мин)
+4. **Удаляет** строку `OPENSEARCH_REINDEX_ON_START` из `.env.prod`
+   (без флага — envDefault=false в config сработает автоматом)
+5. Рестартует worker ещё раз — уже без флага
+
+Одной командой = один даунтайм.
+
+### Ручной путь (для отладки / если prod-reindex завис)
+
+1. В `.env.prod`:
    ```
    OPENSEARCH_REINDEX_ON_START=true
    ```
-2. Задеплой worker (обычно `make redeploy-worker` или через compose).
+2. Рестарт worker:
+   ```
+   docker compose -f docker-compose.prod.yml up -d --no-deps worker
+   ```
 3. Смотри логи — должно быть:
    ```
    OPENSEARCH_REINDEX_ON_START=true — DROP both indices, will rebuild from scratch
@@ -25,11 +48,9 @@ OpenSearch не позволяет менять `settings.analysis` (анали�
    specialists bootstrapped total=N indexed=N
    feed_videos bootstrapped specialists=N
    ```
-4. Верни в `.env.prod`:
-   ```
-   OPENSEARCH_REINDEX_ON_START=false
-   ```
-5. Задеплой worker ещё раз (иначе при следующем рестарте индексы снесутся снова).
+4. Убери строку из `.env.prod` (не оставляй `=false` — просто удали, envDefault
+   сам подставит false).
+5. Рестарт worker снова.
 
 ## Даунтайм
 

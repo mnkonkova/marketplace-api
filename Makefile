@@ -1,5 +1,5 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test test-db-up test-db-reset test-integration lint fmt swag \
-        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos \
+        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos prod-reindex \
         backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n n8n-import n8n-export \
         grafana-dashboards-push grafana-rules-push grafana-alerts-push
 
@@ -160,6 +160,57 @@ prod-seed:
 # напишет в БД ссылки на эти объекты, и фид заработает.
 prod-seed-videos:
 	$(PROD_DC) run --rm api seed-videos
+
+# Полный реиндекс OpenSearch. Нужно после изменения settings.analysis
+# (например, добавили synonyms) — иначе старый индекс использует старые
+# правила анализа, потому что settings.analysis нельзя менять in-place.
+#
+# Флоу:
+#   1. Пишет в .env.prod строку OPENSEARCH_REINDEX_ON_START=true
+#   2. Рестартует worker — при старте он DROP'нет оба индекса, EnsureIndex
+#      создаст заново с текущим маппингом, bootstrap переиндексирует всех
+#      published-approved спецов
+#   3. Ждёт лог "bootstrapped" (specialists + feed_videos)
+#   4. УДАЛЯЕТ строку OPENSEARCH_REINDEX_ON_START из .env.prod
+#      (envDefault=false в config → следующий рестарт worker'a не тронет
+#      индексы). Чистый .env.prod без временных флагов.
+#   5. Рестартует worker ещё раз — теперь без флага, чтобы reindex не
+#      сработал случайно при следующем плановом redeploy.
+#
+# Даунтайм поиска ~15-45 сек на MVP-объёме (см. docs/REINDEX.md).
+# Запускать ночью (0:00-6:00 MSK) — трафик минимален.
+#
+# Использование на VDS: `make prod-reindex`
+prod-reindex:
+	@test -f .env.prod || (echo "ERR: .env.prod missing" >&2; exit 1)
+	@echo "→ enable OPENSEARCH_REINDEX_ON_START=true"
+	@if grep -q "^OPENSEARCH_REINDEX_ON_START=" .env.prod; then \
+		sed -i.bak 's/^OPENSEARCH_REINDEX_ON_START=.*/OPENSEARCH_REINDEX_ON_START=true/' .env.prod; \
+	else \
+		echo "OPENSEARCH_REINDEX_ON_START=true" >> .env.prod; \
+	fi
+	@grep "^OPENSEARCH_REINDEX_ON_START" .env.prod
+	@echo "→ restart worker (DROP indices + bootstrap)"
+	$(PROD_DC) up -d --no-deps worker
+	@echo "→ wait for bootstrap (timeout 5 min)"
+	@t=0; while [ $$t -lt 300 ]; do \
+		if $(PROD_DC) logs --no-color --tail=200 worker 2>&1 | grep -q "specialists bootstrapped"; then \
+			echo "✓ specialists bootstrapped"; \
+			break; \
+		fi; \
+		sleep 2; t=$$((t+2)); \
+	done; \
+	if [ $$t -ge 300 ]; then \
+		echo "ERR: bootstrap timeout, смотри логи: make prod-logs" >&2; \
+		exit 1; \
+	fi
+	@echo "→ remove OPENSEARCH_REINDEX_ON_START from .env.prod"
+	@sed -i.bak '/^OPENSEARCH_REINDEX_ON_START=/d' .env.prod
+	@rm -f .env.prod.bak
+	@! grep -q "^OPENSEARCH_REINDEX_ON_START" .env.prod && echo "✓ flag removed from .env.prod"
+	@echo "→ restart worker снова (без флага) чтобы default сработал"
+	$(PROD_DC) up -d --no-deps worker
+	@echo "✓ reindex done"
 
 # Бекап БД с ротацией: pg_dump из работающего postgres-контейнера →
 # gzip → backups/marketpclce-YYYY-MM-DD_HHMMSS.sql.gz. Удаляет файлы
