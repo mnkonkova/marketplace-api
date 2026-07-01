@@ -285,10 +285,21 @@ func TestModerationAdminRejectRequiresReason(t *testing.T) {
 	adminSvc := admin.NewService(admin.NewRepo(pool), nil, "http://x", time.Hour).
 		WithProfilesRepo(profilesRepo)
 
-	if err := adminSvc.RejectSpecialist(ctx, uid, uuid.New(), "  ", nil); !errors.Is(err, admin.ErrModerationReasonRequired) {
+	// Создаём реального admin'а — moderation_reviewed_by REFERENCES users(id),
+	// uuid.New() не сработает (23503 FK violation после migration 00021).
+	var adminID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+INSERT INTO users (email, password_hash, kind, is_admin, is_approved, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, TRUE, now()) RETURNING id`,
+		"admin-"+uuid.NewString()+"@x").Scan(&adminID); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	defer pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, adminID)
+
+	if err := adminSvc.RejectSpecialist(ctx, uid, adminID, "  ", nil); !errors.Is(err, admin.ErrModerationReasonRequired) {
 		t.Errorf("reject с пустой причиной: want ErrModerationReasonRequired, got %v", err)
 	}
-	if err := adminSvc.RejectSpecialist(ctx, uid, uuid.New(), "плохо", nil); err != nil {
+	if err := adminSvc.RejectSpecialist(ctx, uid, adminID, "плохо", nil); err != nil {
 		t.Fatalf("reject с валидной причиной: %v", err)
 	}
 	status, reason, _ := fetchModeration(t, pool, uid)
