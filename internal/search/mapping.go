@@ -43,6 +43,9 @@ var ruEnSynonyms = []string{
 	"фотограф, photographer",
 	"актёр, актер, actor",
 	"дизайнер, designer",
+
+	// Бренд площадки (люди пишут по-разному — упрощаем поиск себя же).
+	"wayprod, wayprodmarket, вейпрод, вейпродмаркет",
 }
 
 func IndexMapping() map[string]any {
