@@ -368,9 +368,12 @@ func (s *Service) ResendVerification(ctx context.Context, userID uuid.UUID) erro
 			// Уже verified — no-op, не шлём письмо.
 			return nil
 		}
-		if err := s.repo.InvalidatePrevVerificationsInTx(ctx, tx, userID); err != nil {
-			return err
-		}
+		// НЕ инвалидируем старые токены при resend: юзер может открыть письмо
+		// не с последнего resend'а (email-клиент показал старое сверху,
+		// перепутал вкладки, письмо потерялось между resend'ами), и раньше
+		// это давало 410 «ссылка устарела» → замкнутый круг. Каждый токен
+		// живёт до своего expires_at (TTL из конфига). Rate-limit на resend
+		// защищает от лавины писем.
 		return s.issueVerifyTokenInTx(ctx, tx, userID, *u.Email, displayName)
 	})
 }

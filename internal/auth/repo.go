@@ -240,6 +240,14 @@ func (r *Repo) ConsumeVerification(ctx context.Context, tokenHash string) (uuid.
 		 RETURNING user_id, email`,
 		tokenHash).Scan(&userID, &verifyEmail)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Токен неизвестен / уже использован / истёк. Проверяем «уже использован
+		// но юзер за это время verified» — типичный случай двойной отправки
+		// (refresh страницы верификации, email-preview prefetch, share-links).
+		// Если email уже подтверждён — возвращаем success (idempotent), а не
+		// ErrTokenInvalid → юзер видит «подтверждено» вместо «ссылка устарела».
+		if id, ok, cerr := r.checkTokenAlreadyConsumed(ctx, tx, tokenHash); cerr == nil && ok {
+			return id, nil
+		}
 		return uuid.Nil, ErrTokenInvalid
 	}
 	if err != nil {
@@ -265,6 +273,32 @@ func (r *Repo) ConsumeVerification(ctx context.Context, tokenHash string) (uuid.
 		return uuid.Nil, fmt.Errorf("commit: %w", err)
 	}
 	return userID, nil
+}
+
+// checkTokenAlreadyConsumed — вспомогательная проверка для idempotent
+// verify: если токен был использован раньше (used_at != NULL) и юзер уже
+// подтверждён, возвращаем (user_id, true). Это позволяет второму клику
+// по той же email-ссылке показать success, а не «ссылка устарела».
+// Возвращает (uuid.Nil, false, nil) если токен не подходит под этот case.
+func (r *Repo) checkTokenAlreadyConsumed(ctx context.Context, tx pgx.Tx, tokenHash string) (uuid.UUID, bool, error) {
+	var userID uuid.UUID
+	var verifiedAt *time.Time
+	err := tx.QueryRow(ctx,
+		`SELECT ev.user_id, u.email_verified_at
+		 FROM email_verifications ev
+		 JOIN users u ON u.id = ev.user_id
+		 WHERE ev.token_hash = $1 AND ev.used_at IS NOT NULL`,
+		tokenHash).Scan(&userID, &verifiedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if verifiedAt == nil {
+		return uuid.Nil, false, nil
+	}
+	return userID, true, nil
 }
 
 // FindByEmail — поиск по email (case-insensitive через CITEXT). Используется
