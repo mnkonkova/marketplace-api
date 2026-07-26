@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,6 +39,14 @@ func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
 	q := parseQuery(r)
 	res, err := h.svc.Feed(r.Context(), q)
 	if err != nil {
+		// Битый курсор — 400: client-error, ES здоров. Раньше всё уходило
+		// в 502, раздувая HighErrorRate + ESErrorRateHigh на stale-cursor'ах
+		// из старого localStorage / скраперов.
+		if errors.Is(err, ErrBadCursor) {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_cursor",
+				"Курсор невалиден — начните ленту сначала.")
+			return
+		}
 		httpx.WriteErrMsg(w, http.StatusBadGateway, "feed_unavailable",
 			"Лента временно недоступна. Попробуйте позже.")
 		return

@@ -20,12 +20,17 @@ groups:
     interval: 1m
     rules:
       - alert: HighErrorRate
+        # Порог трафика 0.2 rps (60 req/5min) — на пустом бэке 1 timeout
+        # = 100% ошибок и алерт флапал. Реальная деградация видна только
+        # при заметном трафике.
         expr: |
           (
             sum(rate(http_requests_total{job="marketpclce-api",status=~"5.."}[5m]))
             /
             sum(rate(http_requests_total{job="marketpclce-api"}[5m]))
           ) > 0.05
+          and
+          sum(rate(http_requests_total{job="marketpclce-api"}[5m])) > 0.2
         for: 5m
         labels: { severity: page, team: backend }
         annotations:
@@ -200,25 +205,32 @@ groups:
           description: "OS тормозит. Если bulk — outbox-handler застревает; если search — каталог лагает у юзеров. Проверь JVM heap / disk на OS-инстансе."
 
       - alert: ESErrorRateHigh
-        # delete_doc и delete_by_query исключены: их 404 (документа нет —
-        # ничего страшного, наш end-state достигнут) и 409 (external_gte
-        # version_conflict — конкурентный writer уже записал более свежую
-        # версию, наша операция была бы регрессом) клиент проглатывает как
-        # success в DeleteDocVer (см. internal/platform/es/client.go).
-        # НО метрика es_requests_total{status_class="4xx"} инкрементируется
-        # в defer ДО swallow, поэтому raw-счётчик показывает «ошибки»
-        # которые семантически не ошибки.
+        # index_doc, delete_doc, delete_by_query, bulk исключены — у всех
+        # 4xx (409 version_conflict / 404 not_found) семантически = success:
+        # клиент проглатывает как nil в IndexDocVer/DeleteDocVer, значит
+        # конкурентный writer уже записал более свежую версию или наш
+        # end-state (документа нет) уже достигнут. НО метрика
+        # es_requests_total{status_class="4xx"} инкрементируется в defer ДО
+        # swallow, поэтому raw-счётчик показывает «ошибки» которые
+        # семантически не ошибки. При активной outbox-обработке несколько
+        # events для одного aggregate = регулярные 409'ки и алерт флапал.
         #
-        # Реальные delete-проблемы видны через outbox_handler_errors_total
-        # (alert OutboxHandlerErrorSpike выше) — если delete'ы массово
+        # Реальные write-проблемы видны через outbox_handler_errors_total
+        # (alert OutboxHandlerErrorSpike выше) — если writes массово
         # реально валятся (5xx, network, неподдерживаемый 4xx), handler
         # вернёт ошибку и outbox это засчитает.
+        # Порог трафика: sum(rate) > 0.1 rps (>= 30 запросов за 5 мин).
+        # На низком трафике 1-2 timeout'а = 50-100% ошибок, false-positive
+        # ночью / в тихие часы. Реальная деградация — стабильно > 30 req/5min
+        # и > 5% фейлов.
         expr: |
           (
-            sum by (op) (rate(es_requests_total{op!~"delete_doc|delete_by_query",status_class!="2xx"}[5m]))
+            sum by (op) (rate(es_requests_total{op!~"index_doc|delete_doc|delete_by_query|bulk",status_class!="2xx"}[5m]))
             /
-            clamp_min(sum by (op) (rate(es_requests_total{op!~"delete_doc|delete_by_query"}[5m])), 0.01)
+            clamp_min(sum by (op) (rate(es_requests_total{op!~"index_doc|delete_doc|delete_by_query|bulk"}[5m])), 0.01)
           ) > 0.05
+          and
+          sum by (op) (rate(es_requests_total{op!~"index_doc|delete_doc|delete_by_query|bulk"}[5m])) > 0.1
         for: 5m
         labels: { severity: page, team: backend }
         annotations:

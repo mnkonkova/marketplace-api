@@ -4,14 +4,22 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"marketpclce/internal/platform/es"
 	"marketpclce/internal/search"
 )
+
+// ErrBadCursor — курсор невалиден (битый base64 / JSON). Хендлер мапит
+// в 400, не 502: это client-error (stale localStorage, ручные правки
+// URL, скраперы). Раньше ловилось общим err→502 и раздувало HighErrorRate
+// + ESErrorRateHigh на несуществующие ES-проблемы.
+var ErrBadCursor = errors.New("bad cursor")
 
 // pageSize — сколько видео тянем из ES за один запрос. Это потолок одной
 // страницы фронту. С учётом diversity-interleave фактическое разнообразие
@@ -80,19 +88,26 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 		q.Q = ""
 	}
 
-	// Кэш-чек до тяжёлых запросов в ES.
-	if cached, ok := s.cache.Get(ctx, q); ok {
-		return cached, nil
+	// Кэш-чек до тяжёлых запросов в ES. Redis лимитируем 200мс — если
+	// он залипнет (network, сервер тормозит), падаем в ES без задержки
+	// вместо того чтобы утопить весь /feed в 10-сек ожидании.
+	{
+		cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		if cached, ok := s.cache.Get(cacheCtx, q); ok {
+			cancel()
+			return cached, nil
+		}
+		cancel()
 	}
 
 	var cursor cursorPayload
 	if q.Cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 		if err != nil {
-			return Result{}, fmt.Errorf("decode cursor: %w", err)
+			return Result{}, fmt.Errorf("%w: decode: %v", ErrBadCursor, err)
 		}
 		if err := json.Unmarshal(raw, &cursor); err != nil {
-			return Result{}, fmt.Errorf("parse cursor: %w", err)
+			return Result{}, fmt.Errorf("%w: unmarshal: %v", ErrBadCursor, err)
 		}
 	}
 
@@ -254,6 +269,11 @@ func buildFeedQuery(q Query, cursor cursorPayload) map[string]any {
 			map[string]any{"video_created_at": map[string]any{"order": "desc"}},
 			map[string]any{"video_id": map[string]any{"order": "asc"}},
 		},
+		// timeout — server-side лимит OpenSearch. Если shard не успел за
+		// 3 сек, возвращаем частичный результат (`timed_out: true` в ответе,
+		// но статус всё равно 200). Без этого один медленный shard утаскивал
+		// весь запрос в 10-сек HTTP timeout клиента → 5xx на бэке.
+		"timeout": "3s",
 	}
 	if len(cursor.SearchAfter) > 0 {
 		body["search_after"] = cursor.SearchAfter

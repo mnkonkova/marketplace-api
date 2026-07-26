@@ -365,6 +365,9 @@ func buildQuery(q Query, opts queryOpts) map[string]any {
 		"size":  q.Limit,
 		"query": map[string]any{"bool": boolQ},
 		"sort":  sort,
+		// timeout — server-side лимит OpenSearch. Медленный shard не тащит
+		// весь запрос в 10-сек HTTP timeout → 5xx на бэке.
+		"timeout": "3s",
 	}
 
 	if !opts.skipFacets {
