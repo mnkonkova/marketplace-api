@@ -17,6 +17,7 @@ import (
 	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi/handlers"
 	"marketpclce/internal/leads"
+	"marketpclce/internal/partner"
 	"marketpclce/internal/pipelines"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
@@ -52,6 +53,9 @@ type Deps struct {
 	Pipelines   *pipelines.Handler
 	Projects    *projects.Handler
 	Support     *support.Handler
+	// Partner — подтверждение регистрации для «Бота Работ». nil, если общий
+	// секрет не задан: тогда ручки просто нет, а не есть неработающая.
+	Partner     *partner.Handler
 	Admin       *admin.Handler
 
 	CORSOrigins []string
@@ -170,6 +174,11 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/pipelines/{id}", d.Pipelines.AdminGetPipeline)
 			}
 			r.Post("/auth/resend-verification", d.Auth.ResendVerification)
+			// Привязка к «Боту Работ»: под авторизацией, потому что весь её
+			// смысл — подтвердить аккаунт оттуда, где человек уже вошёл.
+			if d.Partner != nil {
+				r.Post("/partner/telegram-link", d.Partner.Link)
+			}
 			r.Get("/me/profile", d.Profiles.Get)
 			r.Patch("/me/profile", d.Profiles.PatchFull)
 			r.Get("/me/client-profile", d.Profiles.GetClient)

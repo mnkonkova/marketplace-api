@@ -76,6 +76,13 @@ type Config struct {
 	// без n8n. В проде .env.prod не должен ставить true.
 	EmailVerificationDisabled bool `env:"EMAIL_VERIFICATION_DISABLED" envDefault:"false"`
 
+	// Привязка аккаунта к «Боту Работ»: соседний продукт даёт партнёрскую
+	// цену тем, кто зарегистрирован у нас. Подтверждаем мы, а не человек
+	// словами, — поэтому нужен общий секрет и адрес его вебхука. Пусто —
+	// ручка не поднимается вовсе.
+	PartnerSecret      string `env:"PARTNER_SECRET"`
+	BotrabotWebhookURL string `env:"BOTRABOT_WEBHOOK_URL"`
+
 	SummarizeCacheTTL    time.Duration `env:"SUMMARIZE_CACHE_TTL" envDefault:"10m"`
 	FeedCacheTTL         time.Duration `env:"FEED_CACHE_TTL" envDefault:"30s"`
 	RateSummarizePerMin  int           `env:"RATE_SUMMARIZE_PER_MIN" envDefault:"5"`

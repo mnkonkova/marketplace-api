@@ -29,6 +29,7 @@ import (
 	"marketpclce/internal/platform/s3"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
+	"marketpclce/internal/partner"
 	"marketpclce/internal/projects"
 	"marketpclce/internal/support"
 	"marketpclce/internal/profiles"
@@ -200,6 +201,17 @@ func main() {
 		WithReviewDeadline(cfg.ReviewDeadline).
 		WithDefaultPipeline(pipelinesSvc)
 	projectsHandler := projects.NewHandler(projectsSvc)
+
+	// Привязка к «Боту Работ». Если общий секрет или адрес вебхука не заданы,
+	// ручки просто нет: неработающая привязка хуже отсутствующей — человек
+	// нажимает кнопку, получает пятисотку и уходит думать, что сломан сайт.
+	partnerSvc := partner.NewService(pool, cfg.BotrabotWebhookURL, cfg.PartnerSecret)
+	var partnerHandler *partner.Handler
+	if partnerSvc.Enabled() {
+		partnerHandler = partner.NewHandler(partnerSvc)
+	} else {
+		logger.Info("partner linking off: no PARTNER_SECRET or BOTRABOT_WEBHOOK_URL")
+	}
 	// Замыкаем кольцо: leads → projects. Залогиненный клиент при отправке
 	// брифа автоматически порождает проект в inbox менеджеров.
 	leadsSvc.WithProjectStarter(projectsSvc)
@@ -246,6 +258,7 @@ func main() {
 		Pipelines:    pipelinesHandler,
 		Projects:     projectsHandler,
 		Support:      support.NewHandler(support.NewService(pool)),
+		Partner:      partnerHandler,
 		Admin:        adminHandler,
 		CORSOrigins:  cfg.CORSOrigins,
 		Limiter:     limiter,
