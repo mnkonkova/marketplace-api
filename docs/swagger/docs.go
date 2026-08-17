@@ -47,6 +47,45 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/managers/promote": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ищется юзер через /admin/users/search, далее этот endpoint\nвыставляет is_manager=TRUE и is_approved=TRUE. send_invite=true\nдополнительно генерит magic-link для входа.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Сделать существующего юзера менеджером (+ опционально invite)",
+                "parameters": [
+                    {
+                        "description": "user_id + send_invite",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.promoteManagerReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "{} если send_invite=false",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.InviteGenerateResult"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/managers/{id}/approve": {
             "post": {
                 "security": [
@@ -103,6 +142,203 @@ const docTemplate = `{
                 "responses": {
                     "204": {
                         "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/admin/moderation/specialists": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-moderation"
+                ],
+                "summary": "Очередь модерации специалистов",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "pending_review (default) | approved | rejected | all",
+                        "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "1-100, default 20",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "default 0",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.moderationListResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/moderation/specialists/count": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-moderation"
+                ],
+                "summary": "Счётчик заявок на модерации (для бейджа в навигации)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.moderationCountResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/moderation/specialists/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "В отличие от /specialists/{id} (только approved+published),\nэта ручка отдаёт и pending, и rejected — чтобы админ мог\nпринимать решение.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-moderation"
+                ],
+                "summary": "Полная карточка спеца для admin'ского просмотра",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/marketpclce_internal_profiles.PublicProfile"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/moderation/specialists/{id}/approve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-moderation"
+                ],
+                "summary": "Одобрить публикацию специалиста (попадает в каталог)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "expected_updated_at для optimistic lock",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.approveReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "409": {
+                        "description": "conflict — спец отредактировал, перезагрузить",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/moderation/specialists/{id}/reject": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-moderation"
+                ],
+                "summary": "Отклонить публикацию специалиста с указанием причины",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "причина (3-500 симв) + expected_updated_at",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.rejectReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "409": {
+                        "description": "conflict — спец отредактировал, перезагрузить",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
                     }
                 }
             }
@@ -487,6 +723,36 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/pipelines/{id}/make_default": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-pipelines"
+                ],
+                "summary": "Сделать воронку дефолтной (для брифов)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "pipeline id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
         "/admin/pipelines/{id}/reorder": {
             "put": {
                 "security": [
@@ -843,6 +1109,51 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Удалить проект (soft-delete, физически чистится через 30д)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "причина",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.cancelReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
             }
         },
         "/admin/projects/{id}/advance_stage": {
@@ -877,6 +1188,112 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "stage_blocked | last_stage",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}/assign_specialist": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Назначить специалиста на проект (по UUID) — админ",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "specialist_user_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.adminAssignSpecReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}/change_funnel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Удаляет project_stages/project_steps текущего проекта и инстанциирует их из новой воронки. revisions_used обнуляется, started_at пересчитывается. Только для status=active.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Админ: сменить воронку проекта (сбросить прогресс)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "new pipeline_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.changeFunnelReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id | bad_pipeline_id | invalid_transition",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "no_project | no_pipeline",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.errorResponse"
                         }
@@ -1044,7 +1461,107 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/projects/{id}/move_step": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Админ-канбан: перенести проект на конкретный шаг",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "target_step_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.moveStepReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/users": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),\nkind (client|specialist), role (manager|admin|regular).\nСортировка created_at DESC. limit 1..100, default 20.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Полный листинг всех юзеров с пагинацией (admin UI)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "часть email/phone/имени, мин 2 симв",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "client | specialist",
+                        "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "manager | admin | regular",
+                        "name": "role",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "1-100, default 20",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "default 0",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.UserListResult"
+                        }
+                    }
+                }
+            },
             "post": {
                 "security": [
                     {
@@ -1082,6 +1599,108 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/users/search": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "ILIKE по email/phone/display_name. Только активные,\nфильтр kind=client|specialist. q короче 2 символов — пусто.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Поиск юзеров (для лукапов в CRM)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "часть email/phone/имени, мин 2 символа",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "client | specialist",
+                        "name": "kind",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.userSearchResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/users/{id}/activate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Реактивировать ранее деактивированного юзера",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/admin/users/{id}/deactivate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "is_active=FALSE — юзер не может логиниться, не светится в выдаче.\nАдминов через UI деактивировать нельзя (400 invalid_input).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Деактивировать юзера (мягкое отключение)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
         "/admin/users/{id}/generate_invite": {
             "post": {
                 "security": [
@@ -1111,6 +1730,37 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_admin.InviteGenerateResult"
                         }
+                    }
+                }
+            }
+        },
+        "/admin/users/{id}/verify_email": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Идемпотентно. Если email уже подтверждён — 204 без изменений.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Подтвердить email юзера вручную (для админского заноса)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
                     }
                 }
             }
@@ -1685,6 +2335,49 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Создаёт проект с указанным pipeline_id. Если client_user_id\nне передан, требуется client_name+client_contact (no-account\nклиент). assigned_to_user_id принудительно ставится в текущего\nменеджера — менеджер не может вешать чужой проект на коллегу.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Менеджер: создать проект вручную (включая клиента без аккаунта)",
+                "parameters": [
+                    {
+                        "description": "project",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.managerCreateProjectReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
             }
         },
         "/manager/projects/inbox": {
@@ -1826,6 +2519,94 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "stage_blocked | last_stage",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/approve_specialist": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Подтвердить выбранного клиентом исполнителя",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.approveResp"
+                        }
+                    },
+                    "400": {
+                        "description": "no_proposed_specialist",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/assign_specialist": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Используется для проектов, заведённых менеджером без брифа,\nлибо после reject_specialist'a — выбрать другого. Валидирует\nчто target — kind='specialist' и активен.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Назначить специалиста на проект (по UUID)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "specialist_user_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.assignSpecReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.errorResponse"
                         }
@@ -2047,6 +2828,98 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/move_step": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Перенести проект на конкретный шаг (для канбана по шагам)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "target_step_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.moveStepReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Project"
+                        }
+                    },
+                    "409": {
+                        "description": "stage_blocked",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/reject_specialist": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Отклонить предложенного клиентом исполнителя",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "причина",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.rejectSpecReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/steps/{step_id}/complete": {
             "post": {
                 "security": [
@@ -2211,6 +3084,66 @@ const docTemplate = `{
                         "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/client-profile": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-profile"
+                ],
+                "summary": "Контактные данные клиента (display_name, phone, telegram)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.ClientProfile"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-profile"
+                ],
+                "summary": "Сохранить контакты клиента",
+                "parameters": [
+                    {
+                        "description": "patch",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.ClientProfilePatch"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.ClientProfile"
                         }
                     }
                 }
@@ -2419,6 +3352,319 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/portfolio/images/{img_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Если в сете остаётся 0 фото — каскадом удаляется сам элемент портфолио.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Удалить одно фото из photo-set'а",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "portfolio image id",
+                        "name": "img_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "no content"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/multipart/abort": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Отменить multipart upload (удалить уже залитые части)",
+                "parameters": [
+                    {
+                        "description": "key/upload_id",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioMultipartAbortInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/multipart/complete": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Завершить multipart upload (собрать чанки)",
+                "parameters": [
+                    {
+                        "description": "key/upload_id/parts",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioMultipartCompleteInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/multipart/part-url": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Presigned PUT URL для одной части multipart upload'а",
+                "parameters": [
+                    {
+                        "description": "key/upload_id/part_number",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioMultipartPartURLInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioMultipartPartURLOutput"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/multipart/start": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Возвращает upload_id, ключ и part_size. Фронт нарезает файл на чанки по part_size и для каждой части ходит за presigned PUT в /me/portfolio/multipart/part-url. После всех PUT — /me/portfolio/multipart/complete.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Старт S3 multipart upload видео (для файлов \u003e 5 МБ)",
+                "parameters": [
+                    {
+                        "description": "filename/content_type/size",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioMultipartStartInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioMultipartStartOutput"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/photoset": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Создаёт portfolio_item kind='image' + N portfolio_images.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Добавить photo-set в портфолио (1..10 фото = одна карусель)",
+                "parameters": [
+                    {
+                        "description": "title + images",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioPhotoSetCreateInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioItem"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/portfolio/upload-url": {
             "post": {
                 "security": [
@@ -2515,6 +3761,73 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Обновить title/description элемента портфолио",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "portfolio item id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "patch fields",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioPatchInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioItem"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
             }
         },
         "/me/portfolio/{id}/categories": {
@@ -2579,6 +3892,190 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/{id}/featured": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "featured=true делает работу закреплённой и снимает флаг с предыдущей — закреплённая всегда одна. featured=false просто снимает закрепление.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Закрепить работу как промо (флагман публичной страницы)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "portfolio item id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "featured flag",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioSetFeaturedInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioItem"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/{id}/images": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Добавить N фото в существующий photo-set",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "portfolio item id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "images to append",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioImagesAppendInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_profiles.PortfolioImage"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/portfolio/{id}/images/order": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "portfolio"
+                ],
+                "summary": "Поменять порядок фото в photo-set'е (drag-and-drop)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "portfolio item id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "image_ids в желаемом порядке",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioImagesReorderInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_profiles.PortfolioImage"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
                         }
@@ -2886,6 +4383,49 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Клиент добавляет комментарий к своему проекту",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Comment"
+                        }
+                    }
+                }
             }
         },
         "/me/projects/{id}/funnel": {
@@ -2920,103 +4460,6 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/internal_projects.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/me/projects/{id}/steps/{step_id}/approve": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "client-projects"
-                ],
-                "summary": "Принять шаг (клиент)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "project id",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "step id",
-                        "name": "step_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_projects.Step"
-                        }
-                    }
-                }
-            }
-        },
-        "/me/projects/{id}/steps/{step_id}/request_revision": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "client-projects"
-                ],
-                "summary": "Запросить правки (клиент)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "project id",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "step id",
-                        "name": "step_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "комментарий",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "$ref": "#/definitions/internal_projects.revisionReq"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_projects.Step"
-                        }
-                    },
-                    "409": {
-                        "description": "revisions_exhausted",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.errorResponse"
                         }
@@ -3551,7 +4994,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/specialists/{id}": {
+        "/specialists/{handle}": {
             "get": {
                 "produces": [
                     "application/json"
@@ -3697,6 +5140,101 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_admin.UserListItem": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "email_verified": {
+                    "type": "boolean"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_admin": {
+                    "type": "boolean"
+                },
+                "is_approved": {
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "type": "boolean"
+                },
+                "is_published": {
+                    "description": "IsPublished — флаг is_published у specialist_profile. Нужен фронту\nчтобы отличить «pending_review до клика \"Опубликовать\"» (= черновик,\nмодерации не ждёт) от «pending_review после публикации» (= висит в\nочереди /admin/moderation).",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "moderation_status": {
+                    "description": "ModerationStatus — pending_review|approved|rejected. NULL для клиентов\n(у них нет specialist_profile). omitempty в JSON: пустая строка =\n«нет статуса» (клиент или спец без профиля).",
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.UserListResult": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.UserListItem"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_admin.UserSearchResult": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.approveReq": {
+            "type": "object",
+            "properties": {
+                "expected_updated_at": {
+                    "description": "ExpectedUpdatedAt — optimistic-lock версия профиля, которую видел\nадмин при открытии карточки. Если null — без проверки (для тестов\nили legacy-CLI). См. docs/SPECIALIST_MODERATION.md §5.C.",
+                    "type": "string"
+                }
+            }
+        },
         "internal_admin.createClientReq": {
             "type": "object",
             "properties": {
@@ -3730,6 +5268,39 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_admin.moderationCountResp": {
+            "type": "object",
+            "properties": {
+                "pending_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_admin.moderationListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_profiles.ModerationQueueItem"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_admin.promoteManagerReq": {
+            "type": "object",
+            "properties": {
+                "send_invite": {
+                    "type": "boolean"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_admin.redeemResp": {
             "type": "object",
             "properties": {
@@ -3738,6 +5309,28 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_admin.rejectReq": {
+            "type": "object",
+            "properties": {
+                "expected_updated_at": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.userSearchResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.UserSearchResult"
+                    }
                 }
             }
         },
@@ -3780,18 +5373,21 @@ const docTemplate = `{
                 "email_verified": {
                     "type": "boolean"
                 },
+                "is_admin": {
+                    "type": "boolean"
+                },
                 "is_approved": {
                     "description": "IsApproved — для manager обязательный аппрув; фронт показывает\n«ждёт аппрува» вместо кабинета.",
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "description": "IsManager / IsAdmin — флаги CRM-прав. Фронт по ним решает, какие\nкабинеты показывать в шапке. Кабинеты client/specialist выводятся\nиз kind.",
                     "type": "boolean"
                 },
                 "kind": {
                     "type": "string"
                 },
                 "phone": {
-                    "type": "string"
-                },
-                "role": {
-                    "description": "Role — CRM-роль для разграничения кабинетов на фронте. Без неё фронт\nне знает, куда отправлять юзера после логина.",
                     "type": "string"
                 },
                 "user_id": {
@@ -3841,8 +5437,8 @@ const docTemplate = `{
                 "password": {
                     "type": "string"
                 },
-                "role": {
-                    "description": "Role — опциональная CRM-роль. Допустимы: client | specialist | manager.\nПусто/опущено → client. admin через register нельзя.",
+                "source": {
+                    "description": "Source — откуда пришла регистрация: \"landing_clients\" разрешает\nавто-подтверждение email'а (юзер сразу может создать бриф без\nклика по письму). Валидность source не проверяем — это UX-ярлык,\nне security-gate: клиент всё равно должен указать реальный контакт\nв самом брифе (client_contact), туда менеджер и напишет.",
                     "type": "string"
                 }
             }
@@ -4012,9 +5608,32 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_feed.Image": {
+            "type": "object",
+            "properties": {
+                "height": {
+                    "type": "integer"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_feed.Item": {
             "type": "object",
             "properties": {
+                "images": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_feed.Image"
+                    }
+                },
+                "kind": {
+                    "type": "string"
+                },
                 "specialist": {
                     "$ref": "#/definitions/internal_feed.Specialist"
                 },
@@ -4071,7 +5690,14 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "type": "boolean"
+                },
                 "primary_category": {
+                    "type": "string"
+                },
+                "production_name": {
+                    "description": "ProductionName — название студии или пусто. IsFreelance — флаг\nфрилансера. Фронт overlay: name \u003e \"Фриланс\" \u003e (ничего).",
                     "type": "string"
                 },
                 "rate_max": {
@@ -4094,6 +5720,10 @@ const docTemplate = `{
         "internal_feed.Video": {
             "type": "object",
             "properties": {
+                "animated_thumb_url": {
+                    "description": "AnimatedThumbURL — animated WebP для главной (hero + works grid).\nAutoplay через \u003cimg\u003e даже в iOS Low Power Mode (не \u003cvideo\u003e).\nЕсли пусто — фронт фолбэчит на \u003cvideo preview_url\u003e. См. §11 docs.",
+                    "type": "string"
+                },
                 "aspect": {
                     "type": "string"
                 },
@@ -4107,6 +5737,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "preview_url": {
                     "type": "string"
                 },
                 "thumb": {
@@ -4239,6 +5872,9 @@ const docTemplate = `{
                 },
                 "target_category": {
                     "type": "string"
+                },
+                "title": {
+                    "type": "string"
                 }
             }
         },
@@ -4296,6 +5932,9 @@ const docTemplate = `{
                 "is_active": {
                     "type": "boolean"
                 },
+                "is_default": {
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -4323,6 +5962,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "is_active": {
+                    "type": "boolean"
+                },
+                "is_default": {
                     "type": "boolean"
                 },
                 "name": {
@@ -4746,6 +6388,43 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_profiles.ClientProfile": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "telegram": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_profiles.ClientProfilePatch": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "telegram": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_profiles.ImageUploadURLInput": {
             "type": "object",
             "properties": {
@@ -4803,7 +6482,14 @@ const docTemplate = `{
                 "skills": {
                     "$ref": "#/definitions/internal_profiles.SkillsPart"
                 },
+                "social_links": {
+                    "$ref": "#/definitions/internal_profiles.SocialLinks"
+                },
                 "updated_at": {
+                    "type": "string"
+                },
+                "username": {
+                    "description": "Username — публичный handle. nil = не трогать; \"\" = сбросить в NULL;\nвалидируется сервисом, см. ValidateUsername.",
                     "type": "string"
                 }
             }
@@ -4826,6 +6512,13 @@ const docTemplate = `{
                 "duration_sec": {
                     "type": "integer"
                 },
+                "profile_categories": {
+                    "description": "ProfileCategories — текущий form-state категорий профиля с фронта.\nИспользуется для валидации video.CategoryCodes когда юзер только что\nзарегистрировался и форма с категориями ещё не сохранена в БД.\nЕсли поле есть — backend проверяет CategoryCodes ⊆ ProfileCategories.\nЕсли nil/пустое — fallback на profile.Categories из БД (старое поведение).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "thumbnail_url": {
                     "type": "string"
                 },
@@ -4837,9 +6530,61 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_profiles.PortfolioImage": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "image_url": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_profiles.PortfolioImagesAppendInput": {
+            "type": "object",
+            "properties": {
+                "images": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_profiles.PortfolioPhotoRef"
+                    }
+                }
+            }
+        },
+        "internal_profiles.PortfolioImagesReorderInput": {
+            "type": "object",
+            "properties": {
+                "image_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "internal_profiles.PortfolioItem": {
             "type": "object",
             "properties": {
+                "animated_thumb_url": {
+                    "type": "string"
+                },
+                "aspect": {
+                    "description": "Aspect — «W:H» исходника, сокращённое до несократимой дроби и\nприжатое к стандартным форматам (\"9:16\", \"16:9\", \"1:1\", \"4:5\"…).\nЗаполняется transcode-воркером через ffprobe (см. transcode.Probe).\nПусто = ещё не пробировано (запись старше миграции 00028 и не прошла\ncmd/backfill-aspect, либо ffprobe недоступен) — фронт в этом случае\nмеряет размеры сам на loadedmetadata.",
+                    "type": "string"
+                },
                 "category_codes": {
                     "type": "array",
                     "items": {
@@ -4852,10 +6597,37 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "duration_sec": {
+                    "description": "DurationSec — длительность оригинала, для метки на плитке. 0 = неизвестна.",
+                    "type": "integer"
+                },
                 "external_url": {
                     "type": "string"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "images": {
+                    "description": "Images — для Kind='image' список фото в карусели (упорядочен по sort_order).\nДля других kind — nil/пусто.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_profiles.PortfolioImage"
+                    }
+                },
+                "is_featured": {
+                    "description": "IsFeatured — закреплённая промо-работа, флагман на публичной странице.\nНе более одной на специалиста (partial unique index, миграция 00028).",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — 'video' | 'image' | 'external'. Фронт по нему выбирает рендер:\nvideo — плеер; image — карусель из Images; external — внешняя ссылка.",
+                    "type": "string"
+                },
+                "preview_status": {
+                    "description": "pending|processing|ready|failed",
+                    "type": "string"
+                },
+                "preview_url": {
+                    "description": "Preview-видео (480p, 5-10 сек, ~500KB) для autoplay в фиде.\nГенерируется worker'ом async (см. docs/VIDEO_TRANSCODING.md).\nПока PreviewStatus != \"ready\", фронт должен фолбэчить на VideoURL.",
                     "type": "string"
                 },
                 "sort_order": {
@@ -4875,6 +6647,158 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_profiles.PortfolioMultipartAbortInput": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "upload_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_profiles.PortfolioMultipartCompleteInput": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "parts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_profiles.PortfolioMultipartPart"
+                    }
+                },
+                "upload_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_profiles.PortfolioMultipartPart": {
+            "type": "object",
+            "properties": {
+                "etag": {
+                    "type": "string"
+                },
+                "part_number": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_profiles.PortfolioMultipartPartURLInput": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "part_number": {
+                    "type": "integer"
+                },
+                "upload_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_profiles.PortfolioMultipartPartURLOutput": {
+            "type": "object",
+            "properties": {
+                "expires_in": {
+                    "type": "integer"
+                },
+                "upload_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_profiles.PortfolioMultipartStartInput": {
+            "type": "object",
+            "properties": {
+                "content_type": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_profiles.PortfolioMultipartStartOutput": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "part_size": {
+                    "type": "integer"
+                },
+                "public_url": {
+                    "type": "string"
+                },
+                "upload_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_profiles.PortfolioPatchInput": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_profiles.PortfolioPhotoRef": {
+            "type": "object",
+            "properties": {
+                "height": {
+                    "type": "integer"
+                },
+                "image_url": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_profiles.PortfolioPhotoSetCreateInput": {
+            "type": "object",
+            "properties": {
+                "category_codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "description": {
+                    "type": "string"
+                },
+                "images": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_profiles.PortfolioPhotoRef"
+                    }
+                },
+                "profile_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_profiles.PortfolioSetCategoriesInput": {
             "type": "object",
             "properties": {
@@ -4887,6 +6811,14 @@ const docTemplate = `{
                 "updated_at": {
                     "description": "UpdatedAt — optimistic-lock версия portfolio_items.updated_at.\nНесовпадение → 409. Без поля — старое поведение.",
                     "type": "string"
+                }
+            }
+        },
+        "internal_profiles.PortfolioSetFeaturedInput": {
+            "type": "object",
+            "properties": {
+                "featured": {
+                    "type": "boolean"
                 }
             }
         },
@@ -4959,6 +6891,16 @@ const docTemplate = `{
                 "is_published": {
                     "type": "boolean"
                 },
+                "moderation_reason": {
+                    "type": "string"
+                },
+                "moderation_reviewed_at": {
+                    "type": "string"
+                },
+                "moderation_status": {
+                    "description": "ModerationStatus — статус модерации публикации админом\n(см. docs/SPECIALIST_MODERATION.md). В каталог попадает только\nis_published=TRUE AND moderation_status='approved'. Возвращается\nтолько владельцу профиля (через /me/profile) — публичная PublicProfile\nэтот статус не отдаёт.",
+                    "type": "string"
+                },
                 "primary_category": {
                     "type": "string"
                 },
@@ -4984,11 +6926,23 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "social_links": {
+                    "description": "SocialLinks — заполняет сам спец из кабинета.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_profiles.SocialLinks"
+                        }
+                    ]
+                },
                 "updated_at": {
                     "description": "UpdatedAt — версия профиля для optimistic locking.\nКлиент должен прислать это значение обратно в PatchInput.UpdatedAt,\nчтобы защититься от lost-update при параллельных PATCH'ах.",
                     "type": "string"
                 },
                 "user_id": {
+                    "type": "string"
+                },
+                "username": {
+                    "description": "Username — публичный handle. Пусто = не выбрал. См. PublicProfile.Username.",
                     "type": "string"
                 }
             }
@@ -5017,11 +6971,29 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "type": "boolean"
+                },
+                "is_preview": {
+                    "description": "IsPreview=true означает что профиль возвращён в owner-preview режиме —\nспец сам смотрит свой профиль ещё до publish/approval, фронт показывает\nбаннер «Это превью — клиенты увидят после публикации».",
+                    "type": "boolean"
+                },
+                "is_published": {
+                    "description": "IsPublished — фактический статус. Нужен фронту в preview-режиме чтобы\nразличить «черновик» (false) от «на модерации» (true + not approved).",
+                    "type": "boolean"
+                },
+                "moderation_status": {
+                    "type": "string"
+                },
                 "portfolio": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_profiles.PortfolioItem"
                     }
+                },
+                "production_name": {
+                    "description": "ProductionName — название студии, в которой работает спец. Пусто, если\nспец фрилансер или ещё не выбрал. IsFreelance=true говорит «я сам по\nсебе» (тогда ProductionName всегда пусто). На фронте: name → как есть;\nis_freelance → «Фриланс»; оба пусты → ничего не показываем.",
+                    "type": "string"
                 },
                 "rate_max": {
                     "type": "integer"
@@ -5047,7 +7019,19 @@ const docTemplate = `{
                         "$ref": "#/definitions/internal_profiles.SkillRef"
                     }
                 },
+                "social_links": {
+                    "description": "SocialLinks — соцсети для прямого контакта (telegram/whatsapp/vk/etc).\nЕсли все пусты, фронт не рендерит блок.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_profiles.SocialLinks"
+                        }
+                    ]
+                },
                 "user_id": {
+                    "type": "string"
+                },
+                "username": {
+                    "description": "Username — публичный handle для красивого URL /specialist/\u003cusername\u003e.\nПусто, если спец ещё не выбрал — фронт фолбэчит на user_id.",
                     "type": "string"
                 }
             }
@@ -5056,6 +7040,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "author_name": {
+                    "type": "string"
+                },
+                "author_user_id": {
+                    "description": "AuthorUserID — UUID юзера, оставившего отзыв. По нему можно\nзайти в users и поднять email/телефон (для службы поддержки —\n«кто этот недовольный клиент»). Публичное имя в UI всё равно\nмаскируется как «Клиент» через AuthorName, но для трекинга\nвнутри команды UUID полезен.",
                     "type": "string"
                 },
                 "created_at": {
@@ -5097,6 +7085,38 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "internal_profiles.SocialLinks": {
+            "type": "object",
+            "properties": {
+                "behance": {
+                    "type": "string"
+                },
+                "dribbble": {
+                    "type": "string"
+                },
+                "instagram": {
+                    "type": "string"
+                },
+                "telegram": {
+                    "type": "string"
+                },
+                "tiktok": {
+                    "type": "string"
+                },
+                "vk": {
+                    "type": "string"
+                },
+                "website": {
+                    "type": "string"
+                },
+                "whatsapp": {
+                    "type": "string"
+                },
+                "youtube": {
+                    "type": "string"
                 }
             }
         },
@@ -5142,6 +7162,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "is_internal": {
+                    "type": "boolean"
                 },
                 "project_id": {
                     "type": "string"
@@ -5212,6 +7235,23 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.PartyContact": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "telegram": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_projects.Project": {
             "type": "object",
             "properties": {
@@ -5221,7 +7261,15 @@ const docTemplate = `{
                 "budget": {
                     "type": "integer"
                 },
+                "client_contact": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "description": "ClientName / ClientContact — заполняется когда client_user_id=NULL.\nДля зарегистрированных клиентов остаются пустыми (берём из\nclient_profiles по client_user_id).",
+                    "type": "string"
+                },
                 "client_user_id": {
+                    "description": "ClientUserID — клиент с аккаунтом. nil если проект заведён менеджером/\nадмином для клиента без регистрации; тогда контакты в ClientName/\nClientContact. CHECK constraint гарантирует одно из двух.",
                     "type": "string"
                 },
                 "completed_at": {
@@ -5280,7 +7328,15 @@ const docTemplate = `{
                 "budget": {
                     "type": "integer"
                 },
+                "client_contact": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "description": "ClientName / ClientContact — заполняется когда client_user_id=NULL.\nДля зарегистрированных клиентов остаются пустыми (берём из\nclient_profiles по client_user_id).",
+                    "type": "string"
+                },
                 "client_user_id": {
+                    "description": "ClientUserID — клиент с аккаунтом. nil если проект заведён менеджером/\nадмином для клиента без регистрации; тогда контакты в ClientName/\nClientContact. CHECK constraint гарантирует одно из двух.",
                     "type": "string"
                 },
                 "completed_at": {
@@ -5341,6 +7397,10 @@ const docTemplate = `{
                     "description": "SpecialistDisplayName — имя исполнителя (если назначен). Пусто если\nspecialist_user_id=nil или у юзера нет specialist_profile.",
                     "type": "string"
                 },
+                "specialist_primary_category": {
+                    "description": "SpecialistPrimaryCategory — title основной категории исполнителя\n(«Видеооператор», «Дизайнер»). Опознавательный знак карточки\nпроекта когда у клиента их несколько.",
+                    "type": "string"
+                },
                 "specialist_user_id": {
                     "type": "string"
                 },
@@ -5392,7 +7452,18 @@ const docTemplate = `{
                 "budget": {
                     "type": "integer"
                 },
+                "client": {
+                    "$ref": "#/definitions/internal_projects.PartyContact"
+                },
+                "client_contact": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "description": "ClientName / ClientContact — заполняется когда client_user_id=NULL.\nДля зарегистрированных клиентов остаются пустыми (берём из\nclient_profiles по client_user_id).",
+                    "type": "string"
+                },
                 "client_user_id": {
+                    "description": "ClientUserID — клиент с аккаунтом. nil если проект заведён менеджером/\nадмином для клиента без регистрации; тогда контакты в ClientName/\nClientContact. CHECK constraint гарантирует одно из двух.",
                     "type": "string"
                 },
                 "completed_at": {
@@ -5434,6 +7505,14 @@ const docTemplate = `{
                 "progress": {
                     "type": "number"
                 },
+                "proposed_specialist": {
+                    "description": "ProposedSpecialist — кого клиент выбрал в брифе (lead_recipient_specialist_id);\nпока не подтверждён менеджером (Specialist=nil). Фронт показывает блок\n«Клиент выбрал …» c кнопками Approve/Reject.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_projects.PartyContact"
+                        }
+                    ]
+                },
                 "revisions_included": {
                     "type": "integer"
                 },
@@ -5442,6 +7521,9 @@ const docTemplate = `{
                 },
                 "source": {
                     "$ref": "#/definitions/internal_projects.ProjectSource"
+                },
+                "specialist": {
+                    "$ref": "#/definitions/internal_projects.PartyContact"
                 },
                 "specialist_user_id": {
                     "type": "string"
@@ -5475,10 +7557,21 @@ const docTemplate = `{
                 "budget": {
                     "type": "integer"
                 },
+                "client": {
+                    "$ref": "#/definitions/internal_projects.PartyContact"
+                },
+                "client_contact": {
+                    "type": "string"
+                },
                 "client_display_name": {
                     "type": "string"
                 },
+                "client_name": {
+                    "description": "ClientName / ClientContact — заполняется когда client_user_id=NULL.\nДля зарегистрированных клиентов остаются пустыми (берём из\nclient_profiles по client_user_id).",
+                    "type": "string"
+                },
                 "client_user_id": {
+                    "description": "ClientUserID — клиент с аккаунтом. nil если проект заведён менеджером/\nадмином для клиента без регистрации; тогда контакты в ClientName/\nClientContact. CHECK constraint гарантирует одно из двух.",
                     "type": "string"
                 },
                 "completed_at": {
@@ -5538,6 +7631,9 @@ const docTemplate = `{
                 },
                 "source": {
                     "$ref": "#/definitions/internal_projects.ProjectSource"
+                },
+                "specialist": {
+                    "$ref": "#/definitions/internal_projects.PartyContact"
                 },
                 "specialist_user_id": {
                     "type": "string"
@@ -5781,6 +7877,14 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.adminAssignSpecReq": {
+            "type": "object",
+            "properties": {
+                "specialist_user_id": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_projects.adminCreateProjectReq": {
             "type": "object",
             "properties": {
@@ -5790,7 +7894,14 @@ const docTemplate = `{
                 "budget": {
                     "type": "integer"
                 },
+                "client_contact": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string"
+                },
                 "client_user_id": {
+                    "description": "ClientUserID — для зарегистрированного клиента. Если пусто,\nнужно client_name + client_contact (no-account клиент).",
                     "type": "string"
                 },
                 "notes": {
@@ -5806,6 +7917,38 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.approveResp": {
+            "type": "object",
+            "properties": {
+                "specialist_user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.assignSpecReq": {
+            "type": "object",
+            "properties": {
+                "specialist_user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.cancelReq": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.changeFunnelReq": {
+            "type": "object",
+            "properties": {
+                "pipeline_id": {
                     "type": "string"
                 }
             }
@@ -5826,6 +7969,9 @@ const docTemplate = `{
             "properties": {
                 "body": {
                     "type": "string"
+                },
+                "is_internal": {
+                    "type": "boolean"
                 }
             }
         },
@@ -5859,6 +8005,36 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.managerCreateProjectReq": {
+            "type": "object",
+            "properties": {
+                "budget": {
+                    "type": "integer"
+                },
+                "client_contact": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "client_user_id": {
+                    "description": "ClientUserID — для зарегистрированного клиента. Если пусто,\nнужно client_name+client_contact (no-account клиент).",
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "pipeline_id": {
+                    "type": "string"
+                },
+                "specialist_user_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_projects.managerListResp": {
             "type": "object",
             "properties": {
@@ -5881,10 +8057,21 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_projects.revisionReq": {
+        "internal_projects.moveStepReq": {
             "type": "object",
             "properties": {
-                "comment": {
+                "target_step_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.rejectSpecReq": {
+            "type": "object",
+            "properties": {
+                "reason": {
                     "type": "string"
                 }
             }
@@ -5946,9 +8133,6 @@ const docTemplate = `{
         "internal_reviews.createReq": {
             "type": "object",
             "properties": {
-                "author_name": {
-                    "type": "string"
-                },
                 "lead_id": {
                     "type": "string"
                 },
@@ -6019,6 +8203,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "category_titles": {
+                    "description": "CategoryTitles — русские названия категорий спеца одной строкой\n(«Монтажёр Моушн-дизайнер»). Индексируется под ru_en с synonyms,\nчтобы multi_match находил спецов по человеческому запросу вроде\n«моушн-дизайнер» / «сценарист» — категории в keyword'е ищутся\nтолько точным match'ем по slug'у.",
+                    "type": "string"
+                },
                 "city": {
                     "type": "string"
                 },
@@ -6028,6 +8216,9 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "type": "boolean"
+                },
                 "is_published": {
                     "type": "boolean"
                 },
@@ -6035,7 +8226,21 @@ const docTemplate = `{
                     "description": "LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.\nИспользуется /feed для tie-breaker'а после rating_avg.",
                     "type": "string"
                 },
+                "preview_animated_url": {
+                    "type": "string"
+                },
+                "preview_thumb_url": {
+                    "type": "string"
+                },
+                "preview_video_url": {
+                    "description": "PreviewVideoURL / PreviewThumbURL / PreviewAnimatedURL — денормализованное\nпоследнее опубликованное видео спеца для рендера карточки в\nSearchResultsPage. Правила отбора:\n  • preview_video_url — берём preview_url (480p ~500KB для autoplay);\n    если пусто (preview ещё не готов) — оригинал video_url.\n  • preview_thumb_url — thumbnail_url (poster).\n  • preview_animated_url — animated_thumb_url (animated WebP для\n    iOS Low Power Mode / soft-limit на конкурентные \u003cvideo\u003e).\nВсе пустые если у спеца нет видео.",
+                    "type": "string"
+                },
                 "primary_category": {
+                    "type": "string"
+                },
+                "production_name": {
+                    "description": "ProductionName / IsFreelance — где работает спец, для отображения в\nпоиске и feed. Производственное имя резолвится через LEFT JOIN\nproductions (пусто если деактивирован/не выбран).",
                     "type": "string"
                 },
                 "rate_max": {
@@ -6235,6 +8440,318 @@ const docTemplate = `{
                 }
             }
         },
+        "marketpclce_internal_profiles.CategoryRef": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "is_primary": {
+                    "type": "boolean"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_profiles.ModerationQueueItem": {
+            "type": "object",
+            "properties": {
+                "avatar_url": {
+                    "type": "string"
+                },
+                "bio": {
+                    "type": "string"
+                },
+                "city": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "is_freelance": {
+                    "type": "boolean"
+                },
+                "moderation_reason": {
+                    "type": "string"
+                },
+                "moderation_status": {
+                    "type": "string"
+                },
+                "primary_category": {
+                    "type": "string"
+                },
+                "production_name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_profiles.PortfolioImage": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "image_url": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "marketpclce_internal_profiles.PortfolioItem": {
+            "type": "object",
+            "properties": {
+                "animated_thumb_url": {
+                    "type": "string"
+                },
+                "aspect": {
+                    "description": "Aspect — «W:H» исходника, сокращённое до несократимой дроби и\nприжатое к стандартным форматам (\"9:16\", \"16:9\", \"1:1\", \"4:5\"…).\nЗаполняется transcode-воркером через ffprobe (см. transcode.Probe).\nПусто = ещё не пробировано (запись старше миграции 00028 и не прошла\ncmd/backfill-aspect, либо ffprobe недоступен) — фронт в этом случае\nмеряет размеры сам на loadedmetadata.",
+                    "type": "string"
+                },
+                "category_codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "duration_sec": {
+                    "description": "DurationSec — длительность оригинала, для метки на плитке. 0 = неизвестна.",
+                    "type": "integer"
+                },
+                "external_url": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "images": {
+                    "description": "Images — для Kind='image' список фото в карусели (упорядочен по sort_order).\nДля других kind — nil/пусто.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_profiles.PortfolioImage"
+                    }
+                },
+                "is_featured": {
+                    "description": "IsFeatured — закреплённая промо-работа, флагман на публичной странице.\nНе более одной на специалиста (partial unique index, миграция 00028).",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — 'video' | 'image' | 'external'. Фронт по нему выбирает рендер:\nvideo — плеер; image — карусель из Images; external — внешняя ссылка.",
+                    "type": "string"
+                },
+                "preview_status": {
+                    "description": "pending|processing|ready|failed",
+                    "type": "string"
+                },
+                "preview_url": {
+                    "description": "Preview-видео (480p, 5-10 сек, ~500KB) для autoplay в фиде.\nГенерируется worker'ом async (см. docs/VIDEO_TRANSCODING.md).\nПока PreviewStatus != \"ready\", фронт должен фолбэчить на VideoURL.",
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "thumbnail_url": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "video_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_profiles.PublicProfile": {
+            "type": "object",
+            "properties": {
+                "avatar_url": {
+                    "type": "string"
+                },
+                "bio": {
+                    "type": "string"
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_profiles.CategoryRef"
+                    }
+                },
+                "city": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "is_freelance": {
+                    "type": "boolean"
+                },
+                "is_preview": {
+                    "description": "IsPreview=true означает что профиль возвращён в owner-preview режиме —\nспец сам смотрит свой профиль ещё до publish/approval, фронт показывает\nбаннер «Это превью — клиенты увидят после публикации».",
+                    "type": "boolean"
+                },
+                "is_published": {
+                    "description": "IsPublished — фактический статус. Нужен фронту в preview-режиме чтобы\nразличить «черновик» (false) от «на модерации» (true + not approved).",
+                    "type": "boolean"
+                },
+                "moderation_status": {
+                    "type": "string"
+                },
+                "portfolio": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_profiles.PortfolioItem"
+                    }
+                },
+                "production_name": {
+                    "description": "ProductionName — название студии, в которой работает спец. Пусто, если\nспец фрилансер или ещё не выбрал. IsFreelance=true говорит «я сам по\nсебе» (тогда ProductionName всегда пусто). На фронте: name → как есть;\nis_freelance → «Фриланс»; оба пусты → ничего не показываем.",
+                    "type": "string"
+                },
+                "rate_max": {
+                    "type": "integer"
+                },
+                "rate_min": {
+                    "type": "integer"
+                },
+                "rating_avg": {
+                    "type": "number"
+                },
+                "reviews": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_profiles.Review"
+                    }
+                },
+                "reviews_count": {
+                    "type": "integer"
+                },
+                "skills": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_profiles.SkillRef"
+                    }
+                },
+                "social_links": {
+                    "description": "SocialLinks — соцсети для прямого контакта (telegram/whatsapp/vk/etc).\nЕсли все пусты, фронт не рендерит блок.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/marketpclce_internal_profiles.SocialLinks"
+                        }
+                    ]
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "username": {
+                    "description": "Username — публичный handle для красивого URL /specialist/\u003cusername\u003e.\nПусто, если спец ещё не выбрал — фронт фолбэчит на user_id.",
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_profiles.Review": {
+            "type": "object",
+            "properties": {
+                "author_name": {
+                    "type": "string"
+                },
+                "author_user_id": {
+                    "description": "AuthorUserID — UUID юзера, оставившего отзыв. По нему можно\nзайти в users и поднять email/телефон (для службы поддержки —\n«кто этот недовольный клиент»). Публичное имя в UI всё равно\nмаскируется как «Клиент» через AuthorName, но для трекинга\nвнутри команды UUID полезен.",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "rating": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_profiles.SkillRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_profiles.SocialLinks": {
+            "type": "object",
+            "properties": {
+                "behance": {
+                    "type": "string"
+                },
+                "dribbble": {
+                    "type": "string"
+                },
+                "instagram": {
+                    "type": "string"
+                },
+                "telegram": {
+                    "type": "string"
+                },
+                "tiktok": {
+                    "type": "string"
+                },
+                "vk": {
+                    "type": "string"
+                },
+                "website": {
+                    "type": "string"
+                },
+                "whatsapp": {
+                    "type": "string"
+                },
+                "youtube": {
+                    "type": "string"
+                }
+            }
+        },
         "marketpclce_internal_search.IndexDoc": {
             "type": "object",
             "properties": {
@@ -6250,6 +8767,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "category_titles": {
+                    "description": "CategoryTitles — русские названия категорий спеца одной строкой\n(«Монтажёр Моушн-дизайнер»). Индексируется под ru_en с synonyms,\nчтобы multi_match находил спецов по человеческому запросу вроде\n«моушн-дизайнер» / «сценарист» — категории в keyword'е ищутся\nтолько точным match'ем по slug'у.",
+                    "type": "string"
+                },
                 "city": {
                     "type": "string"
                 },
@@ -6259,6 +8780,9 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "is_freelance": {
+                    "type": "boolean"
+                },
                 "is_published": {
                     "type": "boolean"
                 },
@@ -6266,7 +8790,21 @@ const docTemplate = `{
                     "description": "LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.\nИспользуется /feed для tie-breaker'а после rating_avg.",
                     "type": "string"
                 },
+                "preview_animated_url": {
+                    "type": "string"
+                },
+                "preview_thumb_url": {
+                    "type": "string"
+                },
+                "preview_video_url": {
+                    "description": "PreviewVideoURL / PreviewThumbURL / PreviewAnimatedURL — денормализованное\nпоследнее опубликованное видео спеца для рендера карточки в\nSearchResultsPage. Правила отбора:\n  • preview_video_url — берём preview_url (480p ~500KB для autoplay);\n    если пусто (preview ещё не готов) — оригинал video_url.\n  • preview_thumb_url — thumbnail_url (poster).\n  • preview_animated_url — animated_thumb_url (animated WebP для\n    iOS Low Power Mode / soft-limit на конкурентные \u003cvideo\u003e).\nВсе пустые если у спеца нет видео.",
+                    "type": "string"
+                },
                 "primary_category": {
+                    "type": "string"
+                },
+                "production_name": {
+                    "description": "ProductionName / IsFreelance — где работает спец, для отображения в\nпоиске и feed. Производственное имя резолвится через LEFT JOIN\nproductions (пусто если деактивирован/не выбран).",
                     "type": "string"
                 },
                 "rate_max": {
