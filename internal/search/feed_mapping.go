@@ -39,6 +39,10 @@ func FeedVideoMapping() map[string]any {
 				"duration_sec":     map[string]any{"type": "integer"},
 				"aspect":           map[string]any{"type": "keyword"},
 				"video_created_at": map[string]any{"type": "date"},
+				// Порядок специалиста и закреплённая работа — по ним
+				// сортируется лента, отфильтрованная по одному спецу.
+				"sort_order":       map[string]any{"type": "integer"},
+				"is_featured":      map[string]any{"type": "boolean"},
 				"category_codes":   map[string]any{"type": "keyword"},
 
 				// денормализованный специалист (для фильтрации/отображения)

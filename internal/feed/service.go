@@ -261,14 +261,45 @@ func buildFeedQuery(q Query, cursor cursorPayload) map[string]any {
 		}
 	}
 
+	// Сортировка зависит от того, что за лента.
+	//
+	// Общая дискавери-лента ранжирует по рейтингу и свежести — там юзер
+	// смотрит разных спецов, и порядок внутри одного из них неважен.
+	//
+	// Лента одного специалиста (открыта с его страницы кликом по работе) —
+	// другой сценарий: юзер уже выбрал человека и листает его портфолио.
+	// Здесь порядок обязан совпадать со страницей, иначе после закреплённой
+	// работы свайп уводит в произвольную последовательность. Поэтому
+	// сначала промо, дальше — порядок, который специалист выставил сам.
+	sort := []any{
+		map[string]any{"rating_avg": map[string]any{"order": "desc"}},
+		map[string]any{"video_created_at": map[string]any{"order": "desc"}},
+		map[string]any{"video_id": map[string]any{"order": "asc"}},
+	}
+	if len(q.UserIDs) == 1 {
+		sort = []any{
+			map[string]any{"is_featured": map[string]any{"order": "desc"}},
+			map[string]any{"sort_order": map[string]any{"order": "asc"}},
+			map[string]any{"video_created_at": map[string]any{"order": "desc"}},
+			// video_id последним — тай-брейк, без него search_after
+			// недетерминирован при равных sort_order.
+			map[string]any{"video_id": map[string]any{"order": "asc"}},
+		}
+	}
+
+	// search_after обязан совпадать с sort по количеству значений. У двух
+	// веток сортировки арность разная (3 против 4), поэтому курсор, снятый
+	// в одной ленте и присланный в другую, уронил бы запрос в ES-ошибку и
+	// 502 у юзера. Такой курсор просто игнорируем — «начни сначала», ровно
+	// как поступаем со старыми v1-курсорами.
+	if len(cursor.SearchAfter) > 0 && len(cursor.SearchAfter) != len(sort) {
+		cursor.SearchAfter = nil
+	}
+
 	body := map[string]any{
 		"size":  pageSize,
 		"query": map[string]any{"bool": boolQ},
-		"sort": []any{
-			map[string]any{"rating_avg": map[string]any{"order": "desc"}},
-			map[string]any{"video_created_at": map[string]any{"order": "desc"}},
-			map[string]any{"video_id": map[string]any{"order": "asc"}},
-		},
+		"sort":  sort,
 		// timeout — server-side лимит OpenSearch. Если shard не успел за
 		// 3 сек, возвращаем частичный результат (`timed_out: true` в ответе,
 		// но статус всё равно 200). Без этого один медленный shard утаскивал
@@ -332,11 +363,11 @@ func videoFromDoc(d search.FeedVideoDoc) Video {
 		PreviewURL:       d.PreviewURL,
 		AnimatedThumbURL: d.AnimatedThumbURL,
 		Thumb:            d.ThumbURL,
-		Title:       d.Title,
-		Description: d.Description,
-		DurationSec: d.DurationSec,
-		Aspect:      d.Aspect,
-		CreatedAt:   d.VideoCreatedAt,
+		Title:            d.Title,
+		Description:      d.Description,
+		DurationSec:      d.DurationSec,
+		Aspect:           d.Aspect,
+		CreatedAt:        d.VideoCreatedAt,
 	}
 }
 

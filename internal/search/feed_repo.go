@@ -38,6 +38,13 @@ type FeedVideoDoc struct {
 	DurationSec    *int      `json:"duration_sec,omitempty"`
 	Aspect         string    `json:"aspect,omitempty"`
 	VideoCreatedAt time.Time `json:"video_created_at"`
+	// SortOrder / IsFeatured — порядок, который специалист выставил у себя в
+	// портфолио, и закреплённая промо-работа. Нужны, чтобы лента одного
+	// специалиста листалась так же, как выглядит его страница: сначала
+	// закреплённая, дальше по его порядку. В общей ленте-дискавери
+	// сортировка остаётся своя (рейтинг + свежесть), эти поля туда не лезут.
+	SortOrder      int       `json:"sort_order"`
+	IsFeatured     bool      `json:"is_featured"`
 	CategoryCodes  []string  `json:"category_codes"`
 	// Images — для Kind='image' карусель кадров, упорядочена по sort_order.
 	Images         []FeedImageDoc `json:"images,omitempty"`
@@ -81,6 +88,8 @@ SELECT
   pi.duration_sec,
   COALESCE(pi.aspect, ''),
   pi.created_at,
+  pi.sort_order,
+  pi.is_featured,
   pi.category_codes,
   p.user_id::text,
   p.display_name,
@@ -120,7 +129,7 @@ ORDER BY pi.sort_order, pi.created_at DESC`
 			&d.VideoID, &d.Kind, &d.VideoURL, &d.PreviewURL, &d.AnimatedThumbURL, &d.ThumbURL,
 			&d.Title, &d.Description,
 			&dur, &d.Aspect,
-			&d.VideoCreatedAt, &d.CategoryCodes,
+			&d.VideoCreatedAt, &d.SortOrder, &d.IsFeatured, &d.CategoryCodes,
 			&d.UserID, &d.DisplayName, &d.AvatarURL,
 			&d.Bio, &d.City,
 			&d.RateMin, &d.RateMax, &d.Currency,
