@@ -1,0 +1,104 @@
+# CI бэкенда: сборка, vet и ВСЕ тесты, включая integration.
+#
+# Ключевой момент — postgres и opensearch поднимаются как service-контейнеры,
+# и тестам передаются TEST_DATABASE_URL / OPENSEARCH_URL. Без них ~40% сюиты
+# молча скипается (t.Skip в integration.Pool и в search-фикстурах), прогон
+# остаётся зелёным, и сломанные тесты живут в этой слепой зоне месяцами —
+# ровно так до 2026-08 никто не замечал четыре красных теста.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: marketpclce
+          POSTGRES_PASSWORD: marketpclce
+          POSTGRES_DB: marketpclce_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marketpclce"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      opensearch:
+        image: opensearchproject/opensearch:2.15.0
+        env:
+          discovery.type: single-node
+          plugins.security.disabled: 'true'
+          OPENSEARCH_INITIAL_ADMIN_PASSWORD: Marketpclce_2026!
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      TEST_DATABASE_URL: postgres://marketpclce:marketpclce@localhost:5432/marketpclce_test?sslmode=disable
+      OPENSEARCH_URL: http://localhost:9200
+      # JWT_SECRET и DATABASE_URL обязательны для config.Load(). Тестам
+      # реальные значения не нужны — они ходят в БД через TEST_DATABASE_URL.
+      DATABASE_URL: postgres://marketpclce:marketpclce@localhost:5432/marketpclce_test?sslmode=disable
+      JWT_SECRET: ci-not-a-real-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Миграции тестовой БД
+        run: |
+          go run -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' \
+            github.com/pressly/goose/v3/cmd/goose@v3.27.3 \
+            -dir migrations postgres "$TEST_DATABASE_URL" up
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Один прогон в -v, лог на диск: из него же считаем скипы. Второй прогон
+      # ради подсчёта был бы лишними 15 секундами и риском разъехаться с первым.
+      - name: Тесты
+        run: |
+          set -o pipefail
+          go test ./... -count=1 -v > /tmp/gotest.log 2>&1 || {
+            echo "::group::Полный лог упавшего прогона"; cat /tmp/gotest.log; echo "::endgroup::"
+            grep -E '^\s*--- FAIL' /tmp/gotest.log | sed 's/^/::error::/'
+            exit 1
+          }
+
+      # Страховка от возврата в исходное состояние: если тесты снова начнут
+      # скипаться (потеряли env, не поднялся service-контейнер), прогон должен
+      # краснеть, а не показывать бодрое «ok» на половине сюиты.
+      - name: Итог и проверка, что ничего не скипнулось
+        run: |
+          PASSED=$(grep -cE '^\s*--- PASS' /tmp/gotest.log || true)
+          SKIPPED=$(grep -cE '^\s*--- SKIP' /tmp/gotest.log || true)
+          echo "passed: $PASSED, skipped: $SKIPPED"
+          if [ "$SKIPPED" -gt 0 ]; then
+            grep -B1 -E '^\s*--- SKIP' /tmp/gotest.log | head -40
+            echo "::error::$SKIPPED тестов скипнулось — БД/OpenSearch недоступны или потерян env"
+            exit 1
+          fi
