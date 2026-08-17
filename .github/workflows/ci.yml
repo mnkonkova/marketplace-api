@@ -11,6 +11,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Ручной запуск из вкладки Actions — удобно, когда прогон упал по
+  # внешней причине (кончились минуты, лёг раннер) и хочется повторить
+  # без пустого коммита.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
