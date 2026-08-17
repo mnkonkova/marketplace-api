@@ -51,6 +51,21 @@ FROM specialist_profiles WHERE user_id = $1`, uid).Scan(&status, &reason, &updat
 	return status, reason, updatedAt
 }
 
+// makeModerationAdmin — реальный админ-юзер для поля moderation_reviewed_by.
+// Случайный uuid.New() туда не годится: колонка внешним ключом смотрит в
+// users(id) (миграция 00021), и approve падает на FK-нарушении.
+func makeModerationAdmin(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
+	t.Helper()
+	var uid uuid.UUID
+	if err := pool.QueryRow(context.Background(), `
+INSERT INTO users (email, password_hash, kind, is_approved, is_admin, email_verified_at)
+VALUES ($1, 'x', 'client', TRUE, TRUE, now()) RETURNING id`,
+		"mod-admin-"+uuid.NewString()+"@x").Scan(&uid); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	return uid
+}
+
 // countOutboxEvents — выборка событий по агрегату и типу. Без orderBy —
 // в state-machine тестах хватает count'a.
 func countOutboxEvents(t *testing.T, pool *pgxpool.Pool, aggregate, aggregateID, eventType string) int {
@@ -218,7 +233,8 @@ func TestModerationAdminApproveOK(t *testing.T) {
 		WithProfilesRepo(profilesRepo)
 
 	_, _, updatedAt := fetchModeration(t, pool, uid)
-	actorID := uuid.New()
+	actorID := makeModerationAdmin(t, pool)
+	defer cleanupSpec(t, pool, actorID)
 	if err := adminSvc.ApproveSpecialist(ctx, uid, actorID, &updatedAt); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
