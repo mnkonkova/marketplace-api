@@ -44,7 +44,8 @@ jobs:
         env:
           discovery.type: single-node
           plugins.security.disabled: 'true'
-          OPENSEARCH_INITIAL_ADMIN_PASSWORD: Marketpclce_2026!
+          # Инертен — security-плагин отключён, переменная нужна для старта.
+          OPENSEARCH_INITIAL_ADMIN_PASSWORD: ci-only-not-a-secret-Aa1!
           OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
         ports:
           - 9200:9200
