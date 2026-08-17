@@ -612,6 +612,48 @@ func (h *Handler) PortfolioSetCategories(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// PortfolioSetFeatured godoc
+// @Summary      Закрепить работу как промо (флагман публичной страницы)
+// @Description  featured=true делает работу закреплённой и снимает флаг с предыдущей — закреплённая всегда одна. featured=false просто снимает закрепление.
+// @Tags         portfolio
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      string                     true  "portfolio item id"
+// @Param        body  body      PortfolioSetFeaturedInput  true  "featured flag"
+// @Success      200   {object}  PortfolioItem
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      404   {object}  errorResponse
+// @Router       /me/portfolio/{id}/featured [put]
+func (h *Handler) PortfolioSetFeatured(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrFields(w, http.StatusBadRequest, "bad_id", msgBadID,
+			httpx.FieldError{Field: "id", Message: "Должен быть UUID"})
+		return
+	}
+	var in PortfolioSetFeaturedInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	item, err := h.svc.SetPortfolioFeatured(r.Context(), uid, itemID, in.Featured)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Элемент портфолио не найден.")
+	case err != nil:
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusOK, item)
+	}
+}
+
 // PortfolioUpdate godoc
 // @Summary      Обновить title/description элемента портфолио
 // @Tags         portfolio

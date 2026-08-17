@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"marketpclce/internal/mediameta"
 	"marketpclce/internal/outbox"
 )
 
@@ -32,9 +33,19 @@ type FFmpeg interface {
 	// главной, без iOS Low Power Mode блокировок). См. §11 docs.
 	MakeAnimatedWebP(ctx context.Context, input, output string, p GifParams) error
 
-	// ProbeDuration — длительность через ffprobe (для выбора gif-params).
-	// 0, err = caller использует дефолтный средний бакет.
-	ProbeDuration(ctx context.Context, input string) (float64, error)
+	// Probe — размеры кадра и длительность через ffprobe. Нужны для выбора
+	// gif-params и для записи реального aspect/duration_sec в БД.
+	// Ошибка = caller использует дефолтный средний бакет и не трогает
+	// метаданные строки.
+	Probe(ctx context.Context, input string) (VideoMeta, error)
+}
+
+// VideoMeta — метаданные оригинала. Width/Height уже с учётом поворота
+// (см. FFmpegBin.Probe), то есть это размеры кадра как его увидит зритель.
+type VideoMeta struct {
+	Width       int
+	Height      int
+	DurationSec float64
 }
 
 // Storage — подмножество S3-клиента, нужное pipeline'у. Реализуется
@@ -170,6 +181,17 @@ func (s *Service) Process(ctx context.Context, payload []byte) error {
 	if err := s.cfg.Storage.Download(ctx, p.S3Key, inputPath); err != nil {
 		return s.handlePipelineErr(ctx, itemID, "download original", err)
 	}
+
+	// Probe один раз на весь пайплайн: длительность нужна gif-параметрам,
+	// размеры кадра — колонке aspect. Ошибка не критична (ffprobe может не
+	// быть в образе) — просто не обновим метаданные, фронт померяет формат
+	// сам на loadedmetadata.
+	meta, probeErr := s.cfg.FFmpeg.Probe(ctx, inputPath)
+	if probeErr != nil {
+		s.logger.Warn("probe failed (метаданные не обновим, gif-params по среднему бакету)",
+			"item_id", itemID, "err", probeErr)
+	}
+
 	if err := s.cfg.FFmpeg.MakePreview(ctx, inputPath, outputPath); err != nil {
 		return s.handlePipelineErr(ctx, itemID, "ffmpeg make preview", err)
 	}
@@ -180,12 +202,12 @@ func (s *Service) Process(ctx context.Context, payload []byte) error {
 
 	// Animated WebP «гифка» (sequential pass): non-critical — если упало,
 	// preview_url всё равно доступен, фронт фолбэчит на <video>. См. §11.
-	gifURL := s.makeAnimatedThumb(ctx, itemID, inputPath, gifPath, gifKey)
+	gifURL := s.makeAnimatedThumb(ctx, itemID, inputPath, gifPath, gifKey, meta.DurationSec)
 
 	// T2 fix: markReady + reindex-emit одной tx. Раньше markReady был
 	// commit'ом, а emitReindex — отдельной tx после него; crash между
 	// ними оставлял preview готовым, но OS feed_videos без preview_url.
-	if err := s.commitReady(ctx, itemID, userID, previewURL, gifURL); err != nil {
+	if err := s.commitReady(ctx, itemID, userID, previewURL, gifURL, meta); err != nil {
 		return fmt.Errorf("commit ready: %w", err)
 	}
 
@@ -237,22 +259,19 @@ WHERE id = $1
 // всё равно эмитим: feed_videos должен переиндекситься (preview_url
 // мог уйти в S3 как orphan, sweep его подберёт).
 // makeAnimatedThumb — генерит и заливает animated WebP. Non-critical: если
-// упало (ffprobe нет, ffmpeg ошибся, libwebp нет в build'е) — пишем warn
-// и возвращаем "", вызывающий код просто не запишет animated_thumb_url.
+// упало (ffmpeg ошибся, libwebp нет в build'е) — пишем warn и возвращаем "",
+// вызывающий код просто не запишет animated_thumb_url.
 // Логика выбора параметров — ChooseGifParams(duration). Если ffprobe не
-// дал длительность, fallback на 15-сек бакет (середина).
+// дал длительность (durationSec <= 0), fallback на 15-сек бакет (середина).
 //
 // После первого pass'a проверяем размер: > 300KB → второй pass с
 // quality-10. Если и второй не вошёл — оставляем что есть (всё равно
 // меньше mp4). Порог 300 КБ — под новый потолок -fs 350K (2026-06 tune-up).
-func (s *Service) makeAnimatedThumb(ctx context.Context, itemID uuid.UUID, input, output, key string) string {
-	dur, err := s.cfg.FFmpeg.ProbeDuration(ctx, input)
-	if err != nil {
-		s.logger.Warn("animated_thumb: probe failed, using middle bucket",
-			"item_id", itemID, "err", err)
-		dur = 10 // средний бакет
+func (s *Service) makeAnimatedThumb(ctx context.Context, itemID uuid.UUID, input, output, key string, durationSec float64) string {
+	if durationSec <= 0 {
+		durationSec = 10 // средний бакет — probe не дал длительность
 	}
-	params := ChooseGifParams(dur)
+	params := ChooseGifParams(durationSec)
 	if err := s.cfg.FFmpeg.MakeAnimatedWebP(ctx, input, output, params); err != nil {
 		s.logger.Warn("animated_thumb: ffmpeg failed (non-critical, preview_url still ok)",
 			"item_id", itemID, "err", err)
@@ -287,12 +306,21 @@ func (s *Service) makeAnimatedThumb(ctx context.Context, itemID uuid.UUID, input
 	return s.cfg.Storage.PublicURL(key)
 }
 
-func (s *Service) commitReady(ctx context.Context, itemID, userID uuid.UUID, previewURL, animatedThumbURL string) error {
+func (s *Service) commitReady(ctx context.Context, itemID, userID uuid.UUID, previewURL, animatedThumbURL string, meta VideoMeta) error {
 	tx, err := s.cfg.DB.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// aspect/duration_sec обновляем только если probe отработал: пустые
+	// значения оставляют колонки как есть (COALESCE), а не затирают NULL'ом
+	// то, что мог проставить backfill.
+	aspect := mediameta.AspectFromSize(meta.Width, meta.Height)
+	var durationSec *int
+	if meta.DurationSec > 0 {
+		d := int(meta.DurationSec + 0.5)
+		durationSec = &d
+	}
 	if _, err := tx.Exec(ctx, `
 UPDATE portfolio_items
 SET preview_url          = $2,
@@ -300,8 +328,11 @@ SET preview_url          = $2,
     preview_status       = 'ready',
     preview_error        = NULL,
     preview_generated_at = now(),
+    aspect               = COALESCE(NULLIF($4, ''), aspect),
+    duration_sec         = COALESCE($5, duration_sec),
     updated_at           = now()
-WHERE id = $1 AND preview_status = 'processing'`, itemID, previewURL, animatedThumbURL); err != nil {
+WHERE id = $1 AND preview_status = 'processing'`,
+		itemID, previewURL, animatedThumbURL, aspect, durationSec); err != nil {
 		return fmt.Errorf("mark ready: %w", err)
 	}
 	if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),

@@ -199,6 +199,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/me/portfolio/multipart/complete", d.Profiles.PortfolioMultipartComplete)
 			r.Post("/me/portfolio/multipart/abort", d.Profiles.PortfolioMultipartAbort)
 			r.Put("/me/portfolio/{id}/categories", d.Profiles.PortfolioSetCategories)
+			r.Put("/me/portfolio/{id}/featured", d.Profiles.PortfolioSetFeatured)
 			r.Patch("/me/portfolio/{id}", d.Profiles.PortfolioUpdate)
 			r.Post("/me/portfolio/{id}/images", d.Profiles.PortfolioImagesAppend)
 			r.Put("/me/portfolio/{id}/images/order", d.Profiles.PortfolioImagesReorder)

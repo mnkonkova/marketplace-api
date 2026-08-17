@@ -3,9 +3,12 @@ package transcode
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -99,29 +102,82 @@ func (f *FFmpegBin) MakePreview(ctx context.Context, input, output string) error
 	return nil
 }
 
-// ProbeDuration возвращает длительность видео в секундах через ffprobe
-// (стандартный binary рядом с ffmpeg). 0, err → нет ffprobe / битый файл;
-// caller'у решать (можно использовать дефолтные gif-params для среднего
-// бакета). Минимальная зависимость: ffprobe идёт в большинстве дистрибов
-// в одном пакете с ffmpeg, на VDS уже есть.
-func (f *FFmpegBin) ProbeDuration(ctx context.Context, input string) (float64, error) {
+// ffprobeOutput — минимальная проекция JSON'а ffprobe. Разбираем именно то,
+// что запросили в -show_entries, остальное игнорируем.
+type ffprobeOutput struct {
+	Streams []struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+		// Tags.Rotate — способ ffmpeg 4.x отдать поворот («90», «-90»).
+		Tags struct {
+			Rotate string `json:"rotate"`
+		} `json:"tags"`
+		// SideDataList — способ ffmpeg 5+ (display matrix).
+		SideDataList []struct {
+			Rotation float64 `json:"rotation"`
+		} `json:"side_data_list"`
+	} `json:"streams"`
+	Format struct {
+		Duration string `json:"duration"`
+	} `json:"format"`
+}
+
+// Probe возвращает размеры кадра и длительность через ffprobe (стандартный
+// binary рядом с ffmpeg). Ошибка → нет ffprobe / битый файл; caller решает,
+// падать или брать дефолты.
+//
+// Поворот учитываем обязательно: видео со смартфона почти всегда лежит в
+// контейнере как 1920×1080 с rotation=-90, и без свапа мы бы записали
+// вертикальному ролику aspect 16:9 — то есть ровно ту ошибку, ради которой
+// всё это и делается. ffmpeg 4.x отдаёт поворот в tags.rotate, 5+ — в
+// side_data_list, читаем оба.
+func (f *FFmpegBin) Probe(ctx context.Context, input string) (VideoMeta, error) {
 	ffprobe := strings.TrimSuffix(f.bin, "ffmpeg") + "ffprobe"
 	cmd := exec.CommandContext(ctx, ffprobe,
 		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height:stream_tags=rotate:stream_side_data=rotation:format=duration",
+		"-of", "json",
 		input,
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("ffprobe: %w", err)
+		return VideoMeta{}, fmt.Errorf("ffprobe: %w", err)
 	}
-	s := strings.TrimSpace(string(out))
-	var d float64
-	if _, err := fmt.Sscanf(s, "%f", &d); err != nil {
-		return 0, fmt.Errorf("parse duration %q: %w", s, err)
+	var parsed ffprobeOutput
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return VideoMeta{}, fmt.Errorf("parse ffprobe json: %w", err)
 	}
-	return d, nil
+	if len(parsed.Streams) == 0 {
+		return VideoMeta{}, fmt.Errorf("ffprobe: нет видео-потока в %s", input)
+	}
+	st := parsed.Streams[0]
+
+	meta := VideoMeta{Width: st.Width, Height: st.Height}
+	if d, err := strconv.ParseFloat(strings.TrimSpace(parsed.Format.Duration), 64); err == nil {
+		meta.DurationSec = d
+	}
+
+	rotation := 0.0
+	if r, err := strconv.ParseFloat(strings.TrimSpace(st.Tags.Rotate), 64); err == nil {
+		rotation = r
+	}
+	for _, sd := range st.SideDataList {
+		if sd.Rotation != 0 {
+			rotation = sd.Rotation
+		}
+	}
+	if isQuarterTurn(rotation) {
+		meta.Width, meta.Height = meta.Height, meta.Width
+	}
+	return meta, nil
+}
+
+// isQuarterTurn — поворот на ±90° (или ±270°, что то же самое) меняет
+// местами ширину и высоту. 180° переворачивает кадр, но формат сохраняет.
+func isQuarterTurn(rotation float64) bool {
+	r := math.Mod(math.Abs(rotation), 180)
+	return math.Abs(r-90) < 1
 }
 
 // GifParams — параметры animated WebP «гифки», выбираемые по длительности

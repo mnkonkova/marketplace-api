@@ -41,14 +41,14 @@ func (f *fakeFFmpeg) MakePreview(ctx context.Context, _, output string) error {
 	return os.WriteFile(output, f.written, 0o644)
 }
 
-// MakeAnimatedWebP / ProbeDuration — no-op stubs для удовлетворения
+// MakeAnimatedWebP / Probe — no-op stubs для удовлетворения
 // FFmpeg-интерфейса. Существующие тесты не проверяют webp-pipeline,
 // он покрыт отдельно в animated_thumb_test.go.
 func (f *fakeFFmpeg) MakeAnimatedWebP(_ context.Context, _, output string, _ transcode.GifParams) error {
 	return os.WriteFile(output, []byte{}, 0o644)
 }
-func (f *fakeFFmpeg) ProbeDuration(_ context.Context, _ string) (float64, error) {
-	return 10, nil
+func (f *fakeFFmpeg) Probe(_ context.Context, _ string) (transcode.VideoMeta, error) {
+	return transcode.VideoMeta{Width: 1080, Height: 1920, DurationSec: 10}, nil
 }
 
 type fakeStorage struct {

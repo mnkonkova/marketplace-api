@@ -53,6 +53,18 @@ type PortfolioItem struct {
 	PreviewURL       string `json:"preview_url,omitempty"`
 	AnimatedThumbURL string `json:"animated_thumb_url,omitempty"`
 	PreviewStatus    string `json:"preview_status"` // pending|processing|ready|failed
+	// Aspect — «W:H» исходника, сокращённое до несократимой дроби и
+	// прижатое к стандартным форматам ("9:16", "16:9", "1:1", "4:5"…).
+	// Заполняется transcode-воркером через ffprobe (см. transcode.Probe).
+	// Пусто = ещё не пробировано (запись старше миграции 00028 и не прошла
+	// cmd/backfill-aspect, либо ffprobe недоступен) — фронт в этом случае
+	// меряет размеры сам на loadedmetadata.
+	Aspect string `json:"aspect,omitempty"`
+	// DurationSec — длительность оригинала, для метки на плитке. 0 = неизвестна.
+	DurationSec int `json:"duration_sec,omitempty"`
+	// IsFeatured — закреплённая промо-работа, флагман на публичной странице.
+	// Не более одной на специалиста (partial unique index, миграция 00028).
+	IsFeatured bool `json:"is_featured"`
 	// Images — для Kind='image' список фото в карусели (упорядочен по sort_order).
 	// Для других kind — nil/пусто.
 	Images []PortfolioImage `json:"images,omitempty"`
@@ -360,6 +372,13 @@ type PortfolioSetCategoriesInput struct {
 	// UpdatedAt — optimistic-lock версия portfolio_items.updated_at.
 	// Несовпадение → 409. Без поля — старое поведение.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// PortfolioSetFeaturedInput — закрепить/открепить работу как промо (флагман
+// на публичной странице). Featured=true снимает флаг с предыдущей работы
+// специалиста в той же транзакции — закреплённая всегда одна.
+type PortfolioSetFeaturedInput struct {
+	Featured bool `json:"featured"`
 }
 
 // PortfolioUploadURLInput — запрос на presigned PUT для прямого аплоада в S3.

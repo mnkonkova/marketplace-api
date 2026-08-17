@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"marketpclce/internal/mediameta"
 )
 
 var (
@@ -578,6 +580,9 @@ SELECT
       'preview_url', COALESCE(pi.preview_url, ''),
       'animated_thumb_url', COALESCE(pi.animated_thumb_url, ''),
       'preview_status', pi.preview_status,
+      'aspect', COALESCE(pi.aspect, ''),
+      'duration_sec', COALESCE(pi.duration_sec, 0),
+      'is_featured', pi.is_featured,
       'images', COALESCE((
         SELECT json_agg(json_build_object(
           'id', img.id,
@@ -701,12 +706,32 @@ ORDER BY s.kind, s.title`, userID)
 	return out, rows.Err()
 }
 
-func (r *Repo) listPortfolio(ctx context.Context, userID uuid.UUID) ([]PortfolioItem, error) {
-	rows, err := r.db.Query(ctx, `
-SELECT id, kind, title, description,
+// portfolioCols — единый список колонок portfolio_items для SELECT/RETURNING.
+// Держим одной константой, потому что раньше шесть запросов перечисляли их
+// вручную и уже начали расходиться (UPDATE ... categories, например, не
+// возвращал preview_*, из-за чего PUT /categories отдавал айтем без превью).
+// Порядок колонок обязан совпадать со scanPortfolioItem.
+const portfolioCols = `id, kind, title, description,
        COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
        category_codes, sort_order, created_at, updated_at,
-       COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status
+       COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status,
+       COALESCE(aspect, ''), COALESCE(duration_sec, 0), is_featured`
+
+// scanPortfolioItem — единая точка чтения portfolioCols. pgx.Row реализуют
+// и Row (QueryRow), и Rows (в цикле), поэтому подходит обоим вызовам.
+func scanPortfolioItem(row pgx.Row, p *PortfolioItem) error {
+	return row.Scan(
+		&p.ID, &p.Kind, &p.Title, &p.Description,
+		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
+		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
+		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
+		&p.Aspect, &p.DurationSec, &p.IsFeatured,
+	)
+}
+
+func (r *Repo) listPortfolio(ctx context.Context, userID uuid.UUID) ([]PortfolioItem, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT `+portfolioCols+`
 FROM portfolio_items
 WHERE user_id = $1
 ORDER BY sort_order, created_at DESC`, userID)
@@ -718,12 +743,7 @@ ORDER BY sort_order, created_at DESC`, userID)
 	var imageItemIDs []uuid.UUID
 	for rows.Next() {
 		var p PortfolioItem
-		if err := rows.Scan(
-			&p.ID, &p.Kind, &p.Title, &p.Description,
-			&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-			&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
-			&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
-		); err != nil {
+		if err := scanPortfolioItem(rows, &p); err != nil {
 			return nil, err
 		}
 		if p.Kind == "image" {
@@ -845,22 +865,13 @@ VALUES (
     'image',
     COALESCE((SELECT MAX(sort_order)+1 FROM portfolio_items WHERE user_id = $1), 0)
 )
-RETURNING id, kind, title, description,
-          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-          category_codes, sort_order, created_at, updated_at,
-          COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status`
+RETURNING ` + portfolioCols
 	var p PortfolioItem
 	cats := in.CategoryCodes
 	if cats == nil {
 		cats = []string{}
 	}
-	err := tx.QueryRow(ctx, qItem, userID, in.Title, in.Description, cats).Scan(
-		&p.ID, &p.Kind, &p.Title, &p.Description,
-		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
-		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
-	)
-	if err != nil {
+	if err := scanPortfolioItem(tx.QueryRow(ctx, qItem, userID, in.Title, in.Description, cats), &p); err != nil {
 		return PortfolioItem{}, fmt.Errorf("insert photo-set item: %w", err)
 	}
 	const qImage = `
@@ -911,10 +922,7 @@ VALUES (
     'video', $7, $8,
     COALESCE((SELECT MAX(sort_order)+1 FROM portfolio_items WHERE user_id = $1), 0)
 )
-RETURNING id, kind, title, description,
-          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-          category_codes, sort_order, created_at, updated_at,
-          COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status`
+RETURNING ` + portfolioCols
 	var p PortfolioItem
 	cats := in.CategoryCodes
 	if cats == nil {
@@ -925,21 +933,20 @@ RETURNING id, kind, title, description,
 		d := in.DurationSec
 		dur = &d
 	}
-	aspect := in.Aspect
-	if aspect == "" {
-		aspect = "9:16"
+	// Раньше здесь стоял дефолт "9:16" — он врал: фронт aspect не присылает,
+	// поэтому горизонтальные ролики тоже записывались вертикальными. Теперь
+	// неизвестный формат остаётся NULL, а реальное значение проставляет
+	// transcode-воркер по ffprobe (или cmd/backfill-aspect для старых строк).
+	var aspect *string
+	if a := mediameta.NormalizeAspect(in.Aspect); a != "" {
+		aspect = &a
 	}
-	err := tx.QueryRow(ctx, q,
+	err := scanPortfolioItem(tx.QueryRow(ctx, q,
 		userID, in.Title, in.Description,
 		in.VideoURL, in.ThumbnailURL,
 		cats,
 		dur, aspect,
-	).Scan(
-		&p.ID, &p.Kind, &p.Title, &p.Description,
-		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
-		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
-	)
+	), &p)
 	if err != nil {
 		return PortfolioItem{}, fmt.Errorf("insert portfolio: %w", err)
 	}
@@ -961,15 +968,9 @@ UPDATE portfolio_items
        updated_at     = now()
  WHERE id = $1 AND user_id = $2
    AND ($4::timestamptz IS NULL OR updated_at = $4)
-RETURNING id, kind, title, description,
-          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-          category_codes, sort_order, created_at, updated_at`
+RETURNING ` + portfolioCols
 	var p PortfolioItem
-	err := tx.QueryRow(ctx, q, itemID, userID, codes, expectedUpdatedAt).Scan(
-		&p.ID, &p.Kind, &p.Title, &p.Description,
-		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
-	)
+	err := scanPortfolioItem(tx.QueryRow(ctx, q, itemID, userID, codes, expectedUpdatedAt), &p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// 0 строк: либо записи нет/чужая, либо updated_at не совпал.
 		// Если клиент прислал ожидание — считаем что это conflict (наиболее
@@ -1152,17 +1153,9 @@ UPDATE portfolio_items
        updated_at  = now()
  WHERE id = $1 AND user_id = $2
    AND ($5::timestamptz IS NULL OR updated_at = $5)
-RETURNING id, kind, title, description,
-          COALESCE(video_url, ''), COALESCE(thumbnail_url, ''), COALESCE(external_url, ''),
-          category_codes, sort_order, created_at, updated_at,
-          COALESCE(preview_url, ''), COALESCE(animated_thumb_url, ''), preview_status`
+RETURNING ` + portfolioCols
 	var p PortfolioItem
-	err := tx.QueryRow(ctx, q, itemID, userID, in.Title, in.Description, in.UpdatedAt).Scan(
-		&p.ID, &p.Kind, &p.Title, &p.Description,
-		&p.VideoURL, &p.ThumbnailURL, &p.ExternalURL,
-		&p.CategoryCodes, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt,
-		&p.PreviewURL, &p.AnimatedThumbURL, &p.PreviewStatus,
-	)
+	err := scanPortfolioItem(tx.QueryRow(ctx, q, itemID, userID, in.Title, in.Description, in.UpdatedAt), &p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if in.UpdatedAt != nil {
 			return PortfolioItem{}, ErrConflict
@@ -1171,6 +1164,48 @@ RETURNING id, kind, title, description,
 	}
 	if err != nil {
 		return PortfolioItem{}, fmt.Errorf("update portfolio meta: %w", err)
+	}
+	return p, nil
+}
+
+// SetPortfolioFeaturedInTx — закрепляет работу как промо (флагман публичной
+// страницы) или снимает закрепление. Закреплённая работа у специалиста ровно
+// одна, поэтому при featured=true сначала снимаем флаг со всех остальных, и
+// только потом ставим на целевую: partial unique index проверяется в конце
+// каждого statement'а, так что обратный порядок словил бы unique_violation.
+//
+// Порядок операций внутри одной tx также защищает от гонки двух параллельных
+// PUT'ов: второй дождётся row-lock'а на уже обновлённых строках.
+func (r *Repo) SetPortfolioFeaturedInTx(ctx context.Context, tx pgx.Tx, userID, itemID uuid.UUID, featured bool) (PortfolioItem, error) {
+	if featured {
+		if _, err := tx.Exec(ctx, `
+UPDATE portfolio_items
+   SET is_featured = FALSE,
+       updated_at  = now()
+ WHERE user_id = $1 AND is_featured AND id <> $2`, userID, itemID); err != nil {
+			return PortfolioItem{}, fmt.Errorf("unset previous featured: %w", err)
+		}
+	}
+	const q = `
+UPDATE portfolio_items
+   SET is_featured = $3,
+       updated_at  = now()
+ WHERE id = $1 AND user_id = $2
+RETURNING ` + portfolioCols
+	var p PortfolioItem
+	err := scanPortfolioItem(tx.QueryRow(ctx, q, itemID, userID, featured), &p)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PortfolioItem{}, ErrNotFound
+	}
+	if err != nil {
+		return PortfolioItem{}, fmt.Errorf("set featured: %w", err)
+	}
+	if p.Kind == "image" {
+		byItem, err := r.loadImagesByItemsInTx(ctx, tx, []uuid.UUID{p.ID})
+		if err != nil {
+			return PortfolioItem{}, err
+		}
+		p.Images = byItem[p.ID]
 	}
 	return p, nil
 }

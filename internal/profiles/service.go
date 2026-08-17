@@ -872,6 +872,28 @@ func (s *Service) UpdatePortfolio(ctx context.Context, userID, itemID uuid.UUID,
 	return item, nil
 }
 
+// SetPortfolioFeatured — закрепить работу как промо (флагман публичной
+// страницы) или снять закрепление. Закреплённая работа одна на специалиста:
+// при featured=true флаг снимается с предыдущей в той же транзакции.
+//
+// Модерацию НЕ дёргаем (в отличие от правки title/description): работа уже
+// прошла проверку, меняется только её позиция на витрине. Отправлять профиль
+// на повторную модерацию за смену промо — значит наказывать за нормальное
+// поведение. Outbox-событие тоже не эмитим: is_featured не участвует ни в
+// поиске, ни в ленте, а публичный профиль читается из Postgres напрямую.
+func (s *Service) SetPortfolioFeatured(ctx context.Context, userID, itemID uuid.UUID, featured bool) (PortfolioItem, error) {
+	var item PortfolioItem
+	err := s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		item, txErr = s.repo.SetPortfolioFeaturedInTx(ctx, tx, userID, itemID, featured)
+		return txErr
+	})
+	if err != nil {
+		return PortfolioItem{}, err
+	}
+	return item, nil
+}
+
 // DeletePortfolioImage — удаляет один кадр из photo-set'а. Если после удаления
 // в сете не осталось фото — каскадом сносим сам portfolio_item (user явно
 // согласился с этим UX в плане: пустой сет бессмысленен).

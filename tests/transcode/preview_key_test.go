@@ -36,10 +36,12 @@ func (stubFFmpeg) MakePreview(_ context.Context, _, _ string) error { return nil
 func (stubFFmpeg) MakeAnimatedWebP(_ context.Context, _, _ string, _ transcode.GifParams) error {
 	return nil
 }
-func (stubFFmpeg) ProbeDuration(_ context.Context, _ string) (float64, error) { return 0, nil }
+func (stubFFmpeg) Probe(_ context.Context, _ string) (transcode.VideoMeta, error) {
+	return transcode.VideoMeta{}, nil
+}
 
 type stubStorage struct{}
 
-func (stubStorage) Download(_ context.Context, _, _ string) error          { return nil }
-func (stubStorage) Upload(_ context.Context, _, _, _ string) error         { return nil }
-func (stubStorage) PublicURL(key string) string                            { return "https://s3/" + key }
+func (stubStorage) Download(_ context.Context, _, _ string) error  { return nil }
+func (stubStorage) Upload(_ context.Context, _, _, _ string) error { return nil }
+func (stubStorage) PublicURL(key string) string                    { return "https://s3/" + key }

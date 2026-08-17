@@ -14,11 +14,13 @@ import (
 // probe/transcode независимо от mp4-pass'a (который должен пройти всегда).
 type webpFFmpeg struct {
 	probeDur     float64
+	probeW       int
+	probeH       int
 	probeErr     error
 	webpErr      error
-	webpFileSize int  // байтов записать в output после успешного pass'a
-	webpCalls    int  // счётчик вызовов MakeAnimatedWebP (для second-pass-теста)
-	lastQuality  int  // quality последнего pass'a
+	webpFileSize int // байтов записать в output после успешного pass'a
+	webpCalls    int // счётчик вызовов MakeAnimatedWebP (для second-pass-теста)
+	lastQuality  int // quality последнего pass'a
 }
 
 func (f *webpFFmpeg) MakePreview(_ context.Context, _, output string) error {
@@ -37,8 +39,12 @@ func (f *webpFFmpeg) MakeAnimatedWebP(_ context.Context, _, output string, p tra
 	return os.WriteFile(output, buf, 0o644)
 }
 
-func (f *webpFFmpeg) ProbeDuration(_ context.Context, _ string) (float64, error) {
-	return f.probeDur, f.probeErr
+func (f *webpFFmpeg) Probe(_ context.Context, _ string) (transcode.VideoMeta, error) {
+	return transcode.VideoMeta{
+		Width:       f.probeW,
+		Height:      f.probeH,
+		DurationSec: f.probeDur,
+	}, f.probeErr
 }
 
 // TestProcess_AnimatedThumb_Success — happy path: pipeline пишет в S3
@@ -80,25 +86,27 @@ func TestProcess_AnimatedThumb_Success(t *testing.T) {
 	if _, ok := st.uploaded[webpKey]; !ok {
 		t.Errorf("expected webp upload to %s", webpKey)
 	}
-	// Long-bucket parameters: probeDur=30 → quality 65
-	if ff.lastQuality != 65 {
-		t.Errorf("expected long-bucket quality=65, got %d", ff.lastQuality)
+	// Long-bucket parameters: probeDur=30 → quality 78 (ChooseGifParams,
+	// ветка >15 сек). Было 65 до tune-апа качества в 9fa9111 (2026-06-09).
+	if ff.lastQuality != 78 {
+		t.Errorf("expected long-bucket quality=78, got %d", ff.lastQuality)
 	}
 	// Cleanup
 	_, _ = pool.Exec(context.Background(),
 		`DELETE FROM outbox WHERE aggregate='specialist' AND aggregate_id=$1`, userID.String())
 }
 
-// TestProcess_AnimatedThumb_Oversized — webp первый pass даёт >150KB,
-// service.go делает second pass с quality-10.
+// TestProcess_AnimatedThumb_Oversized — webp первый pass даёт больше порога
+// (300KB), service.go делает second pass с quality-8. Пороги и шаг менялись
+// в 9fa9111 (2026-06-09): было >150KB и quality-10.
 func TestProcess_AnimatedThumb_Oversized(t *testing.T) {
 	pool, cleanup := withPool(t)
 	defer cleanup()
 	itemID, userID := makeItem(t, pool, "pending", "https://s3/portfolio/u/item.mp4")
 	key := "portfolio/u/" + itemID.String() + ".mp4"
 	st := &fakeStorage{downloads: map[string][]byte{key: []byte("ORIGINAL")}}
-	// probeDur=10 → middle-bucket quality=70. Файл 200K > 150K порог.
-	ff := &webpFFmpeg{probeDur: 10, webpFileSize: 200 * 1024}
+	// probeDur=10 → middle-bucket quality=82. Файл 320K > 300K порог.
+	ff := &webpFFmpeg{probeDur: 10, webpFileSize: 320 * 1024}
 	svc := mkService(t, pool, ff, st)
 
 	_ = svc.Process(context.Background(), mkPayload(t, itemID, userID, key))
@@ -106,16 +114,16 @@ func TestProcess_AnimatedThumb_Oversized(t *testing.T) {
 	if ff.webpCalls != 2 {
 		t.Errorf("expected 2 webp passes (oversize retry), got %d", ff.webpCalls)
 	}
-	// Second pass: 70 - 10 = 60
-	if ff.lastQuality != 60 {
-		t.Errorf("second-pass quality = %d, want 60", ff.lastQuality)
+	// Second pass: 82 - 8 = 74 (пол качества — 70, сюда не упираемся).
+	if ff.lastQuality != 74 {
+		t.Errorf("second-pass quality = %d, want 74", ff.lastQuality)
 	}
 	_, _ = pool.Exec(context.Background(),
 		`DELETE FROM outbox WHERE aggregate='specialist' AND aggregate_id=$1`, userID.String())
 }
 
 // TestProcess_AnimatedThumb_ProbeFailedUsesMiddleBucket — ffprobe не отдаёт
-// длительность → service фолбэк на middle bucket (10 сек = quality 70).
+// длительность → service фолбэк на middle bucket (10 сек = quality 82).
 func TestProcess_AnimatedThumb_ProbeFailedUsesMiddleBucket(t *testing.T) {
 	pool, cleanup := withPool(t)
 	defer cleanup()
@@ -127,8 +135,8 @@ func TestProcess_AnimatedThumb_ProbeFailedUsesMiddleBucket(t *testing.T) {
 
 	_ = svc.Process(context.Background(), mkPayload(t, itemID, userID, key))
 
-	if ff.lastQuality != 70 {
-		t.Errorf("expected middle-bucket quality=70 on probe failure, got %d", ff.lastQuality)
+	if ff.lastQuality != 82 {
+		t.Errorf("expected middle-bucket quality=82 on probe failure, got %d", ff.lastQuality)
 	}
 	_, _ = pool.Exec(context.Background(),
 		`DELETE FROM outbox WHERE aggregate='specialist' AND aggregate_id=$1`, userID.String())
