@@ -1,5 +1,5 @@
 .PHONY: up down logs ps run build tidy migrate-up migrate-down migrate-status migrate-create test test-db-up test-db-reset test-integration lint fmt swag \
-        deploy redeploy redeploy-api redeploy-web prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos prod-reindex \
+        deploy redeploy redeploy-api redeploy-web prod-env-check prod-up prod-down prod-logs prod-ps prod-build prod-migrate prod-seed prod-seed-videos prod-reindex \
         backup-db prod-backup-db prod-restore-db backup-n8n restore-n8n n8n-import n8n-export \
         grafana-dashboards-push grafana-rules-push grafana-alerts-push
 
@@ -181,8 +181,24 @@ prod-seed-videos:
 # Запускать ночью (0:00-6:00 MSK) — трафик минимален.
 #
 # Использование на VDS: `make prod-reindex`
-prod-reindex:
-	@test -f .env.prod || (echo "ERR: .env.prod missing" >&2; exit 1)
+# prod-env-check — превентивная проверка переменных, которые compose требует
+# жёстко (форма ${VAR:?}). Она валится и на незаданной переменной, и на
+# ПУСТОЙ, а сообщение получается про «interpolating services...», по
+# которому непонятно, что делать. Проверяем заранее и говорим прямо.
+prod-env-check:
+	@test -f .env.prod || (echo "ERR: .env.prod missing. Copy .env.prod.example → .env.prod and fill it." >&2; exit 1)
+	@missing=""; \
+	for v in DOMAIN POSTGRES_PASSWORD OPENSEARCH_PASSWORD; do \
+		val=$$(grep -E "^$$v=" .env.prod | cut -d= -f2- | tr -d '"'"'"'"'); \
+		[ -n "$$val" ] || missing="$$missing $$v"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "ERR: в .env.prod пусты обязательные переменные:$$missing" >&2; \
+		echo "     Пароли генерируются так: openssl rand -base64 24" >&2; \
+		exit 1; \
+	fi
+
+prod-reindex: prod-env-check
 	@echo "→ enable OPENSEARCH_REINDEX_ON_START=true"
 	@if grep -q "^OPENSEARCH_REINDEX_ON_START=" .env.prod; then \
 		sed -i.bak 's/^OPENSEARCH_REINDEX_ON_START=.*/OPENSEARCH_REINDEX_ON_START=true/' .env.prod; \
