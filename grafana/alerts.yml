@@ -394,6 +394,30 @@ groups:
           summary: "RAM available < 10%"
           description: "Скоро OOM-killer. Контейнеры с mem_limit могут начать падать. Проверь самых жирных через `docker stats`."
 
+      # OOMRisk смотрит на память ХОСТА и не видит контейнер, упёршийся в
+      # собственный cgroup-лимит. Ровно так прошёл инцидент 2026-08-17:
+      # opensearch стоял на 99% своего лимита (1014MiB/1GiB) и тормозил
+      # поиск, а на VDS было 13 ГБ свободных — хост-алерты молчали, и
+      # проблема всплыла только через ESLatencyHigh, то есть уже симптомом
+      # у пользователей. Этот алерт ловит причину заранее.
+      #
+      # working_set (а не usage) — потому что usage включает reclaimable
+      # page cache: по нему любой активный контейнер выглядит «на 100%».
+      # Порог 0.9 при for=15m: короткие всплески при индексации/бэкапе —
+      # норма, а вот четверть часа под потолком уже означает деградацию.
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          container_memory_working_set_bytes{name!=""}
+          /
+          container_spec_memory_limit_bytes{name!=""}
+          > 0.9
+          and container_spec_memory_limit_bytes{name!=""} > 0
+        for: 15m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Контейнер {{ $labels.name }} у потолка памяти"
+          description: "working_set > 90% mem_limit больше 15 минут. Контейнеру тесно в своём cgroup — на хосте память при этом может быть свободна. Подними mem_limit в docker-compose.prod.yml (для JVM-сервисов заодно heap: правило heap ≈ треть-половина лимита) или разберись, кто течёт."
+
       - alert: ErrorRate5xxBurst
         # Дублирует HighErrorRate (5m), но с for=1m — для более резкой реакции.
         # Срабатывает быстрее если внезапная пиковая ошибка.

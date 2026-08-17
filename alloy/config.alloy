@@ -68,6 +68,31 @@ prometheus.scrape "node" {
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// ── Метрики по контейнерам (cAdvisor) ──────────────────────────────
+// node-exporter показывает память ХОСТА, а контейнеры живут в своих
+// cgroup'ах со своими mem_limit. Разница неприятная: 2026-08-17 opensearch
+// стоял на 99% собственного лимита и тормозил поиск, при этом на VDS было
+// 13 ГБ свободных — хост-алерт OOMRisk молчал, потому что с его точки
+// зрения всё прекрасно. cAdvisor даёт container_memory_* / container_cpu_*
+// в разрезе контейнеров и закрывает эту слепую зону.
+//
+// Встроенный экспортер Alloy — отдельный контейнер поднимать не нужно, но
+// нужны host-моунты (см. docker-compose.prod.yml, сервис alloy).
+prometheus.exporter.cadvisor "containers" {
+	docker_host = "unix:///var/run/docker.sock"
+
+	// Не собираем то, что нам не нужно: метрик у cAdvisor много, а лимиты
+	// Grafana Cloud free tier по активным сериям вполне реальные.
+	enabled_metrics = ["cpu", "memory", "diskIO", "network"]
+	storage_duration = "5m"
+}
+
+prometheus.scrape "cadvisor" {
+	targets         = prometheus.exporter.cadvisor.containers.targets
+	scrape_interval = "30s"
+	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
 // ── Remote-write метрик в Grafana Cloud ────────────────────────────
 prometheus.remote_write "grafana_cloud" {
 	endpoint {

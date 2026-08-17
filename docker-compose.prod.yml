@@ -47,7 +47,17 @@ services:
       - discovery.type=single-node
       - plugins.security.disabled=true
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:?opensearch admin password is required}
-      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      # Heap 2g при mem_limit 6g — правило «heap ≈ треть-половина лимита
+      # контейнера». Вторая часть лимита нужна не JVM, а ядру под page cache
+      # сегментов Lucene: поиск читает их mmap'ом, и если кэшу негде жить,
+      # каждый запрос идёт на диск.
+      #
+      # 2026-08-17, ESLatencyHigh (op=search, p95 > 2s): было 512m/1g, и
+      # контейнер стоял на 99% лимита (1014MiB из 1GiB) при 13 ГБ свободных
+      # на хосте. Heap помещался, а page cache — уже нет, отсюда 143 МБ
+      # block read и медленный search. Хост-алерт OOMRisk этого не видел:
+      # он смотрит на память VDS, а упор был в cgroup контейнера.
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
       - bootstrap.memory_lock=true
     ulimits:
       memlock:
@@ -60,7 +70,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 18
-    mem_limit: 1g
+    # 6g — это потолок, а не резерв: контейнер занимает столько, сколько
+    # реально нужно (heap 2g + off-heap ~1g + кэш, который ядро отдаст
+    # обратно под давлением). На VDS 15 ГБ, так что запас есть.
+    mem_limit: 6g
 
   redis:
     <<: *default-logging
@@ -183,6 +196,12 @@ services:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - alloy-data:/var/lib/alloy/data
+      # Моунты для встроенного cAdvisor-экспортера (метрики по контейнерам).
+      # Все ro: агент только читает cgroup-статистику.
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
     environment:
       GRAFANA_CLOUD_PROM_URL: ${GRAFANA_CLOUD_PROM_URL:-}
       GRAFANA_CLOUD_PROM_USER: ${GRAFANA_CLOUD_PROM_USER:-}

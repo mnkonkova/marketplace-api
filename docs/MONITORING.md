@@ -131,6 +131,68 @@ your Telegram contact point.
 
 ---
 
+## Раннбук: ESLatencyHigh (p95 поиска > 2s)
+
+Разбор инцидента 2026-08-17 — сценарий типовой, повторится.
+
+**Сначала посмотри на `op` в алерте.** `search` — лагает каталог у
+пользователей; `bulk` — застревает outbox-индексер, выдача устаревает, но
+страницы живые. Дальше диагностика общая.
+
+Порт 9200 в проде наружу не проброшен, поэтому `curl` с хоста молча вернёт
+пустоту (с `-s` ошибка съедается). Ходи изнутри контейнера:
+
+```bash
+docker exec api-opensearch-1 curl -s "localhost:9200/_cat/nodes?v&h=name,heap.percent,ram.percent,cpu,load_1m"
+docker exec api-opensearch-1 curl -s localhost:9200/_nodes/stats/jvm | jq '.nodes[].jvm.gc.collectors'
+docker exec api-opensearch-1 curl -s localhost:9200/_cat/allocation?v
+docker stats --no-stream api-opensearch-1     # ← смотреть в первую очередь
+df -h /var/lib/docker
+free -h
+```
+
+Что искать, по убыванию вероятности:
+
+1. **Контейнер у своего mem_limit** (`docker stats` показывает ~99%). Самый
+   частый случай и самый неочевидный: на хосте при этом может быть 13 ГБ
+   свободных, а `OOMRisk` смотрит именно на хост и молчит. Механика — heap
+   помещается, а вот page cache для сегментов Lucene внутри cgroup жить
+   негде, и поиск начинает читать с диска на каждом запросе (виден рост
+   BLOCK I/O). Лечится подъёмом `mem_limit` **и** heap в
+   `docker-compose.prod.yml`, правило: heap ≈ треть-половина лимита,
+   остальное ядру под кэш. Поднимать только heap — сделать хуже.
+2. **Диск под watermark.** `_cat/allocation` + `df -h`. При заполнении OS
+   уходит в read-only (`cluster.blocks.read_only_allow_delete`), пишущие
+   операции встают. Чистить место, потом снимать флаг вручную.
+3. **Old-GC растёт** при живом лимите памяти — heap реально мал под объём
+   данных. Тот же фикс, что в п.1.
+4. **Всплеск soft-relax.** При `Total < 5` и активных фильтрах
+   `internal/search/service.go` шлёт второй запрос без фильтров. Если
+   выросла доля пустых выдач (сломался анализатор, уехал индекс) — нагрузка
+   на кластер удваивается. Проверяется по доле запросов с `relaxed` в
+   ответе.
+
+Пересоздание контейнера (`docker compose -f docker-compose.prod.yml up -d
+opensearch`) роняет поиск примерно на минуту — делать в тихое окно.
+
+## Раннбук: ContainerMemoryNearLimit
+
+Контейнер больше 15 минут держит `working_set` выше 90% своего `mem_limit`.
+Это ранний сигнал того же класса проблем, что выше: сервису тесно в своём
+cgroup, хост-алерты при этом молчат.
+
+```bash
+docker stats --no-stream                 # кто именно и насколько
+docker inspect <name> --format '{{.HostConfig.Memory}}'
+```
+
+Дальше либо поднять лимит в `docker-compose.prod.yml` (для JVM-сервисов —
+вместе с heap), либо искать утечку, если рост монотонный и без нагрузки.
+Метрики приходят от cAdvisor-экспортера внутри Alloy — если алерт «No data»,
+проверь моунты сервиса `alloy` в compose и `docker compose logs alloy`.
+
+---
+
 ## Что отключить, если кончились лимиты Grafana Cloud
 
 Free tier — 10k активных метрик-серий. Если упрёшься (увидишь в Grafana
