@@ -177,6 +177,12 @@ WHERE kind = 'video'
 		}
 		videoKey := storage.KeyFromURL(j.videoURL)
 		if videoKey == "" {
+			// TODO(backfill): работы со ссылкой на чужой хост так и остаются
+			// без aspect — их не трогает ни воркер (нет S3-ключа → нет
+			// события portfolio.video_uploaded), ни эта команда. ffprobe
+			// умеет читать URL напрямую, но ходить по пользовательскому
+			// адресу с нашей инфраструктуры нельзя без фильтра приватных
+			// диапазонов. Разбор и план — docs/VIDEO_TRANSCODING.md §12.
 			slog.Warn("skip: внешний video_url (нет s3-ключа)",
 				"item_id", j.itemID, "video_url", j.videoURL)
 			skipped++
