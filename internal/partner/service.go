@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -140,3 +141,68 @@ func sign(secret string, body []byte) string {
 // SignForTest открывает подпись тестам. Отдельная функция, а не экспорт sign:
 // подписывание — внутреннее дело сервиса, и звать его из другого кода незачем.
 func SignForTest(secret string, body []byte) string { return sign(secret, body) }
+
+// Состояния профиля специалиста глазами партнёра. Публичная ручка
+// /specialists/{id} отвечает на неопубликованного просто 404 — для каталога
+// этого достаточно, а партнёру нужно знать, что человеку делать дальше:
+// заполнить анкету, дождаться модерации, исправить замечания или вернуть
+// публикацию. Одно «нет в каталоге» на все четыре случая превращается в
+// совет невпопад.
+const (
+	StatusPublished = "published"      // в каталоге, ссылка работает
+	StatusPending   = "pending_review" // отправлен на модерацию, ждёт
+	StatusRejected  = "rejected"       // модерация отклонила
+	StatusHidden    = "unpublished"    // одобрен, но снят с публикации самим
+	StatusNoProfile = "no_profile"     // анкеты нет вовсе
+)
+
+// SpecialistStatus — где находится профиль специалиста и как он называется.
+//
+// Отдаём статус и username, но не ссылку: адрес каталога знает сам партнёр,
+// а держать здесь вторую копию его домена незачем.
+func (s *Service) SpecialistStatus(ctx context.Context, userID uuid.UUID) (status, username string, err error) {
+	const q = `
+SELECT is_published, moderation_status, COALESCE(username, '')
+  FROM specialist_profiles
+ WHERE user_id = $1`
+	var published bool
+	var moderation string
+	err = s.db.QueryRow(ctx, q, userID).Scan(&published, &moderation, &username)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return StatusNoProfile, "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("specialist status: %w", err)
+	}
+	return SpecialistState(published, moderation), username, nil
+}
+
+// SpecialistState — правило, по которому состояние профиля превращается в
+// ответ партнёру. Отдельной функцией, потому что это единственное место, где
+// решается, что человеку скажут делать дальше, а проверять его через базу
+// значит не проверять вовсе.
+func SpecialistState(published bool, moderation string) string {
+	switch {
+	case moderation == "rejected":
+		return StatusRejected
+	case moderation == "pending_review":
+		// Черновик и «на модерации» снаружи одно и то же ожидание: человек
+		// уже что-то заполнил, и следующий ход не его, а админа.
+		return StatusPending
+	case !published:
+		// Одобрен, но сам снял с публикации. Совет тут другой: не «заполните
+		// анкету», а «верните публикацию».
+		return StatusHidden
+	}
+	return StatusPublished
+}
+
+// CheckSecret сверяет общий секрет в постоянное время: обычное сравнение
+// строк утекает длину совпавшего префикса, а секрет здесь один на всю связку
+// с «Ботом Работ».
+func (s *Service) CheckSecret(got string) bool {
+	if s.secret == "" || got == "" {
+		return false
+	}
+	return hmac.Equal([]byte(got), []byte(s.secret))
+}

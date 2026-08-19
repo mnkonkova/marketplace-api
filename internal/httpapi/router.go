@@ -118,6 +118,14 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/productions", d.Productions.Public)
 		}
 
+		// Статус профиля для «Бота Работ». Не под пользовательской
+		// авторизацией: спрашивает сервер о сервере, человека в этот момент
+		// на линии нет. Пускает общий секрет — тот же, которым подписаны
+		// вебхуки; ручка проверяет его сама.
+		if d.Partner != nil {
+			r.Get("/partner/specialists/{id}/status", d.Partner.SpecialistStatus)
+		}
+
 		r.Group(func(r chi.Router) {
 			r.Use(RateLimit(d.Limiter, "read", d.ReadWindows))
 			// /specialists/{id} оборачиваем в OptionalAuth: если caller

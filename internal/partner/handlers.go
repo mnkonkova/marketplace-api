@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
 	"marketpclce/internal/auth"
 	"marketpclce/internal/httpx"
 )
@@ -58,4 +61,51 @@ func (h *Handler) Link(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadGateway, "botrabot_unavailable",
 			"Не дозвонились до Бота Работ. Попробуйте через минуту")
 	}
+}
+
+// SpecialistStatus — GET /api/v1/partner/specialists/{id}/status.
+//
+// Ручка для «Бота Работ», не для браузера: партнёрская цена там даётся за
+// опубликованный профиль, и боту нужно знать не только «есть в каталоге или
+// нет», но и почему нет — иначе он советует заполнить анкету тому, кто уже
+// ждёт модерации.
+//
+// Авторизация общим секретом, тем же, которым подписываются вебхуки. Статус
+// модерации — не публичные данные: по нему видно, кого мы отклонили, и
+// отдавать это в открытую нельзя.
+func (h *Handler) SpecialistStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.svc.Enabled() {
+		httpx.WriteErr(w, http.StatusServiceUnavailable, "disabled")
+		return
+	}
+	if !h.svc.CheckSecret(bearer(r)) {
+		httpx.WriteErr(w, http.StatusUnauthorized, "bad_secret")
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErr(w, http.StatusBadRequest, "invalid_id")
+		return
+	}
+	status, username, err := h.svc.SpecialistStatus(r.Context(), id)
+	if err != nil {
+		httpx.WriteErr(w, http.StatusInternalServerError, "status_unavailable")
+		return
+	}
+	out := map[string]any{"state": status}
+	if username != "" {
+		out["username"] = username
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// bearer достаёт токен из заголовка Authorization. Пустая строка означает
+// «не передали» — сравнение всё равно делается в постоянное время.
+func bearer(r *http.Request) string {
+	const prefix = "Bearer "
+	v := r.Header.Get("Authorization")
+	if !strings.HasPrefix(v, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(v[len(prefix):])
 }
