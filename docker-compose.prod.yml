@@ -200,12 +200,11 @@ services:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - alloy-data:/var/lib/alloy/data
-      # Моунты для встроенного cAdvisor-экспортера (метрики по контейнерам).
-      # Все ro: агент только читает cgroup-статистику.
-      - /:/rootfs:ro
+      # Для cAdvisor-экспортера нужен только /sys — статистика берётся из
+      # cgroup. Моунты /rootfs, /var/lib/docker и /dev/disk были убраны:
+      # docker-обработчик cAdvisor на этом драйвере (overlayfs) всё равно не
+      # работает, зато они давали root-доступ ко всей файловой системе хоста.
       - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
     environment:
       GRAFANA_CLOUD_PROM_URL: ${GRAFANA_CLOUD_PROM_URL:-}
       GRAFANA_CLOUD_PROM_USER: ${GRAFANA_CLOUD_PROM_USER:-}

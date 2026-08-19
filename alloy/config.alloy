@@ -79,18 +79,41 @@ prometheus.scrape "node" {
 // Встроенный экспортер Alloy — отдельный контейнер поднимать не нужно, но
 // нужны host-моунты (см. docker-compose.prod.yml, сервис alloy).
 prometheus.exporter.cadvisor "containers" {
-	docker_host = "unix:///var/run/docker.sock"
-
-	// Не собираем то, что нам не нужно: метрик у cAdvisor много, а лимиты
-	// Grafana Cloud free tier по активным сериям вполне реальные.
-	enabled_metrics = ["cpu", "memory", "diskIO", "network"]
+	// docker_host НЕ задаём намеренно. На этом хосте Docker работает с
+	// containerd-снапшоттером (storage driver = overlayfs), а docker-обработчик
+	// cAdvisor ищет метаданные слоёв в /var/lib/docker/image/overlayfs/layerdb/
+	// — каталога при таком драйвере не существует, метаданные живут в
+	// containerd. Итог: на каждый контейнер сыпалась ошибка «failed to
+	// identify the read-write layer ID», а имена контейнеров всё равно
+	// приходили пустыми (name="").
+	//
+	// Без docker.sock cAdvisor читает статистику прямо из cgroup: ошибок ноль,
+	// метрики те же. Проверено на этом хосте: 56 серий памяти, 55 лимитов,
+	// 0 ошибок в логе (с сокетом было 18-21 ошибка и те же метрики).
+	//
+	// Плата — контейнер опознаётся по cgroup-пути в метке id, а не по имени.
+	// Ниже вытаскиваем из него короткий id, чтобы алерт был читаемым.
+	enabled_metrics = ["cpu", "memory", "network"]
 	storage_duration = "5m"
+}
+
+// id вида "/system.slice/docker-<64 hex>.scope" → короткий хеш в отдельной
+// метке: по нему сразу работает `docker ps --filter id=<hash>`.
+prometheus.relabel "cadvisor_container_id" {
+	forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+	rule {
+		source_labels = ["id"]
+		regex         = "/system\\.slice/docker-([0-9a-f]{12})[0-9a-f]*\\.scope"
+		target_label  = "container_id"
+		replacement   = "$1"
+	}
 }
 
 prometheus.scrape "cadvisor" {
 	targets         = prometheus.exporter.cadvisor.containers.targets
 	scrape_interval = "30s"
-	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+	forward_to      = [prometheus.relabel.cadvisor_container_id.receiver]
 }
 
 // ── Remote-write метрик в Grafana Cloud ────────────────────────────

@@ -424,18 +424,23 @@ groups:
       # page cache: по нему любой активный контейнер выглядит «на 100%».
       # Порог 0.9 при for=15m: короткие всплески при индексации/бэкапе —
       # норма, а вот четверть часа под потолком уже означает деградацию.
+      # По container_id, а не по name: на Docker с containerd-снапшоттером
+      # cAdvisor не отдаёт имена (name=""), и правило с {name!=""} не
+      # сматчилось бы никогда — тихо мёртвый алерт. container_id вытаскивается
+      # из cgroup-пути в alloy/config.alloy; по нему работает
+      # `docker ps --filter id=<hash>`.
       - alert: ContainerMemoryNearLimit
         expr: |
-          container_memory_working_set_bytes{name!=""}
+          container_memory_working_set_bytes{container_id!=""}
           /
-          container_spec_memory_limit_bytes{name!=""}
+          container_spec_memory_limit_bytes{container_id!=""}
           > 0.9
-          and container_spec_memory_limit_bytes{name!=""} > 0
+          and container_spec_memory_limit_bytes{container_id!=""} > 0
         for: 15m
         labels: { severity: warn, team: backend }
         annotations:
-          summary: "Контейнер {{ $labels.name }} у потолка памяти"
-          description: "working_set > 90% mem_limit больше 15 минут. Контейнеру тесно в своём cgroup — на хосте память при этом может быть свободна. Подними mem_limit в docker-compose.prod.yml (для JVM-сервисов заодно heap: правило heap ≈ треть-половина лимита) или разберись, кто течёт."
+          summary: "Контейнер {{ $labels.container_id }} у потолка памяти"
+          description: "working_set > 90% mem_limit больше 15 минут. Какой это контейнер: `docker ps --filter id={{ $labels.container_id }}`. Контейнеру тесно в своём cgroup — на хосте память при этом может быть свободна. Подними mem_limit в docker-compose.prod.yml (для JVM-сервисов заодно heap: правило heap ≈ треть-половина лимита) или разберись, кто течёт."
 
       - alert: ErrorRate5xxBurst
         # Дублирует HighErrorRate (5m), но с for=1m — для более резкой реакции.

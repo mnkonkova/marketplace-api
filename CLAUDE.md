@@ -42,3 +42,31 @@ HTTP-метрики помечаются chi route pattern (`/api/v1/specialists
 ## Не трогать без причины
 
 `migrations/00001_init.sql` (initial schema), `internal/search/mapping.go` (поменяешь — переиндексировать).
+
+## Перед каждым пушем — прогон тестов локально
+
+GitHub Actions на аккаунте заблокированы по биллингу: любой воркфлоу
+падает за 5 секунд с «account is locked due to a billing issue». Пока это
+так, CI не проверяет ничего, и единственная защита — прогон руками.
+Воркфлоу лежит в `.github/workflows/ci.yml` и заработает сам, когда
+блокировку снимут.
+
+**Обязательный минимум перед `git push`:**
+
+```bash
+make test-db-up        # идемпотентно, поднимает marketpclce_test и мигрирует
+make test-integration  # 437+ тестов; ~15 сек
+go build ./... && go vet ./...
+```
+
+Именно `test-integration`, а не `make test`. Без `TEST_DATABASE_URL`
+интеграционные тесты молча скипаются — прогон остаётся зелёным на
+половине сюиты, и сломанное живёт в этой слепой зоне месяцами (так и
+случилось: четыре красных теста никто не видел до 2026-08).
+
+Нужны запущенные postgres и opensearch: `docker compose up -d postgres
+opensearch`. Search-тесты без OpenSearch скипаются с внятным сообщением.
+
+При правках публичного API — `make swag` и коммит `docs/swagger/*`.
+При правках `internal/search/*mapping.go` — после деплоя обязателен
+`make prod-reindex`, иначе индекс останется со старой схемой.
