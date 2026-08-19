@@ -169,7 +169,7 @@
           "legendFormat": "ErrorRate5xxBurst"
         },
         {
-          "expr": "(absent(up{job=\"marketpclce-api\"}) == bool 1)",
+          "expr": "(absent(up{job=\"marketpclce-api\"}) or on() vector(0))",
           "refId": "M",
           "legendFormat": "APINotScraped"
         }
@@ -707,7 +707,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (aggregate) (rate(outbox_handler_processed_total{aggregate=~\"project|user|support\",status=\"ok\"}[5m]))",
+          "expr": "sum by (aggregate) (rate(outbox_handler_success_total{aggregate=~\"project|user|support\"}[5m]))",
           "refId": "A",
           "legendFormat": "ok / {{aggregate}}"
         },
