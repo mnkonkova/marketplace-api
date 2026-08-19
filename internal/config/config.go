@@ -67,7 +67,12 @@ type Config struct {
 	// n8n рендерит письмо и шлёт через свой провайдер (UniSender, SMTP, etc).
 	// APP_BASE_URL нужен воркеру для сборки verify-ссылки (у воркера нет
 	// HTTP-контекста, на dev/staging/prod разный URL) — попадает в payload.
-	AppBaseURL          string        `env:"APP_BASE_URL" envDefault:"http://localhost:5173"`
+	AppBaseURL string `env:"APP_BASE_URL" envDefault:"http://localhost:5173"`
+	// SPAShellURL — откуда API берёт index.html, чтобы подставить в него
+	// og-мету конкретного специалиста (см. internal/profiles/og.go).
+	// В проде это Caddy внутри docker-сети. Пусто — ручка /specialist/{id}
+	// не монтируется, ссылки разворачиваются общей метой сайта.
+	SPAShellURL         string        `env:"SPA_SHELL_URL" envDefault:"http://web/index.html"`
 	EmailVerifyTokenTTL time.Duration `env:"EMAIL_VERIFY_TOKEN_TTL" envDefault:"24h"`
 	RateEmailResendPer  time.Duration `env:"RATE_EMAIL_RESEND_PER" envDefault:"60s"`
 	// EmailVerificationDisabled — выключает весь soft-gate целиком: юзер при
@@ -96,8 +101,8 @@ type Config struct {
 	// Лимиты на /auth/* — анти-брутфорс по логину и анти-флуд по регистрации.
 	// Считается по IP. На login достаточно жёстко: 10 попыток/мин ловит
 	// автоматику, но не мешает живому юзеру опечататься 2-3 раза.
-	RateAuthPerMin       int           `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
-	RateAuthPerHour      int           `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
+	RateAuthPerMin  int `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
+	RateAuthPerHour int `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
 
 	// CRM endpoints (/me/projects, /me/specialist, /manager, /admin).
 	// Лимит per user+ip — менеджеры/админы пишут плотно, но не должно быть
@@ -121,9 +126,9 @@ type Config struct {
 	// Если ffmpeg не найден на старте воркера — обработчик
 	// portfolio.video_uploaded стартует как no-op (логирует и квитирует),
 	// чтобы воркер запускался и в dev-окружении без ffmpeg.
-	FFmpegPath        string        `env:"FFMPEG_PATH" envDefault:""`
-	TranscodeTimeout  time.Duration `env:"TRANSCODE_TIMEOUT" envDefault:"90s"`
-	TranscodeTempDir  string        `env:"TRANSCODE_TEMP_DIR" envDefault:"/tmp/transcode"`
+	FFmpegPath       string        `env:"FFMPEG_PATH" envDefault:""`
+	TranscodeTimeout time.Duration `env:"TRANSCODE_TIMEOUT" envDefault:"90s"`
+	TranscodeTempDir string        `env:"TRANSCODE_TEMP_DIR" envDefault:"/tmp/transcode"`
 
 	// CRM v5: review-шаг ставится в waiting_client с deadline=now+ReviewDeadline.
 	// По истечении worker переводит шаг в skipped. Дефолт 7 дней.

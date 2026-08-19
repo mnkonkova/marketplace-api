@@ -22,6 +22,7 @@ import (
 	"marketpclce/internal/httpapi"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/llm"
+	"marketpclce/internal/partner"
 	"marketpclce/internal/pipelines"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
@@ -29,14 +30,13 @@ import (
 	"marketpclce/internal/platform/s3"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
-	"marketpclce/internal/partner"
-	"marketpclce/internal/projects"
-	"marketpclce/internal/support"
 	"marketpclce/internal/profiles"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
+	"marketpclce/internal/support"
 
 	// Сгенерённый swaggo-пакет (`make swag`) — регистрирует OpenAPI spec в init(),
 	// чтобы http-swagger мог отдать /swagger/doc.json.
@@ -120,19 +120,20 @@ func main() {
 
 	profilesRepo := profiles.NewRepo(pool)
 	profilesSvc := profiles.NewService(profilesRepo).WithEmailVerifier(authSvc)
-	profilesHandler := profiles.NewHandler(profilesSvc)
+	profilesHandler := profiles.NewHandler(profilesSvc).
+		WithSPAShell(cfg.SPAShellURL, cfg.AppBaseURL)
 
 	// S3 — опционально: без ключей API стартует без upload-функционала.
 	// Ручка POST /me/portfolio/upload-url вернёт 503 storage_disabled.
 	if cfg.S3AccessKey != "" && cfg.S3SecretKey != "" {
 		s3Client, err := s3.New(s3.Config{
-			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3AccessKey,
-			SecretKey: cfg.S3SecretKey,
-			Bucket:    cfg.S3Bucket,
-			Region:    cfg.S3Region,
-			UseSSL:    cfg.S3UseSSL,
-			PublicURL: cfg.S3PublicURL,
+			Endpoint:   cfg.S3Endpoint,
+			AccessKey:  cfg.S3AccessKey,
+			SecretKey:  cfg.S3SecretKey,
+			Bucket:     cfg.S3Bucket,
+			Region:     cfg.S3Region,
+			UseSSL:     cfg.S3UseSSL,
+			PublicURL:  cfg.S3PublicURL,
 			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
@@ -236,32 +237,32 @@ func main() {
 	})
 
 	router := httpapi.NewRouter(httpapi.Deps{
-		Logger:       logger,
-		HealthDB:     pool,
-		TokenIssuer:  tokenIssuer,
-		Auth:         authHandler,
-		AuthRepo:     authRepo,
+		Logger:      logger,
+		HealthDB:    pool,
+		TokenIssuer: tokenIssuer,
+		Auth:        authHandler,
+		AuthRepo:    authRepo,
 		// data-sec D8: тот же *auth.Repo реализует RevocationChecker через
 		// users.password_changed_at. После reset'a пароля все access-токены
 		// с iat ДО reset'a отвергаются на каждом authenticated-запросе.
 		AuthRevocation: authRepo,
-		Catalog:      catalogHandler,
-		Profiles:     profilesHandler,
-		ProfileCheck: profileCheckHandler,
-		Search:       searchHandler,
-		Feed:         feedHandler,
-		Summarize:    summarizeHandler,
-		Clarify:      clarifyHandler,
-		Leads:        leadsHandler,
-		Reviews:      reviewsHandler,
-		Productions:  productionsHandler,
-		Pipelines:    pipelinesHandler,
-		Projects:     projectsHandler,
-		Support:      support.NewHandler(support.NewService(pool)),
-		Partner:      partnerHandler,
-		Admin:        adminHandler,
-		CORSOrigins:  cfg.CORSOrigins,
-		Limiter:     limiter,
+		Catalog:        catalogHandler,
+		Profiles:       profilesHandler,
+		ProfileCheck:   profileCheckHandler,
+		Search:         searchHandler,
+		Feed:           feedHandler,
+		Summarize:      summarizeHandler,
+		Clarify:        clarifyHandler,
+		Leads:          leadsHandler,
+		Reviews:        reviewsHandler,
+		Productions:    productionsHandler,
+		Pipelines:      pipelinesHandler,
+		Projects:       projectsHandler,
+		Support:        support.NewHandler(support.NewService(pool)),
+		Partner:        partnerHandler,
+		Admin:          adminHandler,
+		CORSOrigins:    cfg.CORSOrigins,
+		Limiter:        limiter,
 		ReadWindows: []ratelimit.Window{
 			{Limit: cfg.RateReadPerMin, Period: time.Minute},
 			{Limit: cfg.RateReadPerHour, Period: time.Hour},

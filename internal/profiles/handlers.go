@@ -13,23 +13,42 @@ import (
 	"marketpclce/internal/httpx"
 )
 
-type Handler struct{ svc *Service }
+type Handler struct {
+	svc *Service
+	// shell/appBaseURL — для GET /specialist/{id} с og-метой (см. og.go).
+	// nil = ручка не смонтирована, превью ссылок работать не будет.
+	shell      *spaShell
+	appBaseURL string
+}
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
+
+// WithSPAShell включает отдачу страницы специалиста с персональной
+// og-метой. shellURL — откуда взять оболочку index.html (в проде это
+// Caddy: http://web/index.html), appBaseURL — публичный адрес сайта для
+// канонического og:url.
+func (h *Handler) WithSPAShell(shellURL, appBaseURL string) *Handler {
+	if shellURL == "" || appBaseURL == "" {
+		return h
+	}
+	h.shell = newSPAShell(shellURL)
+	h.appBaseURL = appBaseURL
+	return h
+}
 
 // Человекочитаемые сообщения. Стабильные коды (`error`) остаются прежними,
 // сообщения добавляются в `message` — фронт ветвится по коду, в UI кладёт текст.
 const (
-	msgInternal       = "Внутренняя ошибка сервера. Попробуйте позже."
-	msgNoUser         = "Требуется авторизация."
-	msgBadJSON        = "Некорректный JSON в теле запроса."
-	msgBadID          = "Неверный формат идентификатора."
-	msgNoProfile      = "Профиль не найден."
-	msgNotFound       = "Объект не найден."
-	msgStale          = "Объект был изменён другим запросом. Перезагрузите данные."
-	msgPublishInc     = "Профиль не готов к публикации: проверьте обязательные поля."
-	msgEmailUnverif   = "Подтвердите email — на него отправлено письмо."
-	msgStorageOff     = "Хранилище медиа недоступно."
+	msgInternal     = "Внутренняя ошибка сервера. Попробуйте позже."
+	msgNoUser       = "Требуется авторизация."
+	msgBadJSON      = "Некорректный JSON в теле запроса."
+	msgBadID        = "Неверный формат идентификатора."
+	msgNoProfile    = "Профиль не найден."
+	msgNotFound     = "Объект не найден."
+	msgStale        = "Объект был изменён другим запросом. Перезагрузите данные."
+	msgPublishInc   = "Профиль не готов к публикации: проверьте обязательные поля."
+	msgEmailUnverif = "Подтвердите email — на него отправлено письмо."
+	msgStorageOff   = "Хранилище медиа недоступно."
 )
 
 // Public godoc
@@ -296,7 +315,9 @@ func (h *Handler) PortfolioCreate(w http.ResponseWriter, r *http.Request) {
 // PortfolioPhotoSetCreate godoc
 // @Summary      Добавить photo-set в портфолио (1..10 фото = одна карусель)
 // @Description  Создаёт portfolio_item kind='image' + N portfolio_images.
-//               Каждый image_url должен указывать на наш S3-bucket.
+//
+//	Каждый image_url должен указывать на наш S3-bucket.
+//
 // @Tags         portfolio
 // @Accept       json
 // @Produce      json
@@ -871,7 +892,6 @@ func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
 
 // типы для swaggo
 type errorResponse struct {

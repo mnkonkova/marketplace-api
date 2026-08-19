@@ -21,8 +21,8 @@ import (
 	"marketpclce/internal/pipelines"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
-	"marketpclce/internal/projects"
 	"marketpclce/internal/profiles"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
@@ -40,23 +40,23 @@ type Deps struct {
 	// проверки (только для тестового окружения). В проде проставляется в
 	// cmd/api/main.go тем же *auth.Repo.
 	AuthRevocation auth.RevocationChecker
-	Catalog     *catalog.Handler
-	Profiles     *profiles.Handler
-	ProfileCheck *profilecheck.Handler
-	Search       *search.Handler
-	Feed         *feed.Handler
-	Summarize   *summarize.Handler
-	Clarify     *clarify.Handler
-	Leads       *leads.Handler
-	Reviews     *reviews.Handler
-	Productions *productions.Handler
-	Pipelines   *pipelines.Handler
-	Projects    *projects.Handler
-	Support     *support.Handler
+	Catalog        *catalog.Handler
+	Profiles       *profiles.Handler
+	ProfileCheck   *profilecheck.Handler
+	Search         *search.Handler
+	Feed           *feed.Handler
+	Summarize      *summarize.Handler
+	Clarify        *clarify.Handler
+	Leads          *leads.Handler
+	Reviews        *reviews.Handler
+	Productions    *productions.Handler
+	Pipelines      *pipelines.Handler
+	Projects       *projects.Handler
+	Support        *support.Handler
 	// Partner — подтверждение регистрации для «Бота Работ». nil, если общий
 	// секрет не задан: тогда ручки просто нет, а не есть неработающая.
-	Partner     *partner.Handler
-	Admin       *admin.Handler
+	Partner *partner.Handler
+	Admin   *admin.Handler
 
 	CORSOrigins []string
 
@@ -88,6 +88,12 @@ func NewRouter(d Deps) http.Handler {
 	// /swagger/*), поэтому эндпоинт доступен только внутри docker network —
 	// alloy скрейпит api:8080/metrics, наружу не торчит.
 	r.Handle("/metrics", promhttp.Handler())
+
+	// Страница специалиста с og-метой под конкретного человека. Живёт вне
+	// /api/v1: это не API, а HTML-оболочка SPA — Caddy проксирует сюда
+	// /specialist/* именно ради превью ссылок в мессенджерах, которые JS
+	// не исполняют. См. internal/profiles/og.go.
+	r.Get("/specialist/{id}", d.Profiles.SpecialistPage)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// /auth/* — анти-брутфорс по IP. register/login/refresh/verify-email
