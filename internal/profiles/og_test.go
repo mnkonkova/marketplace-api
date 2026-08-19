@@ -145,3 +145,16 @@ func TestInjectOG_NoHeadReturnsShellUnchanged(t *testing.T) {
 		t.Error("без </head> оболочку нужно вернуть нетронутой, а не ломать")
 	}
 }
+
+// <title> тоже подменяем: og:title читают мессенджеры, а <title> уходит в
+// поисковую выдачу и в заголовок вкладки. SPA проставит его сама, но
+// только после загрузки JS — которого у бота нет.
+func TestInjectOG_ReplacesTitle(t *testing.T) {
+	out := injectOG(shell, buildOGMeta(testProfile(), "https://x"))
+	if strings.Contains(out, "<title>Wayprmarket</title>") {
+		t.Error("общий <title> сайта остался")
+	}
+	if !strings.Contains(out, "<title>WAYPROD. — режиссёр, монтажёр, моушн-дизайнер · wayprmarket</title>") {
+		t.Errorf("не нашли персональный <title>")
+	}
+}

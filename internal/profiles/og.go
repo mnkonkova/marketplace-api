@@ -173,6 +173,7 @@ func pluralWorks(n int) string {
 // них возьмёт превьюшник, не определено.
 func injectOG(shell string, m ogMeta) string {
 	shell = stripSiteOGTags(shell)
+	shell = replaceTitle(shell, m.Title)
 
 	var b strings.Builder
 	b.WriteString("\n    <!-- og-мета конкретного специалиста, подставлена сервером -->\n")
@@ -205,6 +206,21 @@ func injectOG(shell string, m ogMeta) string {
 	// Нет </head> — оболочка не та, что мы ждали. Отдаём как есть: пусть
 	// страница работает без превью, это лучше сломанного HTML.
 	return shell
+}
+
+// replaceTitle меняет <title> оболочки на имя специалиста. og:title важнее
+// для мессенджеров, но <title> уходит в поиск и в заголовок вкладки — а
+// SPA проставит его только после загрузки JS, которого у бота нет.
+func replaceTitle(shell, title string) string {
+	if title == "" {
+		return shell
+	}
+	start := strings.Index(shell, "<title>")
+	end := strings.Index(shell, "</title>")
+	if start < 0 || end < start {
+		return shell
+	}
+	return shell[:start+len("<title>")] + html.EscapeString(title) + " · wayprmarket" + shell[end:]
 }
 
 // stripSiteOGTags убирает общие og:/twitter:-теги из index.html.
