@@ -20,3 +20,4 @@ backups/
 /worker
 /seed
 /backfill-previews
+.env.prod

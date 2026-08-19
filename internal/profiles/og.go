@@ -45,9 +45,19 @@ type spaShell struct {
 
 func newSPAShell(url string) *spaShell {
 	return &spaShell{
-		url:    url,
-		client: &http.Client{Timeout: 3 * time.Second},
-		ttl:    2 * time.Minute,
+		url: url,
+		client: &http.Client{
+			Timeout: 3 * time.Second,
+			// Редиректы НЕ ходим. Caddy на основном сайте отвечает 308 на
+			// HTTPS, и молчаливое следование за ним уводило запрос наружу
+			// (или в никуда), а мы получали не HTML — превью деградировало
+			// до общей меты сайта, причём беззвучно. Лучше явная ошибка:
+			// её видно в логах, и Caddy отдаст статику по handle_response.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		ttl: 2 * time.Minute,
 	}
 }
 
