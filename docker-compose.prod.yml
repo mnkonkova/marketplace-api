@@ -104,7 +104,11 @@ services:
     expose:
       - "8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      # Путь именно /healthz. Роутер отдаёт /healthz и /readyz, а /health
+      # не существует — healthcheck три месяца получал 404, контейнер
+      # числился unhealthy, и `up -d` спотыкался на depends_on у web:
+      # «dependency failed to start: container api-api-1 is unhealthy».
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 6
