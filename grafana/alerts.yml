@@ -366,6 +366,25 @@ groups:
   - name: default-1m
     interval: 1m
     rules:
+      # Единственная проверка, которая видит сайт снаружи. Все остальные
+      # алерты питаются метриками от alloy, а он живёт на том же VDS: когда
+      # машина падает целиком, сборщик падает вместе с ней. Для таких
+      # случаев есть noDataState=Alerting у APIDown, но он говорит лишь
+      # «метрики пропали» — синтетика говорит «сайт не отвечает клиенту»,
+      # и ловит ещё и случаи, когда метрики идут, а страница отдаёт 5xx.
+      #
+      # Требует инициализированного Synthetic Monitoring с HTTP-проверкой
+      # на https://wayprmarket.ru. Пока проверки нет, метрики нет и правило
+      # молчит (noDataState=OK по умолчанию для не-up выражений).
+      - alert: SiteUnreachableExternally
+        expr: |
+          max_over_time(probe_success{job=~".*wayprmarket.*"}[5m]) == 0
+        for: 2m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Сайт не отвечает внешней проверке"
+          description: "Синтетика из внешних локаций не получает ответ от https://wayprmarket.ru. Проверь VDS целиком: docker compose ps, free -h, диск. Метрики от alloy в этот момент могут отсутствовать — он на том же хосте."
+
       - alert: APIDown
         expr: up{job="marketpclce-api"} < 1
         for: 1m

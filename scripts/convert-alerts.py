@@ -101,11 +101,33 @@ def to_grafana_rule(mimir_rule: dict, group_name: str) -> dict:
                 },
             },
         ],
-        "noDataState": "OK",
+        "noDataState": no_data_state(mimir_rule),
         "execErrState": "Error",
         "annotations": mimir_rule.get("annotations", {}),
         "labels": mimir_rule.get("labels", {}),
     }
+
+
+def no_data_state(rule: dict) -> str:
+    """Что делать, когда данных нет.
+
+    Инцидент 2026-08-19: прод лежал целиком, а Grafana показывала все
+    алерты зелёными. Причина — noDataState=OK для ВСЕХ правил: когда
+    alloy умирает вместе со стеком, метрики просто перестают приходить,
+    серия `up` исчезает, и правило вида `up < 1` уходит в No Data, то
+    есть в «всё хорошо». Сторож, который молчит именно тогда, когда
+    сторожить и нужно.
+
+    Правила про доступность (`up{...}`, `absent(...)`) при отсутствии
+    данных обязаны ЗВОНИТЬ: пропали метрики — значит цель недоступна или
+    сбор сломан, и то и другое требует человека. Для остальных (латентность,
+    бизнес-метрики) отсутствие данных — норма ночью или на пустом трафике,
+    там OK остаётся.
+    """
+    expr = rule.get("expr", "")
+    if "up{" in expr or "absent(" in expr:
+        return "Alerting"
+    return "OK"
 
 
 def delete_existing_in_namespace(namespace="marketpclce"):
