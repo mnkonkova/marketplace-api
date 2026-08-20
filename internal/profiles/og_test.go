@@ -158,3 +158,67 @@ func TestInjectOG_ReplacesTitle(t *testing.T) {
 		t.Errorf("не нашли персональный <title>")
 	}
 }
+
+// Размеры og:image раньше были захардкожены 1280x720. Для вертикального
+// постера (9:16 — типичный промо-ролик) мета сообщала краулеру горизонтальную
+// пропорцию, и Telegram/VK показывали ссылку без превью.
+func TestOGImageSize(t *testing.T) {
+	cases := []struct {
+		aspect string
+		w, h   int
+	}{
+		{"9:16", 720, 1280},
+		{"16:9", 1280, 720},
+		{"1:1", 1280, 1280},
+		{"4:5", 1024, 1280},
+		{"", 0, 0},
+		{"abc", 0, 0},
+		{"16", 0, 0},
+		{"16:0", 0, 0},
+		{"0:9", 0, 0},
+		{"-16:9", 0, 0},
+	}
+	for _, c := range cases {
+		w, h := ogImageSize(c.aspect)
+		if w != c.w || h != c.h {
+			t.Errorf("ogImageSize(%q) = %d x %d, ожидалось %d x %d", c.aspect, w, h, c.w, c.h)
+		}
+	}
+}
+
+// Неизвестный аспект (работа старше миграции 00028, либо аватар) — теги
+// размеров не пишем вовсе: краулер измерит картинку сам.
+func TestInjectOGSkipsUnknownImageSize(t *testing.T) {
+	shell := "<html><head><title>x</title></head><body></body></html>"
+
+	out := injectOG(shell, ogMeta{Title: "T", Image: "https://cdn/x.jpg"})
+	if strings.Contains(out, "og:image:width") {
+		t.Error("размеры объявлены, хотя аспект неизвестен")
+	}
+	if !strings.Contains(out, `content="https://cdn/x.jpg"`) {
+		t.Error("сама картинка потерялась")
+	}
+
+	out = injectOG(shell, ogMeta{Title: "T", Image: "https://cdn/x.jpg", ImageW: 720, ImageH: 1280})
+	if !strings.Contains(out, `content="720"`) || !strings.Contains(out, `content="1280"`) {
+		t.Error("известные размеры не попали в мету")
+	}
+}
+
+// Вертикальная закреплённая работа должна давать вертикальные размеры.
+func TestBuildOGMetaVerticalFeatured(t *testing.T) {
+	p := PublicProfile{
+		DisplayName: "Аня",
+		Portfolio: []PortfolioItem{
+			{ThumbnailURL: "https://cdn/wide.jpg", Aspect: "16:9"},
+			{ThumbnailURL: "https://cdn/tall.jpg", Aspect: "9:16", IsFeatured: true},
+		},
+	}
+	m := buildOGMeta(p, "https://wayprmarket.ru")
+	if m.Image != "https://cdn/tall.jpg" {
+		t.Fatalf("выбрана не закреплённая работа: %s", m.Image)
+	}
+	if m.ImageW != 720 || m.ImageH != 1280 {
+		t.Errorf("размеры %d x %d, ожидалось 720 x 1280", m.ImageW, m.ImageH)
+	}
+}

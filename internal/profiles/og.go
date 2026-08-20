@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,7 +102,11 @@ type ogMeta struct {
 	Title       string
 	Description string
 	Image       string
-	URL         string
+	// ImageW/ImageH — размеры картинки из og:image. 0 = неизвестны, тогда
+	// теги og:image:width/height не пишутся вовсе.
+	ImageW int
+	ImageH int
+	URL    string
 }
 
 // buildOGMeta собирает мету из публичного профиля.
@@ -141,10 +147,15 @@ func buildOGMeta(p PublicProfile, baseURL string) ogMeta {
 		handle = p.UserID.String()
 	}
 
+	image, aspect := pickOGImage(p)
+	imgW, imgH := ogImageSize(aspect)
+
 	return ogMeta{
 		Title:       title,
 		Description: strings.Join(parts, " · "),
-		Image:       pickOGImage(p),
+		Image:       image,
+		ImageW:      imgW,
+		ImageH:      imgH,
 		URL:         strings.TrimRight(baseURL, "/") + "/specialist/" + handle,
 	}
 }
@@ -152,18 +163,59 @@ func buildOGMeta(p PublicProfile, baseURL string) ogMeta {
 // pickOGImage — постер флагмана, иначе первой работы с постером, иначе
 // аватар. Анимированные webp сознательно не берём: Telegram их не всегда
 // тянет, а битая картинка хуже отсутствующей.
-func pickOGImage(p PublicProfile) string {
+// pickOGImage возвращает картинку для превью и её аспект («9:16», «16:9», …).
+// Аспект может быть пустым: у старых работ он не пробирован, а у аватара его
+// нет в принципе. Пустой аспект — сигнал не объявлять размеры.
+func pickOGImage(p PublicProfile) (string, string) {
 	for _, item := range p.Portfolio {
 		if item.IsFeatured && item.ThumbnailURL != "" {
-			return item.ThumbnailURL
+			return item.ThumbnailURL, item.Aspect
 		}
 	}
 	for _, item := range p.Portfolio {
 		if item.ThumbnailURL != "" {
-			return item.ThumbnailURL
+			return item.ThumbnailURL, item.Aspect
 		}
 	}
-	return p.AvatarURL
+	return p.AvatarURL, ""
+}
+
+// ogImageSize переводит «W:H» в пиксельные размеры для og:image:width/height.
+//
+// Раньше размеры были захардкожены как 1280x720. Для вертикальных постеров
+// (а это большинство: промо-ролики снимают 9:16) мета врала краулеру о
+// пропорции — он резервировал горизонтальную карточку и получал вертикальную
+// картинку. Telegram и VK в этом случае показывают ссылку без превью.
+//
+// Абсолютные значения краулеру не важны — важно, чтобы отношение совпадало с
+// реальным файлом, поэтому длинную сторону просто нормируем на 1280.
+// Неизвестный или битый аспект → (0, 0): теги не пишем, краулер измерит сам.
+func ogImageSize(aspect string) (int, int) {
+	w, h, ok := parseAspectRatio(aspect)
+	if !ok {
+		return 0, 0
+	}
+	const long = 1280
+	if w >= h {
+		return long, int(math.Round(long * float64(h) / float64(w)))
+	}
+	return int(math.Round(long * float64(w) / float64(h))), long
+}
+
+func parseAspectRatio(aspect string) (int, int, bool) {
+	parts := strings.SplitN(strings.TrimSpace(aspect), ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	w, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || w <= 0 {
+		return 0, 0, false
+	}
+	h, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || h <= 0 {
+		return 0, 0, false
+	}
+	return w, h, true
 }
 
 func pluralWorks(n int) string {
@@ -200,10 +252,12 @@ func injectOG(shell string, m ogMeta) string {
 	writeMeta("name", "description", m.Description)
 	if m.Image != "" {
 		writeMeta("property", "og:image", m.Image)
-		// Размеры Telegram использует для раскладки карточки; постеры у нас
-		// 720p по большей стороне (см. ExtractThumbnail в transcode).
-		writeMeta("property", "og:image:width", "1280")
-		writeMeta("property", "og:image:height", "720")
+		// Размеры Telegram использует для раскладки карточки. Пишем их только
+		// когда знаем реальную пропорцию — соврать тут хуже, чем промолчать.
+		if m.ImageW > 0 && m.ImageH > 0 {
+			writeMeta("property", "og:image:width", strconv.Itoa(m.ImageW))
+			writeMeta("property", "og:image:height", strconv.Itoa(m.ImageH))
+		}
 		writeMeta("name", "twitter:card", "summary_large_image")
 		writeMeta("name", "twitter:image", m.Image)
 	}
