@@ -92,7 +92,10 @@ func CORS(allowed []string) func(http.Handler) http.Handler {
 					w.Header().Set("Vary", "Origin")
 					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Requested-With")
-					w.Header().Set("Access-Control-Max-Age", "600")
+					// 7200 — потолок, который соблюдает Chrome. При 600 браузер
+					// переспрашивал preflight каждые десять минут, а на
+					// экранах со справочниками это десятки лишних round-trip'ов.
+					w.Header().Set("Access-Control-Max-Age", "7200")
 				}
 			}
 			if r.Method == http.MethodOptions {

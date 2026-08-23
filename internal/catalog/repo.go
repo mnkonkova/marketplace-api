@@ -53,16 +53,19 @@ type Skill struct {
 // заводятся, поэтому при Category != "" они в выдачу не попадают —
 // фронт показывает платформы отдельным блоком, см. cabinet.page.html.
 type SkillFilter struct {
-	Kind     string
-	Category string
+	Kind string
+	// Categories — список кодов. Кабинет и мастер спрашивают навыки сразу по
+	// нескольким выбранным ролям: раньше это был запрос на каждую (пять
+	// ролей — пять запросов и пять CORS-preflight'ов на один клик).
+	Categories []string
 }
 
 func (r *Repo) ListSkills(ctx context.Context, f SkillFilter) ([]Skill, error) {
 	args := []any{}
 	q := `SELECT DISTINCT s.id, s.slug, s.title, s.kind FROM skills s`
-	if f.Category != "" {
-		args = append(args, f.Category)
-		q += fmt.Sprintf(` JOIN skill_categories sc ON sc.skill_id = s.id AND sc.category_code = $%d`, len(args))
+	if len(f.Categories) > 0 {
+		args = append(args, f.Categories)
+		q += fmt.Sprintf(` JOIN skill_categories sc ON sc.skill_id = s.id AND sc.category_code = ANY($%d)`, len(args))
 	}
 	if f.Kind != "" {
 		args = append(args, f.Kind)

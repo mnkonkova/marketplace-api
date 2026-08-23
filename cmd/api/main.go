@@ -386,7 +386,7 @@ func (a clarifyCategoryAdapter) ListCategoriesForPrompt(ctx context.Context) ([]
 type clarifySkillAdapter struct{ repo *catalog.Repo }
 
 func (a clarifySkillAdapter) ListSkillsForPrompt(ctx context.Context, category string) ([]clarify.SkillRef, error) {
-	skills, err := a.repo.ListSkills(ctx, catalog.SkillFilter{Category: category})
+	skills, err := a.repo.ListSkills(ctx, catalog.SkillFilter{Categories: []string{category}})
 	if err != nil {
 		return nil, err
 	}

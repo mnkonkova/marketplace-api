@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"net/http"
+	"strings"
 
 	"marketpclce/internal/httpx"
 )
@@ -22,6 +23,10 @@ func (h *Handler) Categories(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить категории")
 		return
 	}
+	// Справочник меняется от релиза к релизу, а спрашивают его на каждом
+	// экране. Пять минут в браузере снимают основную часть запросов, не
+	// заставляя ждать сутки после правки категорий.
+	w.Header().Set("Cache-Control", "public, max-age=300")
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": cats})
 }
 
@@ -30,7 +35,7 @@ func (h *Handler) Categories(w http.ResponseWriter, r *http.Request) {
 // @Tags         catalog
 // @Produce      json
 // @Param        kind      query     string  false  "tool|platform|genre|skill"
-// @Param        category  query     string  false  "Код категории из /categories — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы при фильтре по категории не возвращаются."
+// @Param        category  query     []string  false  "Коды категорий из /categories (можно несколько или через запятую) — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы при фильтре по категории не возвращаются."
 // @Success      200       {object}  SkillsResponse
 // @Failure      400       {object}  errorResponse
 // @Router       /skills [get]
@@ -44,12 +49,25 @@ func (h *Handler) Skills(w http.ResponseWriter, r *http.Request) {
 			httpx.FieldError{Field: "kind", Message: "Допустимо: tool, platform, genre, skill или пусто"})
 		return
 	}
-	category := r.URL.Query().Get("category")
-	skills, err := h.repo.ListSkills(r.Context(), SkillFilter{Kind: kind, Category: category})
+	// category можно передать несколько раз или через запятую: один запрос
+	// вместо N по числу выбранных ролей.
+	categories := r.URL.Query()["category"]
+	if len(categories) == 1 && strings.Contains(categories[0], ",") {
+		categories = strings.Split(categories[0], ",")
+	}
+	cleaned := categories[:0]
+	for _, c := range categories {
+		if c = strings.TrimSpace(c); c != "" {
+			cleaned = append(cleaned, c)
+		}
+	}
+	categories = cleaned
+	skills, err := h.repo.ListSkills(r.Context(), SkillFilter{Kind: kind, Categories: categories})
 	if err != nil {
 		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "Не удалось загрузить навыки")
 		return
 	}
+	w.Header().Set("Cache-Control", "public, max-age=300")
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": skills})
 }
 
