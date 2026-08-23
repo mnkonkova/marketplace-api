@@ -48,14 +48,14 @@ const (
 )
 
 type Service struct {
-	repo                *Repo
-	tokens              *TokenIssuer
-	now                 func() time.Time
-	verifyTokenTTL      time.Duration
-	passwordResetTTL    time.Duration
-	appBaseURL          string
-	resendCooldown      ResendCooldown
-	verificationOff     bool // если true — soft-gate выключен, юзеры авто-verified
+	repo             *Repo
+	tokens           *TokenIssuer
+	now              func() time.Time
+	verifyTokenTTL   time.Duration
+	passwordResetTTL time.Duration
+	appBaseURL       string
+	resendCooldown   ResendCooldown
+	verificationOff  bool // если true — soft-gate выключен, юзеры авто-verified
 }
 
 // ResendCooldown — узкий интерфейс под Redis-ограничение «не чаще раза в N
@@ -157,6 +157,9 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 		PasswordHash: string(hash),
 		Kind:         in.Kind,
 		Email:        &email,
+		// Пишем имя всем, а не только специалистам: у заказчика профиля нет,
+		// и раньше введённое при регистрации имя просто терялось.
+		DisplayName: in.DisplayName,
 	}
 
 	var userID uuid.UUID
@@ -275,6 +278,7 @@ func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 //   - (active, verified, nil) — оба флага из БД (verification выключен →
 //     verified=true принудительно).
 //   - (_, _, err)             — ошибка БД/чтения.
+//
 // Caller сам решает как мапить: !active → 403 inactive; active && !verified →
 // 403 email_unverified; иначе пропускает.
 //

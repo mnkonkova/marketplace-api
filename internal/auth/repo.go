@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("user not found")
-	ErrAlreadyExists  = errors.New("user already exists")
-	ErrTokenInvalid   = errors.New("verification token invalid or expired")
+	ErrNotFound      = errors.New("user not found")
+	ErrAlreadyExists = errors.New("user already exists")
+	ErrTokenInvalid  = errors.New("verification token invalid or expired")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -23,8 +23,12 @@ type Repo struct{ db *pgxpool.Pool }
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
 type User struct {
-	ID              uuid.UUID
-	Email           *string
+	ID    uuid.UUID
+	Email *string
+	// DisplayName — имя на уровне аккаунта. Нужно заказчику: профиля у него
+	// нет, а имя он указывает при регистрации. У специалиста здесь остаётся
+	// значение с регистрации, редактируемое — в specialist_profiles.
+	DisplayName     string
 	Phone           *string
 	PasswordHash    string
 	Kind            string
@@ -62,11 +66,11 @@ func (u User) Role() string {
 
 func (r *Repo) CreateUser(ctx context.Context, tx pgx.Tx, u User) (uuid.UUID, error) {
 	const q = `
-INSERT INTO users (email, phone, password_hash, kind)
-VALUES ($1, $2, $3, $4)
+INSERT INTO users (email, phone, password_hash, kind, display_name)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id`
 	var id uuid.UUID
-	err := tx.QueryRow(ctx, q, u.Email, u.Phone, u.PasswordHash, u.Kind).Scan(&id)
+	err := tx.QueryRow(ctx, q, u.Email, u.Phone, u.PasswordHash, u.Kind, u.DisplayName).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return uuid.Nil, ErrAlreadyExists
@@ -95,10 +99,10 @@ LIMIT 1`
 
 func (r *Repo) FindByID(ctx context.Context, id uuid.UUID) (User, error) {
 	const q = `
-SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved, password_changed_at
+SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved, password_changed_at, display_name
 FROM users WHERE id = $1`
 	var u User
-	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved, &u.PasswordChangedAt)
+	err := r.db.QueryRow(ctx, q, id).Scan(&u.ID, &u.Email, &u.Phone, &u.PasswordHash, &u.Kind, &u.IsActive, &u.EmailVerifiedAt, &u.IsManager, &u.IsAdmin, &u.IsApproved, &u.PasswordChangedAt, &u.DisplayName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}

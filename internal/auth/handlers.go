@@ -140,7 +140,10 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type meResp struct {
-	UserID        string  `json:"user_id"`
+	UserID string `json:"user_id"`
+	// DisplayName — имя аккаунта. Заказчику показывать больше нечего:
+	// профиля у него нет, а раньше кабинет встречал его пустотой.
+	DisplayName   string  `json:"display_name"`
 	Email         *string `json:"email,omitempty"`
 	Phone         *string `json:"phone,omitempty"`
 	Kind          string  `json:"kind"`
@@ -177,6 +180,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusOK, meResp{
 		UserID:        u.ID.String(),
+		DisplayName:   u.DisplayName,
 		Email:         u.Email,
 		Phone:         u.Phone,
 		Kind:          u.Kind,
@@ -248,7 +252,6 @@ func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
-
 
 type passwordResetRequestReq struct {
 	Email string `json:"email"`
