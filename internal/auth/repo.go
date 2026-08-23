@@ -80,6 +80,23 @@ RETURNING id`
 	return id, nil
 }
 
+// EmailTaken — занят ли адрес. Нужен регистрации: без этой проверки человек
+// узнавал о занятом email только после того, как заполнил половину анкеты,
+// потому что регистрация происходит не на том шаге, где вводят почту.
+//
+// Ответ намеренно скупой (да/нет, без деталей), а роут сидит под тем же
+// анти-брутфорс лимитом, что login/register: перебирать адреса через него
+// не быстрее, чем через саму форму входа.
+func (r *Repo) EmailTaken(ctx context.Context, email string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)`, email).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check email: %w", err)
+	}
+	return exists, nil
+}
+
 func (r *Repo) FindByLogin(ctx context.Context, login string) (User, error) {
 	const q = `
 SELECT id, email, phone, password_hash, kind, is_active, email_verified_at, is_manager, is_admin, is_approved, password_changed_at

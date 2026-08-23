@@ -103,6 +103,9 @@ func NewRouter(d Deps) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(RateLimit(d.Limiter, "auth", d.AuthWindows))
 			r.Post("/auth/register", d.Auth.Register)
+			// Под тем же лимитом, что register/login: перебирать адреса через
+			// этот роут не быстрее, чем через форму входа.
+			r.Get("/auth/email-available", d.Auth.EmailAvailable)
 			r.Post("/auth/login", d.Auth.Login)
 			r.Post("/auth/refresh", d.Auth.Refresh)
 			r.Post("/auth/verify-email", d.Auth.VerifyEmail)

@@ -268,6 +268,15 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	return s.tokens.Issue(u.ID, s.now())
 }
 
+// EmailTaken — свободен ли адрес для регистрации.
+func (s *Service) EmailTaken(ctx context.Context, email string) (bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return false, nil
+	}
+	return s.repo.EmailTaken(ctx, email)
+}
+
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 	return s.repo.FindByID(ctx, id)
 }

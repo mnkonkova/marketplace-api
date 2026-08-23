@@ -167,6 +167,25 @@ type meResp struct {
 // @Failure      401  {object}  errorResponse
 // @Failure      404  {object}  errorResponse
 // @Router       /me [get]
+// EmailAvailable godoc
+// @Summary      Свободен ли email для регистрации
+// @Tags         auth
+// @Param        email  query  string  true  "Проверяемый адрес"
+// @Success      200  {object}  emailAvailableResp
+// @Router       /auth/email-available [get]
+func (h *Handler) EmailAvailable(w http.ResponseWriter, r *http.Request) {
+	taken, err := h.svc.EmailTaken(r.Context(), r.URL.Query().Get("email"))
+	if err != nil {
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, emailAvailableResp{Available: !taken})
+}
+
+type emailAvailableResp struct {
+	Available bool `json:"available"`
+}
+
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFrom(r.Context())
 	if !ok {
