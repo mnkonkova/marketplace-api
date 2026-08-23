@@ -37,6 +37,9 @@ func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 func (r *Repo) Pool() *pgxpool.Pool { return r.db }
 
 func (r *Repo) Get(ctx context.Context, userID uuid.UUID) (Profile, error) {
+	// Категории и навыки берём подзапросами в том же round-trip'е: раньше это
+	// были три последовательных похода в базу на каждый заход в кабинет. Тем
+	// же приёмом (json_agg) уже вылечен публичный профиль — 3496b2a.
 	const q = `
 SELECT p.user_id, COALESCE(p.username, ''), p.display_name, p.bio,
        COALESCE(p.avatar_url, ''), COALESCE(p.city, ''),
@@ -46,11 +49,17 @@ SELECT p.user_id, COALESCE(p.username, ''), p.display_name, p.bio,
        p.updated_at,
        p.production_id, p.is_freelance,
        p.moderation_status, COALESCE(p.moderation_reason, ''), p.moderation_reviewed_at,
-       p.social_links
+       p.social_links,
+       COALESCE((SELECT json_agg(sc.category_code ORDER BY sc.category_code)
+                 FROM specialist_categories sc WHERE sc.user_id = p.user_id), '[]') AS categories,
+       COALESCE((SELECT sc.category_code FROM specialist_categories sc
+                 WHERE sc.user_id = p.user_id AND sc.is_primary LIMIT 1), '') AS primary_category,
+       COALESCE((SELECT json_agg(ss.skill_id ORDER BY ss.skill_id)
+                 FROM specialist_skills ss WHERE ss.user_id = p.user_id), '[]') AS skill_ids
 FROM specialist_profiles p
 WHERE p.user_id = $1`
 	var p Profile
-	var socialJSON []byte
+	var socialJSON, catsJSON, skillsJSON []byte
 	err := r.db.QueryRow(ctx, q, userID).Scan(
 		&p.UserID, &p.Username, &p.DisplayName, &p.Bio,
 		&p.AvatarURL, &p.City,
@@ -60,7 +69,7 @@ WHERE p.user_id = $1`
 		&p.UpdatedAt,
 		&p.ProductionID, &p.IsFreelance,
 		&p.ModerationStatus, &p.ModerationReason, &p.ModerationReviewedAt,
-		&socialJSON,
+		&socialJSON, &catsJSON, &p.PrimaryCategory, &skillsJSON,
 	)
 	if err == nil && len(socialJSON) > 0 {
 		// JSON Unmarshal безопасен — записываем туда только из самого нашего
@@ -75,18 +84,12 @@ WHERE p.user_id = $1`
 		return Profile{}, fmt.Errorf("query profile: %w", err)
 	}
 
-	cats, primary, err := r.listCategories(ctx, userID)
-	if err != nil {
-		return Profile{}, err
-	}
-	p.Categories = cats
-	p.PrimaryCategory = primary
-
-	skills, err := r.listSkillIDs(ctx, userID)
-	if err != nil {
-		return Profile{}, err
-	}
-	p.SkillIDs = skills
+	// json_agg отдаёт [] для пустых — Unmarshal в срез безопасен, формат под
+	// нашим контролем. Пустой срез вместо nil: фронт ждёт массив.
+	p.Categories = []string{}
+	p.SkillIDs = []string{}
+	_ = json.Unmarshal(catsJSON, &p.Categories)
+	_ = json.Unmarshal(skillsJSON, &p.SkillIDs)
 
 	return p, nil
 }
@@ -1375,18 +1378,18 @@ SELECT url FROM (
 // ModerationQueueItem — карточка спеца в админ-очереди модерации.
 // Достаточно того, что админ видит сходу, чтобы понять кто это.
 type ModerationQueueItem struct {
-	UserID          uuid.UUID  `json:"user_id"`
-	Email           string     `json:"email,omitempty"`
-	DisplayName     string     `json:"display_name"`
-	AvatarURL       string     `json:"avatar_url,omitempty"`
-	Bio             string     `json:"bio"`
-	City            string     `json:"city,omitempty"`
-	PrimaryCategory string     `json:"primary_category,omitempty"`
-	IsFreelance     bool       `json:"is_freelance"`
-	ProductionName  string     `json:"production_name,omitempty"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	Status          string     `json:"moderation_status"`
-	Reason          string     `json:"moderation_reason,omitempty"`
+	UserID          uuid.UUID `json:"user_id"`
+	Email           string    `json:"email,omitempty"`
+	DisplayName     string    `json:"display_name"`
+	AvatarURL       string    `json:"avatar_url,omitempty"`
+	Bio             string    `json:"bio"`
+	City            string    `json:"city,omitempty"`
+	PrimaryCategory string    `json:"primary_category,omitempty"`
+	IsFreelance     bool      `json:"is_freelance"`
+	ProductionName  string    `json:"production_name,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	Status          string    `json:"moderation_status"`
+	Reason          string    `json:"moderation_reason,omitempty"`
 }
 
 // ListModerationQueue — очередь модерации. status="pending_review" (default)
@@ -1403,9 +1406,9 @@ func (r *Repo) ListModerationQueue(ctx context.Context, status string, limit, of
 		offset = 0
 	}
 	var (
-		filter  string
-		args    []any
-		argIdx  = 1
+		filter string
+		args   []any
+		argIdx = 1
 	)
 	switch status {
 	case "", "all":
@@ -1502,10 +1505,10 @@ WHERE is_published = TRUE AND moderation_status = 'pending_review'`).Scan(&n)
 // на Approve/Reject) и moderation_status + reason для UI.
 type ModerationDetail struct {
 	PublicProfile
-	UpdatedAt        time.Time  `json:"updated_at"`
-	ModerationStatus string     `json:"moderation_status"`
-	ModerationReason string     `json:"moderation_reason,omitempty"`
-	Email            string     `json:"email,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	ModerationStatus string    `json:"moderation_status"`
+	ModerationReason string    `json:"moderation_reason,omitempty"`
+	Email            string    `json:"email,omitempty"`
 }
 
 // GetForModeration — полная карточка спеца для admin'ского просмотра,
