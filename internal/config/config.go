@@ -104,6 +104,14 @@ type Config struct {
 	RateAuthPerMin  int `env:"RATE_AUTH_PER_MIN" envDefault:"10"`
 	RateAuthPerHour int `env:"RATE_AUTH_PER_HOUR" envDefault:"60"`
 
+	// Выдача presigned-ссылок на загрузку. Отдельный лимит, потому что это
+	// единственное место, где залогиненный человек тратит наши деньги: одна
+	// ссылка — один объект в бакете, а размер объявляет клиент и подпись его
+	// не навязывает. Двадцати в минуту хватает даже фото-кейсу из десяти
+	// снимков с перезаливкой, а скрипту — уже нет.
+	RateUploadPerMin  int `env:"RATE_UPLOAD_PER_MIN" envDefault:"20"`
+	RateUploadPerHour int `env:"RATE_UPLOAD_PER_HOUR" envDefault:"200"`
+
 	// CRM endpoints (/me/projects, /me/specialist, /manager, /admin).
 	// Лимит per user+ip — менеджеры/админы пишут плотно, но не должно быть
 	// возможности устроить шторм action-endpoint-ов (start/skip/approve в

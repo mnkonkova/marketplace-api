@@ -271,6 +271,10 @@ func main() {
 			{Limit: cfg.RateLeadsPerMin, Period: time.Minute},
 			{Limit: cfg.RateLeadsPerHour, Period: time.Hour},
 		},
+		UploadWindows: []ratelimit.Window{
+			{Limit: cfg.RateUploadPerMin, Period: time.Minute},
+			{Limit: cfg.RateUploadPerHour, Period: time.Hour},
+		},
 		ClarifyWindows: []ratelimit.Window{
 			{Limit: cfg.RateClarifyPerMin, Period: time.Minute},
 			{Limit: cfg.RateClarifyPerHour, Period: time.Hour},

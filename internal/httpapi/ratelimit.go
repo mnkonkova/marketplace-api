@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"marketpclce/internal/auth"
 	"marketpclce/internal/ratelimit"
 )
 
@@ -14,6 +15,7 @@ import (
 //   - summarize/clarify/profilecheck → LLM-billing (claude/deepseek $$$)
 //   - leads → отправка писем спецам, потенциально дорогая рассылка
 //   - auth → анти-брутфорс на login/register/redeem_invite
+//
 // Без этой защиты curl-bombing на summarize за минуту жжёт LLM-квоту.
 // Для остальных scope'ов (read и т.п.) fail-OPEN: лучше неограниченный
 // read чем 503 на каталоге, если Redis лёг.
@@ -22,6 +24,24 @@ var expensiveScopes = map[string]struct{}{
 	"clarify":   {},
 	"leads":     {},
 	"auth":      {},
+	// uploads — каждая выданная ссылка разрешает положить объект в бакет.
+	// Без лимитера закрываемся: неограниченная выдача стоит денег, а
+	// невозможность загрузить работу — нет.
+	"uploads": {},
+}
+
+// clientKey — по кому считаем лимит.
+//
+// Для авторизованных ручек это идентификатор человека, а не адрес. Иначе
+// офис за одним NAT'ом делит корзину на всех, а перебор адресов, наоборот,
+// лимит обходит: сменить IP дешевле, чем завести аккаунт. Неавторизованные
+// запросы (логин, регистрация, каталог) считаются по адресу, как и раньше —
+// человека там ещё нет.
+func clientKey(r *http.Request) string {
+	if uid, ok := auth.UserIDFrom(r.Context()); ok {
+		return "u:" + uid.String()
+	}
+	return ratelimit.ClientIP(r)
 }
 
 func RateLimit(rl *ratelimit.Limiter, scope string, windows []ratelimit.Window) func(http.Handler) http.Handler {
@@ -39,7 +59,7 @@ func RateLimit(rl *ratelimit.Limiter, scope string, windows []ratelimit.Window) 
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			err := rl.Allow(r.Context(), scope, ratelimit.ClientIP(r), windows)
+			err := rl.Allow(r.Context(), scope, clientKey(r), windows)
 			if rlErr, ok := ratelimit.IsRateLimited(err); ok {
 				w.Header().Set("Retry-After", strconv.Itoa(int(rlErr.RetryAfter.Seconds())))
 				w.Header().Set("Content-Type", "application/json")

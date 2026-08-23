@@ -60,9 +60,13 @@ type Deps struct {
 
 	CORSOrigins []string
 
-	Limiter          *ratelimit.Limiter
-	ReadWindows      []ratelimit.Window
-	LeadsWindows     []ratelimit.Window
+	Limiter      *ratelimit.Limiter
+	ReadWindows  []ratelimit.Window
+	LeadsWindows []ratelimit.Window
+	// UploadWindows — на выдачу presigned-ссылок. Единственное место, где
+	// залогиненный человек тратит наши деньги: ссылка = объект в бакете, а
+	// размер объявляет клиент, и подпись его не навязывает.
+	UploadWindows    []ratelimit.Window
 	ClarifyWindows   []ratelimit.Window
 	AuthWindows      []ratelimit.Window
 	SummarizeWindows []ratelimit.Window
@@ -209,10 +213,20 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/me/portfolio", d.Profiles.PortfolioList)
 			r.Post("/me/portfolio", d.Profiles.PortfolioCreate)
 			r.Post("/me/portfolio/photoset", d.Profiles.PortfolioPhotoSetCreate)
-			r.Post("/me/portfolio/upload-url", d.Profiles.PortfolioUploadURL)
-			// S3 multipart для крупного видео (> 5 МБ, до 200 МБ).
-			r.Post("/me/portfolio/multipart/start", d.Profiles.PortfolioMultipartStart)
-			r.Post("/me/portfolio/multipart/part-url", d.Profiles.PortfolioMultipartPartURL)
+
+			// Выдача presigned-ссылок — под своим лимитом. Остальной кабинет
+			// не трогаем: там человек читает и правит свои же строки, а здесь
+			// каждый вызов разрешает положить в бакет ещё один объект.
+			// Размер при этом объявляет клиент, и подпись его не навязывает —
+			// то есть без лимита счёт за хранение ограничен только совестью.
+			r.Group(func(r chi.Router) {
+				r.Use(RateLimit(d.Limiter, "uploads", d.UploadWindows))
+				r.Post("/me/portfolio/upload-url", d.Profiles.PortfolioUploadURL)
+				// S3 multipart для крупного видео (> 5 МБ, до 200 МБ).
+				r.Post("/me/portfolio/multipart/start", d.Profiles.PortfolioMultipartStart)
+				r.Post("/me/portfolio/multipart/part-url", d.Profiles.PortfolioMultipartPartURL)
+				r.Post("/me/uploads/image", d.Profiles.ImageUploadURL)
+			})
 			r.Post("/me/portfolio/multipart/complete", d.Profiles.PortfolioMultipartComplete)
 			r.Post("/me/portfolio/multipart/abort", d.Profiles.PortfolioMultipartAbort)
 			r.Put("/me/portfolio/{id}/categories", d.Profiles.PortfolioSetCategories)
@@ -222,9 +236,6 @@ func NewRouter(d Deps) http.Handler {
 			r.Put("/me/portfolio/{id}/images/order", d.Profiles.PortfolioImagesReorder)
 			r.Delete("/me/portfolio/{id}", d.Profiles.PortfolioDelete)
 			r.Delete("/me/portfolio/images/{img_id}", d.Profiles.PortfolioImageDelete)
-
-			// Аплоад картинки (аватар / превью к видео) — общий presigned PUT.
-			r.Post("/me/uploads/image", d.Profiles.ImageUploadURL)
 
 			r.Get("/me/leads/incoming", d.Leads.ListIncoming)
 			r.Patch("/me/leads/{id}/recipient", d.Leads.UpdateRecipient)
