@@ -40,15 +40,30 @@ type ClientProfilePatch struct {
 func (r *Repo) GetClientProfile(ctx context.Context, userID uuid.UUID) (ClientProfile, error) {
 	cp := ClientProfile{UserID: userID}
 	var updatedAt time.Time
+	// display_name подхватываем из users, если в профиле пусто: заказчик
+	// вводит имя при регистрации, а строка client_profiles создаётся только
+	// при первом сохранении контактов. Без этого кабинет и форма заявки
+	// встречали его пустым полем, хотя имя он уже называл.
 	err := r.db.QueryRow(ctx, `
-SELECT display_name, phone, telegram, updated_at FROM client_profiles WHERE user_id = $1`,
+SELECT COALESCE(NULLIF(cp.display_name, ''), u.display_name),
+       cp.phone, cp.telegram, cp.updated_at
+FROM client_profiles cp
+JOIN users u ON u.id = cp.user_id
+WHERE cp.user_id = $1`,
 		userID).Scan(&cp.DisplayName, &cp.Phone, &cp.Telegram, &updatedAt)
 	if err == nil {
 		cp.UpdatedAt = &updatedAt
 		return cp, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return cp, nil // ещё не заполнял — это норм, отдаём пустую без updated_at
+		// Строки профиля ещё нет — отдаём имя из аккаунта, чтобы поле не
+		// оказалось пустым при первом заходе.
+		if err := r.db.QueryRow(ctx,
+			`SELECT display_name FROM users WHERE id = $1`, userID).Scan(&cp.DisplayName); err != nil &&
+			!errors.Is(err, pgx.ErrNoRows) {
+			return ClientProfile{}, fmt.Errorf("get user name: %w", err)
+		}
+		return cp, nil
 	}
 	return ClientProfile{}, fmt.Errorf("get client profile: %w", err)
 }
