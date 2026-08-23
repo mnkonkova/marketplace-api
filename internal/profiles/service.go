@@ -357,9 +357,16 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 		}
 	}
 	if published {
-		// Хард-валидация перед публикацией. Базовая часть (production/bio/
-		// display_name) обязательна всегда — без неё в каталог попадали
-		// «пустые» карточки. LLM-проверка дополнительно, если есть checker.
+		// Хард-валидация перед публикацией: production и display_name.
+		//
+		// Описание в этот список больше не входит — решение владельца.
+		// Требование «сначала напишите о себе» стояло между человеком и
+		// каталогом в тот момент, когда он уже загрузил работу: анкета
+		// пройдена, а публикации нет. Пустое описание портит карточку, но
+		// портит её у одного человека, а отказ на последнем шаге теряет его
+		// целиком. Дописать текст зовём в кабинете, где это уже не блокирует.
+		//
+		// LLM-проверка — дополнительно и только когда есть что проверять.
 		p, err := s.repo.Get(ctx, userID)
 		if err != nil {
 			return Profile{}, err
@@ -372,13 +379,13 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
 		}
 		bio := strings.TrimSpace(p.Bio)
 		name := strings.TrimSpace(p.DisplayName)
-		if bio == "" {
-			return Profile{}, fmt.Errorf("%w: заполните «О себе» в профиле", ErrPublishIncomplete)
-		}
 		if name == "" {
 			return Profile{}, fmt.Errorf("%w: заполните имя в профиле", ErrPublishIncomplete)
 		}
-		if s.checker != nil && s.checker.Available() {
+		// Пустое описание проверять нечем: модель на пустой строке вернёт
+		// отказ, и «необязательное поле» снова станет обязательным, только
+		// молча и чужими словами.
+		if bio != "" && s.checker != nil && s.checker.Available() {
 			title, _ := s.repo.CategoryTitle(ctx, p.PrimaryCategory)
 			res, err := s.checker.Check(ctx, CheckInput{
 				Bio:                  bio,

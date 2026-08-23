@@ -89,6 +89,28 @@ func cleanupSpec(t *testing.T, pool *pgxpool.Pool, uid uuid.UUID) {
 
 // ─── State machine: первый publish (pending → notify) ─────────────
 
+// Публикация без описания проходит: «о себе» перестало быть условием
+// (см. SetPublished). Требование стояло между человеком и каталогом ровно в
+// тот момент, когда он уже загрузил работу, — анкета пройдена, а профиля
+// нет. Пустая карточка портит впечатление у одного, отказ на последнем шаге
+// теряет его целиком.
+func TestPublishGoesThroughWithoutBio(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	uid := makeModerationSpecialist(t, pool)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, uid) })
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE specialist_profiles SET bio = '' WHERE user_id = $1`, uid); err != nil {
+		t.Fatalf("очистить описание: %v", err)
+	}
+
+	svc := profiles.NewService(profiles.NewRepo(pool))
+	if _, err := svc.SetPublished(ctx, uid, true); err != nil {
+		t.Fatalf("публикация без описания должна проходить, а вернулось: %v", err)
+	}
+}
+
 func TestModerationFirstPublishEmitsPending(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()

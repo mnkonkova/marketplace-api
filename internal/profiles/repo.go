@@ -319,22 +319,23 @@ SELECT $1, s FROM unnest($2::uuid[]) AS s`,
 
 // RevalidatePublishInTx — повторяет hard-проверки SetPublished внутри tx
 // под FOR UPDATE на specialist_profiles, чтобы между долгим LLM-checker'ом
-// и финальным UPDATE юзер не смог почистить bio/display_name/production
-// (R10). Если условия нарушены — ErrPublishIncomplete.
+// и финальным UPDATE юзер не смог почистить display_name/production (R10).
+// Если условия нарушены — ErrPublishIncomplete.
+//
+// Описания среди проверок больше нет: оно необязательно для публикации
+// (см. SetPublished). Профиль без описания — плохая карточка, но живая.
 func (r *Repo) RevalidatePublishInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
 	var (
 		productionID *uuid.UUID
 		isFreelance  bool
-		bio          string
 		displayName  string
 	)
 	err := tx.QueryRow(ctx, `
 SELECT production_id, is_freelance,
-       COALESCE(TRIM(bio), ''),
        COALESCE(TRIM(display_name), '')
 FROM specialist_profiles
 WHERE user_id = $1
-FOR UPDATE`, userID).Scan(&productionID, &isFreelance, &bio, &displayName)
+FOR UPDATE`, userID).Scan(&productionID, &isFreelance, &displayName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -343,9 +344,6 @@ FOR UPDATE`, userID).Scan(&productionID, &isFreelance, &bio, &displayName)
 	}
 	if productionID == nil && !isFreelance {
 		return fmt.Errorf("%w: выберите студию или отметьте «фрилансер»", ErrPublishIncomplete)
-	}
-	if bio == "" {
-		return fmt.Errorf("%w: заполните «О себе» в профиле", ErrPublishIncomplete)
 	}
 	if displayName == "" {
 		return fmt.Errorf("%w: заполните имя в профиле", ErrPublishIncomplete)
