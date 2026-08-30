@@ -30,6 +30,9 @@ type registerReq struct {
 type registerResp struct {
 	UserID string    `json:"user_id"`
 	Tokens TokenPair `json:"tokens"`
+	// IsNew — аккаунт создан этим запросом. Фронт по нему решает, вести ли
+	// в мастер профиля или сразу в кабинет.
+	IsNew bool `json:"is_new,omitempty"`
 }
 
 // Register godoc
@@ -212,6 +215,7 @@ func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, registerResp{
 			UserID: res.UserID.String(),
 			Tokens: res.Tokens,
+			IsNew:  res.IsNew,
 		})
 	}
 }

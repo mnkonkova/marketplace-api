@@ -137,6 +137,10 @@ const SourceLandingClients = "landing_clients"
 type RegisterResult struct {
 	UserID uuid.UUID
 	Tokens TokenPair
+	// IsNew — аккаунт создан прямо сейчас. Нужен входу через Яндекс: давнего
+	// пользователя нельзя вести в мастер регистрации, он там второй раз
+	// заполняет то, что у него уже есть.
+	IsNew bool
 }
 
 func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResult, error) {
@@ -343,6 +347,7 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 				return RegisterResult{}, err
 			}
 			pair, err := s.tokens.Issue(id, s.now())
+			// Аккаунт был раньше — это вход, а не регистрация.
 			return RegisterResult{UserID: id, Tokens: pair}, err
 		} else if !errors.Is(err, ErrNotFound) {
 			return RegisterResult{}, err
@@ -393,7 +398,7 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 	}
 
 	pair, err := s.tokens.Issue(userID, s.now())
-	return RegisterResult{UserID: userID, Tokens: pair}, err
+	return RegisterResult{UserID: userID, Tokens: pair, IsNew: true}, err
 }
 
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
