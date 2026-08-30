@@ -81,18 +81,23 @@ RETURNING id`
 }
 
 // FindByIdentity — пользователь по внешнему аккаунту (Яндекс и т.п.).
-func (r *Repo) FindByIdentity(ctx context.Context, provider, providerID string) (uuid.UUID, error) {
+// Роль отдаём тем же запросом: она нужна сразу после входа, чтобы фронт
+// повёл человека в его кабинет, а отдельный SELECT был бы лишним походом.
+func (r *Repo) FindByIdentity(ctx context.Context, provider, providerID string) (uuid.UUID, string, error) {
 	var id uuid.UUID
+	var kind string
 	err := r.db.QueryRow(ctx,
-		`SELECT user_id FROM user_identities WHERE provider = $1 AND provider_id = $2`,
-		provider, providerID).Scan(&id)
+		`SELECT i.user_id, u.kind FROM user_identities i
+		   JOIN users u ON u.id = i.user_id
+		  WHERE i.provider = $1 AND i.provider_id = $2`,
+		provider, providerID).Scan(&id, &kind)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, ErrNotFound
+		return uuid.Nil, "", ErrNotFound
 	}
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("find identity: %w", err)
+		return uuid.Nil, "", fmt.Errorf("find identity: %w", err)
 	}
-	return id, nil
+	return id, kind, nil
 }
 
 // LinkIdentity — привязать внешний аккаунт к пользователю. Повторный вызов
@@ -114,16 +119,17 @@ func (r *Repo) LinkIdentity(ctx context.Context, tx pgx.Tx, userID uuid.UUID, pr
 }
 
 // FindIDByEmail — для склейки: тот же адрес мог зарегистрироваться паролем.
-func (r *Repo) FindIDByEmail(ctx context.Context, email string) (uuid.UUID, error) {
+func (r *Repo) FindIDByEmail(ctx context.Context, email string) (uuid.UUID, string, error) {
 	var id uuid.UUID
-	err := r.db.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&id)
+	var kind string
+	err := r.db.QueryRow(ctx, `SELECT id, kind FROM users WHERE email = $1`, email).Scan(&id, &kind)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, ErrNotFound
+		return uuid.Nil, "", ErrNotFound
 	}
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("find by email: %w", err)
+		return uuid.Nil, "", fmt.Errorf("find by email: %w", err)
 	}
-	return id, nil
+	return id, kind, nil
 }
 
 // MarkEmailVerified — почта из Яндекса уже подтверждена, письмо не нужно.

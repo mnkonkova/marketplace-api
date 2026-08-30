@@ -334,16 +334,16 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 	email := strings.ToLower(strings.TrimSpace(profile.DefaultEmail))
 
 	// 1. Уже входил через Яндекс.
-	if id, err := s.repo.FindByIdentity(ctx, ProviderYandex, profile.ID); err == nil {
+	if id, have, err := s.repo.FindByIdentity(ctx, ProviderYandex, profile.ID); err == nil {
 		pair, err := s.tokens.Issue(id, s.now())
-		return RegisterResult{UserID: id, Tokens: pair, Kind: s.kindOf(ctx, id)}, err
+		return RegisterResult{UserID: id, Tokens: pair, Kind: have}, err
 	} else if !errors.Is(err, ErrNotFound) {
 		return RegisterResult{}, err
 	}
 
 	// 2. Тот же адрес уже зарегистрирован паролем — связываем аккаунты.
 	if email != "" {
-		if id, err := s.repo.FindIDByEmail(ctx, email); err == nil {
+		if id, have, err := s.repo.FindIDByEmail(ctx, email); err == nil {
 			if err := s.repo.LinkIdentity(ctx, nil, id, ProviderYandex, profile.ID, email); err != nil {
 				return RegisterResult{}, err
 			}
@@ -352,7 +352,7 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 			}
 			pair, err := s.tokens.Issue(id, s.now())
 			// Аккаунт был раньше — это вход, а не регистрация.
-			return RegisterResult{UserID: id, Tokens: pair, Kind: s.kindOf(ctx, id)}, err
+			return RegisterResult{UserID: id, Tokens: pair, Kind: have}, err
 		} else if !errors.Is(err, ErrNotFound) {
 			return RegisterResult{}, err
 		}
@@ -403,17 +403,6 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 
 	pair, err := s.tokens.Issue(userID, s.now())
 	return RegisterResult{UserID: userID, Tokens: pair, IsNew: true, Kind: kind}, err
-}
-
-// kindOf — роль существующего аккаунта. Ошибку не поднимаем: маршрут после
-// входа не стоит того, чтобы валить сам вход, пустая строка отправит фронт
-// по запасному пути.
-func (s *Service) kindOf(ctx context.Context, id uuid.UUID) string {
-	u, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return ""
-	}
-	return u.Kind
 }
 
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
