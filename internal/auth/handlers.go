@@ -33,6 +33,9 @@ type registerResp struct {
 	// IsNew — аккаунт создан этим запросом. Фронт по нему решает, вести ли
 	// в мастер профиля или сразу в кабинет.
 	IsNew bool `json:"is_new,omitempty"`
+	// Kind — настоящая роль аккаунта. Фронт ведёт по ней, а не по той, что
+	// сам запросил: иначе заказчик попадал в кабинет специалиста.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Register godoc
@@ -216,6 +219,7 @@ func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
 			UserID: res.UserID.String(),
 			Tokens: res.Tokens,
 			IsNew:  res.IsNew,
+			Kind:   res.Kind,
 		})
 	}
 }

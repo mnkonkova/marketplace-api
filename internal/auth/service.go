@@ -141,6 +141,10 @@ type RegisterResult struct {
 	// пользователя нельзя вести в мастер регистрации, он там второй раз
 	// заполняет то, что у него уже есть.
 	IsNew bool
+	// Kind — НАСТОЯЩАЯ роль аккаунта, а не та, что запросил фронт. Заказчик,
+	// нажавший «я специалист», остаётся заказчиком: профиля специалиста у
+	// него нет, и кабинет встретил бы его «профиль не найден».
+	Kind string
 }
 
 func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResult, error) {
@@ -332,7 +336,7 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 	// 1. Уже входил через Яндекс.
 	if id, err := s.repo.FindByIdentity(ctx, ProviderYandex, profile.ID); err == nil {
 		pair, err := s.tokens.Issue(id, s.now())
-		return RegisterResult{UserID: id, Tokens: pair}, err
+		return RegisterResult{UserID: id, Tokens: pair, Kind: s.kindOf(ctx, id)}, err
 	} else if !errors.Is(err, ErrNotFound) {
 		return RegisterResult{}, err
 	}
@@ -348,7 +352,7 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 			}
 			pair, err := s.tokens.Issue(id, s.now())
 			// Аккаунт был раньше — это вход, а не регистрация.
-			return RegisterResult{UserID: id, Tokens: pair}, err
+			return RegisterResult{UserID: id, Tokens: pair, Kind: s.kindOf(ctx, id)}, err
 		} else if !errors.Is(err, ErrNotFound) {
 			return RegisterResult{}, err
 		}
@@ -398,7 +402,18 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 	}
 
 	pair, err := s.tokens.Issue(userID, s.now())
-	return RegisterResult{UserID: userID, Tokens: pair, IsNew: true}, err
+	return RegisterResult{UserID: userID, Tokens: pair, IsNew: true, Kind: kind}, err
+}
+
+// kindOf — роль существующего аккаунта. Ошибку не поднимаем: маршрут после
+// входа не стоит того, чтобы валить сам вход, пустая строка отправит фронт
+// по запасному пути.
+func (s *Service) kindOf(ctx context.Context, id uuid.UUID) string {
+	u, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return ""
+	}
+	return u.Kind
 }
 
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
