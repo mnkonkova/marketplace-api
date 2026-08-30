@@ -80,6 +80,67 @@ RETURNING id`
 	return id, nil
 }
 
+// FindByIdentity — пользователь по внешнему аккаунту (Яндекс и т.п.).
+func (r *Repo) FindByIdentity(ctx context.Context, provider, providerID string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT user_id FROM user_identities WHERE provider = $1 AND provider_id = $2`,
+		provider, providerID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("find identity: %w", err)
+	}
+	return id, nil
+}
+
+// LinkIdentity — привязать внешний аккаунт к пользователю. Повторный вызов
+// безопасен: пара (provider, provider_id) — первичный ключ.
+func (r *Repo) LinkIdentity(ctx context.Context, tx pgx.Tx, userID uuid.UUID, provider, providerID, email string) error {
+	q := `INSERT INTO user_identities (provider, provider_id, user_id, email)
+	      VALUES ($1, $2, $3, NULLIF($4, ''))
+	      ON CONFLICT (provider, provider_id) DO NOTHING`
+	var err error
+	if tx != nil {
+		_, err = tx.Exec(ctx, q, provider, providerID, userID, email)
+	} else {
+		_, err = r.db.Exec(ctx, q, provider, providerID, userID, email)
+	}
+	if err != nil {
+		return fmt.Errorf("link identity: %w", err)
+	}
+	return nil
+}
+
+// FindIDByEmail — для склейки: тот же адрес мог зарегистрироваться паролем.
+func (r *Repo) FindIDByEmail(ctx context.Context, email string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("find by email: %w", err)
+	}
+	return id, nil
+}
+
+// MarkEmailVerified — почта из Яндекса уже подтверждена, письмо не нужно.
+func (r *Repo) MarkEmailVerified(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+	q := `UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1`
+	var err error
+	if tx != nil {
+		_, err = tx.Exec(ctx, q, userID)
+	} else {
+		_, err = r.db.Exec(ctx, q, userID)
+	}
+	if err != nil {
+		return fmt.Errorf("mark verified: %w", err)
+	}
+	return nil
+}
+
 // EmailTaken — занят ли адрес. Нужен регистрации: без этой проверки человек
 // узнавал о занятом email только после того, как заполнил половину анкеты,
 // потому что регистрация происходит не на том шаге, где вводят почту.

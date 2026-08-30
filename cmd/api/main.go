@@ -113,6 +113,16 @@ func main() {
 	if cfg.EmailVerificationDisabled {
 		slog.Warn("email verification DISABLED — users auto-verified on register; soft-gate skipped (для прода держать выключенным!)")
 	}
+	// Вход через Яндекс включается наличием ключей. Без них ручка отвечает
+	// 501, а фронт не показывает кнопку — локальный запуск не ломается.
+	authSvc.WithYandex(auth.YandexConfig{
+		ClientID:     cfg.YandexClientID,
+		ClientSecret: cfg.YandexClientSecret,
+		RedirectURI:  cfg.YandexRedirectURI,
+	})
+	if !authSvc.YandexEnabled() {
+		slog.Info("yandex oauth disabled: YANDEX_CLIENT_ID/SECRET не заданы")
+	}
 	authHandler := auth.NewHandler(authSvc)
 
 	catalogRepo := catalog.NewRepo(pool)

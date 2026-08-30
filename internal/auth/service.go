@@ -56,7 +56,22 @@ type Service struct {
 	appBaseURL       string
 	resendCooldown   ResendCooldown
 	verificationOff  bool // если true — soft-gate выключен, юзеры авто-verified
+	// Пусто = вход через Яндекс выключен: локальный запуск без ключей это
+	// нормальный режим, а не поломка.
+	yandex YandexConfig
 }
+
+// ProviderYandex — идентификатор провайдера в user_identities.
+const ProviderYandex = "yandex"
+
+// WithYandex включает вход через Яндекс.
+func (s *Service) WithYandex(cfg YandexConfig) *Service {
+	s.yandex = cfg
+	return s
+}
+
+// YandexEnabled — фронт по этому флагу решает, показывать ли кнопку.
+func (s *Service) YandexEnabled() bool { return s.yandex.Enabled() }
 
 // ResendCooldown — узкий интерфейс под Redis-ограничение «не чаще раза в N
 // секунд» по user_id. nil-safe: без подключения cooldown'а ресенд проходит
@@ -275,6 +290,110 @@ func (s *Service) EmailTaken(ctx context.Context, email string) (bool, error) {
 		return false, nil
 	}
 	return s.repo.EmailTaken(ctx, email)
+}
+
+// LoginWithYandex — вход и регистрация одной ручкой.
+//
+// Разводить их незачем: человек нажимает «Войти через Яндекс» и не должен
+// помнить, заводил ли он здесь аккаунт. Три случая:
+//
+//  1. Этот аккаунт Яндекса уже привязан — просто впускаем.
+//  2. Адрес совпал с местным — привязываем к существующему. Почта у Яндекса
+//     подтверждённая, поэтому это он и есть, а не однофамилец.
+//  3. Никого нет — заводим пользователя без пароля.
+//
+// Пароля у такого пользователя не будет вовсе: вход только через Яндекс.
+// Поэтому password_hash NULL, а не заглушка (см. миграцию 00031).
+func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (RegisterResult, error) {
+	if !s.yandex.Enabled() {
+		return RegisterResult{}, ErrYandexDisabled
+	}
+	switch kind {
+	case KindClient, KindSpecialist:
+	default:
+		kind = KindClient
+	}
+
+	client := newYandexClient(s.yandex)
+	token, err := client.exchange(ctx, code)
+	if err != nil {
+		return RegisterResult{}, err
+	}
+	profile, err := client.profile(ctx, token)
+	if err != nil {
+		return RegisterResult{}, err
+	}
+	email := strings.ToLower(strings.TrimSpace(profile.DefaultEmail))
+
+	// 1. Уже входил через Яндекс.
+	if id, err := s.repo.FindByIdentity(ctx, ProviderYandex, profile.ID); err == nil {
+		pair, err := s.tokens.Issue(id, s.now())
+		return RegisterResult{UserID: id, Tokens: pair}, err
+	} else if !errors.Is(err, ErrNotFound) {
+		return RegisterResult{}, err
+	}
+
+	// 2. Тот же адрес уже зарегистрирован паролем — связываем аккаунты.
+	if email != "" {
+		if id, err := s.repo.FindIDByEmail(ctx, email); err == nil {
+			if err := s.repo.LinkIdentity(ctx, nil, id, ProviderYandex, profile.ID, email); err != nil {
+				return RegisterResult{}, err
+			}
+			if err := s.repo.MarkEmailVerified(ctx, nil, id); err != nil {
+				return RegisterResult{}, err
+			}
+			pair, err := s.tokens.Issue(id, s.now())
+			return RegisterResult{UserID: id, Tokens: pair}, err
+		} else if !errors.Is(err, ErrNotFound) {
+			return RegisterResult{}, err
+		}
+	}
+
+	// 3. Новый человек.
+	name := profile.Name()
+	user := User{Kind: kind, DisplayName: name}
+	if email != "" {
+		user.Email = &email
+	}
+
+	var userID uuid.UUID
+	err = s.repo.WithTx(ctx, func(tx pgx.Tx) error {
+		id, err := s.repo.CreateUser(ctx, tx, user)
+		if err != nil {
+			return err
+		}
+		userID = id
+		if err := s.repo.LinkIdentity(ctx, tx, id, ProviderYandex, profile.ID, email); err != nil {
+			return err
+		}
+		// Почту Яндекс подтвердил за нас — письмо не отправляем.
+		if email != "" {
+			if err := s.repo.MarkEmailVerified(ctx, tx, id); err != nil {
+				return err
+			}
+		}
+		// Профиль специалиста создаётся здесь же, как в обычной регистрации:
+		// без него /me/profile вернёт 404 сразу после входа.
+		if kind == KindSpecialist {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO specialist_profiles (user_id, display_name, contact_email)
+				 VALUES ($1, $2, NULLIF($3, ''))`, id, name, email); err != nil {
+				return fmt.Errorf("insert profile: %w", err)
+			}
+			if err := outbox.Emit(ctx, tx, outbox.AggregateSpecialist, id.String(),
+				outbox.EventSpecialistUpserted,
+				map[string]string{"user_id": id.String(), "source": "yandex"}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return RegisterResult{}, err
+	}
+
+	pair, err := s.tokens.Issue(userID, s.now())
+	return RegisterResult{UserID: userID, Tokens: pair}, err
 }
 
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {

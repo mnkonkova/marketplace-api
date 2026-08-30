@@ -110,6 +110,9 @@ func NewRouter(d Deps) http.Handler {
 			// Под тем же лимитом, что register/login: перебирать адреса через
 			// этот роут не быстрее, чем через форму входа.
 			r.Get("/auth/email-available", d.Auth.EmailAvailable)
+			// Вход через Яндекс: фронт присылает одноразовый code, обмен на
+			// токен делает бэкенд — client_secret на клиент не попадает.
+			r.Post("/auth/yandex", d.Auth.YandexLogin)
 			r.Post("/auth/login", d.Auth.Login)
 			r.Post("/auth/refresh", d.Auth.Refresh)
 			r.Post("/auth/verify-email", d.Auth.VerifyEmail)

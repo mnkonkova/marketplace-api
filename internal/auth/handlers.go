@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 
+	"log/slog"
 	"marketpclce/internal/httpx"
+	"strings"
 )
 
 type Handler struct{ svc *Service }
@@ -167,6 +169,53 @@ type meResp struct {
 // @Failure      401  {object}  errorResponse
 // @Failure      404  {object}  errorResponse
 // @Router       /me [get]
+type yandexReq struct {
+	Code string `json:"code"`
+	// Kind — роль для НОВОГО пользователя. Для существующего игнорируется:
+	// заказчик, вошедший через Яндекс, не должен вдруг стать специалистом.
+	Kind string `json:"kind"`
+}
+
+// YandexLogin godoc
+// @Summary      Вход и регистрация через Яндекс
+// @Description  Принимает одноразовый code из redirect'а Яндекса, обменивает
+// @Description  его на профиль и выдаёт пару токенов. Регистрация и вход —
+// @Description  одна ручка: человек не должен помнить, заводил ли аккаунт.
+// @Tags         auth
+// @Param        input  body      yandexReq  true  "code из redirect_uri"
+// @Success      200    {object}  registerResp
+// @Failure      400    {object}  errorResponse
+// @Failure      501    {object}  errorResponse
+// @Router       /auth/yandex [post]
+func (h *Handler) YandexLogin(w http.ResponseWriter, r *http.Request) {
+	var in yandexReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Code) == "" {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", "Не получен код авторизации")
+		return
+	}
+
+	res, err := h.svc.LoginWithYandex(r.Context(), strings.TrimSpace(in.Code), in.Kind)
+	switch {
+	case errors.Is(err, ErrYandexDisabled):
+		httpx.WriteErrMsg(w, http.StatusNotImplemented, "yandex_disabled",
+			"Вход через Яндекс не настроен")
+	case errors.Is(err, ErrYandexExchange):
+		// Детали (какой именно client_secret не подошёл) наружу не отдаём:
+		// человеку они не помогут, а нам расскажут в логе.
+		slog.Warn("yandex exchange failed", "err", err)
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "yandex_failed",
+			"Не удалось войти через Яндекс. Попробуйте ещё раз.")
+	case err != nil:
+		slog.Error("yandex login", "err", err)
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+	default:
+		httpx.WriteJSON(w, http.StatusOK, registerResp{
+			UserID: res.UserID.String(),
+			Tokens: res.Tokens,
+		})
+	}
+}
+
 // EmailAvailable godoc
 // @Summary      Свободен ли email для регистрации
 // @Tags         auth

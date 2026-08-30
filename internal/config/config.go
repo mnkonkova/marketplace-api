@@ -68,6 +68,14 @@ type Config struct {
 	// APP_BASE_URL нужен воркеру для сборки verify-ссылки (у воркера нет
 	// HTTP-контекста, на dev/staging/prod разный URL) — попадает в payload.
 	AppBaseURL string `env:"APP_BASE_URL" envDefault:"http://localhost:5173"`
+
+	// Вход через Яндекс. Пусто = кнопка на фронте не показывается и ручка
+	// отвечает 501: локальный запуск без OAuth должен работать.
+	YandexClientID     string `env:"YANDEX_CLIENT_ID"`
+	YandexClientSecret string `env:"YANDEX_CLIENT_SECRET"`
+	// Должен совпадать с тем, что зарегистрирован в кабинете Яндекса,
+	// иначе обмен кода вернёт invalid_grant.
+	YandexRedirectURI string `env:"YANDEX_REDIRECT_URI"`
 	// SPAShellURL — откуда API берёт index.html, чтобы подставить в него
 	// og-мету конкретного специалиста (см. internal/profiles/og.go).
 	// В проде это Caddy внутри docker-сети. Пусто — ручка /specialist/{id}
