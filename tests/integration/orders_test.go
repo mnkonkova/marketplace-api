@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -634,5 +635,134 @@ func TestManagerProjectOrderAndInvite(t *testing.T) {
 	// Заказчику эти ручки недоступны — они менеджерские.
 	if code, _ := h.Do(t, http.MethodGet, orderPath, h.Token(t, clientID), nil); code != http.StatusForbidden {
 		t.Errorf("заказчик читает заказ по проекту: код %d, ожидался 403", code)
+	}
+}
+
+// События подбора, которые уходят в общий чат, несут project_id — по
+// нему собирается та же ссылка, что у остальных событий проекта.
+//
+// Без неё сообщение «заказ некем закрыть» отправляет человека искать
+// заказ руками ровно в тот момент, когда надо действовать быстро: в
+// payload был только номер заказа, а адреса вида /orders/{id} в CRM нет.
+func TestOrderChatEventsCarryProjectID(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	clientID, creators, cleanup := setupOrderWorld(t, pool)
+	defer cleanup()
+
+	svc := orders.NewService(orders.NewRepo(pool))
+	repo := orders.NewRepo(pool)
+	now := time.Now().UTC()
+
+	res, err := svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID, StartMonth: nextMonth(), Needed: 1,
+		VideosCount: 30, CreatorIDs: creators[:1],
+	}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	orderID := res.Order.ID
+
+	// Проект у заказа появляется не сразу (подбор идёт до оплаты),
+	// поэтому привязываем его явно — как это сделает менеджер, заведя
+	// проект по оплаченному заказу.
+	var projectID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+INSERT INTO projects (client_user_id, kind, title, source, status)
+VALUES ($1, 'creators_turnkey', 'заказ со ссылкой', 'manual', 'active')
+RETURNING id`, clientID).Scan(&projectID); err != nil {
+		t.Fatalf("создать проект: %v", err)
+	}
+	defer func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM outbox WHERE aggregate_id = $1`, orderID.String())
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+	}()
+	if err := repo.LinkProject(ctx, orderID, projectID); err != nil {
+		t.Fatalf("LinkProject: %v", err)
+	}
+
+	if _, err := svc.SendInvitations(ctx, orderID, now); err != nil {
+		t.Fatalf("SendInvitations: %v", err)
+	}
+	// Единственный приглашённый отказался, резерва нет — «добрать».
+	if _, err := svc.Respond(ctx, orderID, creators[0], false, now); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	assertEventLinksProject(t, pool, orderID, "order.need_more", projectID)
+
+	// Молчание суток — второе событие с тем же требованием к ссылке.
+	if _, err := svc.AddCandidates(ctx, orderID, creators[1:2], now); err != nil {
+		t.Fatalf("AddCandidates: %v", err)
+	}
+	// Состарить приглашение иначе нечем: ждать сутки тест не может.
+	// 25 часов — больше порога тишины (24ч) и меньше срока жизни
+	// приглашения (72ч), иначе оно сгорело бы вместо пинга.
+	if _, err := pool.Exec(ctx, `
+UPDATE order_candidates SET invited_at = now() - interval '25 hours'
+WHERE order_id = $1 AND status = 'invited'`, orderID); err != nil {
+		t.Fatalf("состарить приглашение: %v", err)
+	}
+	if _, pinged, err := repo.ExpireAndAdvance(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("ExpireAndAdvance: %v", err)
+	} else if pinged == 0 {
+		t.Fatal("менеджеру не сказали про молчание — событие не родилось")
+	}
+	assertEventLinksProject(t, pool, orderID, "order.candidate_silent", projectID)
+
+	// А у заказа без проекта ключа нет вовсе — не null. Пустое значение
+	// в payload означало бы «проект есть, но неизвестно какой», и ветка
+	// в n8n собрала бы ссылку в никуда.
+	bare, err := svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID, StartMonth: nextMonth(), Needed: 1,
+		VideosCount: 30, CreatorIDs: creators[2:3],
+	}, now)
+	if err != nil {
+		t.Fatalf("Create без проекта: %v", err)
+	}
+	defer func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM outbox WHERE aggregate_id = $1`, bare.Order.ID.String())
+	}()
+	if _, err := svc.SendInvitations(ctx, bare.Order.ID, now); err != nil {
+		t.Fatalf("SendInvitations: %v", err)
+	}
+	if _, err := svc.Respond(ctx, bare.Order.ID, creators[2], false, now); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	var payload string
+	if err := pool.QueryRow(ctx, `
+SELECT payload::text FROM outbox
+WHERE aggregate_id = $1 AND event_type = 'order.need_more'
+ORDER BY id DESC LIMIT 1`, bare.Order.ID.String()).Scan(&payload); err != nil {
+		t.Fatalf("событие заказа без проекта: %v", err)
+	}
+	if strings.Contains(payload, "project_id") {
+		t.Errorf("у заказа без проекта в payload есть project_id: %s", payload)
+	}
+}
+
+// assertEventLinksProject — в payload события лежит project_id, и адрес
+// по нему собирается тот же, что у событий самого проекта.
+func assertEventLinksProject(t *testing.T, pool *pgxpool.Pool, orderID uuid.UUID, eventType string, projectID uuid.UUID) {
+	t.Helper()
+	var got *string
+	err := pool.QueryRow(context.Background(), `
+SELECT payload->>'project_id' FROM outbox
+WHERE aggregate = 'project' AND aggregate_id = $1 AND event_type = $2
+ORDER BY id DESC LIMIT 1`, orderID.String(), eventType).Scan(&got)
+	if err != nil {
+		t.Fatalf("событие %s не найдено в outbox: %v", eventType, err)
+	}
+	if got == nil {
+		t.Fatalf("%s ушло без project_id — сообщение в чат останется без ссылки", eventType)
+	}
+	if *got != projectID.String() {
+		t.Fatalf("%s ссылается на %s, а проект заказа — %s", eventType, *got, projectID)
+	}
+	// «Тот же адрес, что у остальных событий проекта»: ссылку в n8n
+	// собирают из project_id одинаково для всех веток, поэтому
+	// достаточно, чтобы значение было тем же самым идентификатором.
+	const pattern = "/manager/projects/"
+	if want, have := pattern+projectID.String(), pattern+*got; want != have {
+		t.Errorf("адрес %q, ожидали %q", have, want)
 	}
 }

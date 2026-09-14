@@ -518,21 +518,39 @@ WHERE order_id = $1 AND creator_user_id = $2 AND status = 'invited'`,
 	return r.Get(ctx, orderID)
 }
 
+// withProject — положить project_id в payload события, если он есть.
+//
+// Заказ живёт раньше проекта: подбор идёт до оплаты, а проект менеджер
+// заводит после неё, и на момент «добрать» или «креатор молчит» проекта
+// у заказа обычно ещё нет. Поэтому ключ добавляется только когда он
+// заполнен: null в payload означал бы «проект есть, но неизвестно
+// какой», и получатель события собрал бы ссылку в никуда.
+func withProject(payload map[string]any, projectID *uuid.UUID) {
+	if projectID != nil {
+		payload["project_id"] = projectID.String()
+	}
+}
+
 // settleOrder — пересчитать состояние заказа после изменения подборки.
 //
 // Состав укомплектован — staffed. Резерв кончился, а мест не хватает —
 // событие «добрать»: дальше без менеджера не обойтись.
 func settleOrder(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) error {
 	var needed, accepted, invited, reserve int
+	// project_id тянем тем же запросом: он уезжает в событие «добрать»,
+	// чтобы сообщение в чат вело на проект, а не заставляло искать заказ
+	// руками ровно в тот момент, когда надо действовать быстро.
+	var projectID *uuid.UUID
 	if err := tx.QueryRow(ctx, `
-SELECT o.needed,
+SELECT o.needed, o.project_id,
        count(*) FILTER (WHERE c.status = 'accepted'),
        count(*) FILTER (WHERE c.status = 'invited'),
        count(*) FILTER (WHERE c.status = 'reserve')
 FROM creator_orders o
 LEFT JOIN order_candidates c ON c.order_id = o.id
 WHERE o.id = $1
-GROUP BY o.needed`, orderID).Scan(&needed, &accepted, &invited, &reserve); err != nil {
+GROUP BY o.needed, o.project_id`, orderID).Scan(
+		&needed, &projectID, &accepted, &invited, &reserve); err != nil {
 		return fmt.Errorf("settle counts: %w", err)
 	}
 
@@ -549,10 +567,10 @@ WHERE id = $1 AND status = 'inviting'`, orderID); err != nil {
 	if invited == 0 && reserve == 0 {
 		// Звать больше некого. Клиенту показывается плашка «добрать»,
 		// менеджеру уходит событие.
+		payload := map[string]any{"order_id": orderID, "need_more": needed - accepted}
+		withProject(payload, projectID)
 		return outbox.Emit(ctx, tx, outbox.AggregateProject, orderID.String(),
-			outbox.EventOrderNeedMore, map[string]any{
-				"order_id": orderID, "need_more": needed - accepted,
-			})
+			outbox.EventOrderNeedMore, payload)
 	}
 	return nil
 }
@@ -625,13 +643,18 @@ RETURNING order_id, creator_user_id`, now)
 
 	// 3. Молчание сутки — сказать менеджеру. Один раз на приглашение:
 	// manager_pinged_at не даёт написать об этом на каждом проходе.
+	// project_id заказа достаём здесь же подзапросом: он уедет в событие,
+	// чтобы сообщение в чат вело на проект. RETURNING не умеет джойнить,
+	// поэтому скалярный подзапрос — он по первичному ключу и стоит копейки.
 	pingRows, err := r.db.Query(ctx, `
 UPDATE order_candidates SET manager_pinged_at = $1
 WHERE status = 'invited'
   AND manager_pinged_at IS NULL
   AND invited_at IS NOT NULL
   AND invited_at <= $2
-RETURNING order_id, creator_user_id`, now, now.Add(-ManagerPingAfter))
+RETURNING order_id, creator_user_id,
+          (SELECT o.project_id FROM creator_orders o WHERE o.id = order_id)`,
+		now, now.Add(-ManagerPingAfter))
 	if err != nil {
 		return len(gone), 0, fmt.Errorf("ping managers: %w", err)
 	}
@@ -639,11 +662,12 @@ RETURNING order_id, creator_user_id`, now, now.Add(-ManagerPingAfter))
 	type silent struct {
 		orderID   uuid.UUID
 		creatorID uuid.UUID
+		projectID *uuid.UUID
 	}
 	quiet := make([]silent, 0, 8)
 	for pingRows.Next() {
 		var s silent
-		if err := pingRows.Scan(&s.orderID, &s.creatorID); err != nil {
+		if err := pingRows.Scan(&s.orderID, &s.creatorID, &s.projectID); err != nil {
 			return len(gone), 0, fmt.Errorf("scan silent: %w", err)
 		}
 		quiet = append(quiet, s)
@@ -653,10 +677,10 @@ RETURNING order_id, creator_user_id`, now, now.Add(-ManagerPingAfter))
 	}
 	for _, s := range quiet {
 		if err := r.inTx(ctx, func(tx pgx.Tx) error {
+			payload := map[string]any{"order_id": s.orderID, "creator_id": s.creatorID}
+			withProject(payload, s.projectID)
 			return outbox.Emit(ctx, tx, outbox.AggregateProject, s.orderID.String(),
-				outbox.EventOrderCandidateSilent, map[string]any{
-					"order_id": s.orderID, "creator_id": s.creatorID,
-				})
+				outbox.EventOrderCandidateSilent, payload)
 		}); err != nil {
 			return len(gone), len(quiet), err
 		}
