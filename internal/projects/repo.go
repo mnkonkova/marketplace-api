@@ -12,12 +12,17 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("project not found")
-	ErrForbidden       = errors.New("project not visible to user")
-	ErrStepNotFound    = errors.New("project step not found")
+	ErrNotFound          = errors.New("project not found")
+	ErrForbidden         = errors.New("project not visible to user")
+	ErrStepNotFound      = errors.New("project step not found")
 	ErrInvalidTransition = errors.New("invalid step transition")
-	ErrPipelineEmpty   = errors.New("pipeline has no stages or steps")
+	ErrPipelineEmpty     = errors.New("pipeline has no stages or steps")
 )
+
+// defaultRevisions — сколько правок у проекта без воронки. Совпадает с
+// DEFAULT колонки projects.revisions_included: у креаторов и у общего
+// проекта воронки нет, а значит нет и места, откуда взять её значение.
+const defaultRevisions = 2
 
 type Repo struct{ db *pgxpool.Pool }
 
@@ -47,6 +52,19 @@ func (r *Repo) AssertUserCanBeClient(ctx context.Context, userID uuid.UUID) erro
 	return nil
 }
 
+// DefaultPipelineID — воронка по умолчанию. Нужна там, где вид проекта
+// её требует, а спрашивать не у кого: воронку теперь ставят внутри
+// проекта, а не в момент создания.
+func (r *Repo) DefaultPipelineID(ctx context.Context) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx,
+		`SELECT id FROM pipelines WHERE is_default = TRUE AND is_active = TRUE`).Scan(&id)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("default pipeline: %w", err)
+	}
+	return id, nil
+}
+
 // StartProject — атомарно создать проект + снэпшот стадий и шагов.
 // eta_date считается от StartedAt + накопленные duration_days по sort_order.
 // Возвращает id созданного проекта.
@@ -57,15 +75,27 @@ func (r *Repo) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUI
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if in.Kind == "" {
+		in.Kind = KindProductionTurnkey
+	}
+	if in.Kind == KindProductionTurnkey && in.PipelineID == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%w: pipeline_id is required for production projects", ErrInvalidInput)
+	}
+
 	// 1. Считать revisions_included из пайплайна (для снимка в проект).
-	var revs int
-	if err := tx.QueryRow(ctx,
-		`SELECT revisions_included FROM pipelines WHERE id = $1 AND is_active = TRUE`,
-		in.PipelineID).Scan(&revs); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return uuid.Nil, fmt.Errorf("%w: pipeline missing or inactive", ErrNotFound)
+	// Без воронки берём значение по умолчанию из схемы: у креаторов и у
+	// общего проекта правки считаются, а воронки, из которой их взять,
+	// нет.
+	revs := defaultRevisions
+	if in.PipelineID != uuid.Nil {
+		if err := tx.QueryRow(ctx,
+			`SELECT revisions_included FROM pipelines WHERE id = $1 AND is_active = TRUE`,
+			in.PipelineID).Scan(&revs); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("%w: pipeline missing or inactive", ErrNotFound)
+			}
+			return uuid.Nil, fmt.Errorf("load pipeline: %w", err)
 		}
-		return uuid.Nil, fmt.Errorf("load pipeline: %w", err)
 	}
 
 	startedAt := in.StartedAt
@@ -82,20 +112,25 @@ func (r *Repo) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUI
 INSERT INTO projects
   (lead_id, lead_recipient_specialist_id, client_user_id, client_name, client_contact,
    specialist_user_id, assigned_to_user_id,
-   pipeline_id, title, source, status, revisions_included, budget, notes, started_at)
-VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$10,'active',$11,$12,$13,$14)
+   pipeline_id, kind, is_test, title, source, status, revisions_included, budget, notes, started_at)
+VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,''),$6,$7,
+        NULLIF($8,'00000000-0000-0000-0000-000000000000'::uuid),
+        $9,$10,$11,$12,'active',$13,$14,$15,$16)
 RETURNING id`,
 		in.LeadID, in.LeadRecipientSpecialistID, in.ClientUserID, in.ClientName, in.ClientContact,
 		in.SpecialistUserID, in.AssignedToUserID,
-		in.PipelineID, in.Title, string(in.Source), revs, in.Budget, in.Notes, startedAt,
+		in.PipelineID, string(in.Kind), in.IsTest, in.Title, string(in.Source), revs, in.Budget, in.Notes, startedAt,
 	).Scan(&projectID); err != nil {
 		return uuid.Nil, fmt.Errorf("insert project: %w", err)
 	}
 
 	// 3-5. Снэпшот стадий и шагов + активация первой стадии — общий helper,
 	// используется и при создании, и при ChangeFunnel (там тот же flow с нуля).
-	if err := materializePipeline(ctx, tx, projectID, in.PipelineID, *startedAt); err != nil {
-		return uuid.Nil, err
+	// Без воронки шаги не материализуются: их неоткуда взять и незачем.
+	if in.PipelineID != uuid.Nil {
+		if err := materializePipeline(ctx, tx, projectID, in.PipelineID, *startedAt); err != nil {
+			return uuid.Nil, err
+		}
 	}
 
 	// 6. Событие created — для outbox/n8n (Ф8 повесит на этот event email).
@@ -365,7 +400,7 @@ func (r *Repo) getByID(ctx context.Context, projectID uuid.UUID, userIDFilter *u
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(client_name,''), COALESCE(client_contact,''),
        specialist_user_id, assigned_to_user_id,
-       pipeline_id, title, source, status, revisions_included, revisions_used, budget,
+       pipeline_id, kind, is_test, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects WHERE id = $1`
 	args := []any{projectID}
@@ -378,7 +413,7 @@ FROM projects WHERE id = $1`
 		&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID,
 		&p.ClientName, &p.ClientContact,
 		&p.SpecialistUserID, &p.AssignedToUserID,
-		&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
+		&p.PipelineID, &p.Kind, &p.IsTest, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 		&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -404,7 +439,7 @@ func (r *Repo) ListForClient(ctx context.Context, clientID uuid.UUID) ([]Project
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(client_name,''), COALESCE(client_contact,''),
        specialist_user_id, assigned_to_user_id,
-       pipeline_id, title, source, status, revisions_included, revisions_used, budget,
+       pipeline_id, kind, is_test, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
 WHERE client_user_id = $1 AND status <> 'cancelled'
@@ -420,7 +455,7 @@ ORDER BY created_at DESC`, clientID)
 			&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID,
 			&p.ClientName, &p.ClientContact,
 			&p.SpecialistUserID, &p.AssignedToUserID,
-			&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
+			&p.PipelineID, &p.Kind, &p.IsTest, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 			&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
@@ -592,9 +627,9 @@ type TransitionInput struct {
 }
 
 type TransitionResult struct {
-	Project   Project
-	Step      Step
-	Disputed  bool // если в transition подбампали revisions_used и упёрлись в лимит
+	Project  Project
+	Step     Step
+	Disputed bool // если в transition подбампали revisions_used и упёрлись в лимит
 }
 
 func (r *Repo) TransitionStep(ctx context.Context, in TransitionInput) (TransitionResult, error) {
@@ -667,11 +702,11 @@ VALUES ($1,$2,$3,$4,'step_transition',$5,$6,$7)`,
 	// 4. Outbox-событие для нотификаций.
 	if err := emit(ctx, tx, in.ProjectID, &in.StepID, in.ActorUserID, "project.step_transitioned",
 		map[string]any{
-			"project_id":  in.ProjectID.String(),
-			"step_id":     in.StepID.String(),
-			"from":        string(in.From),
-			"to":          string(in.To),
-			"actor_type":  in.ActorType,
+			"project_id": in.ProjectID.String(),
+			"step_id":    in.StepID.String(),
+			"from":       string(in.From),
+			"to":         string(in.To),
+			"actor_type": in.ActorType,
 		},
 	); err != nil {
 		return TransitionResult{}, err
@@ -755,4 +790,39 @@ func emit(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, stepID *uuid.UUID
 	_ = stepID
 	_ = actorID
 	return nil
+}
+
+// PublicationProgress — доля закрытых выкладок по проектам, в процентах.
+//
+// У проекта «креаторы под ключ» шагов нет вовсе, и взвешенный прогресс по
+// шагам всегда давал ноль: проект с шестью сданными роликами из двенадцати
+// выглядел не начатым. Мера у него другая — сколько выкладок закрыто.
+// Отменённые в знаменатель не идут: их сняли с плана, а не провалили.
+func (r *Repo) PublicationProgress(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]float64, error) {
+	out := make(map[uuid.UUID]float64, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT project_id,
+       COUNT(*) FILTER (WHERE status IN ('done', 'closed_manually'))::float8
+         / NULLIF(COUNT(*), 0) * 100
+FROM project_publications
+WHERE project_id = ANY($1) AND status <> 'cancelled'
+GROUP BY project_id`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("publication progress: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var pct *float64
+		if err := rows.Scan(&id, &pct); err != nil {
+			return nil, fmt.Errorf("scan publication progress: %w", err)
+		}
+		if pct != nil {
+			out[id] = *pct
+		}
+	}
+	return out, rows.Err()
 }

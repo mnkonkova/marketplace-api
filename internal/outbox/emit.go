@@ -122,3 +122,45 @@ VALUES ($1, $2, $3, $4)`
 	}
 	return nil
 }
+
+// Проектная страница (00032). Как и остальные project.* — уходят в n8n
+// как есть, он сам решает, что слать креатору, менеджеру и клиенту.
+const (
+	// EventPublicationsCreated — менеджер проставил даты пачкой.
+	// payload: {project_id, batch_id, count, created_by}.
+	EventPublicationsCreated = "project.publications_created"
+
+	// EventPublicationSubmitted — креатор сдал ссылки. payload содержит
+	// status ("partial"|"done") и список сданных площадок: по нему n8n
+	// отличает «вышло полностью» от «вышло, но не везде».
+	EventPublicationSubmitted = "project.publication_submitted"
+
+	// EventPublicationClosed — менеджер закрыл неполную выкладку руками.
+	EventPublicationClosed = "project.publication_closed"
+)
+
+// Самостоятельный подбор креаторов клиентом (00033). Как и остальные
+// project.* — уходят в n8n как есть.
+const (
+	// EventOrderInvitationSent — приглашение ушло креатору. payload:
+	// {order_id, creator_id, priority, expires_at}.
+	EventOrderInvitationSent = "order.invitation_sent"
+
+	EventOrderInvitationAccepted = "order.invitation_accepted"
+	EventOrderInvitationDeclined = "order.invitation_declined"
+
+	// EventOrderInvitationExpired — креатор не ответил, приглашение
+	// сгорело и место освободилось.
+	EventOrderInvitationExpired = "order.invitation_expired"
+
+	// EventOrderCandidateSilent — сутки молчания. Уходит МЕНЕДЖЕРУ:
+	// самому креатору второй раз не пишем, его уже позвали.
+	EventOrderCandidateSilent = "order.candidate_silent"
+
+	// EventOrderStaffed — согласилось столько, сколько нужно.
+	EventOrderStaffed = "order.staffed"
+
+	// EventOrderNeedMore — резерв кончился, а состав не собран.
+	// Дальше без менеджера не обойтись.
+	EventOrderNeedMore = "order.need_more"
+)

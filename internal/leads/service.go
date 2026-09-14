@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	ErrInvalidInput    = errors.New("invalid input")
-	ErrNoSpecialists   = errors.New("no valid specialists in recipients")
+	ErrInvalidInput  = errors.New("invalid input")
+	ErrNoSpecialists = errors.New("no valid specialists in recipients")
 	// ErrSpecialistUnpublished — хотя бы один из выбранных специалистов
 	// не опубликован (или удалён). Брифу не даём отправиться — иначе
 	// клиент думает, что отправил пятерым, а реально дошло двоим.
@@ -155,7 +155,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	// pipelines, каждый со своим proposed.
 	if in.ClientUserID != nil && s.projectStarter != nil {
 		title := strings.TrimSpace(in.Title)
-		if title == "" {
+		// Проект требует названия не короче трёх символов. Заголовок брифа
+		// клиент пишет как хочет — и «ок» сюда попадает. Подставляем первую
+		// строку брифа: иначе проект молча не создастся, а лид останется
+		// висеть без него.
+		if utf8.RuneCountInString(title) < 3 {
 			title = briefTitle(in.Brief)
 		}
 		for _, sid := range valid {
@@ -182,7 +186,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 }
 
 // briefTitle — короткое название проекта из первых ~80 символов брифа.
-// Берём первую строку (до \n), обрезаем до разумной длины.
+// Берём первую строку (до \n), обрезаем до разумной длины. Если первая
+// строка сама не тянет на название («ок», пусто) — «Новый проект»:
+// проекту нужно имя не короче трёх символов.
 func briefTitle(brief string) string {
 	brief = strings.TrimSpace(brief)
 	if i := strings.IndexByte(brief, '\n'); i > 0 {
@@ -193,7 +199,7 @@ func briefTitle(brief string) string {
 		runes := []rune(brief)
 		brief = string(runes[:80]) + "…"
 	}
-	if brief == "" {
+	if utf8.RuneCountInString(brief) < 3 {
 		return "Новый проект"
 	}
 	return brief

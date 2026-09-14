@@ -55,6 +55,32 @@ prometheus.scrape "n8n_metrics" {
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// ── Метрики instacurl (отдельная VDS, приватная сеть) ──────────────
+// Instacurl живёт не в этой docker-сети, а на своей машине — ходим к нему
+// по приватной сети Timeweb, тому же адресу, по которому api зовёт
+// /collect. Поэтому адрес не имя контейнера, а IP:порт из переменной.
+//
+// bearer_token, а не X-API-Key: произвольные заголовки Alloy слать не
+// умеет, и ради этого /metrics научили принимать оба варианта.
+//
+// Если INSTACURL_HOST пуст, неработающим окажется только этот скрейп —
+// остальные компоненты Alloy независимы и продолжат пушить.
+prometheus.scrape "instacurl" {
+	targets = [
+		{
+			__address__ = sys.env("INSTACURL_HOST"),
+			service     = "instacurl",
+			job         = "instacurl",
+		},
+	]
+	metrics_path = "/metrics"
+	// Реже, чем остальные: метрики тут медленные (остаток кредитов,
+	// отставание сбора), а лишние серии стоят денег в Grafana Cloud.
+	scrape_interval = "60s"
+	bearer_token    = sys.env("INSTACURL_API_KEY")
+	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
 // ── Хост-метрики (CPU/RAM/диск/сеть VDS) ───────────────────────────
 prometheus.scrape "node" {
 	targets = [

@@ -12,17 +12,20 @@ import (
 
 	"marketpclce/internal/admin"
 	"marketpclce/internal/auth"
+	"marketpclce/internal/billing"
 	"marketpclce/internal/catalog"
 	"marketpclce/internal/clarify"
 	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi/handlers"
 	"marketpclce/internal/leads"
+	"marketpclce/internal/orders"
 	"marketpclce/internal/partner"
 	"marketpclce/internal/pipelines"
 	"marketpclce/internal/productions"
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
+	"marketpclce/internal/publications"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
@@ -52,7 +55,15 @@ type Deps struct {
 	Productions    *productions.Handler
 	Pipelines      *pipelines.Handler
 	Projects       *projects.Handler
-	Support        *support.Handler
+	// Publications — выкладки креаторов на проектной странице
+	// (проекты вида creators_turnkey). nil — ручки не маунтятся.
+	Publications *publications.Handler
+	// Orders — самостоятельный подбор креаторов клиентом.
+	Orders *orders.Handler
+	// Billing — условия, платежи заказчика и начисления креаторам.
+	// nil — денежные ручки не маунтятся.
+	Billing *billing.Handler
+	Support *support.Handler
 	// Partner — подтверждение регистрации для «Бота Работ». nil, если общий
 	// секрет не задан: тогда ручки просто нет, а не есть неработающая.
 	Partner *partner.Handler
@@ -252,9 +263,89 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/projects/{id}/funnel", d.Projects.ClientGetFunnel)
 				r.Get("/me/projects/{id}/comments", d.Projects.ClientListComments)
 				r.Post("/me/projects/{id}/comments", d.Projects.ClientCreateComment)
+				r.Get("/me/projects/{id}/comments/participants", d.Projects.ClientMentionCandidates)
+				// Переписка креатора и исполнителя общего проекта. Ручки
+				// зависят от d.Projects, а не от d.Publications: ветку даёт
+				// ResolveCreatorThread, выкладки тут ни при чём.
+				r.Get("/me/creator/projects/{id}/comments", d.Projects.CreatorListComments)
+				r.Post("/me/creator/projects/{id}/comments", d.Projects.CreatorCreateComment)
+				r.Get("/me/creator/projects/{id}/comments/participants", d.Projects.CreatorMentionCandidates)
 				r.Post("/me/projects/{id}/steps/{step_id}/submit_review", d.Projects.ClientSubmitReview)
 				r.Get("/me/specialist/projects", d.Projects.SpecialistList)
 				r.Get("/me/specialist/projects/{id}/funnel", d.Projects.SpecialistGetFunnel)
+
+				// Общий проект: клиент выбирает исполнителя и ставит срок,
+				// исполнитель сдаёт, клиент принимает. Менеджерских ручек
+				// тут нет — по требованиям менеджер в этом виде не участвует.
+				r.Get("/me/general-projects", d.Projects.ClientListGeneral)
+				r.Post("/me/general-projects", d.Projects.ClientCreateGeneral)
+				r.Get("/me/general-projects/{id}", d.Projects.ClientGetGeneral)
+				r.Post("/me/general-projects/{id}/accept", d.Projects.ClientAcceptDelivery)
+				r.Post("/me/general-projects/{id}/rework", d.Projects.ClientReworkDelivery)
+				r.Post("/me/general-projects/{id}/cancel", d.Projects.ClientCancelGeneral)
+
+				r.Get("/me/specialist/general-projects", d.Projects.SpecialistListGeneral)
+				r.Get("/me/specialist/general-projects/{id}", d.Projects.SpecialistGetGeneral)
+				r.Post("/me/specialist/general-projects/{id}/deliver", d.Projects.SpecialistDeliver)
+			}
+			// Выкладки креатора. RequireRoles не нужен по той же причине,
+			// что и у клиентских ручек выше: выдача сама фильтрует по
+			// creator_user_id, и чужие выкладки в неё не попадают.
+			if d.Publications != nil {
+				r.Get("/me/creator/projects/{id}/publications", d.Publications.CreatorList)
+				r.Get("/me/creator/projects/{id}/checklist", d.Publications.CreatorChecklist)
+				r.Post("/me/creator/publications/{pub_id}/links", d.Publications.CreatorSubmitLinks)
+				r.Post("/me/creator/publications/{pub_id}/date_request", d.Publications.CreatorRequestDateChange)
+				r.Get("/me/creator/projects/{id}/report", d.Publications.CreatorReport)
+				// «В каких проектах я креатор» — до этого ответить было
+				// нечем, и на страницу выкладок можно было попасть только
+				// по прямой ссылке.
+				r.Get("/me/creator/projects", d.Publications.CreatorProjects)
+				r.Get("/me/creator/projects/{id}", d.Publications.CreatorProjectCard)
+				r.Get("/me/creator/projects/{id}/materials", d.Publications.CreatorMaterials)
+
+				// Взгляд клиента на проект. Здесь же, а не в блоке заказов:
+				// это выкладки, и зависят они от d.Publications.
+				r.Get("/me/projects/{id}/report", d.Publications.ClientReport)
+				r.Get("/me/projects/{id}/videos", d.Publications.ClientVideos)
+				r.Get("/me/projects/{id}/calendar", d.Publications.ClientCalendar)
+				r.Get("/me/projects/{id}/notifications", d.Publications.ClientGetPrefs)
+				r.Put("/me/projects/{id}/notifications", d.Publications.ClientSavePrefs)
+				r.Get("/me/projects/{id}/materials", d.Publications.ClientMaterials)
+				r.Get("/me/projects/{id}/report.csv", d.Publications.ClientReportCSV)
+			}
+			if d.Billing != nil {
+				// Деньги глазами тех, кто их платит и получает.
+				r.Get("/me/projects/{id}/billing", d.Billing.ClientBilling)
+				r.Get("/me/creator/projects/{id}/earnings", d.Billing.CreatorEarnings)
+				// Смета заказа: точные оклады и прогноз бонуса по истории
+				// той самой подборки.
+				r.Get("/me/orders/{id}/estimate", d.Billing.ClientOrderEstimate)
+				// Сумма на странице подбора: состав ещё собирают, заказа
+				// нет, а показать стоимость надо уже сейчас.
+				r.Post("/me/orders/estimate", d.Billing.ClientDraftEstimate)
+			}
+			if d.Orders != nil {
+				// Подбор клиентом. RequireRoles не нужен: выдача сама
+				// фильтрует по владельцу заказа и по приглашённому
+				// креатору, чужого не покажет.
+				r.Get("/me/orders/terms", d.Orders.ClientTerms)
+				r.Post("/me/orders/terms/consent", d.Orders.ClientConsent)
+				r.Get("/me/orders/limit", d.Orders.ClientLimit)
+				r.Post("/me/orders/availability", d.Orders.ClientAvailability)
+				r.Get("/me/orders", d.Orders.ClientListOrders)
+				r.Post("/me/orders", d.Orders.ClientCreateOrder)
+				r.Get("/me/orders/{id}", d.Orders.ClientGetOrder)
+				r.Post("/me/orders/{id}/invite", d.Orders.ClientInvite)
+				r.Post("/me/orders/{id}/cancel", d.Orders.ClientCancelOrder)
+				// Порядок приоритета можно переставить, пока людей не
+				// позвали: передумать после «отправить» — нормальная просьба.
+				r.Put("/me/orders/{id}/priority", d.Orders.ClientReorderPriority)
+
+				r.Get("/me/creator/invitations", d.Orders.CreatorInvitations)
+				r.Post("/me/creator/invitations/{order_id}/respond", d.Orders.CreatorRespond)
+				r.Get("/me/creator/availability", d.Orders.CreatorGetAvailability)
+				r.Put("/me/creator/availability", d.Orders.CreatorSetAvailability)
 			}
 		})
 
@@ -304,6 +395,69 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/manager/projects/{id}/events", d.Projects.ManagerListEvents)
 				r.Get("/manager/projects/{id}/comments", d.Projects.ManagerListComments)
 				r.Post("/manager/projects/{id}/comments", d.Projects.ManagerCreateComment)
+				r.Get("/manager/projects/{id}/comments/participants", d.Projects.ManagerMentionCandidates)
+
+				if d.Publications != nil {
+					r.Get("/manager/projects/{id}/publications", d.Publications.ManagerList)
+					r.Post("/manager/projects/{id}/publications/preview", d.Publications.ManagerPreviewBatch)
+					r.Post("/manager/projects/{id}/publications/batch", d.Publications.ManagerCreateBatch)
+					r.Post("/manager/projects/{id}/publications/cancel_batch", d.Publications.ManagerCancelBatch)
+					r.Post("/manager/publications/{pub_id}/close", d.Publications.ManagerClosePublication)
+					r.Post("/manager/publications/{pub_id}/remind", d.Publications.ManagerRemindNow)
+					r.Get("/manager/projects/{id}/report", d.Publications.ManagerReport)
+					r.Get("/manager/projects/{id}/report.csv", d.Publications.ManagerReportCSV)
+
+					// Состав проекта. Раньше был только POST и DELETE:
+					// добавить креатора менеджер мог, а посмотреть, кто в
+					// проекте, — нет.
+					r.Get("/manager/projects/{id}/creators", d.Publications.ManagerListCreators)
+					r.Post("/manager/projects/{id}/creators", d.Publications.ManagerAddCreator)
+					r.Delete("/manager/projects/{id}/creators/{creator_id}", d.Publications.ManagerRemoveCreator)
+
+					// Материалы проекта: бренд-гайд и обучение креаторам,
+					// клиентские — заказчику.
+					r.Get("/manager/projects/{id}/materials", d.Publications.ManagerListMaterials)
+					r.Post("/manager/projects/{id}/materials", d.Publications.ManagerAddMaterial)
+					r.Delete("/manager/projects/{id}/materials/{material_id}", d.Publications.ManagerDeleteMaterial)
+
+					// Чеклист: снимок проекта и библиотека, из которой его берут.
+					r.Get("/manager/projects/{id}/checklist", d.Publications.ManagerChecklist)
+					r.Post("/manager/projects/{id}/checklist", d.Publications.ManagerSnapshotChecklist)
+					r.Get("/manager/checklist_templates", d.Publications.ManagerChecklistTemplates)
+					// Переключатели проекта: этап черновика и показ
+					// статистики заказчику. Оба меняют работу, а не вид.
+					r.Get("/manager/projects/{id}/settings", d.Publications.ManagerProjectSettings)
+					r.Put("/manager/projects/{id}/settings", d.Publications.ManagerSaveProjectSettings)
+
+					// Автопинг: какие напоминания бот шлёт по проекту сам.
+					r.Get("/manager/projects/{id}/autoping", d.Publications.ManagerAutoping)
+					r.Put("/manager/projects/{id}/autoping", d.Publications.ManagerSaveAutoping)
+
+					r.Post("/manager/publication_date_requests/{req_id}/decide", d.Publications.ManagerDecideDateRequest)
+				}
+				if d.Billing != nil {
+					// Деньги. Платёжного провайдера нет: подтверждение
+					// получения и отметка выплаты — именные действия
+					// менеджера, как переходы этапов в продакшн-проекте.
+					r.Get("/manager/projects/{id}/billing", d.Billing.ManagerBilling)
+					r.Put("/manager/projects/{id}/billing", d.Billing.ManagerSaveTerms)
+					r.Post("/manager/projects/{id}/billing/adopt", d.Billing.ManagerAdoptTerms)
+					r.Put("/manager/projects/{id}/payments/{kind}", d.Billing.ManagerSetPayment)
+					r.Post("/manager/projects/{id}/payments/{kind}/confirm", d.Billing.ManagerConfirmPayment)
+					r.Post("/manager/projects/{id}/accruals/recalc", d.Billing.ManagerRecalcAccruals)
+					r.Post("/manager/projects/{id}/accruals/{accrual_id}/approve", d.Billing.ManagerApproveAccrual)
+					r.Post("/manager/projects/{id}/accruals/{accrual_id}/paid", d.Billing.ManagerPayAccrual)
+					r.Put("/manager/projects/{id}/creators/{creator_id}/utm", d.Billing.ManagerSaveUTM)
+				}
+				if d.Orders != nil {
+					r.Get("/manager/orders", d.Orders.ManagerNeedingAttention)
+					// Заказ по проекту: /manager/orders отдаёт только
+					// застрявшие, а у проекта заказ давно оплачен.
+					r.Get("/manager/projects/{id}/order", d.Orders.ManagerProjectOrder)
+					r.Post("/manager/orders/{id}/candidates", d.Orders.ManagerAddCandidates)
+					r.Post("/manager/orders/{id}/invite", d.Orders.ManagerInvite)
+					r.Post("/manager/orders/{id}/paid", d.Orders.ManagerMarkPaid)
+				}
 			})
 		}
 
@@ -370,6 +524,26 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/admin/projects/{id}/events", d.Projects.AdminListProjectEvents)
 					r.Get("/admin/projects/{id}/comments", d.Projects.AdminListProjectComments)
 					r.Post("/admin/projects/{id}/comments", d.Projects.AdminCreateProjectComment)
+				}
+
+				// Библиотека чеклистов. Правит её админ: пункты
+				// одинаковы для всех проектов, и держать их у каждого
+				// менеджера своим набором — значит спрашивать с
+				// креаторов разное за одну и ту же работу.
+				if d.Publications != nil {
+					r.Get("/admin/checklist_templates", d.Publications.AdminListChecklistTemplates)
+					r.Post("/admin/checklist_templates", d.Publications.AdminSaveChecklistTemplate)
+					r.Get("/admin/checklist_templates/{id}", d.Publications.AdminGetChecklistTemplate)
+					r.Delete("/admin/checklist_templates/{id}", d.Publications.AdminDeleteChecklistTemplate)
+				}
+
+				// Прайс площадки: сколько платит клиент за креатора и
+				// сколько из этого получает сам креатор. Правится только
+				// выпуском новой версии — под старой стоит согласие
+				// клиентов, и переписывать её задним числом нельзя.
+				if d.Billing != nil {
+					r.Get("/admin/terms", d.Billing.AdminListTerms)
+					r.Post("/admin/terms", d.Billing.AdminPublishTerms)
 				}
 			})
 		}

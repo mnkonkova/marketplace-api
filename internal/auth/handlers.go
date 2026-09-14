@@ -111,7 +111,8 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusUnauthorized, "bad_credentials", "Неверный логин или пароль")
 		return
 	case errors.Is(err, ErrInactive):
-		httpx.WriteErr(w, http.StatusForbidden, "inactive")
+		httpx.WriteErrMsg(w, http.StatusForbidden, "inactive",
+			"Аккаунт отключён. Напишите в поддержку, если это ошибка.")
 		return
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
@@ -166,15 +167,6 @@ type meResp struct {
 	IsApproved bool `json:"is_approved"`
 }
 
-// Me godoc
-// @Summary      Текущий пользователь
-// @Tags         auth
-// @Produce      json
-// @Security     BearerAuth
-// @Success      200  {object}  meResp
-// @Failure      401  {object}  errorResponse
-// @Failure      404  {object}  errorResponse
-// @Router       /me [get]
 type yandexReq struct {
 	Code string `json:"code"`
 	// Kind — роль для НОВОГО пользователя. Для существующего игнорируется:
@@ -243,6 +235,15 @@ type emailAvailableResp struct {
 	Available bool `json:"available"`
 }
 
+// Me godoc
+// @Summary      Текущий пользователь
+// @Tags         auth
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  meResp
+// @Failure      401  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Router       /me [get]
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFrom(r.Context())
 	if !ok {
@@ -397,4 +398,7 @@ func (h *Handler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 // тут, чтобы swaggo подхватил тип в @Failure.
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
+	Message string `json:"message,omitempty"`
 }

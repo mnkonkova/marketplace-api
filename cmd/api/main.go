@@ -15,6 +15,7 @@ import (
 
 	"marketpclce/internal/admin"
 	"marketpclce/internal/auth"
+	"marketpclce/internal/billing"
 	"marketpclce/internal/catalog"
 	"marketpclce/internal/clarify"
 	"marketpclce/internal/config"
@@ -22,6 +23,7 @@ import (
 	"marketpclce/internal/httpapi"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/llm"
+	"marketpclce/internal/orders"
 	"marketpclce/internal/partner"
 	"marketpclce/internal/pipelines"
 	"marketpclce/internal/platform/db"
@@ -32,6 +34,7 @@ import (
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
+	"marketpclce/internal/publications"
 	"marketpclce/internal/ratelimit"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
@@ -213,6 +216,16 @@ func main() {
 		WithDefaultPipeline(pipelinesSvc)
 	projectsHandler := projects.NewHandler(projectsSvc)
 
+	// Выкладки креаторов на проектной странице (проекты creators_turnkey).
+	publicationsHandler := publications.NewHandler(
+		publications.NewService(publications.NewRepo(pool)))
+
+	// Самостоятельный подбор креаторов клиентом.
+	ordersHandler := orders.NewHandler(orders.NewService(orders.NewRepo(pool)))
+
+	// Деньги: условия, платежи заказчика и начисления креаторам.
+	billingHandler := billing.NewHandler(billing.NewService(billing.NewRepo(pool)))
+
 	// Привязка к «Боту Работ». Если общий секрет или адрес вебхука не заданы,
 	// ручки просто нет: неработающая привязка хуже отсутствующей — человек
 	// нажимает кнопку, получает пятисотку и уходит думать, что сломан сайт.
@@ -268,6 +281,9 @@ func main() {
 		Productions:    productionsHandler,
 		Pipelines:      pipelinesHandler,
 		Projects:       projectsHandler,
+		Publications:   publicationsHandler,
+		Orders:         ordersHandler,
+		Billing:        billingHandler,
 		Support:        support.NewHandler(support.NewService(pool)),
 		Partner:        partnerHandler,
 		Admin:          adminHandler,

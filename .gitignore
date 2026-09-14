@@ -21,3 +21,7 @@ backups/
 /seed
 /backfill-previews
 .env.prod
+
+# Стенограммы сессий и питоновский кеш скриптов — локальный мусор.
+2026-*-*.txt
+scripts/__pycache__/

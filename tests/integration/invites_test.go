@@ -40,7 +40,7 @@ VALUES ($1, 'x', 'client', TRUE) RETURNING id`,
 	if len(raw) < 32 {
 		t.Errorf("raw token too short: %d", len(raw))
 	}
-	if expiresAt.Before(time.Now().Add(23*time.Hour)) {
+	if expiresAt.Before(time.Now().Add(23 * time.Hour)) {
 		t.Errorf("expires_at должен быть через ~24 часа")
 	}
 

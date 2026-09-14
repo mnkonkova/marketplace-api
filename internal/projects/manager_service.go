@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -30,13 +31,33 @@ func (s *Service) ListAssignedTo(ctx context.Context, managerID uuid.UUID) ([]Pr
 	return s.enrichManagerViews(ctx, projects)
 }
 
-// ListAll — все проекты (админ-кабинет, включая канбан со всеми).
-func (s *Service) ListAll(ctx context.Context, statusFilter string) ([]ProjectManagerView, error) {
-	projects, err := s.repo.ListAll(ctx, statusFilter)
+// ListAll — страница админского списка (он же источник для канбана со
+// всеми проектами). Фильтры и пагинация считаются в SQL, а не после
+// выборки: enrich стоит нескольких запросов на страницу, и делать его для
+// строк, которые потом отбросят, незачем.
+func (s *Service) ListAll(ctx context.Context, p AdminListParams) (AdminListResult, error) {
+	projects, total, err := s.repo.ListAll(ctx, p)
 	if err != nil {
-		return nil, err
+		// repo отдаёт обычную ошибку на невалидные sort/offset — заворачиваем
+		// в ErrInvalidInput, чтобы хендлер ответил 400, а не 500.
+		if strings.HasPrefix(err.Error(), "invalid ") {
+			return AdminListResult{}, fmt.Errorf("%w: %s", ErrInvalidInput, err.Error())
+		}
+		return AdminListResult{}, err
 	}
-	return s.enrichManagerViews(ctx, projects)
+	views, err := s.enrichManagerViews(ctx, projects)
+	if err != nil {
+		return AdminListResult{}, err
+	}
+	limit := p.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 20
+	}
+	offset := p.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	return AdminListResult{Items: views, Total: total, Limit: limit, Offset: offset}, nil
 }
 
 // ListBySpecialist — проекты специалиста (read-only вкладка кабинета).
@@ -67,6 +88,12 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 		if p.SpecialistUserID != nil {
 			idSet[*p.SpecialistUserID] = struct{}{}
 		}
+		// Менеджера тащим тем же батчем: у него нет профиля, и
+		// LoadPartyContacts отдаст ему имя из почты — этого для колонки
+		// «Менеджер» достаточно.
+		if p.AssignedToUserID != nil {
+			idSet[*p.AssignedToUserID] = struct{}{}
+		}
 	}
 	ids := make([]uuid.UUID, 0, len(idSet))
 	for id := range idSet {
@@ -76,6 +103,12 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 	if err != nil {
 		// best-effort: контакты не критичны для канбана
 		contacts = map[uuid.UUID]PartyContact{}
+	}
+	// У проекта с креаторами шагов нет, и прогресс по ним всегда ноль.
+	// Его меру считаем по выкладкам — тем же запросом на весь список.
+	pubProgress, err := s.repo.PublicationProgress(ctx, turnkeyIDs(projects))
+	if err != nil {
+		pubProgress = map[uuid.UUID]float64{}
 	}
 	// Стадии и шаги — батчем, без N+1 на список (было: 2*N запросов в канбане).
 	stagesByProject, err := s.repo.LoadStagesBatch(ctx, projectIDs)
@@ -109,6 +142,9 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 				view.Specialist = &cc
 			}
 		}
+		if p.AssignedToUserID != nil {
+			view.ManagerDisplayName = contacts[*p.AssignedToUserID].DisplayName
+		}
 		steps := stepsByProject[p.ID]
 		stepViews := make([]StepView, 0, len(steps))
 		for _, st := range steps {
@@ -116,6 +152,9 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 		}
 		view.DisplayStatus = DeriveProjectDisplayStatus(p.Status, stepViews)
 		view.Progress = DeriveProgress(stepViews)
+		if pct, ok := pubProgress[p.ID]; ok {
+			view.Progress = pct
+		}
 		if cur := DeriveCurrentStep(stepViews); cur != nil {
 			view.CurrentStepID = &cur.ID
 			view.CurrentStepTitle = cur.Name
@@ -206,6 +245,9 @@ func (s *Service) GetFull(ctx context.Context, projectID, managerID uuid.UUID) (
 		DisplayStatus: DeriveProjectDisplayStatus(p.Status, flat),
 		Progress:      DeriveProgress(flat),
 		Stages:        stageViews,
+	}
+	if pct, ok := s.turnkeyProgress(ctx, p); ok {
+		out.Progress = pct
 	}
 	// Контакты обеих сторон — для блока «Связаться» на странице проекта.
 	// No-account клиент (ClientUserID=nil): берём ClientName/ClientContact
@@ -386,8 +428,11 @@ func (s *Service) SkipStep(ctx context.Context, projectID, stepID, actorID uuid.
 // PatchProject — title/budget/notes с optimistic-lock.
 func (s *Service) PatchProject(ctx context.Context, projectID uuid.UUID, in ManagerPatchInput) (Project, error) {
 	if in.Title != nil {
-		if v := strings.TrimSpace(*in.Title); v == "" {
-			return Project{}, fmt.Errorf("%w: title cannot be empty", ErrInvalidInput)
+		// Та же граница, что и при создании (см. StartProject): иначе
+		// проверку на создании обходят переименованием.
+		if v := strings.TrimSpace(*in.Title); utf8.RuneCountInString(v) < 3 {
+			return Project{}, fmt.Errorf(
+				"%w: название проекта — минимум 3 символа", ErrInvalidInput)
 		}
 	}
 	if in.Budget != nil && *in.Budget < 0 {
@@ -426,4 +471,30 @@ func (s *Service) MoveProjectToStep(ctx context.Context, projectID, targetStepID
 // из новой воронки. См. repo.ChangeFunnel.
 func (s *Service) ChangeFunnel(ctx context.Context, projectID, newPipelineID, actorID uuid.UUID) (Project, error) {
 	return s.repo.ChangeFunnel(ctx, projectID, newPipelineID, actorID)
+}
+
+// turnkeyIDs — только проекты «креаторы под ключ»: у остальных прогресс
+// считается по шагам, и лишний запрос им не нужен.
+func turnkeyIDs(projects []Project) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(projects))
+	for _, p := range projects {
+		if p.Kind == KindCreatorsTurnkey {
+			out = append(out, p.ID)
+		}
+	}
+	return out
+}
+
+// turnkeyProgress — доля закрытых выкладок одного проекта. Второй
+// результат — «мера применима»: у проекта с воронкой её нет.
+func (s *Service) turnkeyProgress(ctx context.Context, p Project) (float64, bool) {
+	if p.Kind != KindCreatorsTurnkey {
+		return 0, false
+	}
+	m, err := s.repo.PublicationProgress(ctx, []uuid.UUID{p.ID})
+	if err != nil {
+		return 0, false
+	}
+	pct, ok := m[p.ID]
+	return pct, ok
 }

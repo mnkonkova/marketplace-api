@@ -57,13 +57,13 @@ VALUES ($1, 'Test', '+7', 'тестовый бриф длиннее 10') RETURNI
 
 	// Проверяем что в БД действительно проект с нашим lead_id и pipeline_id.
 	var got struct {
-		ClientID    uuid.UUID
-		PipelineID  uuid.UUID
-		LeadID      *uuid.UUID
-		AssignedTo  *uuid.UUID
-		Title       string
-		Source      string
-		Notes       string
+		ClientID   uuid.UUID
+		PipelineID uuid.UUID
+		LeadID     *uuid.UUID
+		AssignedTo *uuid.UUID
+		Title      string
+		Source     string
+		Notes      string
 	}
 	_ = pool.QueryRow(ctx, `
 SELECT client_user_id, pipeline_id, lead_id, assigned_to_user_id, title, source::text, COALESCE(notes,'')

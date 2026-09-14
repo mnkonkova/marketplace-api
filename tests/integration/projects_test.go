@@ -328,3 +328,47 @@ func TestHardDeletePipelineBlocked(t *testing.T) {
 		t.Logf("error type: %T — %v (matched generic)", err, err)
 	}
 }
+
+// Без updated_at блокировка молча выключена — и это поведение осознанное,
+// но опасное.
+//
+// Поле необязательное ради обратной совместимости: старый клиент его не
+// шлёт, и перемещение всё равно проходит. Цена — двое менеджеров,
+// открывшие проект одновременно, перетирают ход друг друга без всякого
+// конфликта: оба видят «сохранено», а в проекте остаётся последний.
+// Тест фиксирует это как решение, а не как случайность: если однажды
+// поле сделают обязательным, он упадёт и заставит подумать про старых
+// клиентов.
+func TestAdvanceStageWithoutUpdatedAtSkipsLock(t *testing.T) {
+	pool := integration.Pool(t)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	defer cleanup()
+
+	repo := projects.NewRepo(pool)
+	ctx := context.Background()
+
+	_, _ = pool.Exec(ctx,
+		`UPDATE project_steps SET status = 'done', completed_at = now()
+		 WHERE project_id = $1 AND owner = 'client'`, pid)
+
+	// Кто-то другой уже двигал проект: updated_at в базе свежий.
+	if _, err := pool.Exec(ctx, `UPDATE projects SET updated_at = now() WHERE id = $1`, pid); err != nil {
+		t.Fatalf("bump: %v", err)
+	}
+
+	// Мы шлём без поля — конфликт не возникает.
+	if _, err := repo.AdvanceStage(ctx, pid, clientID, 7*24*time.Hour, nil); err != nil {
+		t.Fatalf("без updated_at перемещение обязано проходить: %v", err)
+	}
+
+	// А со свежим значением — тоже проходит: лок срабатывает только на
+	// расхождении, и это разные вещи.
+	var fresh time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM projects WHERE id = $1`, pid).Scan(&fresh); err != nil {
+		t.Fatalf("read updated_at: %v", err)
+	}
+	if _, err := repo.AdvanceStage(ctx, pid, clientID, 7*24*time.Hour, &fresh); err != nil &&
+		!errors.Is(err, projects.ErrLastStage) && !errors.Is(err, projects.ErrStageBlocked) {
+		t.Fatalf("со свежим updated_at перемещение не должно конфликтовать: %v", err)
+	}
+}

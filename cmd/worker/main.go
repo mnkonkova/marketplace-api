@@ -19,13 +19,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"marketpclce/internal/config"
+	"marketpclce/internal/instacurl"
 	"marketpclce/internal/notifications"
+	"marketpclce/internal/orders"
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
 	"marketpclce/internal/platform/s3"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
+	"marketpclce/internal/publications"
 	"marketpclce/internal/search"
 	"marketpclce/internal/transcode"
 )
@@ -335,6 +338,27 @@ func main() {
 	projectsSvc := projects.NewService(projectsRepo).
 		WithReviewDeadline(cfg.ReviewDeadline)
 	go runReviewAutoSkipTicker(rootCtx, projectsSvc, cfg.ReviewCheckInterval, logger)
+	go runPublicationRemindersTicker(rootCtx,
+		publications.NewService(publications.NewRepo(pool)),
+		cfg.PublicationRemindersInterval, cfg.PublicationRemindersAfterHour, logger)
+
+	go runOrderExpiryTicker(rootCtx, orders.NewService(orders.NewRepo(pool)),
+		cfg.OrderExpiryInterval, logger)
+
+	go runPublicationGaugeTicker(rootCtx,
+		publications.NewService(publications.NewRepo(pool)), 5*time.Minute, logger)
+
+	// Сбор статистики. Клиент nil, если адрес или ключ не заданы — тогда
+	// тикер не поднимается и в логе один внятный warn вместо ежечасных
+	// ошибок.
+	if ic := instacurl.New(cfg.InstacurlURL, cfg.InstacurlAPIKey, cfg.InstacurlTimeout); ic != nil {
+		go runStatsCollectTicker(rootCtx,
+			publications.NewService(publications.NewRepo(pool)).WithCollector(ic),
+			cfg.StatsCollectInterval, cfg.StatsCollectBatch,
+			cfg.StatsCollectBatchesPerTick, logger)
+	} else {
+		logger.Warn("stats collection disabled: INSTACURL_URL or INSTACURL_API_KEY not set")
+	}
 	// CRM v5: периодическая чистка done (через ProjectRetention) и cancelled
 	// (через ProjectCancelledRetention) проектов.
 	go runOldProjectsCleanupTicker(rootCtx, projectsSvc,
@@ -563,6 +587,188 @@ func runReviewAutoSkipTicker(ctx context.Context, svc *projects.Service, interva
 			if skipped > 0 || failed > 0 {
 				logger.Info("review auto-skip", "skipped", skipped, "failed", failed)
 			}
+		}
+	}
+}
+
+// runPublicationRemindersTicker — напоминания креаторам о выкладках и
+// сводка менеджерам в общий чат.
+//
+// Тик частый, а рассылка — раз в день: повтор гасится уникальным индексом
+// в notification_log, а не памятью процесса. Поэтому рестарт воркера
+// безопасен, а после простоя напоминания уходят при первом же тике.
+func runPublicationRemindersTicker(ctx context.Context, svc *publications.Service,
+	interval time.Duration, afterHour int, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if afterHour < 0 || afterHour > 23 {
+		afterHour = publications.DefaultReminderHour
+	}
+
+	run := func() {
+		now := time.Now()
+		if !publications.ReminderWindowOpen(now, afterHour) {
+			return
+		}
+		st, err := svc.RunReminders(ctx, now)
+		if err != nil {
+			logger.Warn("publication reminders failed", "err", err)
+			return
+		}
+		if st.Sent > 0 || st.Failures > 0 || st.Digests > 0 {
+			logger.Info("publication reminders",
+				"considered", st.Considered, "sent", st.Sent,
+				"skipped", st.Skipped, "digests", st.Digests, "failures", st.Failures)
+		}
+	}
+
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runOrderExpiryTicker — сгорание приглашений и пинги менеджеру.
+//
+// Приглашение живёт трое суток, поэтому частый тик не нужен; но и редкий
+// плох: место освободится, а следующего позовут только на следующем
+// проходе, и клиент будет ждать зря. Час — разумная середина.
+func runOrderExpiryTicker(ctx context.Context, svc *orders.Service,
+	interval time.Duration, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	run := func() {
+		expired, pinged, err := svc.RunExpiry(ctx, time.Now())
+		if err != nil {
+			logger.Warn("order expiry failed", "err", err)
+			return
+		}
+		if expired > 0 || pinged > 0 {
+			logger.Info("order expiry", "expired", expired, "manager_pinged", pinged)
+		}
+	}
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runPublicationGaugeTicker — обновление бизнес-gauge'ов проектной
+// страницы: просроченные выкладки, отставание сбора, застрявшие ссылки.
+//
+// Отдельно от сбора: gauge'и должны обновляться, даже когда интеграция с
+// instacurl не настроена — иначе «сбор выключен» и «сбор сломан» выглядят
+// на дашборде одинаково.
+func runPublicationGaugeTicker(ctx context.Context, svc *publications.Service,
+	interval time.Duration, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	run := func() {
+		if _, err := svc.RefreshGauges(ctx, time.Now()); err != nil {
+			logger.Warn("publication gauges refresh failed", "err", err)
+		}
+	}
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runStatsCollectTicker — ежедневный обход сданных роликов и схлопывание
+// рядов по закрытым проектам.
+//
+// Тик может быть частым: правило «один ролик не чаще раза в сутки» и
+// график 1→2→4→8 держатся в выборке DueForCollection, а не в периоде
+// тикера. Поэтому рестарт воркера не приводит к повторному обходу и не
+// жжёт кредиты.
+func runStatsCollectTicker(ctx context.Context, svc *publications.Service,
+	interval time.Duration, batch, batchesPerTick int, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if batch <= 0 {
+		batch = 10
+	}
+	if batchesPerTick <= 0 {
+		batchesPerTick = 20
+	}
+
+	run := func() {
+		now := time.Now()
+		// Пачка мелкая (см. StatsCollectBatch), поэтому за тик прогоняем
+		// несколько подряд — пока есть что собирать. Иначе часовой тик
+		// упирался бы в десять ссылок и не успевал за объёмом.
+		var total publications.CollectStats
+		for i := 0; i < batchesPerTick; i++ {
+			st, err := svc.RunCollection(ctx, time.Now(), batch)
+			total.Considered += st.Considered
+			total.Saved += st.Saved
+			total.NoData += st.NoData
+			total.ThresholdNotified += st.ThresholdNotified
+			if err != nil {
+				logger.Warn("stats collection failed", "err", err,
+					"batch", i+1, "collected_before_failure", total.Saved)
+				break
+			}
+			// Собирать больше нечего — ждём следующего тика.
+			if st.Considered == 0 {
+				break
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if total.Considered > 0 {
+			logger.Info("stats collection",
+				"considered", total.Considered, "saved", total.Saved,
+				"no_data", total.NoData, "threshold_notified", total.ThresholdNotified)
+		}
+		// Схлопывание идёт следом: проект, у которого вышел срок сбора,
+		// на этом же проходе перестаёт опрашиваться.
+		if n, err := svc.RunCollapse(ctx, now); err != nil {
+			logger.Warn("stats collapse failed", "err", err)
+		} else if n > 0 {
+			logger.Info("stats collapsed", "projects", n)
+		}
+	}
+
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
 		}
 	}
 }

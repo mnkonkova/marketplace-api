@@ -29,9 +29,9 @@ var (
 )
 
 type Service struct {
-	repo                     *Repo
-	reviewDeadlineDuration   time.Duration
-	defaultPipelineProvider  DefaultPipelineProvider
+	repo                    *Repo
+	reviewDeadlineDuration  time.Duration
+	defaultPipelineProvider DefaultPipelineProvider
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -55,10 +55,15 @@ func (s *Service) reviewDeadline() time.Duration {
 // StartProject — публичная обёртка над repo.StartProject с валидацией DTO.
 func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUID, error) {
 	in.Title = strings.TrimSpace(in.Title)
-	if in.Title == "" {
-		return uuid.Nil, fmt.Errorf("%w: title is required", ErrInvalidInput)
-	}
-	if utf8.RuneCountInString(in.Title) > 200 {
+	// Нижняя граница — три символа, и считаем её ПОСЛЕ trim. Без неё в
+	// списке заводятся «12345675432» и «  ы  »: по такому названию проект
+	// не найти ни поиском, ни глазами, а переименовать его потом некому.
+	// Двух символов хватает разве что на инициалы — для проекта это не
+	// название.
+	if n := utf8.RuneCountInString(in.Title); n < 3 {
+		return uuid.Nil, fmt.Errorf(
+			"%w: название проекта — минимум 3 символа", ErrInvalidInput)
+	} else if n > 200 {
 		return uuid.Nil, fmt.Errorf("%w: title is too long", ErrInvalidInput)
 	}
 	// Клиент задаётся либо через client_user_id (зарегистрированный),
@@ -72,8 +77,21 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 	// видела NULL (под CHECK constraint).
 	in.ClientName = strings.TrimSpace(in.ClientName)
 	in.ClientContact = strings.TrimSpace(in.ClientContact)
-	if in.PipelineID == uuid.Nil {
-		return uuid.Nil, fmt.Errorf("%w: pipeline_id is required", ErrInvalidInput)
+	// Воронка обязательна только продакшну: у креаторов вместо неё
+	// выкладки, у общего проекта — один срок.
+	if in.Kind == "" {
+		in.Kind = KindProductionTurnkey
+	}
+	// Воронку при создании больше не выбирают: в форме выбирают вид
+	// проекта. Продакшну она всё ещё нужна как каркас шагов — берём
+	// воронку по умолчанию, а править её будут уже внутри проекта.
+	if in.Kind == KindProductionTurnkey && in.PipelineID == uuid.Nil {
+		def, err := s.repo.DefaultPipelineID(ctx)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf(
+				"%w: воронки по умолчанию нет — назначьте её в разделе «Воронки»", ErrInvalidInput)
+		}
+		in.PipelineID = def
 	}
 	if in.Source == "" {
 		in.Source = SourceManual
@@ -135,9 +153,18 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 			primaryCats = c
 		}
 	}
+	// Прогресс проектов с креаторами — по выкладкам, одним запросом на
+	// весь список: шагов у них нет, и прогресс по шагам всегда ноль.
+	pubProgress, err := s.repo.PublicationProgress(ctx, turnkeyIDs(projects))
+	if err != nil {
+		pubProgress = map[uuid.UUID]float64{}
+	}
 	views := make([]ProjectClientView, 0, len(projects))
 	for _, p := range projects {
 		view := buildClientView(p, stagesByProject[p.ID], stepsByProject[p.ID])
+		if pct, ok := pubProgress[p.ID]; ok {
+			view.Progress = pct
+		}
 		if p.SpecialistUserID != nil {
 			view.SpecialistDisplayName = names[*p.SpecialistUserID]
 			view.SpecialistPrimaryCategory = primaryCats[*p.SpecialistUserID]
@@ -168,6 +195,11 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 		return ProjectClientView{}, err
 	}
 	view := buildClientView(p, stages, steps)
+	// Заказчик проекта с креаторами меряет его выкладками, а не шагами:
+	// шагов у такого проекта нет, и прогресс по ним всегда ноль.
+	if pct, ok := s.turnkeyProgress(ctx, p); ok {
+		view.Progress = pct
+	}
 	if p.SpecialistUserID != nil {
 		// best-effort: имя specialist'а из specialist_profiles
 		if names, err := s.repo.LoadClientDisplayNames(ctx, []uuid.UUID{*p.SpecialistUserID}); err == nil {

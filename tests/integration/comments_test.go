@@ -20,7 +20,7 @@ func TestCreateCommentEmitsEvent(t *testing.T) {
 	repo := projects.NewRepo(pool)
 	ctx := context.Background()
 
-	c, err := repo.CreateComment(ctx, pid, clientID, "Привет, как дела?", "plain", false)
+	c, err := repo.CreateComment(ctx, plainComment(pid, clientID, "Привет, как дела?"))
 	if err != nil {
 		t.Fatalf("create comment: %v", err)
 	}
@@ -56,8 +56,8 @@ func TestListCommentsSkipsDeleted(t *testing.T) {
 	repo := projects.NewRepo(pool)
 	ctx := context.Background()
 
-	c1, _ := repo.CreateComment(ctx, pid, clientID, "первый", "plain", false)
-	c2, _ := repo.CreateComment(ctx, pid, clientID, "второй", "plain", false)
+	c1, _ := repo.CreateComment(ctx, plainComment(pid, clientID, "первый"))
+	c2, _ := repo.CreateComment(ctx, plainComment(pid, clientID, "второй"))
 
 	// Soft-delete первого.
 	if _, err := pool.Exec(ctx,
@@ -66,7 +66,7 @@ func TestListCommentsSkipsDeleted(t *testing.T) {
 		t.Fatalf("soft-delete: %v", err)
 	}
 
-	items, err := repo.ListComments(ctx, pid, true)
+	items, err := repo.ListAllComments(ctx, pid)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -89,14 +89,16 @@ func TestInternalCommentsHiddenFromClient(t *testing.T) {
 	repo := projects.NewRepo(pool)
 	ctx := context.Background()
 
-	if _, err := repo.CreateComment(ctx, pid, clientID, "виден всем", "plain", false); err != nil {
+	if _, err := repo.CreateComment(ctx, plainComment(pid, clientID, "виден всем")); err != nil {
 		t.Fatalf("create public: %v", err)
 	}
-	if _, err := repo.CreateComment(ctx, pid, clientID, "только команда", "plain", true); err != nil {
+	internal := plainComment(pid, clientID, "только команда")
+	internal.Thread = projects.ThreadInternal
+	if _, err := repo.CreateComment(ctx, internal); err != nil {
 		t.Fatalf("create internal: %v", err)
 	}
 
-	client, err := repo.ListComments(ctx, pid, false)
+	client, err := repo.ListThread(ctx, pid, projects.ThreadClient, nil)
 	if err != nil {
 		t.Fatalf("list client: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestInternalCommentsHiddenFromClient(t *testing.T) {
 		t.Errorf("client got internal comment")
 	}
 
-	staff, err := repo.ListComments(ctx, pid, true)
+	staff, err := repo.ListAllComments(ctx, pid)
 	if err != nil {
 		t.Fatalf("list staff: %v", err)
 	}
@@ -156,8 +158,8 @@ VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`,
 		t.Fatalf("insert cp: %v", err)
 	}
 
-	c1, _ := repo.CreateComment(ctx, pid, emailOnly, "от менеджера без профиля", "plain", false)
-	c2, _ := repo.CreateComment(ctx, pid, withCP, "от клиента с профилем", "plain", false)
+	c1, _ := repo.CreateComment(ctx, plainComment(pid, emailOnly, "от менеджера без профиля"))
+	c2, _ := repo.CreateComment(ctx, plainComment(pid, withCP, "от клиента с профилем"))
 
 	if c1.AuthorName == "" || c1.AuthorName == "Без имени" {
 		t.Errorf("ожидался префикс email, получено %q", c1.AuthorName)
@@ -166,8 +168,8 @@ VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`,
 		t.Errorf("ожидалось Иван-Клиент, получено %q", c2.AuthorName)
 	}
 
-	// И через ListComments — то же.
-	items, err := repo.ListComments(ctx, pid, true)
+	// И через выдачу списком — то же.
+	items, err := repo.ListAllComments(ctx, pid)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -176,9 +178,22 @@ VALUES ($1, 'x', 'client', TRUE, now()) RETURNING id`,
 		names[c.ID] = c.AuthorName
 	}
 	if names[c1.ID] == "" || names[c1.ID] == "Без имени" {
-		t.Errorf("ListComments: ожидался email-префикс, получено %q", names[c1.ID])
+		t.Errorf("ListAllComments: ожидался email-префикс, получено %q", names[c1.ID])
 	}
 	if names[c2.ID] != "Иван-Клиент" {
-		t.Errorf("ListComments: ожидалось Иван-Клиент, получено %q", names[c2.ID])
+		t.Errorf("ListAllComments: ожидалось Иван-Клиент, получено %q", names[c2.ID])
+	}
+}
+
+// plainComment — обычное сообщение в клиентской ветке. Пять полей на каждый
+// вызов в тесте — шум; отличается в них ровно тело.
+func plainComment(pid, author uuid.UUID, body string) projects.CreateCommentInput {
+	return projects.CreateCommentInput{
+		ProjectID:  pid,
+		AuthorID:   author,
+		Thread:     projects.ThreadClient,
+		Body:       body,
+		BodyText:   body,
+		BodyFormat: projects.FormatPlain,
 	}
 }

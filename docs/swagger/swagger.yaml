@@ -123,6 +123,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          отдаёт ошибку без текста (через httpx.WriteErr).
+        type: string
     type: object
   internal_admin.managersListResp:
     properties:
@@ -180,9 +185,19 @@ definitions:
       refresh_token:
         type: string
     type: object
+  internal_auth.emailAvailableResp:
+    properties:
+      available:
+        type: boolean
+    type: object
   internal_auth.errorResponse:
     properties:
       error:
+        type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
         type: string
     type: object
   internal_auth.loginReq:
@@ -194,6 +209,11 @@ definitions:
     type: object
   internal_auth.meResp:
     properties:
+      display_name:
+        description: |-
+          DisplayName — имя аккаунта. Заказчику показывать больше нечего:
+          профиля у него нет, а раньше кабинет встречал его пустотой.
+        type: string
       email:
         type: string
       email_verified:
@@ -256,6 +276,16 @@ definitions:
     type: object
   internal_auth.registerResp:
     properties:
+      is_new:
+        description: |-
+          IsNew — аккаунт создан этим запросом. Фронт по нему решает, вести ли
+          в мастер профиля или сразу в кабинет.
+        type: boolean
+      kind:
+        description: |-
+          Kind — настоящая роль аккаунта. Фронт ведёт по ней, а не по той, что
+          сам запросил: иначе заказчик попадал в кабинет специалиста.
+        type: string
       tokens:
         $ref: '#/definitions/internal_auth.TokenPair'
       user_id:
@@ -264,6 +294,616 @@ definitions:
   internal_auth.verifyEmailReq:
     properties:
       token:
+        type: string
+    type: object
+  internal_auth.yandexReq:
+    properties:
+      code:
+        type: string
+      kind:
+        description: |-
+          Kind — роль для НОВОГО пользователя. Для существующего игнорируется:
+          заказчик, вошедший через Яндекс, не должен вдруг стать специалистом.
+        type: string
+    type: object
+  internal_billing.Accrual:
+    properties:
+      approved_at:
+        type: string
+      calculated_at:
+        type: string
+      click_bonus:
+        type: integer
+      clicks:
+        type: integer
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      deduction:
+        description: 'Deduction — вычет за недосданное: недосданные ролики не оплачиваются.'
+        type: integer
+      id:
+        type: string
+      is_preview:
+        description: |-
+          IsPreview — строка посчитана на лету и в базе её нет. Так выглядит
+          месяц, который ещё не пересчитывали: цифры по фактам уже есть, и
+          прятать их за кнопкой «Пересчитать» значит показывать заказчику
+          ноль там, где на самом деле счёт. Утвердить и выплатить такую
+          строку нельзя — сперва её сохраняет пересчёт.
+        type: boolean
+        x-omitempty: true
+      paid_at:
+        type: string
+      payout_click_bonus:
+        type: integer
+      payout_deduction:
+        type: integer
+      payout_salary:
+        description: |-
+          Payout* — что получает сам креатор. Считается теми же правилами, но
+          по его ставкам; при незаданной креаторской стороне тарифа совпадает
+          со счётом. Раскладка своя, потому что объяснять «почему вышло
+          столько» креатору надо его числами, а не клиентскими.
+        type: integer
+      payout_total:
+        type: integer
+      payout_views_bonus:
+        type: integer
+      period_month:
+        description: PeriodMonth — первое число месяца.
+        type: string
+      priority:
+        description: |-
+          Priority — каким по приоритету человек попал в подборку. Поля нет
+          вовсе, если проект заведён руками, а не вырос из заказа: «команда
+          собрана по вашему приоритету» — это про него. Отсюда omitempty:
+          приоритета «ноль» не бывает, бывает его отсутствие.
+        type: integer
+        x-omitempty: true
+      project_id:
+        type: string
+      salary:
+        type: integer
+      status:
+        allOf:
+        - $ref: '#/definitions/internal_billing.AccrualStatus'
+        enum:
+        - draft
+        - approved
+        - paid
+      total:
+        description: Total — счёт заказчику за этого креатора.
+        type: integer
+      videos_delivered:
+        type: integer
+      videos_planned:
+        description: |-
+          VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько
+          закрыто. Разница — недостача.
+        type: integer
+      views_base:
+        type: integer
+      views_bonus:
+        type: integer
+      views_over:
+        type: integer
+      views_total:
+        description: |-
+          Просмотры по ступеням тарифа: ViewsBase — то, что попало под полную
+          ставку (до порога на каждом ролике), ViewsOver — то, что сверх и
+          считается по пониженной. Обе части, потому что по одному итогу
+          потом не разобрать, почему бонус именно такой.
+        type: integer
+    type: object
+  internal_billing.AccrualStatus:
+    enum:
+    - draft
+    - approved
+    - paid
+    type: string
+    x-enum-varnames:
+    - AccrualDraft
+    - AccrualApproved
+    - AccrualPaid
+  internal_billing.CreatorEarnings:
+    properties:
+      accruals:
+        description: Accruals — мои начисления по всем месяцам проекта, свежие первыми.
+        items:
+          $ref: '#/definitions/internal_billing.Accrual'
+        type: array
+      terms:
+        $ref: '#/definitions/internal_billing.Terms'
+      utm:
+        $ref: '#/definitions/internal_billing.UTMLink'
+    type: object
+  internal_billing.CreatorForecast:
+    properties:
+      avg_views_per_video:
+        description: |-
+          AvgViewsPerVideo — среднее по его сданным роликам, суммарно по пяти
+          площадкам. 0, если сданных роликов ещё не было.
+        type: integer
+      based_on_videos:
+        description: |-
+          BasedOnVideos — на скольких роликах основано среднее. Ноль означает
+          «истории нет», и это видно в интерфейсе, а не прячется в нуле выше.
+        type: integer
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+    type: object
+  internal_billing.OrderEstimate:
+    properties:
+      avg_views_per_video:
+        description: AvgViewsPerVideo — среднее по подборке, из него и растёт прогноз.
+        type: integer
+      bonus_forecast:
+        description: |-
+          BonusForecast — бонус по ступеням тарифа. Считается НА РОЛИК, а не
+          на общий объём: порог стоит на ролике, и посчитанный по сумме
+          прогноз завышал бы сверхпороговую часть.
+        type: integer
+      creators:
+        description: Creators/Videos — из самого заказа.
+        type: integer
+      forecast:
+        description: Forecast — разбивка по людям.
+        items:
+          $ref: '#/definitions/internal_billing.CreatorForecast'
+        type: array
+      has_forecast:
+        description: |-
+          HasForecast — прогноз посчитан хоть по кому-то. Если false, показывать
+          нужно только оклады: бонус не «ноль», а неизвестен.
+        type: boolean
+      salaries:
+        description: Salaries — оклады, единственная точно известная часть.
+        type: integer
+      terms:
+        allOf:
+        - $ref: '#/definitions/internal_billing.Terms'
+        description: |-
+          Terms — версия правил, с которой клиент согласился при создании
+          заказа. Не действующая на сегодня: цену ему называли по той.
+      total:
+        description: Total — оклады плюс прогноз бонуса.
+        type: integer
+      videos:
+        type: integer
+      views_forecast:
+        description: ViewsForecast — сколько просмотров ожидаем со всего заказа.
+        type: integer
+      without_history:
+        description: |-
+          WithoutHistory — по скольким из подборки истории нет. Пока их
+          много, прогноз опирается на меньшинство, и это надо показать.
+        type: integer
+    type: object
+  internal_billing.Payment:
+    properties:
+      amount:
+        description: Amount — сколько ждём, копейки.
+        type: integer
+      confirmed_at:
+        type: string
+      confirmed_by:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      kind:
+        allOf:
+        - $ref: '#/definitions/internal_billing.PaymentKind'
+        enum:
+        - prepayment
+        - final
+      note:
+        type: string
+      project_id:
+        type: string
+      status:
+        allOf:
+        - $ref: '#/definitions/internal_billing.PaymentStatus'
+        enum:
+        - awaiting
+        - confirmed
+        - cancelled
+    type: object
+  internal_billing.PaymentKind:
+    enum:
+    - prepayment
+    - final
+    type: string
+    x-enum-varnames:
+    - PaymentPrepayment
+    - PaymentFinal
+  internal_billing.PaymentStatus:
+    enum:
+    - awaiting
+    - confirmed
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - PaymentAwaiting
+    - PaymentConfirmed
+    - PaymentCancelled
+  internal_billing.PeriodTotals:
+    properties:
+      click_bonus:
+        type: integer
+      cost_per_1000:
+        description: |-
+          CostPer1000 — во сколько обошлась тысяча просмотров: (оклады +
+          бонусы) ÷ просмотры. nil, пока просмотров нет — делить не на что.
+        type: integer
+      deductions:
+        type: integer
+      margin:
+        type: integer
+      payouts:
+        type: integer
+      salaries:
+        type: integer
+      total:
+        description: |-
+          Total — сколько выставлено заказчику; Payouts — сколько должны
+          креаторам; Margin — разница, то есть что остаётся платформе.
+          При незаданной креаторской стороне тарифа Payouts равен Total, а
+          Margin нулевой: платформа ничего не удерживает.
+        type: integer
+      videos:
+        description: |-
+          Videos/VideosDelivered — сколько выкладок стояло и сколько закрыто.
+          «по 6 роликам» в шапке считается отсюда.
+        type: integer
+      videos_delivered:
+        type: integer
+      views:
+        type: integer
+      views_bonus:
+        type: integer
+    type: object
+  internal_billing.ProjectBilling:
+    properties:
+      accruals:
+        description: |-
+          Accruals — за запрошенный месяц. Пусто, пока не считали.
+
+          Заказчик их тоже видит: в макете это «Команда месяца» — кто сколько
+          роликов сдал и во сколько это ему обошлось. Он за них и платит,
+          поэтому строка «60 000 + 5 850» — его счёт, а не чужие данные.
+        items:
+          $ref: '#/definitions/internal_billing.Accrual'
+        type: array
+      payments:
+        items:
+          $ref: '#/definitions/internal_billing.Payment'
+        type: array
+      period_month:
+        description: PeriodMonth — за какой месяц отданы начисления.
+        type: string
+      terms:
+        $ref: '#/definitions/internal_billing.Terms'
+      totals:
+        allOf:
+        - $ref: '#/definitions/internal_billing.PeriodTotals'
+        description: |-
+          Totals — итог периода. Считается из тех же строк, но на сервере:
+          «оклады 180 000 + бонус 24 678 · 746 ₽ за 1000» показывают и
+          менеджеру, и заказчику, и складывать это дважды на двух экранах
+          значит получить два разных числа.
+      utm:
+        items:
+          $ref: '#/definitions/internal_billing.UTMLink'
+        type: array
+    type: object
+  internal_billing.Terms:
+    properties:
+      bonus_views_threshold:
+        description: |-
+          BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.
+          До него платим полную ставку, свыше — пониженную. 0 = порога нет,
+          весь объём идёт по полной ставке.
+        type: integer
+      click_bonus_rate:
+        description: |-
+          ClickBonusRate — ставка за переход по UTM до месячного порога,
+          копейки. nil = бонус за переходы не считается: источник кликов не
+          подключён, а поля в тарифе есть.
+        type: integer
+        x-nullable: true
+      click_bonus_rate_over:
+        description: ClickBonusRateOver — ставка за каждый следующий переход.
+        type: integer
+        x-nullable: true
+      click_bonus_threshold:
+        description: |-
+          ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной
+          ставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.
+        type: integer
+      creator_rate_per_1000_views:
+        type: integer
+        x-nullable: true
+      creator_rate_per_1000_views_over:
+        type: integer
+        x-nullable: true
+      creator_salary_per_month:
+        description: |-
+          Креаторская сторона тарифа: что получает исполнитель.
+
+          nil означает «столько же, сколько платит клиент»: до заполнения этих
+          полей выплата равна счёту и маржи у платформы нет. Две стороны нужны
+          потому, что это разные деньги — счёт заказчику и обязательство перед
+          креатором; одно число за оба показывало креатору в личном кабинете
+          цену клиента как его собственный заработок.
+        type: integer
+        x-nullable: true
+      project_id:
+        type: string
+      rate_per_1000_views:
+        description: RatePer1000Views — ставка за тысячу просмотров ДО порога, копейки.
+        type: integer
+      rate_per_1000_views_over:
+        description: |-
+          RatePer1000ViewsOver — ставка за тысячу просмотров СВЕРХ порога.
+          Ниже основной намеренно: так виральный ролик не съедает бюджет.
+        type: integer
+      salary_per_month:
+        description: SalaryPerMonth — оклад креатора за месяц, копейки.
+        type: integer
+      terms_version_id:
+        description: TermsVersionID — с какой версии сняты числа. Только для истории.
+        type: string
+      updated_at:
+        type: string
+      videos_first_month:
+        description: |-
+          VideosFirstMonth/VideosNextMonths — за какой объём назван оклад.
+          В тарифе это подпись «30 видео первый месяц, 60 со второго»: без
+          неё сумма оклада ни о чём не говорит.
+        type: integer
+      videos_next_months:
+        type: integer
+    type: object
+  internal_billing.TermsVersion:
+    properties:
+      body:
+        description: Body — текст условий, с которым соглашается клиент.
+        type: string
+      bonus_views_threshold:
+        description: |-
+          BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.
+          До него платим полную ставку, свыше — пониженную. 0 = порога нет,
+          весь объём идёт по полной ставке.
+        type: integer
+      click_bonus_rate:
+        description: |-
+          ClickBonusRate — ставка за переход по UTM до месячного порога,
+          копейки. nil = бонус за переходы не считается: источник кликов не
+          подключён, а поля в тарифе есть.
+        type: integer
+        x-nullable: true
+      click_bonus_rate_over:
+        description: ClickBonusRateOver — ставка за каждый следующий переход.
+        type: integer
+        x-nullable: true
+      click_bonus_threshold:
+        description: |-
+          ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной
+          ставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.
+        type: integer
+      consented_clients:
+        description: |-
+          ConsentedClients — сколько клиентов уже согласились именно с ней.
+          Показывает, что версию нельзя считать черновиком.
+        type: integer
+      creator_rate_per_1000_views:
+        type: integer
+        x-nullable: true
+      creator_rate_per_1000_views_over:
+        type: integer
+        x-nullable: true
+      creator_salary_per_month:
+        description: |-
+          Креаторская сторона тарифа: что получает исполнитель.
+
+          nil означает «столько же, сколько платит клиент»: до заполнения этих
+          полей выплата равна счёту и маржи у платформы нет. Две стороны нужны
+          потому, что это разные деньги — счёт заказчику и обязательство перед
+          креатором; одно число за оба показывало креатору в личном кабинете
+          цену клиента как его собственный заработок.
+        type: integer
+        x-nullable: true
+      is_current:
+        description: |-
+          IsCurrent — эта версия сейчас действует. Действует всегда одна:
+          самая новая.
+        type: boolean
+      project_id:
+        type: string
+      published_at:
+        type: string
+      rate_per_1000_views:
+        description: RatePer1000Views — ставка за тысячу просмотров ДО порога, копейки.
+        type: integer
+      rate_per_1000_views_over:
+        description: |-
+          RatePer1000ViewsOver — ставка за тысячу просмотров СВЕРХ порога.
+          Ниже основной намеренно: так виральный ролик не съедает бюджет.
+        type: integer
+      salary_per_month:
+        description: SalaryPerMonth — оклад креатора за месяц, копейки.
+        type: integer
+      terms_version_id:
+        description: TermsVersionID — с какой версии сняты числа. Только для истории.
+        type: string
+      updated_at:
+        type: string
+      used_by_projects:
+        description: UsedByProjects — сколько проектов сняли с неё числа.
+        type: integer
+      version:
+        description: Version — номер версии; растёт на единицу.
+        type: integer
+      videos_first_month:
+        description: |-
+          VideosFirstMonth/VideosNextMonths — за какой объём назван оклад.
+          В тарифе это подпись «30 видео первый месяц, 60 со второго»: без
+          неё сумма оклада ни о чём не говорит.
+        type: integer
+      videos_next_months:
+        type: integer
+    type: object
+  internal_billing.UTMLink:
+    properties:
+      clicks:
+        description: |-
+          Clicks — заполняется снаружи, из аналитики. Пока бонус за переходы
+          выключен, число справочное.
+        type: integer
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      updated_at:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_billing.accrualsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_billing.Accrual'
+        type: array
+    type: object
+  internal_billing.draftEstimateReq:
+    properties:
+      creator_ids:
+        description: |-
+          CreatorIDs — кого выбрал клиент. Порядок здесь не важен: на сумму
+          влияет состав, а не приоритет.
+        items:
+          type: string
+        type: array
+      needed:
+        description: Needed — сколько креаторов нужно; VideosCount — объём роликов.
+        type: integer
+      videos_count:
+        type: integer
+    type: object
+  internal_billing.errorResponse:
+    properties:
+      error:
+        type: string
+      message:
+        description: Message пустой у ручек, отдающих ошибку без текста.
+        type: string
+    type: object
+  internal_billing.paymentReq:
+    properties:
+      amount:
+        type: integer
+      note:
+        type: string
+    type: object
+  internal_billing.publishTermsReq:
+    properties:
+      body:
+        type: string
+      bonus_views_threshold:
+        type: integer
+      click_bonus_rate:
+        description: |-
+          null в ставке — это «переходы не считаем», в отличие от нуля,
+          который значил бы заданную нулевую ставку. Помечено для спеки:
+          без пометки читающий только swagger отправит 0.
+        type: integer
+        x-nullable: true
+      click_bonus_rate_over:
+        type: integer
+        x-nullable: true
+      click_bonus_threshold:
+        type: integer
+      creator_rate_per_1000_views:
+        type: integer
+        x-nullable: true
+      creator_rate_per_1000_views_over:
+        type: integer
+        x-nullable: true
+      creator_salary_per_month:
+        description: |-
+          Креаторская сторона: что получает исполнитель. null = «столько же,
+          сколько платит клиент», то есть платформа ничего не удерживает.
+        type: integer
+        x-nullable: true
+      rate_per_1000_views:
+        type: integer
+      rate_per_1000_views_over:
+        type: integer
+      salary_per_month:
+        type: integer
+      videos_first_month:
+        description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
+        type: integer
+      videos_next_months:
+        type: integer
+    type: object
+  internal_billing.termsReq:
+    properties:
+      bonus_views_threshold:
+        type: integer
+      click_bonus_rate:
+        description: |-
+          null в ставке — это «переходы не считаем», в отличие от нуля,
+          который значил бы заданную нулевую ставку. Помечено для спеки:
+          без пометки читающий только swagger отправит 0.
+        type: integer
+        x-nullable: true
+      click_bonus_rate_over:
+        type: integer
+        x-nullable: true
+      click_bonus_threshold:
+        type: integer
+      creator_rate_per_1000_views:
+        type: integer
+        x-nullable: true
+      creator_rate_per_1000_views_over:
+        type: integer
+        x-nullable: true
+      creator_salary_per_month:
+        description: |-
+          Креаторская сторона: что получает исполнитель. null = «столько же,
+          сколько платит клиент», то есть платформа ничего не удерживает.
+        type: integer
+        x-nullable: true
+      rate_per_1000_views:
+        type: integer
+      rate_per_1000_views_over:
+        type: integer
+      salary_per_month:
+        type: integer
+      videos_first_month:
+        description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
+        type: integer
+      videos_next_months:
+        type: integer
+    type: object
+  internal_billing.termsVersionsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_billing.TermsVersion'
+        type: array
+    type: object
+  internal_billing.utmReq:
+    properties:
+      url:
         type: string
     type: object
   internal_catalog.CategoriesResponse:
@@ -310,6 +950,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          отдаёт ошибку без текста (httpx.WriteErr).
+        type: string
     type: object
   internal_clarify.Message:
     properties:
@@ -349,6 +994,11 @@ definitions:
   internal_clarify.errorResponse:
     properties:
       error:
+        type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          отдаёт ошибку без текста (httpx.WriteErr).
         type: string
     type: object
   internal_clarify.request:
@@ -548,6 +1198,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
+        type: string
     type: object
   internal_leads.incomingListResponse:
     properties:
@@ -571,6 +1226,292 @@ definitions:
     properties:
       status:
         type: string
+    type: object
+  internal_orders.Availability:
+    properties:
+      creator_user_id:
+        type: string
+      is_available:
+        type: boolean
+      month:
+        type: string
+    type: object
+  internal_orders.Candidate:
+    properties:
+      creator_name:
+        description: |-
+          CreatorName — человеческое имя вместо uuid: та же лесенка
+          specialist → client → префикс email, что в остальной выдаче.
+        type: string
+      creator_user_id:
+        type: string
+      expires_at:
+        type: string
+      invited_at:
+        type: string
+      order_id:
+        type: string
+      priority:
+        type: integer
+      responded_at:
+        type: string
+      status:
+        $ref: '#/definitions/internal_orders.CandidateStatus'
+    type: object
+  internal_orders.CandidateStatus:
+    enum:
+    - reserve
+    - invited
+    - accepted
+    - declined
+    - expired
+    type: string
+    x-enum-varnames:
+    - CandidateReserve
+    - CandidateInvited
+    - CandidateAccepted
+    - CandidateDeclined
+    - CandidateExpired
+  internal_orders.CreateResult:
+    properties:
+      order:
+        $ref: '#/definitions/internal_orders.Order'
+      without_reserve:
+        description: |-
+          WithoutReserve — в подборке ровно нужное число. При отказе одного
+          придётся выбирать заново, и клиента об этом предупреждают.
+        type: boolean
+    type: object
+  internal_orders.Invitation:
+    properties:
+      client_user_id:
+        type: string
+      expires_at:
+        type: string
+      invited_at:
+        type: string
+      order_id:
+        type: string
+      start_month:
+        type: string
+      status:
+        $ref: '#/definitions/internal_orders.CandidateStatus'
+      videos_count:
+        type: integer
+    type: object
+  internal_orders.Order:
+    properties:
+      accepted:
+        description: Accepted — сколько уже согласилось. Считается, а не хранится.
+        type: integer
+      candidates:
+        items:
+          $ref: '#/definitions/internal_orders.Candidate'
+        type: array
+      client_user_id:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      need_more:
+        description: NeedMore — сколько ещё не хватает до укомплектованного состава.
+        type: integer
+      needed:
+        type: integer
+      paid_at:
+        type: string
+      project_id:
+        type: string
+      reserve_left:
+        description: |-
+          ReserveLeft — сколько людей ещё можно позвать без участия клиента.
+          Ноль при NeedMore > 0 — это и есть момент «добрать», когда
+          подключается менеджер.
+        type: integer
+      start_month:
+        type: string
+      status:
+        $ref: '#/definitions/internal_orders.OrderStatus'
+      terms_version_id:
+        type: string
+      updated_at:
+        type: string
+      videos_count:
+        type: integer
+    type: object
+  internal_orders.OrderStatus:
+    enum:
+    - draft
+    - inviting
+    - staffed
+    - paid
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - StatusDraft
+    - StatusInviting
+    - StatusStaffed
+    - StatusPaid
+    - StatusCancelled
+  internal_orders.Terms:
+    properties:
+      body:
+        type: string
+      bonus_views_threshold:
+        type: integer
+      click_bonus_rate:
+        description: 'Переходы: порог месячный. nil в ставке = не считаем.'
+        type: integer
+      click_bonus_rate_over:
+        type: integer
+      click_bonus_threshold:
+        type: integer
+      id:
+        type: string
+      published_at:
+        type: string
+      rate_per_1000_views:
+        description: 'Ставка ступенчатая: до порога на ролик — полная, свыше — пониженная.'
+        type: integer
+      rate_per_1000_views_over:
+        type: integer
+      salary_per_month:
+        description: |-
+          SalaryPerMonth — оклад за месяц; VideosFirstMonth/VideosNextMonths —
+          за какой объём он назван.
+        type: integer
+      version:
+        type: integer
+      videos_first_month:
+        type: integer
+      videos_next_months:
+        type: integer
+    type: object
+  internal_orders.addCandidatesReq:
+    properties:
+      creator_ids:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_orders.availabilityQueryReq:
+    properties:
+      creator_ids:
+        items:
+          type: string
+        type: array
+      month:
+        type: string
+    type: object
+  internal_orders.availabilityQueryResp:
+    properties:
+      busy:
+        items:
+          type: string
+        type: array
+      month:
+        type: string
+    type: object
+  internal_orders.availabilityReq:
+    properties:
+      available:
+        type: boolean
+      month:
+        type: string
+    type: object
+  internal_orders.createOrderReq:
+    properties:
+      creator_ids:
+        description: |-
+          CreatorIDs — В ПОРЯДКЕ ПРИОРИТЕТА. Клиент не выбирает N человек,
+          а расставляет собранных по порядку.
+        items:
+          type: string
+        type: array
+      needed:
+        type: integer
+      start_month:
+        type: string
+      videos_count:
+        type: integer
+    type: object
+  internal_orders.errorResponse:
+    properties:
+      error:
+        type: string
+      message:
+        type: string
+    type: object
+  internal_orders.invitationsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_orders.Invitation'
+        type: array
+    type: object
+  internal_orders.limitResp:
+    properties:
+      allowed:
+        description: |-
+          Allowed — верхняя граница: сколько креаторов можно взять на этот
+          месяц. MinAllowed — нижняя, для подписи «доступно 2–3». Взять
+          меньше нижней границы не запрещено.
+        type: integer
+      completed_months:
+        description: |-
+          CompletedMonths — сколько оплаченных месяцев будет закрыто к его
+          началу. Отдаётся, чтобы «доступен один креатор» не выглядело
+          произволом: видно, что месяцев работы пока ноль.
+        type: integer
+      first_month:
+        description: |-
+          FirstMonth — это первый месяц клиента. В нём берут одного креатора:
+          клиент проверяет формат на небольшой сумме, платформа — что клиент
+          платит и даёт обратную связь.
+        type: boolean
+      min_allowed:
+        type: integer
+      month:
+        description: Month — месяц, на который посчитан лимит, ГГГГ-ММ.
+        type: string
+    type: object
+  internal_orders.myAvailabilityResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_orders.Availability'
+        type: array
+    type: object
+  internal_orders.ordersListResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_orders.Order'
+        type: array
+    type: object
+  internal_orders.reorderReq:
+    properties:
+      creator_ids:
+        description: |-
+          CreatorIDs — новый порядок неприглашённых кандидатов, целиком.
+          Именно порядок, а не состав: добавить или убрать человека здесь
+          нельзя, для этого есть свои ручки со своими проверками.
+        items:
+          type: string
+        type: array
+    type: object
+  internal_orders.respondReq:
+    properties:
+      accept:
+        type: boolean
+    type: object
+  internal_orders.termsResp:
+    properties:
+      consented:
+        type: boolean
+      terms:
+        $ref: '#/definitions/internal_orders.Terms'
     type: object
   internal_pipelines.Pipeline:
     properties:
@@ -737,6 +1678,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          отдаёт ошибку без текста (httpx.WriteErr).
+        type: string
     type: object
   internal_pipelines.patchPipelineReq:
     properties:
@@ -808,6 +1754,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
+        type: string
     type: object
   internal_productions.listResp:
     properties:
@@ -857,6 +1808,11 @@ definitions:
   internal_profilecheck.errorResponse:
     properties:
       error:
+        type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          отдаёт ошибку без текста (httpx.WriteErr).
         type: string
     type: object
   internal_profiles.CategoriesPart:
@@ -1431,6 +2387,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
+        type: string
     type: object
   internal_profiles.portfolioListResponse:
     properties:
@@ -1439,15 +2400,39 @@ definitions:
           $ref: '#/definitions/internal_profiles.PortfolioItem'
         type: array
     type: object
+  internal_projects.AdminListResult:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.ProjectManagerView'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
   internal_projects.Comment:
     properties:
       author_id:
         type: string
       author_name:
+        description: |-
+          AuthorName — display_name автора: specialist_profile → client_profile →
+          префикс email. Считается в запросе, в таблице комментариев его нет.
         type: string
       body:
+        description: |-
+          Body — тело в формате BodyFormat. Для html здесь уже очищенная
+          разметка: чистка происходит на записи, читателю отдаётся готовое.
         type: string
       body_format:
+        type: string
+      body_text:
+        description: |-
+          BodyText — то же без разметки. Фронту нужен там, где HTML не к месту:
+          заголовок уведомления, превью в списке, поиск по переписке.
         type: string
       created_at:
         type: string
@@ -1456,10 +2441,49 @@ definitions:
       id:
         type: string
       is_internal:
+        description: |-
+          IsInternal — то же, что Thread == ThreadInternal. Остаётся в ответе:
+          на него смотрит уже написанный фронт.
         type: boolean
+      mentions:
+        description: Mentions — кого упомянули. Пусто, если никого.
+        items:
+          type: string
+        type: array
       project_id:
         type: string
+      thread:
+        description: Thread/ThreadUserID — ветка. ThreadUserID заполнен только у creator.
+        type: string
+      thread_user_id:
+        type: string
       updated_at:
+        type: string
+    type: object
+  internal_projects.Delivery:
+    properties:
+      attempt:
+        description: Attempt — номер попытки, 1 для первой сдачи.
+        type: integer
+      decided_at:
+        type: string
+      decision:
+        description: Decision — pending, пока клиент не ответил.
+        type: string
+      id:
+        type: string
+      materials:
+        description: Materials — что приложено именно к этой сдаче.
+        items:
+          $ref: '#/definitions/internal_projects.Material'
+        type: array
+      note:
+        type: string
+      rework_reason:
+        type: string
+      submitted_at:
+        type: string
+      submitted_by:
         type: string
     type: object
   internal_projects.Event:
@@ -1491,6 +2515,56 @@ definitions:
       to_status:
         type: string
     type: object
+  internal_projects.GeneralProject:
+    properties:
+      brief:
+        description: Brief — что нужно сделать. Лежит в projects.notes.
+        type: string
+      budget:
+        type: integer
+      client_name:
+        type: string
+      client_user_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      deliveries:
+        description: |-
+          Deliveries — журнал сдач, от первой к последней. Пусто, пока
+          исполнитель ничего не сдал.
+        items:
+          $ref: '#/definitions/internal_projects.Delivery'
+        type: array
+      due_date:
+        description: DueDate — единственный срок проекта.
+        type: string
+      id:
+        type: string
+      overdue:
+        description: |-
+          Overdue — срок прошёл, а работа не принята. Считается на сервере,
+          чтобы клиент и исполнитель видели одно и то же независимо от
+          часового пояса браузера.
+        type: boolean
+      revisions_included:
+        description: |-
+          RevisionsIncluded/Used — сколько раз работу можно вернуть на
+          доработку и сколько раз уже возвращали.
+        type: integer
+      revisions_used:
+        type: integer
+      specialist_name:
+        type: string
+      specialist_user_id:
+        description: SpecialistID — исполнитель, которого выбрал клиент.
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+    type: object
   internal_projects.ManagerPatchInput:
     properties:
       budget:
@@ -1500,6 +2574,38 @@ definitions:
       title:
         type: string
       updated_at:
+        type: string
+    type: object
+  internal_projects.Material:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_projects.MaterialInput:
+    properties:
+      kind:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_projects.Participant:
+    properties:
+      display_name:
+        type: string
+      role:
+        description: |-
+          Role — client | creator | specialist | manager | admin. Нужна фронту,
+          чтобы показать, кто есть кто в выпадашке @.
+        type: string
+      user_id:
         type: string
     type: object
   internal_projects.PartyContact:
@@ -1539,6 +2645,17 @@ definitions:
         type: string
       id:
         type: string
+      is_test:
+        description: |-
+          IsTest — проект заведён для проверки стенда. Админский список такие
+          прячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».
+        type: boolean
+      kind:
+        allOf:
+        - $ref: '#/definitions/internal_projects.ProjectKind'
+        description: |-
+          Kind — вид проекта. Без него фронт отличал проект с креаторами от
+          воронки по наличию выкладок, то есть догадкой.
       lead_id:
         type: string
       lead_recipient_specialist_id:
@@ -1546,6 +2663,9 @@ definitions:
       notes:
         type: string
       pipeline_id:
+        description: |-
+          PipelineID — воронка. nil у общего проекта: воронки у него нет
+          вовсе, и отдавать нулевой uuid значило бы врать, что она есть.
         type: string
       revisions_included:
         type: integer
@@ -1603,6 +2723,17 @@ definitions:
         $ref: '#/definitions/internal_projects.ProjectDisplayStatus'
       id:
         type: string
+      is_test:
+        description: |-
+          IsTest — проект заведён для проверки стенда. Админский список такие
+          прячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».
+        type: boolean
+      kind:
+        allOf:
+        - $ref: '#/definitions/internal_projects.ProjectKind'
+        description: |-
+          Kind — вид проекта. Без него фронт отличал проект с креаторами от
+          воронки по наличию выкладок, то есть догадкой.
       lead_id:
         type: string
       lead_recipient_specialist_id:
@@ -1610,6 +2741,9 @@ definitions:
       notes:
         type: string
       pipeline_id:
+        description: |-
+          PipelineID — воронка. nil у общего проекта: воронки у него нет
+          вовсе, и отдавать нулевой uuid значило бы врать, что она есть.
         type: string
       progress:
         description: Progress — взвешенный % выполнения по видимым клиенту шагам.
@@ -1704,6 +2838,17 @@ definitions:
         $ref: '#/definitions/internal_projects.ProjectDisplayStatus'
       id:
         type: string
+      is_test:
+        description: |-
+          IsTest — проект заведён для проверки стенда. Админский список такие
+          прячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».
+        type: boolean
+      kind:
+        allOf:
+        - $ref: '#/definitions/internal_projects.ProjectKind'
+        description: |-
+          Kind — вид проекта. Без него фронт отличал проект с креаторами от
+          воронки по наличию выкладок, то есть догадкой.
       lead_id:
         type: string
       lead_recipient_specialist_id:
@@ -1711,6 +2856,9 @@ definitions:
       notes:
         type: string
       pipeline_id:
+        description: |-
+          PipelineID — воронка. nil у общего проекта: воронки у него нет
+          вовсе, и отдавать нулевой uuid значило бы врать, что она есть.
         type: string
       progress:
         type: number
@@ -1744,6 +2892,16 @@ definitions:
       updated_at:
         type: string
     type: object
+  internal_projects.ProjectKind:
+    enum:
+    - creators_turnkey
+    - production_turnkey
+    - general
+    type: string
+    x-enum-varnames:
+    - KindCreatorsTurnkey
+    - KindProductionTurnkey
+    - KindGeneral
   internal_projects.ProjectManagerView:
     properties:
       assigned_to_user_id:
@@ -1791,13 +2949,33 @@ definitions:
         $ref: '#/definitions/internal_projects.ProjectDisplayStatus'
       id:
         type: string
+      is_test:
+        description: |-
+          IsTest — проект заведён для проверки стенда. Админский список такие
+          прячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».
+        type: boolean
+      kind:
+        allOf:
+        - $ref: '#/definitions/internal_projects.ProjectKind'
+        description: |-
+          Kind — вид проекта. Без него фронт отличал проект с креаторами от
+          воронки по наличию выкладок, то есть догадкой.
       lead_id:
         type: string
       lead_recipient_specialist_id:
         type: string
+      manager_display_name:
+        description: |-
+          ManagerDisplayName — ответственный менеджер. Без него по списку не
+          ответить на вторую половину вопроса «что не двигалось» — «и кто за
+          это отвечает»: assigned_to_user_id сам по себе ничего не говорит.
+        type: string
       notes:
         type: string
       pipeline_id:
+        description: |-
+          PipelineID — воронка. nil у общего проекта: воронки у него нет
+          вовсе, и отдавать нулевой uuid значило бы врать, что она есть.
         type: string
       progress:
         type: number
@@ -1999,9 +3177,21 @@ definitions:
           ClientUserID — для зарегистрированного клиента. Если пусто,
           нужно client_name + client_contact (no-account клиент).
         type: string
+      is_test:
+        description: |-
+          IsTest — пометить проект как тестовый: в админском списке такие
+          скрыты по умолчанию. Ставится здесь, а не выводится из данных —
+          «тест» в названии пишут не всегда.
+        type: boolean
+      kind:
+        description: Kind — вид проекта. Пусто = production_turnkey.
+        type: string
       notes:
         type: string
       pipeline_id:
+        description: |-
+          PipelineID — необязателен: воронку продакшну подставляем по
+          умолчанию, а креаторам и общему проекту она не нужна вовсе.
         type: string
       source:
         type: string
@@ -2041,8 +3231,24 @@ definitions:
     properties:
       body:
         type: string
+      body_format:
+        description: |-
+          Format — plain (по умолчанию) или html. Для html разметка чистится на
+          сервере: см. internal/richtext.
+        type: string
+      creator_id:
+        description: CreatorID — чья креаторская ветка. Обязателен при thread="creator".
+        type: string
       is_internal:
+        description: |-
+          IsInternal — прежнее поле. Оставлено для уже написанного фронта:
+          true равнозначно thread="internal".
         type: boolean
+      thread:
+        description: |-
+          Thread — client | creator | internal. Пусто = client (или internal,
+          если выставлен is_internal).
+        type: string
     type: object
   internal_projects.commentsResp:
     properties:
@@ -2055,6 +3261,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          отдаёт ошибку без текста (httpx.WriteErr).
+        type: string
     type: object
   internal_projects.eventsResp:
     properties:
@@ -2062,6 +3273,43 @@ definitions:
         items:
           $ref: '#/definitions/internal_projects.Event'
         type: array
+    type: object
+  internal_projects.generalCreateReq:
+    properties:
+      brief:
+        description: Brief — что нужно сделать.
+        type: string
+      budget:
+        type: integer
+      due_date:
+        description: DueDate — срок, YYYY-MM-DD. Единственный срок проекта.
+        type: string
+      specialist_user_id:
+        description: SpecialistID — кого выбрал клиент. Обязателен.
+        type: string
+      title:
+        type: string
+    type: object
+  internal_projects.generalDeliverReq:
+    properties:
+      materials:
+        items:
+          $ref: '#/definitions/internal_projects.MaterialInput'
+        type: array
+      note:
+        type: string
+    type: object
+  internal_projects.generalListResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.GeneralProject'
+        type: array
+    type: object
+  internal_projects.generalReasonReq:
+    properties:
+      reason:
+        type: string
     type: object
   internal_projects.managerCreateProjectReq:
     properties:
@@ -2076,9 +3324,22 @@ definitions:
           ClientUserID — для зарегистрированного клиента. Если пусто,
           нужно client_name+client_contact (no-account клиент).
         type: string
+      is_test:
+        description: |-
+          IsTest — пометить проект как тестовый: админский список такие
+          скрывает по умолчанию.
+        type: boolean
+      kind:
+        description: |-
+          Kind — вид проекта: creators_turnkey | production_turnkey | general.
+          Пусто = production_turnkey, как все проекты до появления видов.
+        type: string
       notes:
         type: string
       pipeline_id:
+        description: |-
+          PipelineID — воронка. Обязателен только для production_turnkey:
+          у креаторов вместо воронки выкладки, у общего проекта — один срок.
         type: string
       specialist_user_id:
         type: string
@@ -2106,6 +3367,13 @@ definitions:
       updated_at:
         type: string
     type: object
+  internal_projects.participantsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_projects.Participant'
+        type: array
+    type: object
   internal_projects.rejectSpecReq:
     properties:
       reason:
@@ -2115,6 +3383,785 @@ definitions:
     properties:
       comment:
         type: string
+    type: object
+  internal_publications.BatchResult:
+    properties:
+      batch_id:
+        type: string
+      created:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.Publication'
+        type: array
+    type: object
+  internal_publications.CalendarDay:
+    properties:
+      date:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.CalendarItem'
+        type: array
+      planned:
+        type: integer
+      published:
+        type: integer
+    type: object
+  internal_publications.CalendarItem:
+    properties:
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      publication_id:
+        type: string
+      status:
+        $ref: '#/definitions/internal_publications.ClientVideoStatus'
+    type: object
+  internal_publications.ChecklistItem:
+    properties:
+      id:
+        type: string
+      is_required:
+        type: boolean
+      platform:
+        type: string
+      project_id:
+        type: string
+      sort_order:
+        type: integer
+      text:
+        type: string
+    type: object
+  internal_publications.ChecklistSnapshotMeta:
+    properties:
+      connected_at:
+        type: string
+      latest_version:
+        description: |-
+          LatestVersion — какая версия этого шаблона в библиотеке сейчас.
+          Больше подключённой — значит вышло обновление.
+        type: integer
+      template_id:
+        type: string
+      template_name:
+        type: string
+      template_version:
+        type: integer
+    type: object
+  internal_publications.ChecklistTemplate:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      items_count:
+        type: integer
+      name:
+        type: string
+      version:
+        type: integer
+    type: object
+  internal_publications.ChecklistTemplateFull:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.ChecklistTemplateItem'
+        type: array
+      items_count:
+        type: integer
+      name:
+        type: string
+      version:
+        type: integer
+    type: object
+  internal_publications.ChecklistTemplateItem:
+    properties:
+      is_required:
+        type: boolean
+      platform:
+        description: Platform — площадка пункта; пусто означает «для всех».
+        type: string
+      text:
+        type: string
+    type: object
+  internal_publications.ClientVideo:
+    properties:
+      collected_at:
+        type: string
+      comments:
+        type: integer
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      likes:
+        type: integer
+      links:
+        items:
+          type: string
+        type: array
+      platforms:
+        items:
+          type: string
+        type: array
+      publication_id:
+        type: string
+      published_at:
+        type: string
+      stats_hidden:
+        description: |-
+          StatsHidden — цифры скрыты настройкой проекта. Отдельное поле, а не
+          молчаливые нули: ноль читается как «никто не смотрел».
+        type: boolean
+      title:
+        description: |-
+          Title — название ролика, которое дал креатор при сдаче. Пусто у
+          роликов, сданных до того, как название начали спрашивать.
+        type: string
+      views:
+        type: integer
+    type: object
+  internal_publications.ClientVideoStatus:
+    enum:
+    - published
+    - planned
+    type: string
+    x-enum-varnames:
+    - ClientStatusPublished
+    - ClientStatusPlanned
+  internal_publications.CreatorProject:
+    properties:
+      added_at:
+        type: string
+      kind:
+        type: string
+      next_due_date:
+        description: NextDueDate — ближайший срок из несданного. nil, когда сдано
+          всё.
+        type: string
+      project_id:
+        type: string
+      publications_open:
+        type: integer
+      publications_overdue:
+        type: integer
+      publications_total:
+        description: |-
+          Счётчики — только по СВОИМ выкладкам. Чужие креатор не видит нигде,
+          и в списке проектов тоже не должен.
+        type: integer
+      status:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_publications.CreatorProjectCard:
+    properties:
+      added_at:
+        type: string
+      brief:
+        description: Brief — что делаем. Лежит в projects.notes.
+        type: string
+      draft_required:
+        description: 'DraftRequired — у выкладки два срока: сдать черновик и выложить.'
+        type: boolean
+      due_date:
+        type: string
+      kind:
+        type: string
+      manager:
+        allOf:
+        - $ref: '#/definitions/internal_publications.Person'
+        description: Manager — кому писать. nil, пока проект никто не взял.
+      monthly_plan:
+        description: |-
+          MonthlyPlan — сколько роликов за месяц по договору. Из него
+          считается «роликов 6 из 12» в шапке.
+        type: integer
+      next_due_date:
+        description: NextDueDate — ближайший срок из несданного. nil, когда сдано
+          всё.
+        type: string
+      platforms:
+        description: |-
+          Platforms — пять площадок, на которые идёт ролик. Отдаём списком,
+          чтобы фронт не держал свою копию порядка колонок.
+        items:
+          type: string
+        type: array
+      project_id:
+        type: string
+      publications_open:
+        type: integer
+      publications_overdue:
+        type: integer
+      publications_total:
+        description: |-
+          Счётчики — только по СВОИМ выкладкам. Чужие креатор не видит нигде,
+          и в списке проектов тоже не должен.
+        type: integer
+      started_at:
+        description: |-
+          StartedAt/DueDate — период проекта. DueDate у проекта с креаторами
+          обычно пуст: сроки стоят у выкладок, а не у проекта.
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_publications.CreatorRow:
+    properties:
+      avg_views:
+        type: number
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      share_percent:
+        description: SharePercent — доля в общем результате проекта.
+        type: number
+      videos:
+        type: integer
+      views:
+        type: integer
+    type: object
+  internal_publications.DateRequest:
+    properties:
+      created_at:
+        type: string
+      decided_at:
+        type: string
+      decided_by:
+        type: string
+      id:
+        type: string
+      publication_id:
+        type: string
+      reason:
+        type: string
+      requested_date:
+        type: string
+      status:
+        type: string
+    type: object
+  internal_publications.DayPoint:
+    properties:
+      date:
+        type: string
+      views:
+        type: integer
+    type: object
+  internal_publications.Material:
+    properties:
+      audience:
+        description: Audience — creators или client. Определяет, кто материал увидит.
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      project_id:
+        type: string
+      sort_order:
+        type: integer
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_publications.NotificationPrefs:
+    properties:
+      on_date_shift:
+        type: boolean
+      on_new_video:
+        type: boolean
+      on_weekly_digest:
+        type: boolean
+      project_id:
+        type: string
+      user_id:
+        type: string
+      views_threshold:
+        description: ViewsThreshold — «ролик перешагнул порог просмотров». nil = не
+          слать.
+        type: integer
+    type: object
+  internal_publications.Person:
+    properties:
+      account_links:
+        additionalProperties:
+          type: string
+        description: |-
+          AccountLinks — ссылки на аккаунты по пяти площадкам, из профиля
+          специалиста. Менеджеру они нужны, чтобы проверить выкладку глазами,
+          не спрашивая креатора. Площадки, которых у человека нет, просто
+          отсутствуют в карте.
+        type: object
+      added_at:
+        description: AddedAt — когда включён в состав проекта.
+        type: string
+      display_name:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_publications.PlatformRow:
+    properties:
+      comments:
+        type: integer
+      likes:
+        type: integer
+      platform:
+        type: string
+      videos:
+        type: integer
+      views:
+        type: integer
+    type: object
+  internal_publications.ProjectSettings:
+    properties:
+      client_sees_stats:
+        description: ClientSeesStats — заказчик видит цифры.
+        type: boolean
+      draft_required:
+        description: 'DraftRequired — у выкладки два срока: сдать черновик и выложить.'
+        type: boolean
+    type: object
+  internal_publications.Publication:
+    properties:
+      batch_id:
+        type: string
+      close_reason:
+        type: string
+      closed_by:
+        type: string
+      comments:
+        type: integer
+      created_at:
+        type: string
+      creator_name:
+        description: |-
+          CreatorName — человеческое имя вместо uuid. Считается в выдаче, а не
+          хранится: имя живёт в профиле и меняется там.
+        type: string
+      creator_user_id:
+        type: string
+      draft_due_date:
+        type: string
+      due_date:
+        type: string
+      id:
+        type: string
+      likes:
+        type: integer
+      links:
+        items:
+          $ref: '#/definitions/internal_publications.SubmittedLink'
+        type: array
+      overdue:
+        description: |-
+          Overdue — вычисляется, а не хранится: просрочка зависит от текущей
+          даты и от того, не висит ли просьба о переносе. Хранить такое поле
+          значит держать фоновую задачу, которая его переписывает каждую ночь.
+        type: boolean
+      pending_date_request:
+        allOf:
+        - $ref: '#/definitions/internal_publications.DateRequest'
+        description: |-
+          PendingDateRequest — непринятая просьба о переносе. Пока она есть,
+          выкладка не считается просроченной и пинги по ней не идут.
+      project_id:
+        type: string
+      stats_collected_at:
+        description: StatsCollectedAt — самый свежий сбор среди площадок выкладки.
+        type: string
+      status:
+        $ref: '#/definitions/internal_publications.Status'
+      title:
+        description: |-
+          Title — название ролика. Пишет креатор в момент сдачи: он
+          единственный, кто знает, что снял. У запланированной выкладки
+          названия ещё нет, и это нормально — тему задаёт дата.
+        type: string
+      updated_at:
+        type: string
+      views:
+        description: |-
+          Views/Likes/Comments — сумма по всем площадкам выкладки, по
+          последнему снимку каждой ссылки. Порог «миллион просмотров» считается
+          по ролику целиком, а не по отдельной площадке, поэтому суммой этой
+          пользуются и уведомления, и интерфейс — собирать её на фронте из
+          videos_table значило бы держать вторую реализацию того же правила.
+        type: integer
+    type: object
+  internal_publications.ReminderPrefs:
+    properties:
+      due_today:
+        description: DueToday — креатору в бот утром в день выкладки.
+        type: boolean
+      incomplete:
+        description: Incomplete — ролик вышел, но собраны не все пять ссылок.
+        type: boolean
+      manager_digest:
+        description: ManagerDigest — сводка в общий чат менеджеров. Креаторы её не
+          видят.
+        type: boolean
+      overdue:
+        description: Overdue — на следующий день после просрочки и дальше раз в сутки.
+        type: boolean
+      project_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_publications.Report:
+    properties:
+      as_of:
+        type: string
+      by_creator:
+        items:
+          $ref: '#/definitions/internal_publications.CreatorRow'
+        type: array
+      by_day:
+        items:
+          $ref: '#/definitions/internal_publications.DayPoint'
+        type: array
+      by_platform:
+        items:
+          $ref: '#/definitions/internal_publications.PlatformRow'
+        type: array
+      collapsed:
+        type: boolean
+      comments:
+        type: integer
+      er_percent:
+        type: number
+      growth_24h:
+        type: integer
+      likes:
+        type: integer
+      project_id:
+        type: string
+      videos:
+        type: integer
+      videos_table:
+        items:
+          $ref: '#/definitions/internal_publications.VideoRow'
+        type: array
+      views:
+        type: integer
+    type: object
+  internal_publications.Scheme:
+    enum:
+    - daily
+    - weekdays
+    - tue_thu
+    - every_other_day
+    type: string
+    x-enum-comments:
+      SchemeDaily: каждый день
+      SchemeEveryOtherDay: через день
+      SchemeTueThu: вторник и четверг
+      SchemeWeekdays: будни
+    x-enum-descriptions:
+    - каждый день
+    - будни
+    - вторник и четверг
+    - через день
+    x-enum-varnames:
+    - SchemeDaily
+    - SchemeWeekdays
+    - SchemeTueThu
+    - SchemeEveryOtherDay
+  internal_publications.Status:
+    enum:
+    - planned
+    - partial
+    - done
+    - closed_manually
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - StatusPlanned
+    - StatusPartial
+    - StatusDone
+    - StatusClosedManually
+    - StatusCancelled
+  internal_publications.SubmittedLink:
+    properties:
+      external_media_id:
+        type: string
+      id:
+        type: string
+      last_collected_at:
+        type: string
+      platform:
+        type: string
+      publication_id:
+        type: string
+      submitted_at:
+        type: string
+      url:
+        type: string
+      url_canonical:
+        type: string
+    type: object
+  internal_publications.VideoRow:
+    properties:
+      collected_at:
+        type: string
+      comments:
+        type: integer
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      er_percent:
+        type: number
+      growth_24h:
+        type: integer
+      likes:
+        type: integer
+      link_id:
+        type: string
+      platform:
+        type: string
+      publication_id:
+        type: string
+      submitted_at:
+        type: string
+      url:
+        type: string
+      views:
+        type: integer
+    type: object
+  internal_publications.autopingReq:
+    properties:
+      due_today:
+        type: boolean
+      incomplete:
+        type: boolean
+      manager_digest:
+        type: boolean
+      overdue:
+        type: boolean
+    type: object
+  internal_publications.batchReq:
+    properties:
+      creator_user_ids:
+        items:
+          type: string
+        type: array
+      dates:
+        description: 'Dates — альтернатива схеме: произвольный список дат (YYYY-MM-DD).'
+        items:
+          type: string
+        type: array
+      draft_lead_days:
+        type: integer
+      from:
+        type: string
+      scheme:
+        $ref: '#/definitions/internal_publications.Scheme'
+      to:
+        type: string
+    type: object
+  internal_publications.calendarResp:
+    properties:
+      days:
+        items:
+          $ref: '#/definitions/internal_publications.CalendarDay'
+        type: array
+      month:
+        type: string
+    type: object
+  internal_publications.cancelBatchReq:
+    properties:
+      batch_id:
+        type: string
+    type: object
+  internal_publications.cancelBatchResp:
+    properties:
+      cancelled:
+        type: integer
+    type: object
+  internal_publications.checklistResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.ChecklistItem'
+        type: array
+    type: object
+  internal_publications.clientFeedResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.ClientVideo'
+        type: array
+    type: object
+  internal_publications.closeReq:
+    properties:
+      reason:
+        type: string
+    type: object
+  internal_publications.creatorProjectsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.CreatorProject'
+        type: array
+    type: object
+  internal_publications.creatorReq:
+    properties:
+      creator_user_id:
+        type: string
+    type: object
+  internal_publications.dateRequestReq:
+    properties:
+      reason:
+        type: string
+      requested_date:
+        type: string
+    type: object
+  internal_publications.decideReq:
+    properties:
+      approve:
+        type: boolean
+    type: object
+  internal_publications.errorResponse:
+    properties:
+      error:
+        type: string
+      message:
+        type: string
+    type: object
+  internal_publications.listResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.Publication'
+        type: array
+    type: object
+  internal_publications.managerChecklistResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.ChecklistItem'
+        type: array
+      template:
+        $ref: '#/definitions/internal_publications.ChecklistSnapshotMeta'
+    type: object
+  internal_publications.materialReq:
+    properties:
+      audience:
+        description: |-
+          Audience — creators (по умолчанию) или client. Материалы для
+          креаторов заказчик не видит.
+        type: string
+      kind:
+        description: Kind — doc, video или link.
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_publications.materialsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.Material'
+        type: array
+    type: object
+  internal_publications.personsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.Person'
+        type: array
+    type: object
+  internal_publications.prefsReq:
+    properties:
+      on_date_shift:
+        type: boolean
+      on_new_video:
+        type: boolean
+      on_weekly_digest:
+        type: boolean
+      views_threshold:
+        type: integer
+    type: object
+  internal_publications.previewResp:
+    properties:
+      dates:
+        items:
+          type: string
+        type: array
+      total:
+        type: integer
+    type: object
+  internal_publications.remindResp:
+    properties:
+      sent:
+        type: boolean
+    type: object
+  internal_publications.saveTemplateReq:
+    properties:
+      description:
+        type: string
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.ChecklistTemplateItem'
+        type: array
+      name:
+        type: string
+      replaces:
+        description: Replaces — id версии, которую заменяем. Пусто — новый шаблон.
+        type: string
+    type: object
+  internal_publications.snapshotReq:
+    properties:
+      template_id:
+        type: string
+    type: object
+  internal_publications.snapshotResp:
+    properties:
+      copied:
+        type: integer
+    type: object
+  internal_publications.submitReq:
+    properties:
+      checked_item_ids:
+        items:
+          type: string
+        type: array
+      title:
+        description: |-
+          Title — название ролика. Досылая площадки, поле можно не повторять:
+          пустое не затирает записанное.
+        type: string
+      urls:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_publications.templatesResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.ChecklistTemplate'
+        type: array
     type: object
   internal_reviews.Review:
     properties:
@@ -2160,6 +4207,11 @@ definitions:
   internal_reviews.errResponse:
     properties:
       error:
+        type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
         type: string
     type: object
   internal_reviews.listResponse:
@@ -2291,6 +4343,11 @@ definitions:
     properties:
       error:
         type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          отдаёт ошибку без текста (httpx.WriteErr).
+        type: string
     type: object
   internal_summarize.Pick:
     properties:
@@ -2336,6 +4393,11 @@ definitions:
   internal_summarize.errorResponse:
     properties:
       error:
+        type: string
+      message:
+        description: |-
+          Message — человеческий текст для интерфейса. omitempty: часть ручек
+          зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
         type: string
     type: object
   internal_summarize.request:
@@ -2692,6 +4754,117 @@ info:
   title: marketpclce API
   version: "1.0"
 paths:
+  /admin/checklist_templates:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.templatesResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "403":
+          description: forbidden — нужна роль admin
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Библиотека чеклистов (админ)
+      tags:
+      - admin-publications
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Правки на месте нет намеренно: шаблон уходит в проекты снимком,
+        и подмена пунктов под идущими проектами означала бы, что креатор
+        отмечал одно, а спросят с него другое. Прежняя версия гасится.
+      parameters:
+      - description: шаблон целиком
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.saveTemplateReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.ChecklistTemplateFull'
+        "400":
+          description: bad_json; invalid_input — пустое название, нет пунктов, неизвестная
+            площадка
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — заменяемой версии нет или она уже погашена
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Выпустить версию шаблона чеклиста (админ)
+      tags:
+      - admin-publications
+  /admin/checklist_templates/{id}:
+    delete:
+      description: 'Проекты, куда он уже подключён, не меняются: у них свой снимок.'
+      parameters:
+      - description: template id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — шаблона нет или он уже погашен
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Убрать шаблон из библиотеки (админ)
+      tags:
+      - admin-publications
+    get:
+      parameters:
+      - description: template id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.ChecklistTemplateFull'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Шаблон чеклиста целиком (админ)
+      tags:
+      - admin-publications
   /admin/managers:
     get:
       parameters:
@@ -3317,18 +5490,54 @@ paths:
       - admin-productions
   /admin/projects:
     get:
+      description: |-
+        Поиск, фильтры, сортировка и пагинация считаются на сервере.
+        q — ILIKE по названию проекта и по клиенту (имя в профиле,
+        имя на проекте у клиента без аккаунта, почта), мин 2 символа.
+        manager — uuid ответственного либо "none" (без ответственного).
+        include_test=true показывает проекты, помеченные как тестовые
+        (по умолчанию скрыты). sort: updated_asc | updated_desc |
+        created_asc | created_desc, default updated_desc.
       parameters:
-      - description: filter by status
+      - description: часть названия проекта или имени клиента, мин 2 симв
+        in: query
+        name: q
+        type: string
+      - description: точный статус проекта; пусто = всё кроме cancelled
         in: query
         name: status
         type: string
+      - description: uuid менеджера | none
+        in: query
+        name: manager
+        type: string
+      - description: показать тестовые проекты, default false
+        in: query
+        name: include_test
+        type: boolean
+      - description: updated_asc | updated_desc | created_asc | created_desc
+        in: query
+        name: sort
+        type: string
+      - description: 1-1000, default 20
+        in: query
+        name: limit
+        type: integer
+      - description: default 0
+        in: query
+        name: offset
+        type: integer
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_projects.managerListResp'
+            $ref: '#/definitions/internal_projects.AdminListResult'
+        "400":
+          description: bad_manager_id | invalid_input
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
       summary: Все проекты (админ — таблица и канбан)
@@ -3499,11 +5708,20 @@ paths:
       - admin-projects
   /admin/projects/{id}/comments:
     get:
+      description: Все ветки сразу; thread сужает до одной.
       parameters:
       - description: project id
         in: path
         name: id
         required: true
+        type: string
+      - description: client | creator | internal
+        in: query
+        name: thread
+        type: string
+      - description: чья ветка, при thread=creator
+        in: query
+        name: creator_id
         type: string
       produces:
       - application/json
@@ -3512,9 +5730,17 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_projects.commentsResp'
+        "400":
+          description: bad_id; bad_thread; bad_creator_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "403":
+          description: forbidden_role — нужна роль админа
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
-      summary: Комментарии любого проекта (админ)
+      summary: Переписка любого проекта (админ)
       tags:
       - admin-projects
     post:
@@ -3539,9 +5765,21 @@ paths:
           description: Created
           schema:
             $ref: '#/definitions/internal_projects.Comment'
+        "400":
+          description: bad_json; bad_id; bad_creator_id; empty_comment; invalid_input
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "403":
+          description: forbidden_role — нужна роль админа
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_a_project_creator — creator_id не в составе проекта
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
-      summary: Комментировать любой проект (админ)
+      summary: Написать в переписку любого проекта (админ)
       tags:
       - admin-projects
   /admin/projects/{id}/events:
@@ -3559,6 +5797,14 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_projects.eventsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "403":
+          description: forbidden_role — нужна роль админа
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
       summary: Лента активности любого проекта (админ)
@@ -3624,6 +5870,65 @@ paths:
       summary: 'Админ-канбан: перенести проект на конкретный шаг'
       tags:
       - admin-projects
+  /admin/terms:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.termsVersionsResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "403":
+          description: forbidden — нужна роль admin
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Прайс площадки: все версии (админ)'
+      tags:
+      - admin-billing
+    post:
+      consumes:
+      - application/json
+      description: 'Существующая версия не переписывается: под ней стоит согласие
+        клиентов, а проекты сняли с неё числа снимком.'
+      parameters:
+      - description: ставки и текст условий
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_billing.publishTermsReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_billing.TermsVersion'
+        "400":
+          description: bad_json, invalid_input — текст пуст или доля креатора больше
+            цены клиента
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "403":
+          description: forbidden — нужна роль admin
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Выпустить новую версию прайса (админ)
+      tags:
+      - admin-billing
   /admin/users:
     get:
       description: |-
@@ -3791,6 +6096,22 @@ paths:
       summary: Поиск юзеров (для лукапов в CRM)
       tags:
       - admin-users
+  /auth/email-available:
+    get:
+      parameters:
+      - description: Проверяемый адрес
+        in: query
+        name: email
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_auth.emailAvailableResp'
+      summary: Свободен ли email для регистрации
+      tags:
+      - auth
   /auth/login:
     post:
       consumes:
@@ -4001,6 +6322,35 @@ paths:
       summary: Подтвердить email по токену из письма
       tags:
       - auth
+  /auth/yandex:
+    post:
+      description: |-
+        Принимает одноразовый code из redirect'а Яндекса, обменивает
+        его на профиль и выдаёт пару токенов. Регистрация и вход —
+        одна ручка: человек не должен помнить, заводил ли аккаунт.
+      parameters:
+      - description: code из redirect_uri
+        in: body
+        name: input
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.yandexReq'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_auth.registerResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Вход и регистрация через Яндекс
+      tags:
+      - auth
   /categories:
     get:
       produces:
@@ -4154,6 +6504,179 @@ paths:
       summary: Создать заявку (lead)
       tags:
       - leads
+  /manager/checklist_templates:
+    get:
+      description: |-
+        Из чего выбирать при подключении чеклиста к проекту.
+        Выключенные шаблоны не показываются: подключить их нельзя.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.templatesResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Библиотека чеклистов (менеджер)
+      tags:
+      - manager-publications
+  /manager/orders:
+    get:
+      description: |-
+        Резерв кончился, а состав не собран — дальше автоматика
+        сделать ничего не может.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.ordersListResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заказы, где нужен менеджер
+      tags:
+      - manager-orders
+  /manager/orders/{id}/candidates:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Приоритеты продолжают существующие. Если место свободно,
+        приглашение уходит немедленно.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: кого добавить в резерв
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_orders.addCandidatesReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_json; bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — заказ не найден
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: wrong_status — заказ уже укомплектован, оплачен или отменён
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Добрать людей в подборку (менеджер)
+      tags:
+      - manager-orders
+  /manager/orders/{id}/invite:
+    post:
+      description: |-
+        Обычно очередь двигается сама: отказ и сгоревшее
+        приглашение сразу отдают место следующему. Ручка нужна там,
+        где автоматике нечего было двигать — например, заказ остался
+        черновиком и приглашения не ушли вовсе.
+        Приглашение уходит только на реально свободное место
+        (needed − accepted − invited); если звать некого, это 409, а
+        не тихий успех.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — заказ не найден
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: wrong_status — заказ собран, оплачен или отменён; no_free_slot
+            — свободных мест нет или резерв кончился
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Позвать следующих по приоритету (менеджер)
+      tags:
+      - manager-orders
+  /manager/orders/{id}/paid:
+    post:
+      description: |-
+        Платежей в системе нет, отметка ручная. Проект после этого
+        менеджер создаёт сам — авто-создания нет намеренно.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — заказ не найден
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: wrong_status — оплатить можно только укомплектованный заказ
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отметить оплату (менеджер)
+      tags:
+      - manager-orders
   /manager/projects:
     get:
       produces:
@@ -4172,7 +6695,11 @@ paths:
       consumes:
       - application/json
       description: |-
-        Создаёт проект с указанным pipeline_id. Если client_user_id
+        kind задаёт вид проекта: creators_turnkey (выкладки),
+        production_turnkey (воронка, по умолчанию) или general.
+        pipeline_id обязателен только для production_turnkey — у
+        двух других видов воронки нет.
+        Если client_user_id
         не передан, требуется client_name+client_contact (no-account
         клиент). assigned_to_user_id принудительно ставится в текущего
         менеджера — менеджер не может вешать чужой проект на коллегу.
@@ -4250,6 +6777,134 @@ paths:
       summary: Inline-редактирование title/budget/notes
       tags:
       - manager-projects
+  /manager/projects/{id}/accruals/{accrual_id}/approve:
+    post:
+      description: После утверждения строка не пересчитывается.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: accrual id
+        in: path
+        name: accrual_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.Accrual'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — начисление не найдено
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "409":
+          description: wrong_accrual_status — период уже утверждён или выплачен
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Утвердить период (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/accruals/{accrual_id}/paid:
+    post:
+      description: |-
+        Только после утверждения: между «посчитали» и «отправили
+        деньги» проходит время, и путать их нельзя.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: accrual id
+        in: path
+        name: accrual_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.Accrual'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — начисление не найдено
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "409":
+          description: wrong_accrual_status — период не утверждён или уже выплачен
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отметить выплату (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/accruals/recalc:
+    post:
+      description: |-
+        Считается по фактам: выкладки месяца, их статус и просмотры
+        из ежедневного сбора. Недосданные ролики не оплачиваются —
+        вычет пропорционален недостаче. Бонус идёт только с роликов,
+        перешагнувших порог просмотров. Утверждённые и выплаченные
+        строки не трогаются.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ГГГГ-ММ, по умолчанию текущий
+        in: query
+        name: month
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.accrualsResp'
+        "400":
+          description: bad_id; bad_month
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Пересчитать начисления за месяц (менеджер)
+      tags:
+      - manager-billing
   /manager/projects/{id}/advance_stage:
     post:
       description: |-
@@ -4336,6 +6991,283 @@ paths:
       summary: Назначить специалиста на проект (по UUID)
       tags:
       - manager-projects
+  /manager/projects/{id}/autoping:
+    get:
+      description: |-
+        Четыре выключателя по четырём видам напоминаний. Проект, где
+        ничего не трогали, пингуется полностью — отсутствие настроек
+        означает «всё включено».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.ReminderPrefs'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Настройки автопинга проекта (менеджер)
+      tags:
+      - manager-publications
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Поля необязательные: не переданное остаётся как было.
+        Выключенное напоминание не откладывается, а не отправляется;
+        кнопка «напомнить» руками автопингом не управляется.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: выключатели
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.autopingReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.ReminderPrefs'
+        "400":
+          description: bad_json; bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Изменить автопинг проекта (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/billing:
+    get:
+      description: |-
+        Условия, платежи заказчика, начисления креаторам за месяц,
+        UTM-метки и итог периода — одним ответом: по частям это
+        пять запросов на один экран. Все суммы в копейках.
+        В каждой строке начисления две суммы: total — счёт
+        заказчику за этого креатора, payout_total — выплата
+        самому креатору. В totals они сведены: total, payouts и
+        margin (что остаётся платформе).
+        Тариф ступенчатый: до порога на ролик — полная ставка,
+        свыше — пониженная.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ГГГГ-ММ, по умолчанию текущий
+        in: query
+        name: month
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.ProjectBilling'
+        "400":
+          description: bad_id; bad_month — месяц не в формате ГГГГ-ММ
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Деньги проекта (менеджер)
+      tags:
+      - manager-billing
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Условия — снимок, а не ссылка на действующий прайс: правка
+        прайса не переписывает историю уже идущего проекта.
+        У тарифа две стороны: что платит клиент и что получает
+        креатор. Креаторские ставки null означают «столько же» —
+        тогда выплата равна счёту и маржи у платформы нет.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ставки в копейках
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_billing.termsReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.Terms'
+        "400":
+          description: bad_json; bad_id; invalid_input — отрицательная ставка
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Задать условия проекта (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/billing/adopt:
+    post:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.Terms'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден, или прайс ещё не заведён
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Взять условия из действующего прайса (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/checklist:
+    get:
+      description: |-
+        Снимок, подключённый к проекту. Правки в нём остаются внутри
+        проекта: библиотека шаблонов живёт отдельно.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.managerChecklistResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Чеклист проекта (менеджер)
+      tags:
+      - manager-publications
+    post:
+      consumes:
+      - application/json
+      description: 'Снимок: последующая правка библиотеки не меняет этот проект.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: шаблон чек-листа
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.snapshotReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.snapshotResp'
+        "400":
+          description: bad_json — нужен template_id; bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Скопировать чеклист из библиотеки в проект (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/claim:
     post:
       parameters:
@@ -4364,11 +7296,23 @@ paths:
       - manager-projects
   /manager/projects/{id}/comments:
     get:
+      description: |-
+        Без параметров — вся переписка: клиентская ветка, ветки
+        креаторов и внутренние заметки. thread сужает до одной ветки;
+        для thread=creator нужен creator_id.
       parameters:
       - description: project id
         in: path
         name: id
         required: true
+        type: string
+      - description: client | creator | internal
+        in: query
+        name: thread
+        type: string
+      - description: чья ветка, при thread=creator
+        in: query
+        name: creator_id
         type: string
       produces:
       - application/json
@@ -4377,14 +7321,31 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_projects.commentsResp'
+        "400":
+          description: bad_id; bad_thread — неизвестное значение; bad_creator_id —
+            не uuid или не задан при thread=creator
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
-      summary: Комментарии проекта (менеджер)
+      summary: Переписка проекта (менеджер)
       tags:
       - manager-projects
     post:
       consumes:
       - application/json
+      description: |-
+        thread выбирает ветку: client (по умолчанию), creator (нужен
+        creator_id) или internal. Прежнее поле is_internal=true
+        равнозначно thread=internal.
       parameters:
       - description: project id
         in: path
@@ -4404,11 +7365,231 @@ paths:
           description: Created
           schema:
             $ref: '#/definitions/internal_projects.Comment'
+        "400":
+          description: bad_json; bad_id; bad_creator_id; empty_comment — пустое сообщение;
+            invalid_input — превышена длина или неизвестный body_format
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер; not_a_project_creator
+            — creator_id не в составе проекта
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
-      summary: Добавить комментарий (менеджер)
+      summary: Написать в переписку проекта (менеджер)
       tags:
       - manager-projects
+  /manager/projects/{id}/comments/participants:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: client (по умолчанию) | creator | internal
+        in: query
+        name: thread
+        type: string
+      - description: чья ветка, при thread=creator
+        in: query
+        name: creator_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.participantsResp'
+        "400":
+          description: bad_id; bad_thread; bad_creator_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Кого можно упомянуть в ветке (менеджер)
+      tags:
+      - manager-projects
+  /manager/projects/{id}/creators:
+    get:
+      description: |-
+        Действующие креаторы с именами и ссылками на аккаунты по
+        пяти площадкам — чтобы проверить выкладку глазами, не
+        спрашивая креатора. Выбывшие из состава не показываются.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.personsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Состав проекта (менеджер)
+      tags:
+      - manager-publications
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: кого добавляем
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.creatorReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_json — нужен creator_user_id; bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект или пользователь не найден
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: not_a_creator — не специалист либо аккаунт отключён
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Добавить креатора в проект (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/creators/{creator_id}:
+    delete:
+      description: 'Мягкое удаление: сданные выкладки и цифры в отчёте остаются.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: creator user id
+        in: path
+        name: creator_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_id — неверный id проекта или креатора
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: creator_not_in_project — этого креатора нет в составе
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Убрать креатора из проекта (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/creators/{creator_id}/utm:
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Метку ставит менеджер, креатор её только видит. Переходы
+        заполняются снаружи; бонус за них пока выключен (BETA) и
+        считается, только если задать ставку в условиях.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: creator id
+        in: path
+        name: creator_id
+        required: true
+        type: string
+      - description: ссылка
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_billing.utmReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.UTMLink'
+        "400":
+          description: bad_json; bad_id; invalid_input — пустая ссылка или не http(s)
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Поставить UTM-метку креатору (менеджер)
+      tags:
+      - manager-billing
   /manager/projects/{id}/events:
     get:
       parameters:
@@ -4432,11 +7613,137 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_projects.eventsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
       summary: Лента активности проекта (менеджер)
       tags:
       - manager-projects
+  /manager/projects/{id}/materials:
+    get:
+      description: |-
+        Все материалы обеих аудиторий. Приложенное к сдаче сюда не
+        попадает — оно живёт в карточке сдачи.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.materialsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Материалы проекта (менеджер)
+      tags:
+      - manager-publications
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: материал
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.materialReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.Material'
+        "400":
+          description: bad_json; bad_id; invalid_input — неизвестный kind или audience,
+            пустое название, ссылка не http(s)
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: too_many_materials — в проекте уже сто материалов
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Добавить материал в проект (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/materials/{material_id}:
+    delete:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: material id
+        in: path
+        name: material_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: удалено
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — материал не найден или он из другого проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Убрать материал из проекта (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/move_stage:
     post:
       consumes:
@@ -4501,6 +7808,314 @@ paths:
       summary: Перенести проект на конкретный шаг (для канбана по шагам)
       tags:
       - manager-projects
+  /manager/projects/{id}/order:
+    get:
+      description: |-
+        Экран проекта показывает состав, но не показывает, как он
+        собирался: клиент присылал ПРИОРИТЕТ, а не список, и место
+        освобождается отказом или молчанием. Менеджеру нужна вся
+        очередь целиком, включая отказавшихся, — иначе непонятно,
+        почему в проекте четвёртый по счёту.
+
+        Отдельной ручкой, а не фильтром /manager/orders: тот список
+        отдаёт только застрявшие заказы, а у проекта заказ давно
+        оплачен и туда не попадает.
+        Проект, заведённый руками, заказа не имеет — 404 здесь
+        означает «его и не было», а не сбой.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — проект вырос не из заказа
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заказ, из которого вырос проект (менеджер)
+      tags:
+      - manager-orders
+  /manager/projects/{id}/payments/{kind}:
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Видов два: prepayment и final — половина вперёд, половина по
+        завершении. Подтверждённый платёж не переписывается.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: prepayment или final
+        in: path
+        name: kind
+        required: true
+        type: string
+      - description: сумма в копейках
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_billing.paymentReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.Payment'
+        "400":
+          description: bad_json; bad_id; invalid_input — неизвестный вид платежа или
+            отрицательная сумма
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "409":
+          description: already_confirmed — платёж подтверждён, сумму задним числом
+            не меняем
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сколько ждём от заказчика (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/payments/{kind}/confirm:
+    post:
+      description: |-
+        Платёжного провайдера нет: деньги приходят мимо системы, а
+        менеджер подтверждает получение — поэтому подтверждение
+        именное и заносится в журнал.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: prepayment или final
+        in: path
+        name: kind
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.Payment'
+        "400":
+          description: bad_id; invalid_input — неизвестный вид платежа
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — платёж не заведён или проект не ваш
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "409":
+          description: already_confirmed — платёж уже подтверждён
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Подтвердить платёж (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/publications:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.listResp'
+        "400":
+          description: bad_id — неверный id проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Все выкладки проекта (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/publications/batch:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: параметры пачки
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.batchReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.BatchResult'
+        "400":
+          description: bad_json; bad_date — дата не в формате ГГГГ-ММ-ДД; bad_schedule;
+            invalid_input — не выбраны креаторы или даты, пачка больше 500; nothing_to_create
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: wrong_project_kind — выкладки бывают только у «креаторы под
+            ключ»; creator_not_in_project — креатора нет в составе
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Проставить даты выкладок пачкой (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/publications/cancel_batch:
+    post:
+      consumes:
+      - application/json
+      description: Отменяются только те выкладки, по которым ещё ничего не сдано.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: id пачки
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.cancelBatchReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.cancelBatchResp'
+        "400":
+          description: bad_json — нужен batch_id отменяемой пачки; bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отменить пачку выкладок (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/publications/preview:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Показывает, какие даты будут созданы, до создания. Массовая
+        простановка — единственное место, где одна ошибка стоит ручной
+        чистки десятков строк.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: параметры пачки
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.batchReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.previewResp'
+        "400":
+          description: bad_json — не удалось разобрать тело; invalid_input — дата
+            не в формате ГГГГ-ММ-ДД; bad_schedule — неизвестная схема или слишком
+            большой диапазон
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или назначен другому менеджеру
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Предпросмотр пачки выкладок (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/reject_specialist:
     post:
       consumes:
@@ -4526,6 +8141,146 @@ paths:
       summary: Отклонить предложенного клиентом исполнителя
       tags:
       - manager-projects
+  /manager/projects/{id}/report:
+    get:
+      description: |-
+        Итоги, накопительный график, сравнение креаторов и площадок,
+        таблица роликов. Заменяет ручную таблицу.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Report'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отчёт по проекту (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/report.csv:
+    get:
+      description: Для тех, кому нужен файл, а не страница.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: CSV
+          schema:
+            type: string
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Выгрузка отчёта в CSV (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/settings:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.ProjectSettings'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Настройки проекта: этап черновика и показ статистики (менеджер)'
+      tags:
+      - manager-publications
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Этап черновика добавляет каждой НОВОЙ выкладке второй срок;
+        уже проставленные сроки выключение не стирает — по ним креатор
+        уже сдаёт. Показ статистики закрывает заказчику и отчёт, и цифры
+        в ленте роликов.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: переключатели
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.ProjectSettings'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.ProjectSettings'
+        "400":
+          description: bad_json; bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Изменить настройки проекта (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/steps/{step_id}/complete:
     post:
       parameters:
@@ -4624,6 +8379,132 @@ paths:
       summary: Входящие проекты без ответственного
       tags:
       - manager-projects
+  /manager/publication_date_requests/{req_id}/decide:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: date request id
+        in: path
+        name: req_id
+        required: true
+        type: string
+      - description: решение по переносу
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.decideReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_json; bad_id — неверный id просьбы
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — просьба не найдена, уже рассмотрена или в чужом
+            проекте
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Решение по просьбе о переносе даты (менеджер)
+      tags:
+      - manager-publications
+  /manager/publications/{pub_id}/close:
+    post:
+      consumes:
+      - application/json
+      description: Исключение из правила «закрыто на пяти ссылках». Причина обязательна.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: причина закрытия
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.closeReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_id; invalid_input — закрытие неполной выкладки
+            требует причины
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или в чужом проекте
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: publication_closed — выкладка уже закрыта или отменена
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Закрыть неполную выкладку вручную (менеджер)
+      tags:
+      - manager-publications
+  /manager/publications/{pub_id}/remind:
+    post:
+      description: |-
+        Не дожидаясь утренней рассылки. Второе нажатие в тот же день
+        ничего не отправит: креатор не должен получать два одинаковых
+        сообщения подряд.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.remindResp'
+        "400":
+          description: bad_id — неверный id выкладки
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или в чужом проекте
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: already_reminded — сегодня по этой выкладке напоминание уже
+            отправляли
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Напомнить о выкладке сейчас (менеджер)
+      tags:
+      - manager-publications
   /me:
     get:
       produces:
@@ -4682,6 +8563,791 @@ paths:
       summary: Сохранить контакты клиента
       tags:
       - client-profile
+  /me/creator/availability:
+    get:
+      description: |-
+        Отдаёт только те месяцы, которые вы отмечали. Не отмеченный
+        месяц в выдачу не попадает: «не отмечал» и «занят» — разные
+        вещи, и склеивать их в false нельзя.
+      parameters:
+      - description: сколько месяцев вперёд, 1-24, по умолчанию 12
+        in: query
+        name: months
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.myAvailabilityResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Моя занятость по месяцам (креатор)
+      tags:
+      - creator-orders
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Клиент видит занятость ещё при расстановке приоритета —
+        иначе первым в списке окажется тот, кто взять не может.
+      parameters:
+      - description: занятость по месяцам
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_orders.availabilityReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_json; bad_month; invalid_input — не указано, свободны вы
+            или нет
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отметить занятость в месяце (креатор)
+      tags:
+      - creator-orders
+  /me/creator/invitations:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.invitationsResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои приглашения (креатор)
+      tags:
+      - creator-orders
+  /me/creator/invitations/{order_id}/respond:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Отказ не штраф и на место в выдаче не влияет. При отказе
+        приглашение немедленно уходит следующему по приоритету.
+      parameters:
+      - description: order id
+        in: path
+        name: order_id
+        required: true
+        type: string
+      - description: согласие или отказ
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_orders.respondReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_json; bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: 'not_invited — активного приглашения нет: сгорело, отозвано
+            или адресовано другому'
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Ответить на приглашение (креатор)
+      tags:
+      - creator-orders
+  /me/creator/projects:
+    get:
+      description: |-
+        Проекты, где я в действующем составе, со счётчиками только
+        по своим выкладкам: сколько всего, сколько не сдано и
+        сколько горит. Просьба о переносе снимает просрочку — так же,
+        как в напоминаниях.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.creatorProjectsResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои проекты (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}:
+    get:
+      description: |-
+        Шапка страницы выкладок: название, бриф, период, месячный
+        план, нужен ли черновик, кому писать и счётчики по своим
+        выкладкам. Раньше всё это фронт собирал из списка выкладок,
+        а брифа и плана там взять было неоткуда.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.CreatorProjectCard'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не в его составе
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Карточка проекта (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}/checklist:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.checklistResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — вы не участник этого проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Чеклист проекта (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}/comments:
+    get:
+      description: |-
+        Креатор «под ключ» видит только свою ветку с менеджером:
+        ни переписки клиента, ни веток других креаторов. В общем
+        проекте это переписка с клиентом.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.commentsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не в его составе
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Моя переписка по проекту (креатор/исполнитель)
+      tags:
+      - creator-projects
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.commentReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.Comment'
+        "400":
+          description: bad_json; bad_id; empty_comment — пустое сообщение; invalid_input
+            — превышена длина или неизвестный body_format
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не в его составе
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Написать в переписку по проекту (креатор/исполнитель)
+      tags:
+      - creator-projects
+  /me/creator/projects/{id}/comments/participants:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.participantsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не в его составе
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Кого можно упомянуть в переписке (креатор/исполнитель)
+      tags:
+      - creator-projects
+  /me/creator/projects/{id}/earnings:
+    get:
+      description: |-
+        По каким условиям и сколько вышло по месяцам. Показывается
+        креаторская сторона тарифа и его собственные выплаты: что
+        за него платит клиент — не его данные.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.CreatorEarnings'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не в его составе
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мой заработок по проекту (креатор)
+      tags:
+      - creator-billing
+  /me/creator/projects/{id}/materials:
+    get:
+      description: |-
+        Бренд-гайд, обучение и прочее, что открывается в момент
+        добавления в проект.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.materialsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не в его составе
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Материалы проекта (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}/publications:
+    get:
+      description: |-
+        Только свои: чужие выкладки не попадают в выдачу, а не прячутся
+        на фронте.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.listResp'
+        "400":
+          description: bad_id — неверный id проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои выкладки в проекте (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}/report:
+    get:
+      description: 'Только свои ролики: чужие цифры не попадают в выдачу.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Report'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — вы не участник этого проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "410":
+          description: collapsed_no_detail — проект закрыт, подробная статистика по
+            роликам больше не хранится
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отчёт по своим роликам (креатор)
+      tags:
+      - creator-publications
+  /me/creator/publications/{pub_id}/date_request:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Дедлайн ставит менеджер; креатор может только попросить.
+        Пока просьба не рассмотрена, выкладка не считается просроченной.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: новая дата и причина
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.dateRequestReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.DateRequest'
+        "400":
+          description: bad_json; bad_id; bad_date — дата не в формате ГГГГ-ММ-ДД;
+            invalid_input — нужна причина, перенос в прошлое
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или чужая
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: already_requested — непринятая просьба уже висит
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Попросить перенос дедлайна (креатор)
+      tags:
+      - creator-publications
+  /me/creator/publications/{pub_id}/links:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Ссылки принимаются в любом виде — площадка распознаётся сама.
+        Пришли все пять — выкладка закрыта, одна-четыре — сдана частично.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: ссылки на выкладку
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.submitReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_id; no_links — не передано ни одной ссылки; duplicate_platform
+            — две ссылки на одну площадку; unknown_platform — ссылка не с одной из
+            пяти площадок
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или заведена на другого креатора
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: publication_closed — досылать ссылки нельзя
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "422":
+          description: checklist_incomplete — не отмечены обязательные пункты, в message
+            перечислены какие
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сдать ролик ссылками (креатор)
+      tags:
+      - creator-publications
+  /me/general-projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.generalListResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои общие проекты (клиент)
+      tags:
+      - client-projects
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Клиент сам выбирает исполнителя и ставит один срок. Ни
+        воронки, ни выкладок, ни менеджера: задача уходит
+        исполнителю уведомлением, дальше сдача и приёмка.
+      parameters:
+      - description: body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.generalCreateReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.GeneralProject'
+        "400":
+          description: bad_json; bad_specialist_id — не uuid; bad_due_date — не дата
+            в формате YYYY-MM-DD; invalid_input — пустое название, срок в прошлом
+            или дальше года, заказ у самого себя
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "422":
+          description: specialist_unavailable — профиль не опубликован, аккаунт выключен
+            или это сотрудник
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Завести общий проект
+      tags:
+      - client-projects
+  /me/general-projects/{id}:
+    get:
+      description: |-
+        Вместе с журналом сдач: что и когда сдавали, что принято,
+        что вернули и почему.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.GeneralProject'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Карточка общего проекта (клиент)
+      tags:
+      - client-projects
+  /me/general-projects/{id}/accept:
+    post:
+      description: 'Принятие закрывает проект: другого конца у общего проекта нет.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.GeneralProject'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "409":
+          description: no_pending_delivery — исполнитель ещё ничего не сдал; project_closed
+            — проект уже принят или отменён
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Принять работу (клиент)
+      tags:
+      - client-projects
+  /me/general-projects/{id}/cancel:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Отменить проект со сданной и неразобранной работой нельзя —
+        сначала примите её или верните на доработку.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: причина
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_projects.generalReasonReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: отменено
+        "400":
+          description: bad_json; bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "409":
+          description: delivery_pending — работа сдана и ждёт вашего ответа; project_closed
+            — проект уже принят или отменён
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отменить общий проект (клиент)
+      tags:
+      - client-projects
+  /me/general-projects/{id}/rework:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: что не так
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.generalReasonReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.GeneralProject'
+        "400":
+          description: bad_json; bad_id; invalid_input — не указано, что доработать
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "409":
+          description: no_pending_delivery — исполнитель ещё ничего не сдал; project_closed
+            — проект уже принят или отменён; rework_limit — правки по проекту закончились
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вернуть работу на доработку (клиент)
+      tags:
+      - client-projects
   /me/leads/{id}/recipient:
     patch:
       consumes:
@@ -4761,6 +9427,441 @@ paths:
       summary: Входящие заявки специалиста
       tags:
       - leads
+  /me/orders:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.ordersListResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои заказы на подбор (заказчик)
+      tags:
+      - client-orders
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: состав заказа
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_orders.createOrderReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_orders.CreateResult'
+        "400":
+          description: bad_json; bad_month; invalid_input — объём, месяц в прошлом,
+            пустой id; not_enough_candidates — в подборке меньше, чем нужно взять;
+            duplicate_candidate
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "403":
+          description: no_consent — не приняты условия работы
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: too_many_creators — в первый месяц доступен один креатор, со
+            второго до трёх; not_a_creator — в пакет берутся только блогеры и авторы
+            UGC; creator_busy — кто-то занят в этом месяце
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Создать заказ на подбор (заказчик)
+      tags:
+      - client-orders
+  /me/orders/{id}:
+    get:
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_id — неверный id заказа
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — заказ не ваш или не существует
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заказ на подбор (заказчик)
+      tags:
+      - client-orders
+  /me/orders/{id}/cancel:
+    post:
+      description: Приглашения отзываются, приглашённые получают уведомление.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — заказ не ваш
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: wrong_status — заказ уже оплачен или отменён
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Распустить состав (заказчик)
+      tags:
+      - client-orders
+  /me/orders/{id}/estimate:
+    get:
+      description: |-
+        Оклады известны точно, бонус — прогноз: он зависит от
+        просмотров, которых ещё нет. Прогноз строится по истории
+        тех самых людей, что в подборке — по их сданным роликам в
+        любых проектах. По кому истории нет, тот в среднее не
+        входит и посчитан в without_history: считать новичка нулём
+        значит занизить смету ровно настолько, насколько подборка
+        новая. Если истории нет ни у кого, has_forecast=false и
+        показывать надо только оклады — бонус не ноль, а неизвестен.
+        Условия берутся той версии, с которой клиент согласился при
+        создании заказа, а не действующей на сегодня.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.OrderEstimate'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — заказ не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Во сколько обойдётся заказ (клиент)
+      tags:
+      - client-billing
+  /me/orders/{id}/invite:
+    post:
+      description: |-
+        Приглашения уходят первым по приоритету и только на свободные
+        места. Откажется или промолчит — подключится следующий.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — заказ не ваш
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: wrong_status — приглашения уже отправлены
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отправить приглашения (заказчик)
+      tags:
+      - client-orders
+  /me/orders/{id}/priority:
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Приглашения уходят по порядку, и передумать после «отправить» —
+        нормальная просьба. Переставить можно только тех, кого ещё не
+        звали: у приглашённого уже тикает срок ответа. Занятые места
+        достаются тем же людям в новом порядке, поэтому перестановка
+        не задевает приглашённых, стоящих между ними.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: новый порядок
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_orders.reorderReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_json; bad_id; invalid_input — пустой список; priority_set_mismatch
+            — прислан не тот набор людей
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — заказ не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: priority_locked — заказ уже собран, оплачен или отменён
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Переставить приоритет в заказе (клиент)
+      tags:
+      - client-orders
+  /me/orders/availability:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Занятость нужна на карточке в выдаче: иначе первым в списке
+        окажется тот, кто взять не может, и заказ провисит трое суток
+        впустую.
+
+        Отдельной ручкой, а не полем в поиске: поиск живёт в
+        OpenSearch и обновляется через outbox, а занятость меняется
+        каждый день и от месяца к месяцу. Держать её в индексе значило
+        бы переиндексировать каталог на каждую отметку креатора.
+        Фильтр по категориям при этом отдельной ручки не требует —
+        у /search он уже есть: ?category=blogger,ugc.
+      parameters:
+      - description: месяцы, на которые смотрим
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_orders.availabilityQueryReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.availabilityQueryResp'
+        "400":
+          description: bad_json; bad_month — месяц не в формате ГГГГ-ММ; too_many_ids
+            — больше 200 человек за раз
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Кто из выбранных занят в месяце (заказчик)
+      tags:
+      - client-orders
+  /me/orders/estimate:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Сумма для страницы подбора: клиент собирает состав, и она
+        пересчитывается на каждое изменение. Оклады известны точно,
+        бонус — прогноз по истории выбранных людей, разложенный по
+        ступеням тарифа. Кто без истории, тот в среднее не входит и
+        посчитан в without_history: считать новичка нулём значит
+        занизить смету ровно настолько, насколько подборка новая.
+        has_forecast=false означает «бонус неизвестен», а не «ноль».
+        Условия берутся действующие — те, с которыми клиент и
+        согласится при оформлении.
+      parameters:
+      - description: состав
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_billing.draftEstimateReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.OrderEstimate'
+        "400":
+          description: bad_json; invalid_input — пустой состав, больше 50 человек,
+            ноль роликов или креаторов
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — прайс ещё не заведён
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сколько будет стоить пакет (заказчик, до создания заказа)
+      tags:
+      - client-billing
+  /me/orders/limit:
+    get:
+      description: |-
+        Первый месяц — один креатор: клиент проверяет формат на
+        небольшой сумме, платформа проверяет, что клиент платит и
+        адекватно даёт обратную связь. Дальше 2–3.
+        Месяц важен: клиент берёт команду с конкретного месяца, и
+        к декабрю у него может быть закрыто больше месяцев, чем к
+        сентябрю — лимит на сегодня показывал бы не то число, по
+        которому потом создастся заказ.
+        Клиент видит ограничение ДО подбора, а не при попытке
+        добавить второго: запрет посреди работы читается как поломка.
+      parameters:
+      - description: ГГГГ-ММ, по умолчанию текущий
+        in: query
+        name: month
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.limitResp'
+        "400":
+          description: bad_month — месяц не в формате ГГГГ-ММ
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сколько креаторов доступно на месяц (заказчик)
+      tags:
+      - client-orders
+  /me/orders/terms:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.termsResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — версия правил ещё не опубликована
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Действующие условия работы (заказчик)
+      tags:
+      - client-orders
+  /me/orders/terms/consent:
+    post:
+      description: |-
+        Согласие фиксируется с конкретной версией: правила меняются —
+        старые заказы остаются на своей.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Terms'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — версия правил ещё не опубликована
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Принять условия работы (заказчик)
+      tags:
+      - client-orders
   /me/portfolio:
     get:
       produces:
@@ -5447,8 +10548,92 @@ paths:
       summary: Мои проекты (для клиента)
       tags:
       - client-projects
+  /me/projects/{id}/billing:
+    get:
+      description: |-
+        Что подписано, что оплачено и состав месяца: кто сколько
+        роликов сдал и во сколько это обошлось. Заказчик за эту
+        команду платит, поэтому строки начислений — его счёт.
+        UTM-метки ему не отдаются: это инструмент менеджера.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ГГГГ-ММ, по умолчанию текущий
+        in: query
+        name: month
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.ProjectBilling'
+        "400":
+          description: bad_id; bad_month — месяц не в формате ГГГГ-ММ
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Условия и оплата по проекту (заказчик)
+      tags:
+      - client-billing
+  /me/projects/{id}/calendar:
+    get:
+      description: |-
+        Что уже вышло и что запланировано, с отметкой креатора.
+        Просрочек в календаре нет: выкладка с прошедшей датой без
+        ссылок остаётся «запланированной».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: месяц в виде ГГГГ-ММ, по умолчанию текущий
+        in: query
+        name: month
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.calendarResp'
+        "400":
+          description: bad_id; bad_month — месяц не в формате ГГГГ-ММ
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Календарь месяца (заказчик)
+      tags:
+      - client-publications
   /me/projects/{id}/comments:
     get:
+      description: |-
+        Только клиентская ветка: переписку менеджера с креаторами и
+        внутренние заметки клиент не видит.
       parameters:
       - description: project id
         in: path
@@ -5462,14 +10647,31 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_projects.commentsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
-      summary: Комментарии моего проекта (клиент)
+      summary: Переписка по моему проекту (клиент)
       tags:
       - client-projects
     post:
       consumes:
       - application/json
+      description: |-
+        Сообщение уходит в клиентскую ветку. Креаторы её не видят.
+        body_format=html — разметка чистится на сервере: остаются
+        жирный, курсив, списки, ссылки и упоминания, остальное
+        выбрасывается. Упомянуть можно только участника ветки.
       parameters:
       - description: project id
         in: path
@@ -5489,9 +10691,57 @@ paths:
           description: Created
           schema:
             $ref: '#/definitions/internal_projects.Comment'
+        "400":
+          description: bad_json; bad_id; empty_comment — пустое сообщение; invalid_input
+            — превышена длина или неизвестный body_format
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
-      summary: Клиент добавляет комментарий к своему проекту
+      summary: Клиент пишет в переписку по своему проекту
+      tags:
+      - client-projects
+  /me/projects/{id}/comments/participants:
+    get:
+      description: |-
+        Список для выпадашки @. Он же — множество, по которому
+        упоминания проверяются на записи.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.participantsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Кого можно упомянуть в переписке (клиент)
       tags:
       - client-projects
   /me/projects/{id}/funnel:
@@ -5518,6 +10768,187 @@ paths:
       summary: Воронка моего проекта (стадии + видимые шаги)
       tags:
       - client-projects
+  /me/projects/{id}/materials:
+    get:
+      description: |-
+        Только помеченные как клиентские. Обучение и бренд-гайд для
+        креаторов заказчику не показываются.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.materialsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или он не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Материалы проекта (заказчик)
+      tags:
+      - client-publications
+  /me/projects/{id}/notifications:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.NotificationPrefs'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Настройки уведомлений (заказчик)
+      tags:
+      - client-publications
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Незаданные поля не меняются. views_threshold = 0 или null
+        означает «не уведомлять о просмотрах».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: настройки уведомлений
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.prefsReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.NotificationPrefs'
+        "400":
+          description: bad_json; bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Изменить настройки уведомлений (заказчик)
+      tags:
+      - client-publications
+  /me/projects/{id}/report:
+    get:
+      description: |-
+        Те же цифры, что у менеджера, без внутренней кухни.
+        Доступен, только если у проекта включён показ статистики.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Report'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш либо показ статистики отключён (ответ
+            одинаковый намеренно)
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отчёт по проекту (заказчик)
+      tags:
+      - client-publications
+  /me/projects/{id}/report.csv:
+    get:
+      description: |-
+        Та же таблица, что у менеджера. Доступна по тому же правилу,
+        что и сам отчёт: при выключенном показе статистики — 404,
+        как и «не ваш проект».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: CSV
+          schema:
+            type: string
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш или показ статистики выключен
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Выгрузка отчёта в CSV (заказчик)
+      tags:
+      - client-publications
   /me/projects/{id}/steps/{step_id}/submit_review:
     post:
       parameters:
@@ -5543,6 +10974,140 @@ paths:
       summary: Закрыть review-шаг (после оставления отзыва)
       tags:
       - client-projects
+  /me/projects/{id}/videos:
+    get:
+      description: |-
+        Ролик появляется в ленте, когда его можно посмотреть, — то есть
+        когда креатор сдал ссылки, а не когда стоит дата в плане.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.clientFeedResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вышедшие ролики проекта (заказчик)
+      tags:
+      - client-publications
+  /me/specialist/general-projects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.generalListResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Общие проекты, где я исполнитель
+      tags:
+      - specialist-projects
+  /me/specialist/general-projects/{id}:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.GeneralProject'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не его исполнитель
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Карточка общего проекта (исполнитель)
+      tags:
+      - specialist-projects
+  /me/specialist/general-projects/{id}/deliver:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Материалы — ссылки на результат, до 20 штук. Пока клиент не
+        ответил, сдать второй раз нельзя.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.generalDeliverReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_projects.Delivery'
+        "400":
+          description: bad_json; bad_id; invalid_input — нет ни ссылки, ни комментария;
+            больше 20 материалов; ссылка не http(s); неизвестный kind материала
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "404":
+          description: not_found — проект не найден или вы не его исполнитель
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "409":
+          description: delivery_pending — предыдущая сдача ещё не разобрана; project_closed
+            — проект принят или отменён
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сдать работу (исполнитель)
+      tags:
+      - specialist-projects
   /me/specialist/projects:
     get:
       produces:
@@ -5837,12 +11402,15 @@ paths:
         in: query
         name: kind
         type: string
-      - description: Код категории из /categories — отфильтровать навыки, релевантные
-          категории (см. skill_categories). Платформы при фильтре по категории не
-          возвращаются.
+      - collectionFormat: csv
+        description: Коды категорий из /categories (можно несколько или через запятую)
+          — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы
+          при фильтре по категории не возвращаются.
         in: query
+        items:
+          type: string
         name: category
-        type: string
+        type: array
       produces:
       - application/json
       responses:

@@ -151,6 +151,48 @@ type Config struct {
 	ReviewDeadline      time.Duration `env:"REVIEW_DEADLINE" envDefault:"168h"`
 	ReviewCheckInterval time.Duration `env:"REVIEW_CHECK_INTERVAL" envDefault:"1h"`
 
+	// PublicationRemindersInterval — как часто воркер проверяет, кому пора
+	// напомнить о выкладке. Час: отправка всё равно дедуплицируется по
+	// дате, поэтому частый тик не приводит к повторным сообщениям, а
+	// только сокращает задержку после рестарта.
+	PublicationRemindersInterval time.Duration `env:"PUBLICATION_REMINDERS_INTERVAL" envDefault:"1h"`
+	// PublicationRemindersAfterHour — час местного времени, с которого
+	// можно писать креаторам. До него проход выполняется вхолостую.
+	PublicationRemindersAfterHour int `env:"PUBLICATION_REMINDERS_AFTER_HOUR" envDefault:"9"`
+
+	// Сбор статистики по сданным роликам (instacurl). Без URL и ключа
+	// сбор не запускается вовсе: пустой отчёт читается как «ролики никто
+	// не смотрит», и это худшая из подмен.
+	InstacurlURL     string        `env:"INSTACURL_URL"`
+	InstacurlAPIKey  string        `env:"INSTACURL_API_KEY"`
+	InstacurlTimeout time.Duration `env:"INSTACURL_TIMEOUT" envDefault:"60s"`
+	// StatsCollectInterval — как часто воркер проверяет, кого пора
+	// обойти. Частый тик безопасен: правило «раз в сутки на ролик»
+	// держится в выборке, а не расписанием тикера.
+	StatsCollectInterval time.Duration `env:"STATS_COLLECT_INTERVAL" envDefault:"1h"`
+	// StatsCollectBatch — сколько ссылок за ОДИН поход в instacurl.
+	//
+	// Десять, а не сорок: обход одной ссылки VK занимает ~3,5 секунды
+	// (замер на живом клипе) и они идут последовательно — внутри
+	// instacurl Chromium запускается по одному. Сорок ссылок, из которых
+	// восемь-десять на VK, не укладывались в таймаут клиента в 60 секунд,
+	// и такая пачка не собиралась никогда.
+	StatsCollectBatch int `env:"STATS_COLLECT_BATCH" envDefault:"10"`
+	// StatsCollectBatchesPerTick — сколько пачек прогонять за один тик.
+	//
+	// Нужен именно потому, что пачка стала мелкой: при часовом тике
+	// десять ссылок за проход — это 240 в сутки, чего не хватит уже на
+	// одного креатора с шестьюдесятью роликами на пяти площадках.
+	// Прогоняем пачки подряд, пока есть что собирать, но не больше этого
+	// числа — чтобы один тик не работал бесконечно.
+	StatsCollectBatchesPerTick int `env:"STATS_COLLECT_BATCHES_PER_TICK" envDefault:"20"`
+
+	// OrderExpiryInterval — как часто проверять протухшие приглашения.
+	// Приглашение живёт трое суток, но место надо отдавать следующему
+	// быстро: час — компромисс между «клиент ждёт зря» и лишними
+	// проходами по пустой выборке.
+	OrderExpiryInterval time.Duration `env:"ORDER_EXPIRY_INTERVAL" envDefault:"1h"`
+
 	// ProjectRetention — через сколько после completed_at done-проект
 	// физически удаляется из БД (вместе со снэпшотом стадий/шагов,
 	// событиями, комментариями — все каскады). По умолчанию 7 дней:

@@ -108,4 +108,7 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// отдаёт ошибку без текста (httpx.WriteErr).
+	Message string `json:"message,omitempty"`
 }

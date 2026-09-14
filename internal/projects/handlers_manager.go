@@ -45,6 +45,9 @@ func writeManagerErr(w http.ResponseWriter, err error) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrStepNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект или шаг не найден.")
+	case errors.Is(err, ErrCommentEmpty):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "empty_comment",
+			"Сообщение пустое.")
 	case errors.Is(err, ErrAlreadyClaimed):
 		httpx.WriteErrMsg(w, http.StatusConflict, "already_claimed",
 			"Проект уже взят другим менеджером.")
@@ -581,15 +584,27 @@ type managerCreateProjectReq struct {
 	ClientName       string `json:"client_name,omitempty"`
 	ClientContact    string `json:"client_contact,omitempty"`
 	SpecialistUserID string `json:"specialist_user_id,omitempty"`
-	PipelineID       string `json:"pipeline_id"`
-	Title            string `json:"title"`
-	Budget           *int   `json:"budget,omitempty"`
-	Notes            string `json:"notes,omitempty"`
+	// PipelineID — воронка. Обязателен только для production_turnkey:
+	// у креаторов вместо воронки выкладки, у общего проекта — один срок.
+	PipelineID string `json:"pipeline_id"`
+	// Kind — вид проекта: creators_turnkey | production_turnkey | general.
+	// Пусто = production_turnkey, как все проекты до появления видов.
+	Kind string `json:"kind,omitempty"`
+	// IsTest — пометить проект как тестовый: админский список такие
+	// скрывает по умолчанию.
+	IsTest bool   `json:"is_test,omitempty"`
+	Title  string `json:"title"`
+	Budget *int   `json:"budget,omitempty"`
+	Notes  string `json:"notes,omitempty"`
 }
 
 // ManagerCreateProject godoc
 // @Summary  Менеджер: создать проект вручную (включая клиента без аккаунта)
-// @Description Создаёт проект с указанным pipeline_id. Если client_user_id
+// @Description kind задаёт вид проекта: creators_turnkey (выкладки),
+// @Description production_turnkey (воронка, по умолчанию) или general.
+// @Description pipeline_id обязателен только для production_turnkey — у
+// @Description двух других видов воронки нет.
+// @Description Если client_user_id
 // @Description не передан, требуется client_name+client_contact (no-account
 // @Description клиент). assigned_to_user_id принудительно ставится в текущего
 // @Description менеджера — менеджер не может вешать чужой проект на коллегу.
@@ -611,16 +626,39 @@ func (h *Handler) ManagerCreateProject(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
 		return
 	}
-	pipelineID, err := uuid.Parse(in.PipelineID)
-	if err != nil {
+	kind := ProjectKind(in.Kind)
+	switch kind {
+	case "":
+		kind = KindProductionTurnkey
+	case KindCreatorsTurnkey, KindProductionTurnkey, KindGeneral:
+	default:
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_kind",
+			"Вид проекта бывает creators_turnkey, production_turnkey или general.")
+		return
+	}
+
+	// Воронка обязательна только продакшну. Раньше её требовали от всех,
+	// и проект с креаторами через API завести было нельзя вовсе.
+	var pipelineID uuid.UUID
+	if s := strings.TrimSpace(in.PipelineID); s != "" {
+		parsed, err := uuid.Parse(s)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id",
+				"pipeline_id должен быть UUID.")
+			return
+		}
+		pipelineID = parsed
+	} else if kind == KindProductionTurnkey {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id",
-			"pipeline_id обязателен и должен быть UUID.")
+			"Для проекта с воронкой нужен pipeline_id.")
 		return
 	}
 	// Менеджер автоматически становится assigned_to — иначе пришлось бы
 	// делать второй POST claim. У админа другой endpoint, там флаг гибкий.
 	startInput := StartProjectInput{
 		PipelineID:       pipelineID,
+		Kind:             kind,
+		IsTest:           in.IsTest,
 		AssignedToUserID: &uid,
 		Title:            in.Title,
 		Budget:           in.Budget,

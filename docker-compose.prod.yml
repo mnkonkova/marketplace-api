@@ -212,6 +212,10 @@ services:
       GRAFANA_CLOUD_LOKI_URL: ${GRAFANA_CLOUD_LOKI_URL:-}
       GRAFANA_CLOUD_LOKI_USER: ${GRAFANA_CLOUD_LOKI_USER:-}
       GRAFANA_CLOUD_LOKI_KEY: ${GRAFANA_CLOUD_LOKI_KEY:-}
+      # instacurl живёт на своей VDS: "10.x.x.x:8000" по приватной сети.
+      # Пусто — скрейп instacurl не работает, остальные метрики идут.
+      INSTACURL_HOST: ${INSTACURL_HOST:-}
+      INSTACURL_API_KEY: ${INSTACURL_API_KEY:-}
     command:
       - run
       - /etc/alloy/config.alloy

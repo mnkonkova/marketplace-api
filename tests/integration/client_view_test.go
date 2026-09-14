@@ -1,0 +1,256 @@
+package integration_test
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"marketpclce/internal/instacurl"
+	"marketpclce/internal/publications"
+	"marketpclce/tests/integration"
+)
+
+// В ленту клиента попадает только то, что можно посмотреть: выкладка со
+// сданными ссылками. Дата в плане — ещё не ролик.
+func TestClientFeedShowsOnlyPublished(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{pubDay(-1), pubDay(1)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: res.Items[0].ID,
+		ActorUserID:   creators[0],
+		URLs: []string{
+			"https://www.tiktok.com/@u/video/1",
+			"https://youtu.be/dQw4w9WgXcQ",
+		},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+
+	feed, err := svc.ClientFeed(ctx, projectID, 50)
+	if err != nil {
+		t.Fatalf("ClientFeed: %v", err)
+	}
+	if len(feed) != 1 {
+		t.Fatalf("в ленте %d роликов, ожидался 1 (второй ещё не сдан)", len(feed))
+	}
+	if len(feed[0].Platforms) != 2 {
+		t.Errorf("площадок %d, ожидалось 2", len(feed[0].Platforms))
+	}
+	if feed[0].CreatorUserID != creators[0] {
+		t.Error("в ленте не тот креатор")
+	}
+}
+
+// Клиент не видит просрочек. Выкладка с прошедшей датой и без ссылок
+// остаётся для него «запланированной» — разбирается с отставанием
+// менеджер, а не заказчик с креатором напрямую.
+func TestClientCalendarHidesOverdue(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	month := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates: []time.Time{
+			time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC),
+			time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC),
+		},
+		CreatedBy: creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	// Первую сдали, вторая просрочена (дата в прошлом, ссылок нет).
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: res.Items[0].ID,
+		ActorUserID:   creators[0],
+		URLs:          []string{"https://vk.com/clip-1_2"},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+
+	days, err := svc.Calendar(ctx, projectID, month)
+	if err != nil {
+		t.Fatalf("Calendar: %v", err)
+	}
+	if len(days) != 2 {
+		t.Fatalf("дней в календаре %d, ожидалось 2", len(days))
+	}
+
+	var published, planned int
+	for _, d := range days {
+		published += d.Published
+		planned += d.Planned
+		for _, it := range d.Items {
+			if it.Status != publications.ClientStatusPublished &&
+				it.Status != publications.ClientStatusPlanned {
+				t.Errorf("клиенту утёк внутренний статус: %s", it.Status)
+			}
+		}
+	}
+	if published != 1 || planned != 1 {
+		t.Errorf("вышло %d, запланировано %d; ожидалось 1 и 1", published, planned)
+	}
+}
+
+// Отменённые выкладки клиенту не показываются вовсе.
+func TestClientCalendarSkipsCancelled(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	month := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if n, err := svc.CancelBatch(ctx, projectID, res.BatchID); err != nil || n != 1 {
+		t.Fatalf("CancelBatch: n=%d err=%v", n, err)
+	}
+
+	days, err := svc.Calendar(ctx, projectID, month)
+	if err != nil {
+		t.Fatalf("Calendar: %v", err)
+	}
+	if len(days) != 0 {
+		t.Errorf("отменённая выкладка попала в календарь клиента: %+v", days)
+	}
+}
+
+// Настройки уведомлений: по умолчанию включено всё, кроме порога.
+// Частичное обновление не сбрасывает соседние переключатели.
+func TestClientPrefsDefaultsAndPartialUpdate(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, _, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	var clientID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT client_user_id FROM projects WHERE id = $1`, projectID).Scan(&clientID); err != nil {
+		t.Fatalf("read client: %v", err)
+	}
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	prefs, err := svc.Prefs(ctx, projectID, clientID)
+	if err != nil {
+		t.Fatalf("Prefs: %v", err)
+	}
+	if !prefs.OnNewVideo || !prefs.OnWeeklyDigest || !prefs.OnDateShift {
+		t.Error("по умолчанию уведомления должны быть включены")
+	}
+	if prefs.ViewsThreshold != nil {
+		t.Error("порог просмотров по умолчанию не задан")
+	}
+
+	threshold := int64(100000)
+	prefs.ViewsThreshold = &threshold
+	prefs.OnWeeklyDigest = false
+	if err := svc.SavePrefs(ctx, prefs); err != nil {
+		t.Fatalf("SavePrefs: %v", err)
+	}
+
+	got, err := svc.Prefs(ctx, projectID, clientID)
+	if err != nil {
+		t.Fatalf("Prefs: %v", err)
+	}
+	if got.ViewsThreshold == nil || *got.ViewsThreshold != 100000 {
+		t.Errorf("порог %v, ожидалось 100000", got.ViewsThreshold)
+	}
+	if got.OnWeeklyDigest {
+		t.Error("недельная сводка должна была выключиться")
+	}
+	if !got.OnNewVideo {
+		t.Error("соседний переключатель сбросился — частичное обновление сломано")
+	}
+
+	// Ноль означает «не уведомлять», а не «порог в ноль просмотров».
+	zero := int64(0)
+	got.ViewsThreshold = &zero
+	if err := svc.SavePrefs(ctx, got); err != nil {
+		t.Fatalf("SavePrefs(0): %v", err)
+	}
+	after, _ := svc.Prefs(ctx, projectID, clientID)
+	if after.ViewsThreshold != nil {
+		t.Errorf("нулевой порог сохранился как %v — уведомления пошли бы на каждый ролик", after.ViewsThreshold)
+	}
+}
+
+// «Ролик перешагнул порог» приходит ОДИН раз, а не каждый день, пока
+// просмотры остаются выше.
+func TestThresholdNotifiedOnlyOnce(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/threshold"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	var clientID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT client_user_id FROM projects WHERE id = $1`, projectID).Scan(&clientID); err != nil {
+		t.Fatalf("read client: %v", err)
+	}
+
+	repo := publications.NewRepo(pool)
+	threshold := int64(1000)
+	if err := repo.SavePrefs(ctx, publications.NotificationPrefs{
+		ProjectID: projectID, UserID: clientID,
+		OnNewVideo: true, OnWeeklyDigest: true, OnDateShift: true,
+		ViewsThreshold: &threshold,
+	}); err != nil {
+		t.Fatalf("SavePrefs: %v", err)
+	}
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: okResult(url, 5000, 100, 10),
+	}}
+	svc := publications.NewService(repo).WithCollector(fake)
+
+	now := time.Now().UTC()
+	st, err := svc.RunCollection(ctx, now, 50)
+	if err != nil {
+		t.Fatalf("RunCollection: %v", err)
+	}
+	if st.ThresholdNotified != 1 {
+		t.Fatalf("уведомлений %d, ожидалось 1", st.ThresholdNotified)
+	}
+
+	// Следующий день: просмотры всё ещё выше порога, но писать второй раз
+	// нельзя — человек уже знает.
+	fake.byURL[url] = okResult(url, 9000, 200, 20)
+	tomorrow := now.AddDate(0, 0, 1)
+	st, err = svc.RunCollection(ctx, tomorrow, 50)
+	if err != nil {
+		t.Fatalf("RunCollection (завтра): %v", err)
+	}
+	if st.ThresholdNotified != 0 {
+		t.Errorf("уведомление ушло второй раз (%d) — клиент получит его каждый день", st.ThresholdNotified)
+	}
+}

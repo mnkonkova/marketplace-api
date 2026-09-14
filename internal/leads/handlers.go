@@ -227,6 +227,9 @@ func atoi(s string, def int) int {
 // типы для swaggo
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
+	Message string `json:"message,omitempty"`
 }
 
 type incomingListResponse struct {

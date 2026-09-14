@@ -80,12 +80,14 @@ func RequireRoles(repo IdentityLoader, roles ...string) func(http.Handler) http.
 			}
 			if !isActive {
 				httpx.SetReqReason(r.Context(), "inactive")
-				httpx.WriteErr(w, http.StatusForbidden, "inactive")
+				httpx.WriteErrMsg(w, http.StatusForbidden, "inactive",
+					"Аккаунт отключён. Напишите в поддержку, если это ошибка.")
 				return
 			}
 			if _, ok := allowed[role]; !ok {
 				httpx.SetReqReason(r.Context(), "forbidden_role")
-				httpx.WriteErr(w, http.StatusForbidden, "forbidden_role")
+				httpx.WriteErrMsg(w, http.StatusForbidden, "forbidden_role",
+					"У вашей роли нет доступа к этому разделу.")
 				return
 			}
 			if role == RoleManager && !isApproved {

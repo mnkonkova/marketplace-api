@@ -558,4 +558,7 @@ type userSearchResp struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// отдаёт ошибку без текста (через httpx.WriteErr).
+	Message string `json:"message,omitempty"`
 }

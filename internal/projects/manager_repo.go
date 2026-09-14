@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -51,7 +52,7 @@ func (r *Repo) ListAssignedTo(ctx context.Context, managerID uuid.UUID) ([]Proje
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(client_name,''), COALESCE(client_contact,''),
        specialist_user_id, assigned_to_user_id,
-       pipeline_id, title, source, status, revisions_included, revisions_used, budget,
+       pipeline_id, kind, is_test, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
 WHERE assigned_to_user_id = $1
@@ -76,7 +77,7 @@ func (r *Repo) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) ([]
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(client_name,''), COALESCE(client_contact,''),
        specialist_user_id, assigned_to_user_id,
-       pipeline_id, title, source, status, revisions_included, revisions_used, budget,
+       pipeline_id, kind, is_test, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
 WHERE specialist_user_id = $1 AND status <> 'cancelled'
@@ -89,35 +90,124 @@ LIMIT 500`, specialistID)
 	return scanProjects(rows)
 }
 
-// ListAll — все проекты (для админского обзора + канбана). По умолчанию
-// прячем cancelled — у них своя retention 30 дней до физического удаления,
-// в админке они только засоряют список. Чтобы посмотреть скрытые —
-// явно указать statusFilter='cancelled'.
+// adminSortOrder — разрешённые порядки админского списка. Белый список, а
+// не подстановка присланного значения в SQL: сортировка — единственный
+// параметр, который иначе попал бы в запрос текстом.
+var adminSortOrder = map[string]string{
+	AdminSortUpdatedAsc:  "p.updated_at ASC",
+	AdminSortUpdatedDesc: "p.updated_at DESC",
+	AdminSortCreatedDesc: "p.created_at DESC",
+	AdminSortCreatedAsc:  "p.created_at ASC",
+}
+
+// ListAll — админский список проектов: поиск, фильтры, сортировка и
+// страница. Возвращает (items, total), где total — количество под теми же
+// фильтрами без limit/offset, чтобы фронт нарисовал пагинатор.
 //
-// P1: hard cap LIMIT 1000 (адмиский набор шире менеджерского, но
-// тоже не бесконечный). При росте проекта понадобится пагинация.
-func (r *Repo) ListAll(ctx context.Context, statusFilter string) ([]Project, error) {
-	q := `
-SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
-       COALESCE(client_name,''), COALESCE(client_contact,''),
-       specialist_user_id, assigned_to_user_id,
-       pipeline_id, title, source, status, revisions_included, revisions_used, budget,
-       COALESCE(notes,''), started_at, completed_at, created_at, updated_at
-FROM projects`
-	args := []any{}
-	if statusFilter != "" {
-		q += " WHERE status = $1"
-		args = append(args, statusFilter)
-	} else {
-		q += " WHERE status <> 'cancelled'"
+// Фильтрация серверная намеренно: раньше ручка отдавала до 1000 строк, и
+// фронт фильтровал их у себя. С ростом числа проектов это тупик — браузер
+// тянет всё ради одного поискового слова.
+//
+// По умолчанию прячем cancelled — у них своя retention 30 дней до
+// физического удаления, в админке они только засоряют список. Чтобы
+// посмотреть их — явно указать Status='cancelled'.
+func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, error) {
+	if p.Limit <= 0 || p.Limit > 1000 {
+		p.Limit = 20
 	}
-	q += " ORDER BY updated_at DESC LIMIT 1000"
-	rows, err := r.db.Query(ctx, q, args...)
+	if p.Offset < 0 {
+		p.Offset = 0
+	}
+	// Cap на offset — большие OFFSET в PG дорогие (скипает строки ДО
+	// LIMIT). 10k @ 20/стр — 500-я страница: до неё не долистывают,
+	// туда приходят либо ошибкой фронта, либо нагрузить. Тот же порог,
+	// что у /admin/users.
+	if p.Offset > 10000 {
+		return nil, 0, fmt.Errorf("invalid offset: max 10000 (используйте поиск/фильтры)")
+	}
+	order, ok := adminSortOrder[p.Sort]
+	if p.Sort != "" && !ok {
+		return nil, 0, fmt.Errorf("invalid sort %q", p.Sort)
+	}
+	if !ok {
+		// Без параметра — прежний порядок ручки. Таблица в админке просит
+		// updated_asc явно; канбану и сводке порядок безразличен, и менять
+		// его им за спиной незачем.
+		order = adminSortOrder[AdminSortUpdatedDesc]
+	}
+
+	args := []any{}
+	conds := []string{}
+
+	if p.Status != "" {
+		args = append(args, p.Status)
+		conds = append(conds, fmt.Sprintf("p.status = $%d", len(args)))
+	} else {
+		conds = append(conds, "p.status <> 'cancelled'")
+	}
+	if !p.IncludeTest {
+		conds = append(conds, "p.is_test = FALSE")
+	}
+	switch {
+	case p.ManagerID != nil:
+		args = append(args, *p.ManagerID)
+		conds = append(conds, fmt.Sprintf("p.assigned_to_user_id = $%d", len(args)))
+	case p.Unassigned:
+		conds = append(conds, "p.assigned_to_user_id IS NULL")
+	}
+	// Поиск короче двух символов игнорируем: по одной букве совпадёт всё,
+	// и пользователь получит тот же список, только медленнее.
+	if q := strings.TrimSpace(p.Q); utf8.RuneCountInString(q) >= 2 {
+		// data-sec D11: экранируем LIKE-метасимволы, иначе '%' в запросе
+		// читается как «любая строка».
+		likeEsc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+		args = append(args, "%"+likeEsc.Replace(q)+"%")
+		idx := len(args)
+		// Клиент у проекта бывает двух видов: зарегистрированный (имя в
+		// client_profiles, запасной вариант — почта) и без аккаунта (имя
+		// прямо на проекте). Ищем по всем — иначе половина проектов по
+		// имени клиента не находится.
+		conds = append(conds, fmt.Sprintf(`(
+			p.title ILIKE $%d ESCAPE '\'
+			OR COALESCE(p.client_name,'') ILIKE $%d ESCAPE '\'
+			OR COALESCE(cp.display_name,'') ILIKE $%d ESCAPE '\'
+			OR COALESCE(u.email::text,'') ILIKE $%d ESCAPE '\'
+		)`, idx, idx, idx, idx))
+	}
+
+	base := `
+FROM projects p
+LEFT JOIN users           u  ON u.id = p.client_user_id
+LEFT JOIN client_profiles cp ON cp.user_id = p.client_user_id
+WHERE ` + strings.Join(conds, " AND ")
+
+	var total int
+	if err := r.db.QueryRow(ctx, "SELECT COUNT(*) "+base, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count all projects: %w", err)
+	}
+
+	args = append(args, p.Limit, p.Offset)
+	listQ := fmt.Sprintf(`
+SELECT p.id, p.lead_id, p.lead_recipient_specialist_id, p.client_user_id,
+       COALESCE(p.client_name,''), COALESCE(p.client_contact,''),
+       p.specialist_user_id, p.assigned_to_user_id,
+       p.pipeline_id, p.kind, p.is_test, p.title, p.source, p.status,
+       p.revisions_included, p.revisions_used, p.budget,
+       COALESCE(p.notes,''), p.started_at, p.completed_at, p.created_at, p.updated_at
+%s
+ORDER BY %s, p.id
+LIMIT $%d OFFSET $%d`, base, order, len(args)-1, len(args))
+
+	rows, err := r.db.Query(ctx, listQ, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list all projects: %w", err)
+		return nil, 0, fmt.Errorf("list all projects: %w", err)
 	}
 	defer rows.Close()
-	return scanProjects(rows)
+	items, err := scanProjects(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
 }
 
 func (r *Repo) listAssignedFilter(ctx context.Context, suffix string) ([]Project, error) {
@@ -125,7 +215,7 @@ func (r *Repo) listAssignedFilter(ctx context.Context, suffix string) ([]Project
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(client_name,''), COALESCE(client_contact,''),
        specialist_user_id, assigned_to_user_id,
-       pipeline_id, title, source, status, revisions_included, revisions_used, budget,
+       pipeline_id, kind, is_test, title, source, status, revisions_included, revisions_used, budget,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects ` + suffix
 	rows, err := r.db.Query(ctx, q)
@@ -144,7 +234,7 @@ func scanProjects(rows pgx.Rows) ([]Project, error) {
 			&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID,
 			&p.ClientName, &p.ClientContact,
 			&p.SpecialistUserID, &p.AssignedToUserID,
-			&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
+			&p.PipelineID, &p.Kind, &p.IsTest, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 			&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan project: %w", err)
@@ -332,9 +422,9 @@ VALUES ($1, NULL, $2, 'human', 'specialist_approved', $3)`,
 
 // AssignSpecialist — назначает конкретного спеца на проект напрямую,
 // минуя proposed-flow. Используется в трёх кейсах:
-//  1) проект создан вручную менеджером без spec'a (Phase 1 — no-account);
-//  2) изначальный proposed-спец был отклонён, менеджер выбрал другого;
-//  3) админ переназначает спеца в спорной ситуации.
+//  1. проект создан вручную менеджером без spec'a (Phase 1 — no-account);
+//  2. изначальный proposed-спец был отклонён, менеджер выбрал другого;
+//  3. админ переназначает спеца в спорной ситуации.
 //
 // Валидация: целевой юзер должен быть kind='specialist' и активен.
 // step_event/outbox events те же что у ApproveProposedSpecialist, но с
@@ -422,12 +512,12 @@ VALUES ($1, NULL, $2, 'human', 'specialist_assigned', $3)`,
 // тыкать «принять» в инбоксе лидов после ручного назначения.
 //
 // Кейсы:
-//  1) Спец был в исходном списке получателей (proposed-flow) — UPDATE
+//  1. Спец был в исходном списке получателей (proposed-flow) — UPDATE
 //     существующей строки lead_recipients.
-//  2) Менеджер назначил спеца, не входившего в получателей лида
+//  2. Менеджер назначил спеца, не входившего в получателей лида
 //     (свободное назначение через AssignSpecialist) — INSERT новой
 //     строки, чтобы review-check потом нашёл связку (lead, spec).
-//  3) leadID == nil — проект создан вручную, без лида — no-op.
+//  3. leadID == nil — проект создан вручную, без лида — no-op.
 //
 // responded_at сохраняется при апдейте (через COALESCE), чтобы не
 // затирать реальное время ответа спеца, если он успел отреагировать.
@@ -584,7 +674,7 @@ WHERE id = $1 AND ($6::timestamptz IS NULL OR updated_at = $6)
 RETURNING id, lead_id, lead_recipient_specialist_id, client_user_id,
           COALESCE(client_name,''), COALESCE(client_contact,''),
           specialist_user_id, assigned_to_user_id,
-          pipeline_id, title, source, status, revisions_included, revisions_used, budget,
+          pipeline_id, kind, is_test, title, source, status, revisions_included, revisions_used, budget,
           COALESCE(notes,''), started_at, completed_at, created_at, updated_at`
 	var trimmedTitle, trimmedNotes *string
 	if in.Title != nil {
@@ -611,7 +701,7 @@ RETURNING id, lead_id, lead_recipient_specialist_id, client_user_id,
 		&p.ID, &p.LeadID, &p.LeadRecipientSpecialistID, &p.ClientUserID,
 		&p.ClientName, &p.ClientContact,
 		&p.SpecialistUserID, &p.AssignedToUserID,
-		&p.PipelineID, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
+		&p.PipelineID, &p.Kind, &p.IsTest, &p.Title, &p.Source, &p.Status, &p.RevisionsIncluded, &p.RevisionsUsed, &p.Budget,
 		&p.Notes, &p.StartedAt, &p.CompletedAt, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -636,11 +726,11 @@ RETURNING id, lead_id, lead_recipient_specialist_id, client_user_id,
 
 // stageInfo — текущая стадия проекта (минимум для канбана и advance_stage).
 type stageInfo struct {
-	ID         uuid.UUID
-	Name       string
-	SortOrder  int
-	StartedAt  *time.Time
-	Completed  bool
+	ID        uuid.UUID
+	Name      string
+	SortOrder int
+	StartedAt *time.Time
+	Completed bool
 }
 
 // CurrentAndNextStage — текущая активная стадия (первая с шагами не в
@@ -691,14 +781,15 @@ ORDER BY st.sort_order`, projectID)
 }
 
 // AdvanceStage — переход на следующую стадию. Бизнес-логика (бриф §4.3):
-//   1. Если в текущей стадии есть незавершённый client-шаг → ErrStageBlocked.
-//   2. Все pending/in_progress team-шаги текущей стадии → done.
-//   3. Текущая стадия completed_at = now.
-//   4. Первый шаг следующей стадии активируется:
-//      owner=team/system → in_progress; owner=client → waiting_client.
-//      Для is_review+client дополнительно ставится review_deadline.
-//   5. Следующая стадия started_at = now.
-//   6. Event stage_advance + outbox.
+//  1. Если в текущей стадии есть незавершённый client-шаг → ErrStageBlocked.
+//  2. Все pending/in_progress team-шаги текущей стадии → done.
+//  3. Текущая стадия completed_at = now.
+//  4. Первый шаг следующей стадии активируется:
+//     owner=team/system → in_progress; owner=client → waiting_client.
+//     Для is_review+client дополнительно ставится review_deadline.
+//  5. Следующая стадия started_at = now.
+//  6. Event stage_advance + outbox.
+//
 // Если следующей стадии нет — ErrLastStage.
 //
 // reviewDeadline — длительность дедлайна для review-шага (передаётся
