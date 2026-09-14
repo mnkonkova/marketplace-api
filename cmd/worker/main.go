@@ -2,23 +2,21 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"marketpclce/internal/config"
+	"marketpclce/internal/eventroute"
 	"marketpclce/internal/instacurl"
 	"marketpclce/internal/notifications"
 	"marketpclce/internal/orders"
@@ -32,6 +30,18 @@ import (
 	"marketpclce/internal/search"
 	"marketpclce/internal/transcode"
 )
+
+// dispatcherOrNil — nil-указатель, положенный в интерфейс, перестаёт
+// быть nil: проверка `d.CRM == nil` в обработчике его не поймала бы, и
+// «адрес не задан» превратилось бы в вызов метода на nil-приёмнике.
+// Send такое переживает, но полагаться на это нельзя — интерфейс должен
+// быть честно пустым.
+func dispatcherOrNil(d *notifications.WebhookDispatcher) eventroute.Dispatcher {
+	if d == nil {
+		return nil
+	}
+	return d
+}
 
 func main() {
 	_ = godotenv.Load()
@@ -117,32 +127,6 @@ func main() {
 		slog.Warn("specialists bootstrap skipped", "err", err)
 	}
 
-	specialistHandler := func(ctx context.Context, _ int64, aggregateID, eventType string, payload []byte) error {
-		uid, err := uuid.Parse(aggregateID)
-		if err != nil {
-			return err
-		}
-		// version_micro — внешняя версия (updated_at.UnixMicro() emitter'a)
-		// для external_gte OCC в OpenSearch. Старые события без поля → 0,
-		// indexer фолбэкается на безверсионный путь (как раньше).
-		var p struct {
-			VersionMicro int64 `json:"version_micro"`
-		}
-		_ = json.Unmarshal(payload, &p) // невалидный payload = version 0
-		switch eventType {
-		case outbox.EventSpecialistDeleted:
-			if err := indexer.Delete(ctx, uid, p.VersionMicro); err != nil {
-				return err
-			}
-			return feedIndexer.DeleteByUser(ctx, uid)
-		default:
-			if err := indexer.Reconcile(ctx, uid, p.VersionMicro); err != nil {
-				return err
-			}
-			return feedIndexer.ReconcileVideos(ctx, uid)
-		}
-	}
-
 	// email.* (verify_send, password_reset_send) ходят только через n8n
 	// (workflow crmEmailNotify, см. deploy/n8n/workflows/). n8n получает
 	// {event_id, event_type, data:{to,token,base_url}}, сам рендерит HTML
@@ -157,46 +141,6 @@ func main() {
 		slog.Info("n8n email webhook ready", "url", cfg.N8nEmailWebhookURL)
 	}
 
-	emailHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		if n8nEmailDispatcher != nil {
-			return n8nEmailDispatcher.Send(ctx, notifications.Payload{
-				// R4: outbox.id уникален по таблице → идемпотентность в n8n.
-				EventID:     strconv.FormatInt(outboxID, 10),
-				Aggregate:   "user",
-				AggregateID: aggregateID,
-				EventType:   eventType,
-				Data:        payload,
-				OccurredAt:  time.Now().UTC(),
-			})
-		}
-		// Fallback для локального запуска без n8n: логируем URL и квитируем.
-		switch eventType {
-		case outbox.EventEmailVerifySend:
-			var p outbox.EmailVerifyPayload
-			if err := json.Unmarshal(payload, &p); err != nil {
-				return fmt.Errorf("decode email payload: %w", err)
-			}
-			slog.Info("verify-email (n8n disabled, copy this URL manually)",
-				"to", p.To,
-				"url", p.BaseURL+"/verify?token="+p.Token,
-			)
-			return nil
-		case outbox.EventEmailPasswordResetSend:
-			var p outbox.EmailPasswordResetPayload
-			if err := json.Unmarshal(payload, &p); err != nil {
-				return fmt.Errorf("decode password reset payload: %w", err)
-			}
-			slog.Info("password-reset (n8n disabled, copy this URL manually)",
-				"to", p.To,
-				"url", p.BaseURL+"/auth/reset?token="+p.Token,
-			)
-			return nil
-		default:
-			slog.Warn("unknown email event", "type", eventType)
-			return nil
-		}
-	}
-
 	// n8n-диспатчер для CRM-событий project.*. nil = выключен (события
 	// квитируются как no-op, чтобы не зависать в outbox-ретраях).
 	n8nDispatcher := notifications.NewWebhookDispatcher(cfg.N8nWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
@@ -206,40 +150,6 @@ func main() {
 		slog.Info("n8n webhook ready", "url", cfg.N8nWebhookURL)
 	}
 
-	projectHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		// no-op если диспатчер не сконфигурирован — событие считается
-		// обработанным, чтобы не копить ретраи на проде без webhook.
-		if n8nDispatcher == nil {
-			return nil
-		}
-		return n8nDispatcher.Send(ctx, notifications.Payload{
-			// R4: outbox.id уникален по таблице → идемпотентность в n8n.
-			EventID:     strconv.FormatInt(outboxID, 10),
-			Aggregate:   outbox.AggregateProject,
-			AggregateID: aggregateID,
-			EventType:   eventType,
-			Data:        payload,
-			OccurredAt:  time.Now().UTC(),
-		})
-	}
-
-	// moderation.specialist_pending → n8n уведомление админу о новой заявке
-	// на одобрение публикации. Использует тот же CRM webhook (N8N_WEBHOOK_URL).
-	// При выключенном webhook'е — no-op (событие квитируется).
-	moderationHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		if n8nDispatcher == nil {
-			return nil
-		}
-		return n8nDispatcher.Send(ctx, notifications.Payload{
-			EventID:     strconv.FormatInt(outboxID, 10),
-			Aggregate:   outbox.AggregateModeration,
-			AggregateID: aggregateID,
-			EventType:   eventType,
-			Data:        payload,
-			OccurredAt:  time.Now().UTC(),
-		})
-	}
-
 	// support.message_received → отдельный workflow (дамп в Telegram).
 	n8nSupportDispatcher := notifications.NewWebhookDispatcher(cfg.N8nSupportWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
 	if n8nSupportDispatcher == nil {
@@ -247,20 +157,6 @@ func main() {
 	} else {
 		slog.Info("n8n support webhook ready", "url", cfg.N8nSupportWebhookURL)
 	}
-	supportHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		if n8nSupportDispatcher == nil {
-			return nil
-		}
-		return n8nSupportDispatcher.Send(ctx, notifications.Payload{
-			EventID:     strconv.FormatInt(outboxID, 10),
-			Aggregate:   outbox.AggregateSupport,
-			AggregateID: aggregateID,
-			EventType:   eventType,
-			Data:        payload,
-			OccurredAt:  time.Now().UTC(),
-		})
-	}
-
 	// portfolio.video_uploaded → транскодинг preview (480p, ~500KB) через
 	// локальный ffmpeg. См. docs/VIDEO_TRANSCODING.md.
 	// Условия для активации:
@@ -269,7 +165,7 @@ func main() {
 	// Если что-то из этого нет — handler стартует как no-op (логирует и
 	// квитирует событие), worker не валится. Это позволяет запускать
 	// воркер локально без ffmpeg/без S3 и видеть остальные хендлеры.
-	portfolioHandler := transcodeNoOpHandler
+	var transcoder eventroute.Transcoder
 	ffmpeg, ffmpegErr := transcode.NewFFmpegBin(cfg.FFmpegPath, cfg.TranscodeTimeout)
 	switch {
 	case ffmpegErr != nil:
@@ -279,20 +175,20 @@ func main() {
 		slog.Warn("transcode disabled (S3 creds not set) — portfolio.video_uploaded acked as no-op")
 	default:
 		s3TC, err := s3.New(s3.Config{
-			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3AccessKey,
-			SecretKey: cfg.S3SecretKey,
-			Bucket:    cfg.S3Bucket,
-			Region:    cfg.S3Region,
-			UseSSL:    cfg.S3UseSSL,
-			PublicURL: cfg.S3PublicURL,
+			Endpoint:   cfg.S3Endpoint,
+			AccessKey:  cfg.S3AccessKey,
+			SecretKey:  cfg.S3SecretKey,
+			Bucket:     cfg.S3Bucket,
+			Region:     cfg.S3Region,
+			UseSSL:     cfg.S3UseSSL,
+			PublicURL:  cfg.S3PublicURL,
 			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
 			slog.Error("transcode s3 client init failed", "err", err)
 			os.Exit(1)
 		}
-		transcoder, err := transcode.NewService(transcode.Config{
+		svc, err := transcode.NewService(transcode.Config{
 			FFmpeg:  ffmpeg,
 			Storage: s3TC,
 			TempDir: cfg.TranscodeTempDir,
@@ -302,28 +198,24 @@ func main() {
 			slog.Error("transcode service init failed", "err", err)
 			os.Exit(1)
 		}
-		portfolioHandler = func(ctx context.Context, _ int64, aggregateID, eventType string, payload []byte) error {
-			if eventType != outbox.EventPortfolioVideoUploaded {
-				return fmt.Errorf("%w: unknown portfolio event %q", outbox.ErrPermanent, eventType)
-			}
-			err := transcoder.Process(ctx, payload)
-			if err != nil && errors.Is(err, transcode.ErrPermanent) {
-				return fmt.Errorf("%w: %v", outbox.ErrPermanent, err)
-			}
-			return err
-		}
+		transcoder = svc
 		slog.Info("transcode ready", "ffmpeg_timeout", cfg.TranscodeTimeout, "tempdir", cfg.TranscodeTempDir)
 	}
 
+	// Маршрутизация событий живёт в internal/eventroute: сами
+	// обработчики и таблица «агрегат → обработчик» там же, здесь только
+	// сборка зависимостей. Замыкания посреди main() нельзя было позвать
+	// из теста, и перепутанные местами вебхуки никто бы не заметил.
 	worker := outbox.NewWorker(pool, logger,
-		map[string]outbox.Handler{
-			outbox.AggregateSpecialist:  specialistHandler,
-			outbox.AggregateEmail:       emailHandler,
-			outbox.AggregateProject:     projectHandler,
-			outbox.AggregateSupport:     supportHandler,
-			outbox.AggregatePortfolio:   portfolioHandler,
-			outbox.AggregateModeration:  moderationHandler,
-		},
+		eventroute.Handlers(eventroute.Deps{
+			CRM:        dispatcherOrNil(n8nDispatcher),
+			Email:      dispatcherOrNil(n8nEmailDispatcher),
+			Support:    dispatcherOrNil(n8nSupportDispatcher),
+			Search:     indexer,
+			Feed:       feedIndexer,
+			Transcoder: transcoder,
+			Logger:     logger,
+		}),
 		outbox.Config{
 			MaxAttempts:     cfg.OutboxMaxAttempts,
 			BackoffCap:      cfg.OutboxBackoffCap,
@@ -369,13 +261,13 @@ func main() {
 	// выключен (no-op), фронт-аплоад продолжает работать.
 	if cfg.S3SweepAccessKey != "" && cfg.S3SweepSecretKey != "" {
 		s3Client, err := s3.New(s3.Config{
-			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3SweepAccessKey,
-			SecretKey: cfg.S3SweepSecretKey,
-			Bucket:    cfg.S3Bucket,
-			Region:    cfg.S3Region,
-			UseSSL:    cfg.S3UseSSL,
-			PublicURL: cfg.S3PublicURL,
+			Endpoint:   cfg.S3Endpoint,
+			AccessKey:  cfg.S3SweepAccessKey,
+			SecretKey:  cfg.S3SweepSecretKey,
+			Bucket:     cfg.S3Bucket,
+			Region:     cfg.S3Region,
+			UseSSL:     cfg.S3UseSSL,
+			PublicURL:  cfg.S3PublicURL,
 			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
@@ -430,15 +322,6 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("worker bye")
-}
-
-// transcodeNoOpHandler — заглушка для portfolio.video_uploaded когда
-// ffmpeg/S3 не сконфигурены. Не делает ничего, только логирует — событие
-// квитируется как success, чтобы не висеть в outbox-ретраях.
-var transcodeNoOpHandler outbox.Handler = func(_ context.Context, _ int64, aggregateID, eventType string, _ []byte) error {
-	slog.Info("transcode no-op (handler disabled)",
-		"aggregate_id", aggregateID, "event", eventType)
-	return nil
 }
 
 // runBusinessGaugeTicker — фоновое обновление бизнес-gauge'ов проектов/

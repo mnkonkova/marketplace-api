@@ -620,11 +620,25 @@ VALUES ($1, NULL, $2, 'human', 'specialist_rejected', $3, $4)`,
 		mustJSON(map[string]string{"specialist_user_id": proposed.String()})); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}
+	// Название и клиент — чтобы сообщение в чат читалось одной строкой:
+	// «менеджер отклонил специалиста» без проекта ничего не говорит.
+	rpayload := map[string]any{
+		"project_id":         projectID.String(),
+		"specialist_user_id": proposed.String(),
+		"reason":             reason,
+	}
+	enrichProjectPayload(ctx, tx, projectID, rpayload)
+	// Имя отклонённого берём отдельно: enrich смотрит на
+	// specialist_user_id проекта, а отклонённый лежал в
+	// lead_recipient_specialist_id, который мы только что очистили.
+	var proposedName string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(display_name, '') FROM specialist_profiles WHERE user_id = $1`,
+		*proposed).Scan(&proposedName); err == nil && proposedName != "" {
+		rpayload["specialist_display_name"] = proposedName
+	}
 	if err := emit(ctx, tx, projectID, nil, actorID, "project.specialist_rejected",
-		map[string]string{
-			"project_id":         projectID.String(),
-			"specialist_user_id": proposed.String(),
-		}); err != nil {
+		rpayload); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
