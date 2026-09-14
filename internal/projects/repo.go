@@ -826,3 +826,38 @@ GROUP BY project_id`, ids)
 	}
 	return out, rows.Err()
 }
+
+// PublicationCount — сколько выкладок закрыто и сколько всего запланировано.
+type PublicationCount struct{ Done, Total int }
+
+// PublicationCounts — те же числа, что и PublicationProgress, но до
+// деления. Список показывает «4 из 12», и считать это из процента обратно
+// нельзя: 62% не раскладывается в пару целых однозначно.
+func (r *Repo) PublicationCounts(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]PublicationCount, error) {
+	out := make(map[uuid.UUID]PublicationCount, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT project_id,
+       COUNT(*) FILTER (WHERE status IN ('done', 'closed_manually')),
+       COUNT(*)
+FROM project_publications
+WHERE project_id = ANY($1) AND status <> 'cancelled'
+GROUP BY project_id`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("publication counts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id uuid.UUID
+			c  PublicationCount
+		)
+		if err := rows.Scan(&id, &c.Done, &c.Total); err != nil {
+			return nil, fmt.Errorf("scan publication counts: %w", err)
+		}
+		out[id] = c
+	}
+	return out, rows.Err()
+}

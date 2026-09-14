@@ -502,6 +502,16 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/users/{id}/deactivate", d.Admin.AdminDeactivateUser)
 					r.Post("/admin/users/{id}/activate", d.Admin.AdminActivateUser)
 					r.Get("/admin/users/search", d.Admin.AdminSearchUsers)
+					// {id} после /search: chi разводит их сам, но читателю
+					// порядок подсказывает, что «search» — не uuid.
+					r.Get("/admin/users/{id}", d.Admin.AdminGetUser)
+					r.Post("/admin/users/{id}/mark_test", d.Admin.AdminMarkUserTest)
+
+					// Сводка, журнал, команда и ⌘K-поиск — оболочка админки.
+					r.Get("/admin/summary", d.Admin.AdminSummary)
+					r.Get("/admin/team", d.Admin.AdminListTeam)
+					r.Get("/admin/audit", d.Admin.AdminListAudit)
+					r.Get("/admin/search", d.Admin.AdminGlobalSearch)
 
 					// Модерация публикаций специалистов — docs/SPECIALIST_MODERATION.md
 					r.Get("/admin/moderation/specialists", d.Admin.AdminListPendingSpecialists)
@@ -519,7 +529,13 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/projects/{id}/move_stage", d.Projects.AdminMoveStage)
 					r.Post("/admin/projects/{id}/move_step", d.Projects.AdminMoveStep)
 					r.Post("/admin/projects/{id}/change_funnel", d.Projects.AdminChangeFunnel)
+					r.Post("/admin/projects/{id}/restore", d.Projects.AdminRestoreProject)
+					r.Post("/admin/projects/{id}/mark_test", d.Projects.AdminMarkProjectTest)
 					r.Post("/admin/projects/{id}/assign", d.Projects.AdminAssignManager)
+					// Передача проектов уходящего менеджера. Живёт рядом с
+					// проектами, а не с пользователями: событие и outbox на
+					// каждый проект те же, что у одиночного назначения.
+					r.Post("/admin/managers/{id}/transfer_projects", d.Projects.AdminTransferProjects)
 					r.Post("/admin/projects/{id}/assign_specialist", d.Projects.AdminAssignSpecialist)
 					r.Get("/admin/projects/{id}/events", d.Projects.AdminListProjectEvents)
 					r.Get("/admin/projects/{id}/comments", d.Projects.AdminListProjectComments)

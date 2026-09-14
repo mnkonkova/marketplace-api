@@ -35,15 +35,22 @@ func (h *Handler) Public(w http.ResponseWriter, r *http.Request) {
 // @Tags         admin-productions
 // @Produce      json
 // @Security     BearerAuth
-// @Success      200  {object}  listResp
+// @Description У каждой строки — сколько специалистов состоит в продакшене
+// @Description и сколько незавершённых проектов за ними числится.
+// @Success      200  {object}  usageListResp
 // @Router       /admin/productions [get]
 func (h *Handler) AdminList(w http.ResponseWriter, r *http.Request) {
-	items, err := h.svc.List(r.Context())
+	items, err := h.svc.ListWithUsage(r.Context())
 	if err != nil {
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, listResp{Items: items})
+	httpx.WriteJSON(w, http.StatusOK, usageListResp{Items: items})
+}
+
+// usageListResp — админский справочник со счётчиками.
+type usageListResp struct {
+	Items []ProductionListItem `json:"items"`
 }
 
 type createReq struct {

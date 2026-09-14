@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"marketpclce/internal/admin"
+	"marketpclce/internal/audit"
 	"marketpclce/internal/auth"
 	"marketpclce/internal/billing"
 	"marketpclce/internal/catalog"
@@ -245,7 +246,8 @@ func main() {
 	// для длинных временно поднимем в env.
 	adminRepo := admin.NewRepo(pool)
 	adminSvc := admin.NewService(adminRepo, tokenIssuer, cfg.AppBaseURL, cfg.EmailVerifyTokenTTL).
-		WithProfilesRepo(profilesRepo)
+		WithProfilesRepo(profilesRepo).
+		WithAuditRepo(audit.NewRepo(pool))
 	adminHandler := admin.NewHandler(adminSvc)
 
 	var summarizeCache *summarize.Cache

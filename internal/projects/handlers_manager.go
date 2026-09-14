@@ -57,6 +57,18 @@ func writeManagerErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrLastStage):
 		httpx.WriteErrMsg(w, http.StatusConflict, "last_stage",
 			"Проект уже на последней стадии.")
+	case errors.Is(err, ErrNotCancelled):
+		httpx.WriteErrMsg(w, http.StatusConflict, "not_cancelled",
+			"Проект не отменён — возвращать нечего.")
+	case errors.Is(err, ErrNoCancelEvent):
+		httpx.WriteErrMsg(w, http.StatusConflict, "no_cancel_event",
+			"Не видно, в каком статусе проект был до отмены — верните статус вручную.")
+	case errors.Is(err, ErrSameManager):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "same_manager",
+			"Проекты уже у этого менеджера — выберите другого.")
+	case errors.Is(err, ErrNotManagerTarget):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "not_manager",
+			"Принять проекты может только одобренный менеджер или админ.")
 	case errors.Is(err, ErrConflict):
 		httpx.WriteErrMsg(w, http.StatusConflict, "stale_updated_at",
 			"Проект был обновлён другим запросом.")

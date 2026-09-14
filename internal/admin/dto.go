@@ -18,6 +18,8 @@ type ManagerInfo struct {
 	EmailVerified    bool      `json:"email_verified"`
 	AssignedProjects int       `json:"assigned_projects"`
 	CreatedAt        time.Time `json:"created_at"`
+	// LastLoginAt — nil = не входил ни разу.
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 }
 
 // CreateClientInput — админ заводит клиента вручную (kind=client, role=client).
@@ -69,6 +71,13 @@ type UserListItem struct {
 	IsActive      bool      `json:"is_active"`
 	EmailVerified bool      `json:"email_verified"`
 	CreatedAt     time.Time `json:"created_at"`
+	// LastLoginAt — nil означает «не входил ни разу», а не «давно».
+	// Разница важная: сотрудника, который так и не зашёл, надо позвать,
+	// а не ждать.
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	// IsTest — пользователь заведён для проверки. По умолчанию такие
+	// в выдаче скрыты.
+	IsTest bool `json:"is_test"`
 	// ModerationStatus — pending_review|approved|rejected. NULL для клиентов
 	// (у них нет specialist_profile). omitempty в JSON: пустая строка =
 	// «нет статуса» (клиент или спец без профиля).
@@ -83,11 +92,14 @@ type UserListItem struct {
 // ListAllUsersParams — фильтры и пагинация для /admin/users.
 // Все поля опциональны. Limit принудительно clamp'ится 1..100.
 type ListAllUsersParams struct {
-	Q      string // поиск ILIKE по email/phone/display_name; <2 символов игнорируется
-	Kind   string // "client" | "specialist" | "" (без фильтра)
-	Role   string // "manager" | "admin" | "regular" | "" (regular = !is_manager && !is_admin)
-	Limit  int
-	Offset int
+	Q    string // поиск ILIKE по email/phone/display_name; <2 символов игнорируется
+	Kind string // "client" | "specialist" | "" (без фильтра)
+	Role string // "manager" | "admin" | "regular" | "" (regular = !is_manager && !is_admin)
+	// IncludeTest — показывать пользователей с is_test. По умолчанию
+	// скрыты: после прогонов на стенде их в базе больше, чем настоящих.
+	IncludeTest bool
+	Limit       int
+	Offset      int
 }
 
 // UserListResult — ответ пагинированного листинга. Total — общее количество

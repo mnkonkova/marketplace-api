@@ -27,6 +27,15 @@ type Pipeline struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+// PipelineListItem — строка админского списка воронок: воронка плюс
+// сколько проектов по ней сейчас идёт. В карточке воронки этого числа
+// нет намеренно — там правят содержимое, а решение «выключать ли»
+// принимают в списке.
+type PipelineListItem struct {
+	Pipeline
+	ActiveProjects int `json:"active_projects"`
+}
+
 // PipelineFull — полное дерево для редактора. GET /admin/pipelines/{id}.
 type PipelineFull struct {
 	Pipeline

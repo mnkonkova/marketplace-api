@@ -62,10 +62,10 @@ SELECT u.id, COALESCE(u.email::text, ''), u.is_active, u.is_approved,
        (SELECT COUNT(*) FROM projects p
         WHERE p.assigned_to_user_id = u.id
           AND p.status IN ('draft','active','on_hold','dispute')),
-       u.created_at
+       u.created_at, u.last_login_at
 FROM users u
 LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
-WHERE u.is_manager = TRUE`
+WHERE u.is_manager = TRUE AND u.is_test = FALSE`
 	args := []any{}
 	if approved != nil {
 		q += " AND u.is_approved = $1"
@@ -81,7 +81,8 @@ WHERE u.is_manager = TRUE`
 	for rows.Next() {
 		var m ManagerInfo
 		if err := rows.Scan(&m.UserID, &m.Email, &m.IsActive, &m.IsApproved,
-			&m.EmailVerified, &m.DisplayName, &m.AssignedProjects, &m.CreatedAt); err != nil {
+			&m.EmailVerified, &m.DisplayName, &m.AssignedProjects, &m.CreatedAt,
+			&m.LastLoginAt); err != nil {
 			return nil, fmt.Errorf("scan manager: %w", err)
 		}
 		out = append(out, m)
@@ -129,7 +130,7 @@ SELECT u.id, COALESCE(u.email::text,''), COALESCE(u.phone,''),
 FROM users u
 LEFT JOIN client_profiles     cp ON cp.user_id = u.id
 LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
-WHERE u.is_active = TRUE`
+WHERE u.is_active = TRUE AND u.is_test = FALSE`
 	args := []any{pattern, prefix}
 	pIdx := 3
 	if kind != "" && kind != "all" {
@@ -217,6 +218,9 @@ func (r *Repo) ListAllUsers(ctx context.Context, p ListAllUsersParams) ([]UserLi
 		args = append(args, p.Kind)
 		conds = append(conds, fmt.Sprintf("u.kind = $%d", len(args)))
 	}
+	if !p.IncludeTest {
+		conds = append(conds, "u.is_test = FALSE")
+	}
 	switch p.Role {
 	case "manager":
 		conds = append(conds, "u.is_manager = TRUE AND u.is_admin = FALSE")
@@ -250,7 +254,7 @@ SELECT u.id, COALESCE(u.email::text,''), COALESCE(u.phone,''),
        COALESCE(NULLIF(cp.display_name,''), NULLIF(sp.display_name,''), ''),
        u.kind, u.is_admin, u.is_manager, u.is_approved, u.is_active,
        u.email_verified_at IS NOT NULL,
-       u.created_at,
+       u.created_at, u.last_login_at, u.is_test,
        COALESCE(sp.moderation_status, ''),
        COALESCE(sp.is_published, FALSE)
 %s
@@ -269,7 +273,8 @@ LIMIT $%d OFFSET $%d`, base, len(args)-1, len(args))
 		if err := rows.Scan(
 			&u.UserID, &u.Email, &u.Phone, &u.DisplayName,
 			&u.Kind, &u.IsAdmin, &u.IsManager, &u.IsApproved, &u.IsActive,
-			&u.EmailVerified, &u.CreatedAt, &u.ModerationStatus, &u.IsPublished,
+			&u.EmailVerified, &u.CreatedAt, &u.LastLoginAt, &u.IsTest,
+			&u.ModerationStatus, &u.IsPublished,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan user: %w", err)
 		}

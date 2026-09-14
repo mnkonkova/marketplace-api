@@ -28,6 +28,13 @@ func (s *Service) List(ctx context.Context) ([]Production, error) {
 	return s.repo.List(ctx, false)
 }
 
+// ListWithUsage — справочник для админа: со счётчиками участников и
+// активных проектов. Публичному списку они не нужны — там выбирают
+// продакшен, а не решают его судьбу.
+func (s *Service) ListWithUsage(ctx context.Context) ([]ProductionListItem, error) {
+	return s.repo.ListWithUsage(ctx, false)
+}
+
 func (s *Service) ListActive(ctx context.Context) ([]Production, error) {
 	return s.repo.List(ctx, true)
 }

@@ -18,6 +18,12 @@ import (
 
 var ErrInvalidInput = errors.New("invalid input")
 
+// wrapInvalid — repo отдаёт «invalid ...» обычной ошибкой; заворачиваем в
+// ErrInvalidInput, чтобы хендлер ответил 400, а не 500.
+func wrapInvalid(err error) error {
+	return fmt.Errorf("%w: %s", ErrInvalidInput, err.Error())
+}
+
 // ErrModerationReasonRequired — reject без причины запрещён: спец должен
 // видеть, что именно поправить.
 var ErrModerationReasonRequired = errors.New("moderation reason required")
@@ -25,8 +31,11 @@ var ErrModerationReasonRequired = errors.New("moderation reason required")
 const moderationReasonMaxLen = 500
 
 type Service struct {
-	repo       *Repo
-	profiles   *profiles.Repo // для очереди модерации специалистов
+	repo     *Repo
+	profiles *profiles.Repo // для очереди модерации специалистов
+	// audit — чтение журнала админских действий. Пишут в него сами
+	// домены из своих транзакций, здесь только читаем.
+	audit      *audit.Repo
 	appBaseURL string
 	inviteTTL  time.Duration
 	tokens     *auth.TokenIssuer

@@ -150,6 +150,15 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 	if !p.IncludeTest {
 		conds = append(conds, "p.is_test = FALSE")
 	}
+	if p.Kind != "" {
+		switch ProjectKind(p.Kind) {
+		case KindCreatorsTurnkey, KindProductionTurnkey, KindGeneral:
+		default:
+			return nil, 0, fmt.Errorf("invalid kind %q", p.Kind)
+		}
+		args = append(args, p.Kind)
+		conds = append(conds, fmt.Sprintf("p.kind = $%d", len(args)))
+	}
 	switch {
 	case p.ManagerID != nil:
 		args = append(args, *p.ManagerID)

@@ -106,9 +106,10 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 	}
 	// У проекта с креаторами шагов нет, и прогресс по ним всегда ноль.
 	// Его меру считаем по выкладкам — тем же запросом на весь список.
-	pubProgress, err := s.repo.PublicationProgress(ctx, turnkeyIDs(projects))
+	// Берём сразу парой чисел: процент из них выводится, обратно — нет.
+	pubCounts, err := s.repo.PublicationCounts(ctx, turnkeyIDs(projects))
 	if err != nil {
-		pubProgress = map[uuid.UUID]float64{}
+		pubCounts = map[uuid.UUID]PublicationCount{}
 	}
 	// Стадии и шаги — батчем, без N+1 на список (было: 2*N запросов в канбане).
 	stagesByProject, err := s.repo.LoadStagesBatch(ctx, projectIDs)
@@ -152,8 +153,22 @@ func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([
 		}
 		view.DisplayStatus = DeriveProjectDisplayStatus(p.Status, stepViews)
 		view.Progress = DeriveProgress(stepViews)
-		if pct, ok := pubProgress[p.ID]; ok {
-			view.Progress = pct
+		// Шаги меряем сделанными и пропущенными: пропущенный шаг проекту
+		// больше ничего не должен, и держать его в «осталось» — врать.
+		if len(stepViews) > 0 {
+			done := 0
+			for _, sv := range stepViews {
+				if sv.Status == StepStatusDone || sv.Status == StepStatusSkipped {
+					done++
+				}
+			}
+			view.ProgressDone, view.ProgressTotal = done, len(stepViews)
+			view.ProgressUnit = ProgressUnitSteps
+		}
+		if c, ok := pubCounts[p.ID]; ok && c.Total > 0 {
+			view.Progress = float64(c.Done) / float64(c.Total) * 100
+			view.ProgressDone, view.ProgressTotal = c.Done, c.Total
+			view.ProgressUnit = ProgressUnitPublications
 		}
 		if cur := DeriveCurrentStep(stepViews); cur != nil {
 			view.CurrentStepID = &cur.ID

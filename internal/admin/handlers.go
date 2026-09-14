@@ -93,7 +93,8 @@ func (h *Handler) AdminListManagers(w http.ResponseWriter, r *http.Request) {
 // AdminListAllUsers godoc
 // @Summary  Полный листинг всех юзеров с пагинацией (admin UI)
 // @Description Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),
-// @Description kind (client|specialist), role (manager|admin|regular).
+// @Description kind (client|specialist), role (manager|admin|regular),
+// @Description include_test (по умолчанию тестовые скрыты).
 // @Description Сортировка created_at DESC. limit 1..100, default 20.
 // @Tags     admin-users
 // @Produce  json
@@ -101,6 +102,7 @@ func (h *Handler) AdminListManagers(w http.ResponseWriter, r *http.Request) {
 // @Param    q      query string false "часть email/phone/имени, мин 2 симв"
 // @Param    kind   query string false "client | specialist"
 // @Param    role   query string false "manager | admin | regular"
+// @Param    include_test query bool false "показать тестовых пользователей, default false"
 // @Param    limit  query int    false "1-100, default 20"
 // @Param    offset query int    false "default 0"
 // @Success  200 {object} UserListResult
@@ -112,11 +114,14 @@ func (h *Handler) AdminListAllUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	res, err := h.svc.ListAllUsers(r.Context(), ListAllUsersParams{
-		Q:      strings.TrimSpace(r.URL.Query().Get("q")),
-		Kind:   strings.TrimSpace(r.URL.Query().Get("kind")),
-		Role:   strings.TrimSpace(r.URL.Query().Get("role")),
-		Limit:  limit,
-		Offset: offset,
+		Q:    strings.TrimSpace(r.URL.Query().Get("q")),
+		Kind: strings.TrimSpace(r.URL.Query().Get("kind")),
+		Role: strings.TrimSpace(r.URL.Query().Get("role")),
+		// Тестовых прячем, пока явно не попросили — как и тестовые
+		// проекты в /admin/projects.
+		IncludeTest: r.URL.Query().Get("include_test") == "true",
+		Limit:       limit,
+		Offset:      offset,
 	})
 	if err != nil {
 		writeServiceErr(w, err)

@@ -103,8 +103,11 @@ func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
 // @Description имя на проекте у клиента без аккаунта, почта), мин 2 символа.
 // @Description manager — uuid ответственного либо "none" (без ответственного).
 // @Description include_test=true показывает проекты, помеченные как тестовые
-// @Description (по умолчанию скрыты). sort: updated_asc | updated_desc |
-// @Description created_asc | created_desc, default updated_desc.
+// @Description (по умолчанию скрыты). kind — вид проекта. sort: updated_asc |
+// @Description updated_desc | created_asc | created_desc, default updated_desc.
+// @Description У каждой карточки прогресс ещё и числом: progress_done /
+// @Description progress_total, единица в progress_unit (publications у
+// @Description креаторов, steps у продакшна).
 // @Tags     admin-projects
 // @Produce  json
 // @Security BearerAuth
@@ -112,6 +115,7 @@ func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
 // @Param    status       query string false "точный статус проекта; пусто = всё кроме cancelled"
 // @Param    manager      query string false "uuid менеджера | none"
 // @Param    include_test query bool   false "показать тестовые проекты, default false"
+// @Param    kind         query string false "creators_turnkey | production_turnkey | general"
 // @Param    sort         query string false "updated_asc | updated_desc | created_asc | created_desc"
 // @Param    limit        query int    false "1-1000, default 20"
 // @Param    offset       query int    false "default 0"
@@ -132,6 +136,7 @@ func (h *Handler) AdminListProjects(w http.ResponseWriter, r *http.Request) {
 		// Тестовые прячем, пока явно не попросили: вопрос «включать ли
 		// мусор» должен решаться выбором, а не молчанием.
 		IncludeTest: qs.Get("include_test") == "true",
+		Kind:        strings.TrimSpace(qs.Get("kind")),
 		Limit:       limit,
 		Offset:      offset,
 	}

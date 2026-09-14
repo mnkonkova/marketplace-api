@@ -32,6 +32,18 @@ type ProjectManagerView struct {
 	DisplayStatus      ProjectDisplayStatus `json:"display_status"`
 	Progress           float64              `json:"progress"`
 
+	// Прогресс числом, а не только процентом.
+	//
+	// «62%» в списке не отвечает на вопрос, с которым в него смотрят:
+	// сколько роликов ещё выложить и сколько шагов осталось пройти.
+	// Единица измерения у видов проектов разная, поэтому рядом с числами
+	// лежит ProgressUnit — иначе «3 из 5» читалось бы как что угодно.
+	ProgressDone  int `json:"progress_done"`
+	ProgressTotal int `json:"progress_total"`
+	// ProgressUnit — publications у креаторов, steps у продакшна.
+	// Пусто означает, что мерить нечего: ни выкладок, ни шагов.
+	ProgressUnit string `json:"progress_unit,omitempty"`
+
 	// CurrentStageID/Title — куда положить карточку в канбане.
 	CurrentStageID    *uuid.UUID `json:"current_stage_id,omitempty"`
 	CurrentStageName  string     `json:"current_stage_name,omitempty"`
@@ -71,10 +83,20 @@ type AdminListParams struct {
 	Unassigned bool
 	// IncludeTest — показывать проекты с is_test. По умолчанию скрыты.
 	IncludeTest bool
-	Sort        string
-	Limit       int
-	Offset      int
+	// Kind — вид проекта: creators_turnkey | production_turnkey | general.
+	// Пусто = все. Вид определяет и колонки таблицы, и смысл прогресса,
+	// поэтому смешанный список админ почти всегда сужает до одного вида.
+	Kind   string
+	Sort   string
+	Limit  int
+	Offset int
 }
+
+// ProgressUnit* — в чём измерен прогресс проекта (см. ProjectManagerView).
+const (
+	ProgressUnitPublications = "publications"
+	ProgressUnitSteps        = "steps"
+)
 
 // AdminListResult — страница админского списка. Total — количество под
 // текущими фильтрами без limit/offset, для пагинатора на фронте.
