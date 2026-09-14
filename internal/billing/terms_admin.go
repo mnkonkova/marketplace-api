@@ -81,6 +81,10 @@ SELECT v.id, v.version, v.body, v.published_at,
        v.click_bonus_rate, v.click_bonus_threshold, v.click_bonus_rate_over,
        v.creator_salary_per_month, v.creator_rate_per_1000_views,
        v.creator_rate_per_1000_views_over,
+       v.step_views, v.first_period_fee, v.base_fee, v.step_fee,
+       v.step_tier2_from, v.step_fee_over, v.step_cap_views, v.guarantee_views,
+       v.creator_first_period_fee, v.creator_base_fee, v.creator_step_fee,
+       v.creator_step_fee_over,
        v.version = (SELECT MAX(version) FROM terms_versions),
        (SELECT COUNT(*) FROM client_terms_consents c WHERE c.terms_version_id = v.id),
        (SELECT COUNT(*) FROM project_billing b WHERE b.terms_version_id = v.id)
@@ -99,6 +103,10 @@ ORDER BY v.version DESC`)
 			&v.ClickBonusRate, &v.ClickBonusThreshold, &v.ClickBonusRateOver,
 			&v.CreatorSalaryPerMonth, &v.CreatorRatePer1000Views,
 			&v.CreatorRatePer1000ViewsOver,
+			&v.StepViews, &v.FirstPeriodFee, &v.BaseFee, &v.StepFee,
+			&v.StepTier2From, &v.StepFeeOver, &v.StepCapViews, &v.GuaranteeViews,
+			&v.CreatorFirstPeriodFee, &v.CreatorBaseFee, &v.CreatorStepFee,
+			&v.CreatorStepFeeOver,
 			&v.IsCurrent, &v.ConsentedClients, &v.UsedByProjects); err != nil {
 			return nil, fmt.Errorf("scan terms version: %w", err)
 		}
@@ -160,14 +168,21 @@ INSERT INTO terms_versions
   (version, body, salary_per_month, videos_first_month, videos_next_months,
    rate_per_1000_views, bonus_views_threshold, rate_per_1000_views_over,
    click_bonus_rate, click_bonus_threshold, click_bonus_rate_over,
-   creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over)
+   creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over,
+   step_views, first_period_fee, base_fee, step_fee,
+   step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
+   creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over)
 VALUES ((SELECT COALESCE(MAX(version), 0) + 1 FROM terms_versions),
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 RETURNING id, version, published_at`,
 		v.Body, v.SalaryPerMonth, v.VideosFirstMonth, v.VideosNextMonths,
 		v.RatePer1000Views, v.BonusViewsThreshold, v.RatePer1000ViewsOver,
 		v.ClickBonusRate, v.ClickBonusThreshold, v.ClickBonusRateOver,
-		v.CreatorSalaryPerMonth, v.CreatorRatePer1000Views, v.CreatorRatePer1000ViewsOver).
+		v.CreatorSalaryPerMonth, v.CreatorRatePer1000Views, v.CreatorRatePer1000ViewsOver,
+		v.StepViews, v.FirstPeriodFee, v.BaseFee, v.StepFee,
+		v.StepTier2From, v.StepFeeOver, v.StepCapViews, v.GuaranteeViews,
+		v.CreatorFirstPeriodFee, v.CreatorBaseFee, v.CreatorStepFee, v.CreatorStepFeeOver).
 		Scan(&v.TermsVersionID, &v.Version, &v.PublishedAt)
 	if err != nil {
 		return TermsPublishResult{}, fmt.Errorf("publish terms version: %w", err)
@@ -211,14 +226,20 @@ SELECT id, version, body, published_at,
        salary_per_month, videos_first_month, videos_next_months,
        rate_per_1000_views, bonus_views_threshold, rate_per_1000_views_over,
        click_bonus_rate, click_bonus_threshold, click_bonus_rate_over,
-       creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over
+       creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over,
+       step_views, first_period_fee, base_fee, step_fee,
+       step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
+       creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over
 FROM terms_versions
 ORDER BY version DESC
 LIMIT 1`).Scan(&v.TermsVersionID, &v.Version, &v.Body, &v.PublishedAt,
 		&v.SalaryPerMonth, &v.VideosFirstMonth, &v.VideosNextMonths,
 		&v.RatePer1000Views, &v.BonusViewsThreshold, &v.RatePer1000ViewsOver,
 		&v.ClickBonusRate, &v.ClickBonusThreshold, &v.ClickBonusRateOver,
-		&v.CreatorSalaryPerMonth, &v.CreatorRatePer1000Views, &v.CreatorRatePer1000ViewsOver)
+		&v.CreatorSalaryPerMonth, &v.CreatorRatePer1000Views, &v.CreatorRatePer1000ViewsOver,
+		&v.StepViews, &v.FirstPeriodFee, &v.BaseFee, &v.StepFee,
+		&v.StepTier2From, &v.StepFeeOver, &v.StepCapViews, &v.GuaranteeViews,
+		&v.CreatorFirstPeriodFee, &v.CreatorBaseFee, &v.CreatorStepFee, &v.CreatorStepFeeOver)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TermsVersion{}, false, nil
 	}
@@ -264,6 +285,23 @@ func diffTerms(from, to Terms) []TermsChange {
 		from.CreatorRatePer1000Views, to.CreatorRatePer1000Views)
 	add("creator_rate_per_1000_views_over", "Креатору за 1000 просмотров сверх порога",
 		from.CreatorRatePer1000ViewsOver, to.CreatorRatePer1000ViewsOver)
+
+	// Ступенчатый тариф.
+	add("step_views", "Размер ступени, просмотров", from.StepViews, to.StepViews)
+	add("first_period_fee", "Фикс за первый период", from.FirstPeriodFee, to.FirstPeriodFee)
+	add("base_fee", "Фикс со второго периода", from.BaseFee, to.BaseFee)
+	add("step_fee", "Цена ступени", from.StepFee, to.StepFee)
+	add("step_tier2_from", "Ступень дешевеет с", from.StepTier2From, to.StepTier2From)
+	add("step_fee_over", "Цена ступени сверх порога", from.StepFeeOver, to.StepFeeOver)
+	add("step_cap_views", "Потолок оплачиваемых просмотров", from.StepCapViews, to.StepCapViews)
+	add("guarantee_views", "Гарантия, просмотров", from.GuaranteeViews, to.GuaranteeViews)
+	add("creator_first_period_fee", "Креатору за первый период",
+		from.CreatorFirstPeriodFee, to.CreatorFirstPeriodFee)
+	add("creator_base_fee", "Креатору фикс со второго периода",
+		from.CreatorBaseFee, to.CreatorBaseFee)
+	add("creator_step_fee", "Креатору за ступень", from.CreatorStepFee, to.CreatorStepFee)
+	add("creator_step_fee_over", "Креатору за ступень сверх порога",
+		from.CreatorStepFeeOver, to.CreatorStepFeeOver)
 	return out
 }
 
@@ -296,6 +334,18 @@ func (s *Service) PublishTermsVersion(ctx context.Context, v TermsVersion, actor
 		c.RatePer1000ViewsOver > v.RatePer1000ViewsOver {
 		return TermsPublishResult{}, fmt.Errorf(
 			"%w: доля креатора больше, чем платит клиент — проверьте ставки", ErrInvalidInput)
+	}
+	// То же правило для ступеней. Проверяется по лесенкам, а не по полям:
+	// незаполненная креаторская ступень означает «как у клиента», и
+	// сравнение пустого поля с числом ничего не значило бы.
+	if v.Terms.Stepped() {
+		cl, cr := v.Terms.ClientLadder(), v.Terms.CreatorLadder()
+		if cr.FirstPeriodFee > cl.FirstPeriodFee || cr.BaseFee > cl.BaseFee ||
+			cr.StepFee > cl.StepFee || cr.StepFeeOver > cl.StepFeeOver ||
+			cr.TailRate > cl.TailRate {
+			return TermsPublishResult{}, fmt.Errorf(
+				"%w: ступени креатора дороже клиентских — проверьте тариф", ErrInvalidInput)
+		}
 	}
 	return s.repo.PublishTermsVersion(ctx, v, actorID)
 }

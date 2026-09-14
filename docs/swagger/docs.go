@@ -12754,6 +12754,13 @@ const docTemplate = `{
                 "carry_out_creator": {
                     "type": "integer"
                 },
+                "client_debt_in": {
+                    "description": "ClientDebtIn/ClientDebtOut — долг перед клиентом в ПРОСМОТРАХ:\nнедобрали гарантию — период оплачен как гарантия, а недостающее\nдобираем бесплатно в следующем. Не в деньгах, так в оферте.",
+                    "type": "integer"
+                },
+                "client_debt_out": {
+                    "type": "integer"
+                },
                 "ends_on": {
                     "type": "string"
                 },
@@ -12850,6 +12857,11 @@ const docTemplate = `{
         "internal_billing.Terms": {
             "type": "object",
             "properties": {
+                "base_fee": {
+                    "description": "BaseFee — фикс со второго периода.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "bonus_views_threshold": {
                     "description": "BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.\nДо него платим полную ставку, свыше — пониженную. 0 = порога нет,\nвесь объём идёт по полной ставке.",
                     "type": "integer"
@@ -12868,6 +12880,15 @@ const docTemplate = `{
                     "description": "ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной\nставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.",
                     "type": "integer"
                 },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_rate_per_1000_views": {
                     "type": "integer",
                     "x-nullable": true
@@ -12878,6 +12899,24 @@ const docTemplate = `{
                 },
                 "creator_salary_per_month": {
                     "description": "Креаторская сторона тарифа: что получает исполнитель.\n\nnil означает «столько же, сколько платит клиент»: до заполнения этих\nполей выплата равна счёту и маржи у платформы нет. Две стороны нужны\nпотому, что это разные деньги — счёт заказчику и обязательство перед\nкреатором; одно число за оба показывало креатору в личном кабинете\nцену клиента как его собственный заработок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "description": "GuaranteeViews — гарантия в просмотрах. Недобрали — период всё\nравно оплачивается как гарантия, а недостающие просмотры уходят в\nдолг перед клиентом и гасятся из следующего периода. Долг в\nПРОСМОТРАХ, а не в деньгах: так в оферте.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -12895,6 +12934,31 @@ const docTemplate = `{
                 "salary_per_month": {
                     "description": "SalaryPerMonth — оклад креатора за месяц, копейки.",
                     "type": "integer"
+                },
+                "step_cap_views": {
+                    "description": "StepCapViews — выше этого объёма ступени не оплачиваются.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "description": "StepFee — цена полной ступени до StepTier2From.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "description": "StepFeeOver — цена ступени после этого порога.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "description": "StepTier2From — с какого объёма ступень дешевеет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "terms_version_id": {
                     "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
@@ -12955,6 +13019,11 @@ const docTemplate = `{
         "internal_billing.TermsPublishResult": {
             "type": "object",
             "properties": {
+                "base_fee": {
+                    "description": "BaseFee — фикс со второго периода.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "body": {
                     "description": "Body — текст условий, с которым соглашается клиент.",
                     "type": "string"
@@ -12992,6 +13061,15 @@ const docTemplate = `{
                     "description": "ConsentsRequired — сколько клиентов согласились с прежней\nдействующей версией и теперь должны согласиться заново.",
                     "type": "integer"
                 },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_rate_per_1000_views": {
                     "type": "integer",
                     "x-nullable": true
@@ -13002,6 +13080,24 @@ const docTemplate = `{
                 },
                 "creator_salary_per_month": {
                     "description": "Креаторская сторона тарифа: что получает исполнитель.\n\nnil означает «столько же, сколько платит клиент»: до заполнения этих\nполей выплата равна счёту и маржи у платформы нет. Две стороны нужны\nпотому, что это разные деньги — счёт заказчику и обязательство перед\nкреатором; одно число за оба показывало креатору в личном кабинете\nцену клиента как его собственный заработок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "description": "GuaranteeViews — гарантия в просмотрах. Недобрали — период всё\nравно оплачивается как гарантия, а недостающие просмотры уходят в\nдолг перед клиентом и гасятся из следующего периода. Долг в\nПРОСМОТРАХ, а не в деньгах: так в оферте.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -13034,6 +13130,31 @@ const docTemplate = `{
                 "salary_per_month": {
                     "description": "SalaryPerMonth — оклад креатора за месяц, копейки.",
                     "type": "integer"
+                },
+                "step_cap_views": {
+                    "description": "StepCapViews — выше этого объёма ступени не оплачиваются.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "description": "StepFee — цена полной ступени до StepTier2From.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "description": "StepFeeOver — цена ступени после этого порога.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "description": "StepTier2From — с какого объёма ступень дешевеет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "terms_version_id": {
                     "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
@@ -13062,6 +13183,11 @@ const docTemplate = `{
         "internal_billing.TermsVersion": {
             "type": "object",
             "properties": {
+                "base_fee": {
+                    "description": "BaseFee — фикс со второго периода.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "body": {
                     "description": "Body — текст условий, с которым соглашается клиент.",
                     "type": "string"
@@ -13088,6 +13214,15 @@ const docTemplate = `{
                     "description": "ConsentedClients — сколько клиентов уже согласились именно с ней.\nПоказывает, что версию нельзя считать черновиком.",
                     "type": "integer"
                 },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_rate_per_1000_views": {
                     "type": "integer",
                     "x-nullable": true
@@ -13098,6 +13233,24 @@ const docTemplate = `{
                 },
                 "creator_salary_per_month": {
                     "description": "Креаторская сторона тарифа: что получает исполнитель.\n\nnil означает «столько же, сколько платит клиент»: до заполнения этих\nполей выплата равна счёту и маржи у платформы нет. Две стороны нужны\nпотому, что это разные деньги — счёт заказчику и обязательство перед\nкреатором; одно число за оба показывало креатору в личном кабинете\nцену клиента как его собственный заработок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "description": "GuaranteeViews — гарантия в просмотрах. Недобрали — период всё\nравно оплачивается как гарантия, а недостающие просмотры уходят в\nдолг перед клиентом и гасятся из следующего периода. Долг в\nПРОСМОТРАХ, а не в деньгах: так в оферте.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -13130,6 +13283,31 @@ const docTemplate = `{
                 "salary_per_month": {
                     "description": "SalaryPerMonth — оклад креатора за месяц, копейки.",
                     "type": "integer"
+                },
+                "step_cap_views": {
+                    "description": "StepCapViews — выше этого объёма ступени не оплачиваются.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "description": "StepFee — цена полной ступени до StepTier2From.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "description": "StepFeeOver — цена ступени после этого порога.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "description": "StepTier2From — с какого объёма ступень дешевеет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "terms_version_id": {
                     "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
@@ -13251,6 +13429,10 @@ const docTemplate = `{
         "internal_billing.publishTermsReq": {
             "type": "object",
             "properties": {
+                "base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "body": {
                     "type": "string"
                 },
@@ -13269,6 +13451,15 @@ const docTemplate = `{
                 "click_bonus_threshold": {
                     "type": "integer"
                 },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона ступеней. null = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_rate_per_1000_views": {
                     "type": "integer",
                     "x-nullable": true
@@ -13282,6 +13473,22 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "rate_per_1000_views": {
                     "type": "integer"
                 },
@@ -13290,6 +13497,27 @@ const docTemplate = `{
                 },
                 "salary_per_month": {
                     "type": "integer"
+                },
+                "step_cap_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "---- ступенчатый тариф ----\n\nЗаполненный step_views означает, что версия считается ступенями, а\nоклад и ставка за тысячу в расчёт не идут — кроме вирального\nхвоста, который считается по rate_per_1000_views_over и порогу на\nролик выше. null во всех этих полях = версия по старой модели;\nпоэтому именно null, а не 0: ноль значил бы «ступень нулевого\nразмера».",
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "videos_first_month": {
                     "description": "За какой объём назван оклад: «30 видео первый месяц, 60 со второго».",
@@ -13303,6 +13531,10 @@ const docTemplate = `{
         "internal_billing.termsReq": {
             "type": "object",
             "properties": {
+                "base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "bonus_views_threshold": {
                     "type": "integer"
                 },
@@ -13318,6 +13550,15 @@ const docTemplate = `{
                 "click_bonus_threshold": {
                     "type": "integer"
                 },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона ступеней. null = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_rate_per_1000_views": {
                     "type": "integer",
                     "x-nullable": true
@@ -13331,6 +13572,22 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "rate_per_1000_views": {
                     "type": "integer"
                 },
@@ -13339,6 +13596,27 @@ const docTemplate = `{
                 },
                 "salary_per_month": {
                     "type": "integer"
+                },
+                "step_cap_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "---- ступенчатый тариф ----\n\nЗаполненный step_views означает, что версия считается ступенями, а\nоклад и ставка за тысячу в расчёт не идут — кроме вирального\nхвоста, который считается по rate_per_1000_views_over и порогу на\nролик выше. null во всех этих полях = версия по старой модели;\nпоэтому именно null, а не 0: ноль значил бы «ступень нулевого\nразмера».",
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "videos_first_month": {
                     "description": "За какой объём назван оклад: «30 видео первый месяц, 60 со второго».",

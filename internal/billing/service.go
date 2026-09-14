@@ -129,6 +129,31 @@ func checkRates(t Terms) (Terms, error) {
 		(t.ClickBonusRateOver != nil && *t.ClickBonusRateOver < 0) {
 		return Terms{}, fmt.Errorf("%w: ставка за переходы не бывает отрицательной", ErrInvalidInput)
 	}
+
+	// Ступени. Пустые поля — это «версия по старой модели», а не ноль;
+	// проверяем только заполненное.
+	for _, v := range []*int64{
+		t.StepViews, t.FirstPeriodFee, t.BaseFee, t.StepFee, t.StepTier2From,
+		t.StepFeeOver, t.StepCapViews, t.GuaranteeViews,
+		t.CreatorFirstPeriodFee, t.CreatorBaseFee, t.CreatorStepFee, t.CreatorStepFeeOver,
+	} {
+		if v != nil && *v < 0 {
+			return Terms{}, fmt.Errorf("%w: ступени тарифа не бывают отрицательными", ErrInvalidInput)
+		}
+	}
+	if t.StepViews != nil && *t.StepViews == 0 {
+		// Ступень нулевого размера — это деление на ноль в расчёте.
+		// Хотели «без ступеней» — не присылайте поле вовсе.
+		return Terms{}, fmt.Errorf(
+			"%w: размер ступени не бывает нулевым — уберите поле, если тариф без ступеней", ErrInvalidInput)
+	}
+	if t.Stepped() {
+		if t.StepCapViews != nil && t.StepTier2From != nil &&
+			*t.StepCapViews > 0 && *t.StepTier2From > *t.StepCapViews {
+			return Terms{}, fmt.Errorf(
+				"%w: ступень дешевеет позже, чем тариф перестаёт её считать", ErrInvalidInput)
+		}
+	}
 	return t, nil
 }
 
@@ -183,6 +208,33 @@ func (s *Service) Recalculate(ctx context.Context, projectID uuid.UUID, p Projec
 	if err != nil {
 		return nil, err
 	}
+
+	if terms.Stepped() {
+		// Вход периода — это выход предыдущего: долг перед клиентом и
+		// перенесённый остаток креатора. Подтягиваем перед счётом, иначе
+		// период посчитается по устаревшему входу.
+		p, err = s.repo.SyncCarryIn(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		rows, left, err := s.steppedAccruals(ctx, terms, facts, projectID, p)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range rows {
+			if err := s.repo.SaveAccrual(ctx, a); err != nil {
+				return nil, err
+			}
+		}
+		// Долг и перенос — величины периода: сохраняем их рядом с ним, а
+		// не в строках начисления. Подытог их заморозит вместе со срезом.
+		if err := s.repo.SaveLeftovers(ctx, p.ID, left); err != nil {
+			return nil, err
+		}
+		start := p.StartsOn
+		return s.repo.Accruals(ctx, projectID, &start, nil)
+	}
+
 	for _, f := range facts {
 		a := calcAccrual(terms, f, projectID, p.StartsOn)
 		if err := s.repo.SaveAccrual(ctx, a); err != nil {
@@ -191,6 +243,105 @@ func (s *Service) Recalculate(ctx context.Context, projectID uuid.UUID, p Projec
 	}
 	start := p.StartsOn
 	return s.repo.Accruals(ctx, projectID, &start, nil)
+}
+
+// steppedAccruals — начисления периода по ступенчатому тарифу.
+//
+// Тариф ступенчатый ПО ПЕРИОДУ: фикс платится за период, а ступени
+// берутся от общего объёма — сумма ступеней по креаторам порознь дала бы
+// другое число, и контрольные точки оферты перестали бы сходиться.
+// Поэтому считаем период целиком одной calcPeriod, а потом раскладываем
+// сумму по строкам креаторов пропорционально их просмотрам.
+//
+// Раскладка — это подача, а не правило тарифа: сумма строк равна сумме
+// периода копейка в копейку, остаток от деления достаётся тому, у кого
+// больше просмотров.
+func (s *Service) steppedAccruals(
+	ctx context.Context, terms Terms, facts []creatorPeriod, projectID uuid.UUID, p ProjectPeriod,
+) ([]Accrual, periodLeftovers, error) {
+	pc := periodContext{
+		Seq:            p.Seq,
+		ClientDebtIn:   p.ClientDebtIn,
+		CreatorCarryIn: p.CarryInCreator,
+	}
+	agg := aggregateFacts(facts)
+	total, left := calcPeriod(terms, agg, pc, projectID, p.StartsOn)
+
+	rows := make([]Accrual, 0, len(facts))
+	if len(facts) == 0 {
+		return rows, left, nil
+	}
+
+	// Кому достанется остаток от деления: тому, у кого больше просмотров.
+	// Произвольный выбор здесь был бы не страшен для суммы, но менял бы
+	// строки от пересчёта к пересчёту.
+	biggest := 0
+	for i := range facts {
+		if facts[i].ViewsTotal > facts[biggest].ViewsTotal {
+			biggest = i
+		}
+	}
+
+	// Раздано по строкам — по каждой части раскладки отдельно.
+	var givenClient, givenCreator struct{ salary, tail int64 }
+	for i, f := range facts {
+		a := Accrual{
+			ProjectID:       projectID,
+			CreatorUserID:   f.CreatorID,
+			PeriodStart:     p.StartsOn,
+			VideosPlanned:   f.Planned,
+			VideosDelivered: f.Delivered,
+			ViewsTotal:      f.ViewsTotal,
+			ViewsBase:       f.ViewsBase,
+			ViewsOver:       f.ViewsOver,
+			Clicks:          f.Clicks,
+		}
+		share := func(sum int64) int64 {
+			if agg.ViewsTotal <= 0 {
+				// Просмотров нет вовсе — делим поровну: фикс за период
+				// платится и тогда, когда ничего не набрали.
+				return sum / int64(len(facts))
+			}
+			return sum * f.ViewsTotal / agg.ViewsTotal
+		}
+		a.Salary = share(total.Salary)
+		a.ViewsBonus = share(total.ViewsBonus)
+		a.Total = a.Salary + a.ViewsBonus
+		a.PayoutSalary = share(total.PayoutSalary)
+		a.PayoutViewsBonus = share(total.PayoutViewsBonus)
+		a.PayoutTotal = a.PayoutSalary + a.PayoutViewsBonus
+		givenClient.salary += a.Salary
+		givenClient.tail += a.ViewsBonus
+		givenCreator.salary += a.PayoutSalary
+		givenCreator.tail += a.PayoutViewsBonus
+		rows = append(rows, a)
+		_ = i
+	}
+	// Остаток от деления — тому, у кого больше просмотров. По каждой
+	// части отдельно: свалить всё в фикс значило бы показать в раскладке
+	// хвост, которого столько не было.
+	rows[biggest].Salary += total.Salary - givenClient.salary
+	rows[biggest].ViewsBonus += total.ViewsBonus - givenClient.tail
+	rows[biggest].Total = rows[biggest].Salary + rows[biggest].ViewsBonus
+	rows[biggest].PayoutSalary += total.PayoutSalary - givenCreator.salary
+	rows[biggest].PayoutViewsBonus += total.PayoutViewsBonus - givenCreator.tail
+	rows[biggest].PayoutTotal = rows[biggest].PayoutSalary + rows[biggest].PayoutViewsBonus
+	return rows, left, nil
+}
+
+// aggregateFacts — факты периода одной строкой: ступени считаются от
+// общего объёма, а не по каждому креатору порознь.
+func aggregateFacts(facts []creatorPeriod) creatorPeriod {
+	var agg creatorPeriod
+	for _, f := range facts {
+		agg.Planned += f.Planned
+		agg.Delivered += f.Delivered
+		agg.ViewsTotal += f.ViewsTotal
+		agg.ViewsBase += f.ViewsBase
+		agg.ViewsOver += f.ViewsOver
+		agg.Clicks += f.Clicks
+	}
+	return agg
 }
 
 // viewsThreshold — порог просмотров на ролик для SQL. Ноль в условиях
@@ -202,6 +353,38 @@ func viewsThreshold(t Terms) int64 {
 		return math.MaxInt64
 	}
 	return t.BonusViewsThreshold
+}
+
+// periodContext — что расчёт знает о периоде помимо фактов.
+//
+// Ступенчатый тариф считается по периоду целиком, а не по строке
+// креатора: фикс платится за период, а ступени берутся от общего объёма.
+// Поэтому расчёту нужен номер периода, долг перед клиентом и
+// перенесённый остаток креатора.
+type periodContext struct {
+	// Seq — какой это период по счёту. Первый оплачивается фиксом: там
+	// оплачивается запуск, а не результат.
+	Seq int
+	// ClientDebtIn — сколько просмотров мы должны клиенту на входе: они
+	// не выставляются ему к оплате.
+	ClientDebtIn int64
+	// CreatorCarryIn — остаток ступени, перенесённый креатору из
+	// прошлого периода: складывается с просмотрами этого.
+	CreatorCarryIn int64
+}
+
+// periodLeftovers — что период оставляет следующему.
+//
+// Величины периода, а не строки начисления: замораживаются подытогом
+// вместе со срезом. Пересчёт задним числом поехал бы цепочкой по уже
+// оплаченным периодам.
+type periodLeftovers struct {
+	// ClientDebtOut — сколько просмотров остались должны клиенту.
+	ClientDebtOut int64
+	// CreatorCarryOut — остаток, не добравший до полной ступени. У
+	// клиента такой остаток сгорает (решение владельца продукта), у
+	// креатора переносится.
+	CreatorCarryOut int64
 }
 
 // calcAccrual — вся арифметика начисления в одном месте, без обращений
@@ -231,6 +414,98 @@ func calcAccrual(t Terms, f creatorPeriod, projectID uuid.UUID, period time.Time
 		creator.salary, creator.deduction, creator.viewsBonus, creator.clickBonus, creator.total
 
 	return a
+}
+
+// calcPeriod — начисление за период целиком по ступенчатому тарифу.
+//
+// Та же функция для обеих сторон и для прогноза до ступени: разведи их —
+// и разница между «что заплатил клиент» и «что получил креатор» станет
+// следствием ошибки, а не тарифа.
+//
+// Возвращает начисление (суммой по периоду) и то, что период оставляет
+// следующему: долг перед клиентом и перенесённый остаток креатора.
+func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID, period time.Time) (Accrual, periodLeftovers) {
+	a := Accrual{
+		ProjectID:       projectID,
+		PeriodStart:     period,
+		VideosPlanned:   f.Planned,
+		VideosDelivered: f.Delivered,
+		ViewsTotal:      f.ViewsTotal,
+		ViewsBase:       f.ViewsBase,
+		ViewsOver:       f.ViewsOver,
+		Clicks:          f.Clicks,
+	}
+	var left periodLeftovers
+
+	// Порогов в тарифе ДВА, и работают они по очереди.
+	//
+	// Сначала виральный хвост: просмотры сверх порога НА РОЛИК уже
+	// отделены в SQL (f.ViewsOver) и оплачиваются пониженной ставкой за
+	// тысячу. В ступени они не идут вовсе — иначе одна виральная удача
+	// стоила бы клиенту как месяц работы.
+	//
+	// Остаток (f.ViewsBase — просмотры до порога, сложенные по всем
+	// роликам периода) идёт в месячные ступени: они про рост аккаунта.
+	// Одно правило другое не заменяет, «упрощать» их в одно нельзя.
+	stepPool := f.ViewsBase
+
+	// ---- клиент ----
+	//
+	// Долг гасится первым: первые ClientDebtIn просмотров периода мы
+	// обещали бесплатно и к оплате не выставляем.
+	//
+	// Долг и гарантия меряются ступенчатым объёмом, а не общим. На
+	// практике это одно и то же число: недобрать гарантию в 300 000 и
+	// при этом иметь виральный хвост нельзя — ролик, перешагнувший
+	// миллион, сам по себе даёт в ступенчатый объём целый миллион.
+	billable := stepPool - pc.ClientDebtIn
+	if billable < 0 {
+		billable = 0
+	}
+	// Недоставленная часть долга остаётся долгом.
+	if pc.ClientDebtIn > stepPool {
+		left.ClientDebtOut = pc.ClientDebtIn - stepPool
+	}
+
+	client := t.ClientLadder()
+	guarantee := derefOr(t.GuaranteeViews, 0)
+	charged := billable
+	if pc.Seq > 1 && guarantee > 0 && billable < guarantee {
+		// Недобрали гарантию: период оплачивается как гарантия, а
+		// недостающие просмотры уходят в долг и гасятся из следующего.
+		// Долг в ПРОСМОТРАХ, а не в деньгах — так в оферте: «недостающее
+		// доберём бесплатно».
+		charged = guarantee
+		left.ClientDebtOut += guarantee - billable
+	}
+	clientFee, _ := client.Fee(pc.Seq, charged)
+	clientTail := client.Tail(f.ViewsOver)
+	a.Salary = clientFee
+	a.ViewsBonus = clientTail
+	a.Total = clientFee + clientTail
+
+	// Неполная ступень клиенту не выставляется и НЕ переносится: решение
+	// владельца продукта, зафиксировано намеренно — это не баг.
+
+	// ---- креатор ----
+	//
+	// Та же пара правил его ставками. У него остаток ступени, наоборот,
+	// переносится: считаем от ступенчатого объёма периода плюс то, что
+	// пришло из прошлого.
+	creator := t.CreatorLadder()
+	counted := stepPool + pc.CreatorCarryIn
+	creatorFee, steps := creator.Fee(pc.Seq, counted)
+	creatorTail := creator.Tail(f.ViewsOver)
+	a.PayoutSalary = creatorFee
+	a.PayoutViewsBonus = creatorTail
+	a.PayoutTotal = creatorFee + creatorTail
+	if pc.Seq > 1 && creator.StepViews > 0 {
+		paid := steps * creator.StepViews
+		if counted > paid {
+			left.CreatorCarryOut = counted - paid
+		}
+	}
+	return a, left
 }
 
 // amounts — раскладка одной стороны тарифа.
@@ -379,12 +654,26 @@ func (s *Service) accrualsOrPreview(
 	}
 	// Тарифа нет — считать не по чему, и это не ошибка: у проекта могли
 	// ещё не заполнить условия.
-	if terms.SalaryPerMonth == 0 && terms.RatePer1000Views == 0 {
+	if !terms.Stepped() && terms.SalaryPerMonth == 0 && terms.RatePer1000Views == 0 {
 		return saved, nil
 	}
 	facts, err := s.periodFacts(ctx, projectID, p, viewsThreshold(terms))
 	if err != nil {
 		return nil, err
+	}
+	if terms.Stepped() {
+		// Предпросмотр считается тем же кодом, что и настоящий пересчёт,
+		// просто без записи: своя формула «для показа» разошлась бы с
+		// будущим счётом молча — а именно этот экран человек и увидит
+		// первым.
+		rows, _, err := s.steppedAccruals(ctx, terms, facts, projectID, p)
+		if err != nil {
+			return nil, err
+		}
+		for i := range rows {
+			rows[i].IsPreview = true
+		}
+		return rows, nil
 	}
 	out := make([]Accrual, 0, len(facts))
 	for _, f := range facts {
@@ -572,7 +861,7 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 func (s *Service) nextStepForecast(
 	ctx context.Context, projectID, creatorID uuid.UUID, terms Terms, now time.Time,
 ) (*NextStepForecast, error) {
-	if terms.SalaryPerMonth == 0 && terms.RatePer1000Views == 0 {
+	if !terms.Stepped() && terms.SalaryPerMonth == 0 && terms.RatePer1000Views == 0 {
 		return nil, nil
 	}
 	period, err := s.Period(ctx, projectID, 0, now)
@@ -601,8 +890,26 @@ func (s *Service) nextStepForecast(
 	}
 
 	// Перенесённый остаток уже в счёте — значит и до ступени с ним ближе.
-	counted := mine.ViewsTotal + period.CarryInCreator
-	toGo := StepViews - counted%StepViews
+	//
+	// Ступень берём из условий проекта, если тариф ступенчатый: число
+	// сто тысяч переехало из константы в версию условий. Константа
+	// остаётся запасным значением для проектов на старых версиях, где
+	// ступеней в тарифе нет вовсе, а полосу рисовать всё равно надо.
+	step := StepViews
+	if terms.Stepped() {
+		step = *terms.StepViews
+	}
+	// Считаем от того объёма, который вообще попадает в ступени. При
+	// ступенчатом тарифе это просмотры ДО порога на ролик: виральный
+	// хвост оплачивается отдельной ставкой и ступень не приближает —
+	// показывать обратное значило бы обещать креатору ступень за
+	// просмотры, которые в неё не идут.
+	pool := mine.ViewsTotal
+	if terms.Stepped() {
+		pool = mine.ViewsBase
+	}
+	counted := pool + period.CarryInCreator
+	toGo := step - counted%step
 
 	// Куда лягут будущие просмотры — в полную ставку или в пониженную,
 	// зависит от того, на каком ролике они наберутся. Раскладываем их в
@@ -613,6 +920,10 @@ func (s *Service) nextStepForecast(
 	grown := mine
 	grown.ViewsTotal += toGo
 	switch {
+	case terms.Stepped():
+		// Ступень набирается только просмотрами до порога на ролик:
+		// прирост, который её закрывает, по определению идёт туда же.
+		grown.ViewsBase += toGo
 	case mine.ViewsTotal <= 0:
 		// Просмотров ещё нет, делить нечего: первые идут по полной
 		// ставке — так же, как посчитал бы их расчёт.
@@ -623,9 +934,31 @@ func (s *Service) nextStepForecast(
 		grown.ViewsOver += toGo - base
 	}
 
-	nowAccrual := calcAccrual(terms, mine, projectID, period.StartsOn)
-	thenAccrual := calcAccrual(terms, grown, projectID, period.StartsOn)
-	gain := thenAccrual.PayoutTotal - nowAccrual.PayoutTotal
+	var gain int64
+	if terms.Stepped() {
+		// Ступенчатый тариф считается по периоду целиком, поэтому и
+		// прогноз — по нему же: одна функция на счёт, выплату и прогноз.
+		pc := periodContext{
+			Seq:            period.Seq,
+			ClientDebtIn:   period.ClientDebtIn,
+			CreatorCarryIn: period.CarryInCreator,
+		}
+		aggFacts, err := s.periodFacts(ctx, projectID, period, viewsThreshold(terms))
+		if err != nil {
+			return nil, err
+		}
+		agg := aggregateFacts(aggFacts)
+		grownAgg := agg
+		grownAgg.ViewsTotal += toGo
+		grownAgg.ViewsBase += toGo
+		nowPeriod, _ := calcPeriod(terms, agg, pc, projectID, period.StartsOn)
+		thenPeriod, _ := calcPeriod(terms, grownAgg, pc, projectID, period.StartsOn)
+		gain = thenPeriod.PayoutTotal - nowPeriod.PayoutTotal
+	} else {
+		nowAccrual := calcAccrual(terms, mine, projectID, period.StartsOn)
+		thenAccrual := calcAccrual(terms, grown, projectID, period.StartsOn)
+		gain = thenAccrual.PayoutTotal - nowAccrual.PayoutTotal
+	}
 	if gain < 0 {
 		// Отрицательный прогноз означал бы, что рост просмотров
 		// уменьшает выплату: такого в тарифе нет, и показывать это
@@ -633,7 +966,7 @@ func (s *Service) nextStepForecast(
 		gain = 0
 	}
 	return &NextStepForecast{
-		StepViews:       StepViews,
+		StepViews:       step,
 		ViewsToGo:       toGo,
 		CarryInIncluded: period.CarryInCreator,
 		ForecastPayout:  gain,

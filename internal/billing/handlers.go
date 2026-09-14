@@ -51,6 +51,64 @@ type termsReq struct {
 	CreatorSalaryPerMonth       *int64 `json:"creator_salary_per_month" extensions:"x-nullable"`
 	CreatorRatePer1000Views     *int64 `json:"creator_rate_per_1000_views" extensions:"x-nullable"`
 	CreatorRatePer1000ViewsOver *int64 `json:"creator_rate_per_1000_views_over" extensions:"x-nullable"`
+
+	// ---- ступенчатый тариф ----
+	//
+	// Заполненный step_views означает, что версия считается ступенями, а
+	// оклад и ставка за тысячу в расчёт не идут — кроме вирального
+	// хвоста, который считается по rate_per_1000_views_over и порогу на
+	// ролик выше. null во всех этих полях = версия по старой модели;
+	// поэтому именно null, а не 0: ноль значил бы «ступень нулевого
+	// размера».
+	StepViews      *int64 `json:"step_views" extensions:"x-nullable"`
+	FirstPeriodFee *int64 `json:"first_period_fee" extensions:"x-nullable"`
+	BaseFee        *int64 `json:"base_fee" extensions:"x-nullable"`
+	StepFee        *int64 `json:"step_fee" extensions:"x-nullable"`
+	StepTier2From  *int64 `json:"step_tier2_from" extensions:"x-nullable"`
+	StepFeeOver    *int64 `json:"step_fee_over" extensions:"x-nullable"`
+	StepCapViews   *int64 `json:"step_cap_views" extensions:"x-nullable"`
+	GuaranteeViews *int64 `json:"guarantee_views" extensions:"x-nullable"`
+
+	// Креаторская сторона ступеней. null = «как у клиента».
+	CreatorFirstPeriodFee *int64 `json:"creator_first_period_fee" extensions:"x-nullable"`
+	CreatorBaseFee        *int64 `json:"creator_base_fee" extensions:"x-nullable"`
+	CreatorStepFee        *int64 `json:"creator_step_fee" extensions:"x-nullable"`
+	CreatorStepFeeOver    *int64 `json:"creator_step_fee_over" extensions:"x-nullable"`
+}
+
+// terms — запрос в условия. Одним местом на обе ручки (менеджер правит
+// условия проекта, админ выпускает версию прайса): разложи это по двум
+// хендлерам — и новое поле однажды доедет только до одного из них.
+func (req termsReq) terms() Terms {
+	return Terms{
+		SalaryPerMonth:       req.SalaryPerMonth,
+		VideosFirstMonth:     req.VideosFirstMonth,
+		VideosNextMonths:     req.VideosNextMonths,
+		RatePer1000Views:     req.RatePer1000Views,
+		BonusViewsThreshold:  req.BonusViewsThreshold,
+		RatePer1000ViewsOver: req.RatePer1000ViewsOver,
+		ClickBonusRate:       req.ClickBonusRate,
+		ClickBonusThreshold:  req.ClickBonusThreshold,
+		ClickBonusRateOver:   req.ClickBonusRateOver,
+
+		CreatorSalaryPerMonth:       req.CreatorSalaryPerMonth,
+		CreatorRatePer1000Views:     req.CreatorRatePer1000Views,
+		CreatorRatePer1000ViewsOver: req.CreatorRatePer1000ViewsOver,
+
+		StepViews:      req.StepViews,
+		FirstPeriodFee: req.FirstPeriodFee,
+		BaseFee:        req.BaseFee,
+		StepFee:        req.StepFee,
+		StepTier2From:  req.StepTier2From,
+		StepFeeOver:    req.StepFeeOver,
+		StepCapViews:   req.StepCapViews,
+		GuaranteeViews: req.GuaranteeViews,
+
+		CreatorFirstPeriodFee: req.CreatorFirstPeriodFee,
+		CreatorBaseFee:        req.CreatorBaseFee,
+		CreatorStepFee:        req.CreatorStepFee,
+		CreatorStepFeeOver:    req.CreatorStepFeeOver,
+	}
 }
 
 type paymentReq struct {
@@ -207,22 +265,9 @@ func (h *Handler) ManagerSaveTerms(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
 		return
 	}
-	t, err := h.svc.SaveTerms(r.Context(), Terms{
-		ProjectID:            projectID,
-		SalaryPerMonth:       req.SalaryPerMonth,
-		VideosFirstMonth:     req.VideosFirstMonth,
-		VideosNextMonths:     req.VideosNextMonths,
-		RatePer1000Views:     req.RatePer1000Views,
-		BonusViewsThreshold:  req.BonusViewsThreshold,
-		RatePer1000ViewsOver: req.RatePer1000ViewsOver,
-		ClickBonusRate:       req.ClickBonusRate,
-		ClickBonusThreshold:  req.ClickBonusThreshold,
-		ClickBonusRateOver:   req.ClickBonusRateOver,
-
-		CreatorSalaryPerMonth:       req.CreatorSalaryPerMonth,
-		CreatorRatePer1000Views:     req.CreatorRatePer1000Views,
-		CreatorRatePer1000ViewsOver: req.CreatorRatePer1000ViewsOver,
-	}, uid)
+	t := req.terms()
+	t.ProjectID = projectID
+	t, err := h.svc.SaveTerms(r.Context(), t, uid)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -702,22 +747,8 @@ func (h *Handler) AdminPublishTerms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := h.svc.PublishTermsVersion(r.Context(), TermsVersion{
-		Terms: Terms{
-			SalaryPerMonth:       req.SalaryPerMonth,
-			VideosFirstMonth:     req.VideosFirstMonth,
-			VideosNextMonths:     req.VideosNextMonths,
-			RatePer1000Views:     req.RatePer1000Views,
-			BonusViewsThreshold:  req.BonusViewsThreshold,
-			RatePer1000ViewsOver: req.RatePer1000ViewsOver,
-			ClickBonusRate:       req.ClickBonusRate,
-			ClickBonusThreshold:  req.ClickBonusThreshold,
-			ClickBonusRateOver:   req.ClickBonusRateOver,
-
-			CreatorSalaryPerMonth:       req.CreatorSalaryPerMonth,
-			CreatorRatePer1000Views:     req.CreatorRatePer1000Views,
-			CreatorRatePer1000ViewsOver: req.CreatorRatePer1000ViewsOver,
-		},
-		Body: req.Body,
+		Terms: req.terms(),
+		Body:  req.Body,
 	}, actor)
 	if err != nil {
 		writeErr(w, err)

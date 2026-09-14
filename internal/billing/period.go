@@ -96,6 +96,12 @@ type ProjectPeriod struct {
 	CarryInCreator  int64 `json:"carry_in_creator"`
 	CarryOutCreator int64 `json:"carry_out_creator"`
 
+	// ClientDebtIn/ClientDebtOut — долг перед клиентом в ПРОСМОТРАХ:
+	// недобрали гарантию — период оплачен как гарантия, а недостающее
+	// добираем бесплатно в следующем. Не в деньгах, так в оферте.
+	ClientDebtIn  int64 `json:"client_debt_in"`
+	ClientDebtOut int64 `json:"client_debt_out"`
+
 	// RatingScaleID — какой версией справочника порогов оценивался
 	// период. Проставляется при подытоге и больше не меняется: чем
 	// оценивали, тем и оценивали. nil у периода, который ещё идёт.
@@ -124,6 +130,7 @@ func (p ProjectPeriod) LockDueAt(delay time.Duration) time.Time {
 const periodScanCols = `id, project_id, seq, starts_on, ends_on, prev_period_id,
        status, locked_at, locked_by, snapshot_as_of, snapshot_approx,
        carry_in_client, carry_out_client, carry_in_creator, carry_out_creator,
+       client_debt_in, client_debt_out,
        rating_scale_id,
        (SELECT rs.version FROM rating_scales rs WHERE rs.id = rating_scale_id)`
 
@@ -132,6 +139,7 @@ func scanPeriod(row pgx.Row) (ProjectPeriod, error) {
 	err := row.Scan(&p.ID, &p.ProjectID, &p.Seq, &p.StartsOn, &p.EndsOn, &p.PrevPeriodID,
 		&p.Status, &p.LockedAt, &p.LockedBy, &p.SnapshotAsOf, &p.SnapshotApprox,
 		&p.CarryInClient, &p.CarryOutClient, &p.CarryInCreator, &p.CarryOutCreator,
+		&p.ClientDebtIn, &p.ClientDebtOut,
 		&p.RatingScaleID, &p.RatingScaleVersion)
 	return p, err
 }
@@ -433,6 +441,46 @@ const publishedInPeriodSQL = `
     GROUP BY p.id, p.creator_user_id, p.status
     HAVING MIN(COALESCE(l.published_at, l.submitted_at))::date BETWEEN $3 AND $4
 `
+
+// SyncCarryIn — подтянуть периоду то, что оставил предыдущий: долг
+// перед клиентом и перенесённый остаток креатора.
+//
+// Только пока период идёт: у подытоженного вход заморожен вместе со
+// срезом. Предыдущий период при этом может быть ещё открыт — тогда вход
+// пересчитается на следующем пересчёте, и это правильно: пока оба идут,
+// числа обоих ещё не окончательные.
+func (r *Repo) SyncCarryIn(ctx context.Context, p ProjectPeriod) (ProjectPeriod, error) {
+	if p.IsLocked() || p.PrevPeriodID == nil {
+		return p, nil
+	}
+	if _, err := r.db.Exec(ctx, `
+UPDATE project_periods cur
+SET client_debt_in = prev.client_debt_out,
+    carry_in_creator = prev.carry_out_creator,
+    updated_at = now()
+FROM project_periods prev
+WHERE cur.id = $1 AND prev.id = $2 AND cur.status = $3`,
+		p.ID, *p.PrevPeriodID, PeriodOpen); err != nil {
+		return ProjectPeriod{}, fmt.Errorf("sync carry in: %w", err)
+	}
+	return r.PeriodBySeq(ctx, p.ProjectID, p.Seq)
+}
+
+// SaveLeftovers — записать периоду то, что он оставляет следующему:
+// долг перед клиентом и перенесённый остаток креатора.
+//
+// Только пока период идёт: у подытоженного эти величины заморожены
+// вместе со срезом, и переписать их значило бы поехать цепочкой по уже
+// оплаченным периодам.
+func (r *Repo) SaveLeftovers(ctx context.Context, periodID uuid.UUID, l periodLeftovers) error {
+	if _, err := r.db.Exec(ctx, `
+UPDATE project_periods
+SET client_debt_out = $2, carry_out_creator = $3, updated_at = now()
+WHERE id = $1 AND status = $4`, periodID, l.ClientDebtOut, l.CreatorCarryOut, PeriodOpen); err != nil {
+		return fmt.Errorf("save period leftovers: %w", err)
+	}
+	return nil
+}
 
 // UnlockPeriod — вернуть подытоженный период в работу.
 //

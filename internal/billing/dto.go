@@ -88,7 +88,207 @@ type Terms struct {
 	CreatorRatePer1000Views     *int64 `json:"creator_rate_per_1000_views,omitempty" extensions:"x-nullable"`
 	CreatorRatePer1000ViewsOver *int64 `json:"creator_rate_per_1000_views_over,omitempty" extensions:"x-nullable"`
 
+	// ---- ступенчатый тариф ----
+	//
+	// Заполненный StepViews означает, что версия ступенчатая и считается
+	// по этим полям; поля старой модели (оклад и ставка за тысячу) в ней
+	// не участвуют. У прежних версий они пусты, и расчёт уходит в старую
+	// ветку — проекты, стоящие на них, не пересчитываются.
+
+	// StepViews — размер ступени в просмотрах. Раньше сто тысяч были
+	// константой в коде.
+	StepViews *int64 `json:"step_views,omitempty" extensions:"x-nullable"`
+	// FirstPeriodFee — фикс за первый период проекта: там оплачивается
+	// запуск, а не результат, и ступени не считаются вовсе.
+	FirstPeriodFee *int64 `json:"first_period_fee,omitempty" extensions:"x-nullable"`
+	// BaseFee — фикс со второго периода.
+	BaseFee *int64 `json:"base_fee,omitempty" extensions:"x-nullable"`
+	// StepFee — цена полной ступени до StepTier2From.
+	StepFee *int64 `json:"step_fee,omitempty" extensions:"x-nullable"`
+	// StepTier2From — с какого объёма ступень дешевеет.
+	StepTier2From *int64 `json:"step_tier2_from,omitempty" extensions:"x-nullable"`
+	// StepFeeOver — цена ступени после этого порога.
+	StepFeeOver *int64 `json:"step_fee_over,omitempty" extensions:"x-nullable"`
+	// StepCapViews — выше этого объёма ступени не оплачиваются.
+	StepCapViews *int64 `json:"step_cap_views,omitempty" extensions:"x-nullable"`
+	// GuaranteeViews — гарантия в просмотрах. Недобрали — период всё
+	// равно оплачивается как гарантия, а недостающие просмотры уходят в
+	// долг перед клиентом и гасятся из следующего периода. Долг в
+	// ПРОСМОТРАХ, а не в деньгах: так в оферте.
+	GuaranteeViews *int64 `json:"guarantee_views,omitempty" extensions:"x-nullable"`
+
+	// Креаторская сторона тех же ступеней. nil означает «столько же,
+	// сколько у клиента» — то же правило, что у нынешних креаторских
+	// ставок.
+	CreatorFirstPeriodFee *int64 `json:"creator_first_period_fee,omitempty" extensions:"x-nullable"`
+	CreatorBaseFee        *int64 `json:"creator_base_fee,omitempty" extensions:"x-nullable"`
+	CreatorStepFee        *int64 `json:"creator_step_fee,omitempty" extensions:"x-nullable"`
+	CreatorStepFeeOver    *int64 `json:"creator_step_fee_over,omitempty" extensions:"x-nullable"`
+
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// Stepped — версия условий считается по ступеням.
+//
+// Признак — заполненная ступень: без неё считать ступенчато не по чему,
+// и расчёт уходит в прежнюю модель (оклад плюс ставка за тысячу).
+// Проверка в одном месте: разложи её по вызывающим — и однажды половина
+// кода посчитает версию ступенчатой, а половина нет.
+func (t Terms) Stepped() bool {
+	return t.StepViews != nil && *t.StepViews > 0 && t.StepFee != nil
+}
+
+// StepLadder — ступени одной стороны сделки.
+//
+// Клиентская и креаторская стороны различаются только числами, поэтому
+// лесенка одна: две копии этих правил разъехались бы на первой правке,
+// и разница между «что заплатил клиент» и «что получил креатор» стала бы
+// следствием ошибки, а не тарифа.
+type StepLadder struct {
+	StepViews      int64
+	FirstPeriodFee int64
+	BaseFee        int64
+	StepFee        int64
+	Tier2From      int64
+	StepFeeOver    int64
+	CapViews       int64
+	// TailRate — ставка за тысячу просмотров вирального хвоста, то есть
+	// сверх порога НА РОЛИК (Terms.BonusViewsThreshold). Хвост в ступени
+	// не идёт и оплачивается отдельно по этой пониженной ставке.
+	TailRate int64
+}
+
+// Tail — сколько стоит виральный хвост периода.
+//
+// Порогов в тарифе два, и они про разное. Порог на ролик защищает от
+// одной виральной удачи: миллион просмотров одного ролика — это не рост
+// аккаунта, и платить за него как за работу месяца клиент не должен.
+// Месячные ступени, наоборот, отражают именно рост. Одно другое не
+// заменяет, поэтому хвост вынут из объёма ДО расчёта ступеней и
+// оплачивается своей ставкой.
+//
+// Тысячи только полные: остаток меньше тысячи не оплачивается — то же
+// правило, что у ступеней.
+func (l StepLadder) Tail(viewsOver int64) int64 {
+	if viewsOver <= 0 || l.TailRate <= 0 {
+		return 0
+	}
+	return viewsOver / 1000 * l.TailRate
+}
+
+// ClientLadder — ступени клиентской стороны.
+func (t Terms) ClientLadder() StepLadder {
+	return StepLadder{
+		StepViews:      derefOr(t.StepViews, 0),
+		FirstPeriodFee: derefOr(t.FirstPeriodFee, 0),
+		BaseFee:        derefOr(t.BaseFee, 0),
+		StepFee:        derefOr(t.StepFee, 0),
+		Tier2From:      derefOr(t.StepTier2From, 0),
+		StepFeeOver:    derefOr(t.StepFeeOver, 0),
+		CapViews:       derefOr(t.StepCapViews, 0),
+		TailRate:       t.RatePer1000ViewsOver,
+	}
+}
+
+// CreatorLadder — ступени креаторской стороны. Незаполненное число
+// означает «как у клиента»: до выпуска настоящих креаторских ставок
+// стороны совпадают и маржи на просмотрах нет.
+//
+// ВНИМАНИЕ: при равных ставках и одностороннем переносе остатка креатору
+// уходит БОЛЬШЕ ступеней, чем выставлено клиенту — клиентский остаток
+// сгорает, креаторский копится. Это следствие решения владельца
+// продукта, а не ошибка счёта; видно здесь, чтобы не искали причину в
+// арифметике.
+func (t Terms) CreatorLadder() StepLadder {
+	l := t.ClientLadder()
+	if t.CreatorFirstPeriodFee != nil {
+		l.FirstPeriodFee = *t.CreatorFirstPeriodFee
+	}
+	if t.CreatorBaseFee != nil {
+		l.BaseFee = *t.CreatorBaseFee
+	}
+	if t.CreatorStepFee != nil {
+		l.StepFee = *t.CreatorStepFee
+	}
+	if t.CreatorStepFeeOver != nil {
+		l.StepFeeOver = *t.CreatorStepFeeOver
+	}
+	l.TailRate = t.creatorTailRate(l.StepViews, l.StepFee)
+	return l
+}
+
+// tailRateDivisor — во сколько раз ставка за виральный хвост ниже
+// базовой. Правило тарифа, а не совпадение: и в почасовой версии (90 ₽ и
+// 9 ₽), и в ступенчатой (60 ₽ и 6 ₽) отношение одно и то же.
+const tailRateDivisor = 10
+
+// creatorTailRate — ставка креатора за виральный хвост.
+//
+// Порядок намеренный: названное руками число главнее правила, но если
+// названа только базовая ставка креатора — пониженная выводится из неё
+// сама. Оставить её пустой значило бы «как у клиента», то есть отдать
+// креатору за хвост клиентскую цену и съесть маржу ровно там, где тариф
+// специально понижен.
+//
+// Базовая ставка креатора берётся из его ставки за тысячу, а если
+// сторона задана ступенями — из его ступени: ступень и есть та же
+// ставка, выраженная за сто тысяч просмотров.
+func (t Terms) creatorTailRate(stepViews, creatorStepFee int64) int64 {
+	switch {
+	case t.CreatorRatePer1000ViewsOver != nil:
+		return *t.CreatorRatePer1000ViewsOver
+	case t.CreatorRatePer1000Views != nil:
+		return *t.CreatorRatePer1000Views / tailRateDivisor
+	case t.CreatorStepFee != nil && stepViews > 0:
+		return creatorStepFee * 1000 / stepViews / tailRateDivisor
+	default:
+		return t.RatePer1000ViewsOver
+	}
+}
+
+// Fee — сколько стоит период с таким объёмом просмотров.
+//
+// Возвращает сумму и число оплаченных ступеней. Первый период считается
+// фиксом: там оплачивается запуск, а не результат, и ступеней в нём нет.
+//
+// Ступени только ПОЛНЫЕ: 149 999 просмотров — это одна ступень, а не
+// полторы. Что делать с остатком, решает вызывающий: у клиента он
+// сгорает, у креатора переносится.
+func (l StepLadder) Fee(seq int, views int64) (fee int64, steps int64) {
+	if seq <= 1 {
+		return l.FirstPeriodFee, 0
+	}
+	fee = l.BaseFee
+	if l.StepViews <= 0 {
+		return fee, 0
+	}
+	// Выше потолка ступени не оплачиваются вовсе.
+	counted := views
+	if l.CapViews > 0 && counted > l.CapViews {
+		counted = l.CapViews
+	}
+	steps = counted / l.StepViews
+
+	// Первая ступень дороже второй: ставка падает намеренно, чтобы
+	// виральный ролик не съедал бюджет клиента.
+	cheapFrom := l.Tier2From
+	if cheapFrom <= 0 || cheapFrom > counted {
+		return fee + steps*l.StepFee, steps
+	}
+	full := cheapFrom / l.StepViews
+	if full > steps {
+		full = steps
+	}
+	fee += full * l.StepFee
+	fee += (steps - full) * l.StepFeeOver
+	return fee, steps
+}
+
+func derefOr(v *int64, def int64) int64 {
+	if v == nil {
+		return def
+	}
+	return *v
 }
 
 // CreatorSide — тот же тариф, но ставками креатора. Незаполненная
@@ -102,9 +302,7 @@ func (t Terms) CreatorSide() Terms {
 	if t.CreatorRatePer1000Views != nil {
 		c.RatePer1000Views = *t.CreatorRatePer1000Views
 	}
-	if t.CreatorRatePer1000ViewsOver != nil {
-		c.RatePer1000ViewsOver = *t.CreatorRatePer1000ViewsOver
-	}
+	c.RatePer1000ViewsOver = t.creatorTailRate(derefOr(t.StepViews, 0), derefOr(t.CreatorStepFee, 0))
 	return c
 }
 

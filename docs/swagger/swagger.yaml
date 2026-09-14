@@ -1503,6 +1503,14 @@ definitions:
         type: integer
       carry_out_creator:
         type: integer
+      client_debt_in:
+        description: |-
+          ClientDebtIn/ClientDebtOut — долг перед клиентом в ПРОСМОТРАХ:
+          недобрали гарантию — период оплачен как гарантия, а недостающее
+          добираем бесплатно в следующем. Не в деньгах, так в оферте.
+        type: integer
+      client_debt_out:
+        type: integer
       ends_on:
         type: string
       id:
@@ -1589,6 +1597,10 @@ definitions:
     type: object
   internal_billing.Terms:
     properties:
+      base_fee:
+        description: BaseFee — фикс со второго периода.
+        type: integer
+        x-nullable: true
       bonus_views_threshold:
         description: |-
           BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.
@@ -1611,6 +1623,16 @@ definitions:
           ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной
           ставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.
         type: integer
+      creator_base_fee:
+        type: integer
+        x-nullable: true
+      creator_first_period_fee:
+        description: |-
+          Креаторская сторона тех же ступеней. nil означает «столько же,
+          сколько у клиента» — то же правило, что у нынешних креаторских
+          ставок.
+        type: integer
+        x-nullable: true
       creator_rate_per_1000_views:
         type: integer
         x-nullable: true
@@ -1628,6 +1650,26 @@ definitions:
           цену клиента как его собственный заработок.
         type: integer
         x-nullable: true
+      creator_step_fee:
+        type: integer
+        x-nullable: true
+      creator_step_fee_over:
+        type: integer
+        x-nullable: true
+      first_period_fee:
+        description: |-
+          FirstPeriodFee — фикс за первый период проекта: там оплачивается
+          запуск, а не результат, и ступени не считаются вовсе.
+        type: integer
+        x-nullable: true
+      guarantee_views:
+        description: |-
+          GuaranteeViews — гарантия в просмотрах. Недобрали — период всё
+          равно оплачивается как гарантия, а недостающие просмотры уходят в
+          долг перед клиентом и гасятся из следующего периода. Долг в
+          ПРОСМОТРАХ, а не в деньгах: так в оферте.
+        type: integer
+        x-nullable: true
       project_id:
         type: string
       rate_per_1000_views:
@@ -1641,6 +1683,28 @@ definitions:
       salary_per_month:
         description: SalaryPerMonth — оклад креатора за месяц, копейки.
         type: integer
+      step_cap_views:
+        description: StepCapViews — выше этого объёма ступени не оплачиваются.
+        type: integer
+        x-nullable: true
+      step_fee:
+        description: StepFee — цена полной ступени до StepTier2From.
+        type: integer
+        x-nullable: true
+      step_fee_over:
+        description: StepFeeOver — цена ступени после этого порога.
+        type: integer
+        x-nullable: true
+      step_tier2_from:
+        description: StepTier2From — с какого объёма ступень дешевеет.
+        type: integer
+        x-nullable: true
+      step_views:
+        description: |-
+          StepViews — размер ступени в просмотрах. Раньше сто тысяч были
+          константой в коде.
+        type: integer
+        x-nullable: true
       terms_version_id:
         description: TermsVersionID — с какой версии сняты числа. Только для истории.
         type: string
@@ -1695,6 +1759,10 @@ definitions:
     type: object
   internal_billing.TermsPublishResult:
     properties:
+      base_fee:
+        description: BaseFee — фикс со второго периода.
+        type: integer
+        x-nullable: true
       body:
         description: Body — текст условий, с которым соглашается клиент.
         type: string
@@ -1737,6 +1805,16 @@ definitions:
           ConsentsRequired — сколько клиентов согласились с прежней
           действующей версией и теперь должны согласиться заново.
         type: integer
+      creator_base_fee:
+        type: integer
+        x-nullable: true
+      creator_first_period_fee:
+        description: |-
+          Креаторская сторона тех же ступеней. nil означает «столько же,
+          сколько у клиента» — то же правило, что у нынешних креаторских
+          ставок.
+        type: integer
+        x-nullable: true
       creator_rate_per_1000_views:
         type: integer
         x-nullable: true
@@ -1752,6 +1830,26 @@ definitions:
           потому, что это разные деньги — счёт заказчику и обязательство перед
           креатором; одно число за оба показывало креатору в личном кабинете
           цену клиента как его собственный заработок.
+        type: integer
+        x-nullable: true
+      creator_step_fee:
+        type: integer
+        x-nullable: true
+      creator_step_fee_over:
+        type: integer
+        x-nullable: true
+      first_period_fee:
+        description: |-
+          FirstPeriodFee — фикс за первый период проекта: там оплачивается
+          запуск, а не результат, и ступени не считаются вовсе.
+        type: integer
+        x-nullable: true
+      guarantee_views:
+        description: |-
+          GuaranteeViews — гарантия в просмотрах. Недобрали — период всё
+          равно оплачивается как гарантия, а недостающие просмотры уходят в
+          долг перед клиентом и гасятся из следующего периода. Долг в
+          ПРОСМОТРАХ, а не в деньгах: так в оферте.
         type: integer
         x-nullable: true
       is_current:
@@ -1781,6 +1879,28 @@ definitions:
       salary_per_month:
         description: SalaryPerMonth — оклад креатора за месяц, копейки.
         type: integer
+      step_cap_views:
+        description: StepCapViews — выше этого объёма ступени не оплачиваются.
+        type: integer
+        x-nullable: true
+      step_fee:
+        description: StepFee — цена полной ступени до StepTier2From.
+        type: integer
+        x-nullable: true
+      step_fee_over:
+        description: StepFeeOver — цена ступени после этого порога.
+        type: integer
+        x-nullable: true
+      step_tier2_from:
+        description: StepTier2From — с какого объёма ступень дешевеет.
+        type: integer
+        x-nullable: true
+      step_views:
+        description: |-
+          StepViews — размер ступени в просмотрах. Раньше сто тысяч были
+          константой в коде.
+        type: integer
+        x-nullable: true
       terms_version_id:
         description: TermsVersionID — с какой версии сняты числа. Только для истории.
         type: string
@@ -1803,6 +1923,10 @@ definitions:
     type: object
   internal_billing.TermsVersion:
     properties:
+      base_fee:
+        description: BaseFee — фикс со второго периода.
+        type: integer
+        x-nullable: true
       body:
         description: Body — текст условий, с которым соглашается клиент.
         type: string
@@ -1833,6 +1957,16 @@ definitions:
           ConsentedClients — сколько клиентов уже согласились именно с ней.
           Показывает, что версию нельзя считать черновиком.
         type: integer
+      creator_base_fee:
+        type: integer
+        x-nullable: true
+      creator_first_period_fee:
+        description: |-
+          Креаторская сторона тех же ступеней. nil означает «столько же,
+          сколько у клиента» — то же правило, что у нынешних креаторских
+          ставок.
+        type: integer
+        x-nullable: true
       creator_rate_per_1000_views:
         type: integer
         x-nullable: true
@@ -1848,6 +1982,26 @@ definitions:
           потому, что это разные деньги — счёт заказчику и обязательство перед
           креатором; одно число за оба показывало креатору в личном кабинете
           цену клиента как его собственный заработок.
+        type: integer
+        x-nullable: true
+      creator_step_fee:
+        type: integer
+        x-nullable: true
+      creator_step_fee_over:
+        type: integer
+        x-nullable: true
+      first_period_fee:
+        description: |-
+          FirstPeriodFee — фикс за первый период проекта: там оплачивается
+          запуск, а не результат, и ступени не считаются вовсе.
+        type: integer
+        x-nullable: true
+      guarantee_views:
+        description: |-
+          GuaranteeViews — гарантия в просмотрах. Недобрали — период всё
+          равно оплачивается как гарантия, а недостающие просмотры уходят в
+          долг перед клиентом и гасятся из следующего периода. Долг в
+          ПРОСМОТРАХ, а не в деньгах: так в оферте.
         type: integer
         x-nullable: true
       is_current:
@@ -1877,6 +2031,28 @@ definitions:
       salary_per_month:
         description: SalaryPerMonth — оклад креатора за месяц, копейки.
         type: integer
+      step_cap_views:
+        description: StepCapViews — выше этого объёма ступени не оплачиваются.
+        type: integer
+        x-nullable: true
+      step_fee:
+        description: StepFee — цена полной ступени до StepTier2From.
+        type: integer
+        x-nullable: true
+      step_fee_over:
+        description: StepFeeOver — цена ступени после этого порога.
+        type: integer
+        x-nullable: true
+      step_tier2_from:
+        description: StepTier2From — с какого объёма ступень дешевеет.
+        type: integer
+        x-nullable: true
+      step_views:
+        description: |-
+          StepViews — размер ступени в просмотрах. Раньше сто тысяч были
+          константой в коде.
+        type: integer
+        x-nullable: true
       terms_version_id:
         description: TermsVersionID — с какой версии сняты числа. Только для истории.
         type: string
@@ -1964,6 +2140,9 @@ definitions:
     type: object
   internal_billing.publishTermsReq:
     properties:
+      base_fee:
+        type: integer
+        x-nullable: true
       body:
         type: string
       bonus_views_threshold:
@@ -1980,6 +2159,13 @@ definitions:
         x-nullable: true
       click_bonus_threshold:
         type: integer
+      creator_base_fee:
+        type: integer
+        x-nullable: true
+      creator_first_period_fee:
+        description: Креаторская сторона ступеней. null = «как у клиента».
+        type: integer
+        x-nullable: true
       creator_rate_per_1000_views:
         type: integer
         x-nullable: true
@@ -1992,12 +2178,48 @@ definitions:
           сколько платит клиент», то есть платформа ничего не удерживает.
         type: integer
         x-nullable: true
+      creator_step_fee:
+        type: integer
+        x-nullable: true
+      creator_step_fee_over:
+        type: integer
+        x-nullable: true
+      first_period_fee:
+        type: integer
+        x-nullable: true
+      guarantee_views:
+        type: integer
+        x-nullable: true
       rate_per_1000_views:
         type: integer
       rate_per_1000_views_over:
         type: integer
       salary_per_month:
         type: integer
+      step_cap_views:
+        type: integer
+        x-nullable: true
+      step_fee:
+        type: integer
+        x-nullable: true
+      step_fee_over:
+        type: integer
+        x-nullable: true
+      step_tier2_from:
+        type: integer
+        x-nullable: true
+      step_views:
+        description: |-
+          ---- ступенчатый тариф ----
+
+          Заполненный step_views означает, что версия считается ступенями, а
+          оклад и ставка за тысячу в расчёт не идут — кроме вирального
+          хвоста, который считается по rate_per_1000_views_over и порогу на
+          ролик выше. null во всех этих полях = версия по старой модели;
+          поэтому именно null, а не 0: ноль значил бы «ступень нулевого
+          размера».
+        type: integer
+        x-nullable: true
       videos_first_month:
         description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
         type: integer
@@ -2006,6 +2228,9 @@ definitions:
     type: object
   internal_billing.termsReq:
     properties:
+      base_fee:
+        type: integer
+        x-nullable: true
       bonus_views_threshold:
         type: integer
       click_bonus_rate:
@@ -2020,6 +2245,13 @@ definitions:
         x-nullable: true
       click_bonus_threshold:
         type: integer
+      creator_base_fee:
+        type: integer
+        x-nullable: true
+      creator_first_period_fee:
+        description: Креаторская сторона ступеней. null = «как у клиента».
+        type: integer
+        x-nullable: true
       creator_rate_per_1000_views:
         type: integer
         x-nullable: true
@@ -2032,12 +2264,48 @@ definitions:
           сколько платит клиент», то есть платформа ничего не удерживает.
         type: integer
         x-nullable: true
+      creator_step_fee:
+        type: integer
+        x-nullable: true
+      creator_step_fee_over:
+        type: integer
+        x-nullable: true
+      first_period_fee:
+        type: integer
+        x-nullable: true
+      guarantee_views:
+        type: integer
+        x-nullable: true
       rate_per_1000_views:
         type: integer
       rate_per_1000_views_over:
         type: integer
       salary_per_month:
         type: integer
+      step_cap_views:
+        type: integer
+        x-nullable: true
+      step_fee:
+        type: integer
+        x-nullable: true
+      step_fee_over:
+        type: integer
+        x-nullable: true
+      step_tier2_from:
+        type: integer
+        x-nullable: true
+      step_views:
+        description: |-
+          ---- ступенчатый тариф ----
+
+          Заполненный step_views означает, что версия считается ступенями, а
+          оклад и ставка за тысячу в расчёт не идут — кроме вирального
+          хвоста, который считается по rate_per_1000_views_over и порогу на
+          ролик выше. null во всех этих полях = версия по старой модели;
+          поэтому именно null, а не 0: ноль значил бы «ступень нулевого
+          размера».
+        type: integer
+        x-nullable: true
       videos_first_month:
         description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
         type: integer

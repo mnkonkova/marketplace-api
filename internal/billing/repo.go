@@ -45,13 +45,21 @@ SELECT terms_version_id, salary_per_month, videos_first_month, videos_next_month
        rate_per_1000_views, bonus_views_threshold, rate_per_1000_views_over,
        click_bonus_rate, click_bonus_threshold, click_bonus_rate_over,
        creator_salary_per_month, creator_rate_per_1000_views,
-       creator_rate_per_1000_views_over, updated_at
+       creator_rate_per_1000_views_over,
+       step_views, first_period_fee, base_fee, step_fee,
+       step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
+       creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
+       updated_at
 FROM project_billing WHERE project_id = $1`, projectID).
 		Scan(&t.TermsVersionID, &t.SalaryPerMonth, &t.VideosFirstMonth, &t.VideosNextMonths,
 			&t.RatePer1000Views, &t.BonusViewsThreshold, &t.RatePer1000ViewsOver,
 			&t.ClickBonusRate, &t.ClickBonusThreshold, &t.ClickBonusRateOver,
 			&t.CreatorSalaryPerMonth, &t.CreatorRatePer1000Views,
-			&t.CreatorRatePer1000ViewsOver, &t.UpdatedAt)
+			&t.CreatorRatePer1000ViewsOver,
+			&t.StepViews, &t.FirstPeriodFee, &t.BaseFee, &t.StepFee,
+			&t.StepTier2From, &t.StepFeeOver, &t.StepCapViews, &t.GuaranteeViews,
+			&t.CreatorFirstPeriodFee, &t.CreatorBaseFee, &t.CreatorStepFee, &t.CreatorStepFeeOver,
+			&t.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, nil
 	}
@@ -71,8 +79,13 @@ INSERT INTO project_billing
    click_bonus_rate, click_bonus_threshold, click_bonus_rate_over,
    creator_salary_per_month, creator_rate_per_1000_views,
    creator_rate_per_1000_views_over,
+   step_views, first_period_fee, base_fee, step_fee,
+   step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
+   creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
    updated_by, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+        $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
+        $15, now())
 ON CONFLICT (project_id) DO UPDATE SET
   terms_version_id = EXCLUDED.terms_version_id,
   salary_per_month = EXCLUDED.salary_per_month,
@@ -87,6 +100,18 @@ ON CONFLICT (project_id) DO UPDATE SET
   creator_salary_per_month = EXCLUDED.creator_salary_per_month,
   creator_rate_per_1000_views = EXCLUDED.creator_rate_per_1000_views,
   creator_rate_per_1000_views_over = EXCLUDED.creator_rate_per_1000_views_over,
+  step_views = EXCLUDED.step_views,
+  first_period_fee = EXCLUDED.first_period_fee,
+  base_fee = EXCLUDED.base_fee,
+  step_fee = EXCLUDED.step_fee,
+  step_tier2_from = EXCLUDED.step_tier2_from,
+  step_fee_over = EXCLUDED.step_fee_over,
+  step_cap_views = EXCLUDED.step_cap_views,
+  guarantee_views = EXCLUDED.guarantee_views,
+  creator_first_period_fee = EXCLUDED.creator_first_period_fee,
+  creator_base_fee = EXCLUDED.creator_base_fee,
+  creator_step_fee = EXCLUDED.creator_step_fee,
+  creator_step_fee_over = EXCLUDED.creator_step_fee_over,
   updated_by = EXCLUDED.updated_by,
   updated_at = now()
 RETURNING updated_at`,
@@ -95,7 +120,11 @@ RETURNING updated_at`,
 		t.BonusViewsThreshold, t.RatePer1000ViewsOver,
 		t.ClickBonusRate, t.ClickBonusThreshold, t.ClickBonusRateOver,
 		t.CreatorSalaryPerMonth, t.CreatorRatePer1000Views, t.CreatorRatePer1000ViewsOver,
-		actor).Scan(&t.UpdatedAt); err != nil {
+		actor,
+		t.StepViews, t.FirstPeriodFee, t.BaseFee, t.StepFee,
+		t.StepTier2From, t.StepFeeOver, t.StepCapViews, t.GuaranteeViews,
+		t.CreatorFirstPeriodFee, t.CreatorBaseFee, t.CreatorStepFee, t.CreatorStepFeeOver,
+	).Scan(&t.UpdatedAt); err != nil {
 		return Terms{}, fmt.Errorf("save project billing: %w", err)
 	}
 	return t, nil
@@ -108,12 +137,18 @@ func (r *Repo) LatestTerms(ctx context.Context) (Terms, error) {
 SELECT id, salary_per_month, videos_first_month, videos_next_months,
        rate_per_1000_views, bonus_views_threshold,
        rate_per_1000_views_over, click_bonus_rate, click_bonus_threshold, click_bonus_rate_over,
-       creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over
+       creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over,
+       step_views, first_period_fee, base_fee, step_fee,
+       step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
+       creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over
 FROM terms_versions ORDER BY version DESC LIMIT 1`).
 		Scan(&t.TermsVersionID, &t.SalaryPerMonth, &t.VideosFirstMonth, &t.VideosNextMonths,
 			&t.RatePer1000Views, &t.BonusViewsThreshold, &t.RatePer1000ViewsOver,
 			&t.ClickBonusRate, &t.ClickBonusThreshold, &t.ClickBonusRateOver,
-			&t.CreatorSalaryPerMonth, &t.CreatorRatePer1000Views, &t.CreatorRatePer1000ViewsOver)
+			&t.CreatorSalaryPerMonth, &t.CreatorRatePer1000Views, &t.CreatorRatePer1000ViewsOver,
+			&t.StepViews, &t.FirstPeriodFee, &t.BaseFee, &t.StepFee,
+			&t.StepTier2From, &t.StepFeeOver, &t.StepCapViews, &t.GuaranteeViews,
+			&t.CreatorFirstPeriodFee, &t.CreatorBaseFee, &t.CreatorStepFee, &t.CreatorStepFeeOver)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Terms{}, ErrNotFound
 	}
