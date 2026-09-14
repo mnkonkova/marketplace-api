@@ -134,6 +134,10 @@ type ClientBillingView struct {
 	// PeriodMonth — за какой месяц отданы начисления.
 	PeriodMonth time.Time          `json:"period_month"`
 	Totals      ClientPeriodTotals `json:"totals"`
+	// Month — состояние месяца. Заказчику оно нужно по той же причине,
+	// что и менеджеру: пока месяц идёт, числа ещё изменятся, и счёт
+	// нельзя считать окончательным.
+	Month ProjectMonth `json:"month"`
 }
 
 // clientAccrual — строка начисления глазами заказчика.

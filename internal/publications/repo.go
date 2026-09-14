@@ -324,7 +324,7 @@ func (r *Repo) hydrate(ctx context.Context, ps []*Publication) error {
 
 	linkRows, err := r.db.Query(ctx, `
 SELECT id, publication_id, platform, url, url_canonical,
-       COALESCE(external_media_id, ''), submitted_at, last_collected_at
+       COALESCE(external_media_id, ''), submitted_at, last_collected_at, published_at
 FROM publication_links
 WHERE publication_id = ANY($1)
 ORDER BY submitted_at`, ids)
@@ -335,11 +335,18 @@ ORDER BY submitted_at`, ids)
 	for linkRows.Next() {
 		var l SubmittedLink
 		if err := linkRows.Scan(&l.ID, &l.PublicationID, &l.Platform, &l.URL,
-			&l.URLCanonical, &l.ExternalMediaID, &l.SubmittedAt, &l.LastCollectedAt); err != nil {
+			&l.URLCanonical, &l.ExternalMediaID, &l.SubmittedAt, &l.LastCollectedAt,
+			&l.PublishedAt); err != nil {
 			return fmt.Errorf("scan link: %w", err)
 		}
 		if p := byID[l.PublicationID]; p != nil {
 			p.Links = append(p.Links, l)
+			// «Когда ролик вышел» — самое раннее среди площадок.
+			// Считаем здесь, а не в SQL: строки уже в руках, а второй
+			// запрос ради минимума был бы запросом ради минимума.
+			if l.PublishedAt != nil && (p.PublishedAt == nil || l.PublishedAt.Before(*p.PublishedAt)) {
+				p.PublishedAt = l.PublishedAt
+			}
 		}
 	}
 	if err := linkRows.Err(); err != nil {

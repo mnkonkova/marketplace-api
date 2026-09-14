@@ -15,6 +15,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"marketpclce/internal/billing"
 	"marketpclce/internal/config"
 	"marketpclce/internal/eventroute"
 	"marketpclce/internal/instacurl"
@@ -236,6 +237,12 @@ func main() {
 
 	go runOrderExpiryTicker(rootCtx, orders.NewService(orders.NewRepo(pool)),
 		cfg.OrderExpiryInterval, logger)
+
+	// Фиксация месяцев. До неё правило «через две недели после конца
+	// месяца просмотры больше не меняются» не исполнялось нигде: оно
+	// держалось на том, что менеджер вовремя нажал «Пересчитать».
+	go runMonthLockTicker(rootCtx, billing.NewService(billing.NewRepo(pool)),
+		cfg.BillingMonthLockInterval, cfg.BillingMonthLockDelay, logger)
 
 	go runPublicationGaugeTicker(rootCtx,
 		publications.NewService(publications.NewRepo(pool)), 5*time.Minute, logger)
@@ -503,6 +510,44 @@ func runOrderExpiryTicker(ctx context.Context, svc *orders.Service,
 		}
 		if expired > 0 || pinged > 0 {
 			logger.Info("order expiry", "expired", expired, "manager_pinged", pinged)
+		}
+	}
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runMonthLockTicker — закрывает месяцы, которым пора.
+//
+// Месяц фиксируется через delay после своего конца: суммы пересчитываются
+// в последний раз, просмотры сохраняются срезом. Дальше числа месяца не
+// меняются, даже если ролики продолжают набирать просмотры, — в этом и
+// смысл.
+//
+// Ошибка на одном месяце не роняет проход: остальные проекты в ней не
+// виноваты, а следующий тик попробует снова.
+func runMonthLockTicker(ctx context.Context, svc *billing.Service,
+	interval, delay time.Duration, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	run := func() {
+		locked, failed, err := svc.LockDueMonths(ctx, time.Now().UTC(), delay)
+		if err != nil {
+			logger.Warn("month lock scan failed", "err", err)
+			return
+		}
+		if locked > 0 || failed > 0 {
+			logger.Info("months locked", "locked", locked, "failed", failed)
 		}
 	}
 	run()

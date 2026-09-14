@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"marketpclce/internal/billing"
 	"marketpclce/internal/instacurl"
 	"marketpclce/internal/publications"
 	"marketpclce/tests/integration"
@@ -161,11 +163,11 @@ func TestCollectionSnapshotIsIdempotent(t *testing.T) {
 	}
 
 	v1, l1, c1 := int64(100), int64(1), int64(0)
-	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, now); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, nil, now); err != nil {
 		t.Fatalf("SaveStats: %v", err)
 	}
 	v2, l2, c2 := int64(250), int64(9), int64(3)
-	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, now); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, nil, now); err != nil {
 		t.Fatalf("SaveStats (повтор): %v", err)
 	}
 
@@ -298,11 +300,11 @@ func TestCollapseWritesSummaryBeforeDeleting(t *testing.T) {
 	// Два дня истории: итог должен взять последний день, а не сумму —
 	// просмотры накопительные.
 	v1, l1, c1 := int64(400), int64(10), int64(2)
-	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, now.AddDate(0, 0, -1)); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, nil, now.AddDate(0, 0, -1)); err != nil {
 		t.Fatalf("SaveStats day1: %v", err)
 	}
 	v2, l2, c2 := int64(900), int64(31), int64(5)
-	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, now); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, nil, now); err != nil {
 		t.Fatalf("SaveStats day2: %v", err)
 	}
 
@@ -310,6 +312,14 @@ func TestCollapseWritesSummaryBeforeDeleting(t *testing.T) {
 	closedAt := now.AddDate(0, 0, -29)
 	if err := repo.StopCollectionAfter(ctx, projectID, closedAt, publications.CollectionRetention); err != nil {
 		t.Fatalf("StopCollectionAfter: %v", err)
+	}
+
+	// Месяц выкладки фиксируем: пока он идёт, схлопывать ежедневный ряд
+	// нельзя — из него снимается срез месяца. Здесь это предусловие, а
+	// не предмет проверки (см. TestCollapseKeepsLockedSnapshot).
+	if _, err := billing.NewService(billing.NewRepo(pool)).
+		LockMonth(ctx, projectID, pubDay(0), nil, now); err != nil {
+		t.Fatalf("зафиксировать месяц: %v", err)
 	}
 
 	n, err := repo.CollapseFinished(ctx, now)
@@ -740,4 +750,124 @@ WHERE p.project_id = $1`, projectID).Scan(&withStats); err != nil {
 	if withStats != 2 {
 		t.Errorf("цифры получили %d ссылки из 2 — у второй в отчёте будут нули", withStats)
 	}
+}
+
+// okResultPublished — тот же ответ, но с датой публикации.
+func okResultPublished(url, publishedAt string, views int64) instacurl.Result {
+	r := okResult(url, views, 0, 0)
+	r.Posts[0].PublishedAt = publishedAt
+	return r
+}
+
+// Дата публикации сохраняется при сборе, пишется один раз и переживает
+// её отсутствие в ответе.
+//
+// До этого PublishedAt приходил на каждом обходе и выбрасывался: в базе
+// его не было вовсе, и «сколько ролику дней» ответить было нечем.
+func TestPublishedAtSavedOnceAndSurvivesAbsence(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/pub42"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	repo := publications.NewRepo(pool)
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: okResultPublished(url, "2026-09-02T10:30:00Z", 1000),
+	}}
+	svc := publications.NewService(repo).WithCollector(fake)
+
+	// Собираем «сейчас»: ссылки заводятся с next_collect_at = now(), и
+	// проход задним числом просто ничего бы не взял.
+	day := time.Now().UTC()
+	if _, err := svc.RunCollection(ctx, day, 50); err != nil {
+		t.Fatalf("первый сбор: %v", err)
+	}
+	got := linkPublishedAt(t, pool, projectID)
+	if got == nil {
+		t.Fatal("дата публикации не сохранилась")
+	}
+	want := time.Date(2026, 9, 2, 10, 30, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("дата публикации %v, ожидали %v", got, want)
+	}
+
+	// Источник передумал: прислал другую дату. Не переписываем — ролик
+	// не выходит дважды, а источник со временем начинает врать.
+	fake.byURL[url] = okResultPublished(url, "2026-09-05T00:00:00Z", 2000)
+	if _, err := svc.RunCollection(ctx, day.AddDate(0, 0, 2), 50); err != nil {
+		t.Fatalf("второй сбор: %v", err)
+	}
+	if got := linkPublishedAt(t, pool, projectID); got == nil || !got.Equal(want) {
+		t.Errorf("дата публикации переписана: %v, ожидали %v", got, want)
+	}
+
+	// Источник перестал отдавать дату — сохранённое остаётся на месте, а
+	// сбор метрик не ломается.
+	fake.byURL[url] = okResult(url, 3000, 0, 0)
+	st, err := svc.RunCollection(ctx, day.AddDate(0, 0, 6), 50)
+	if err != nil {
+		t.Fatalf("третий сбор: %v", err)
+	}
+	if st.Saved != 1 {
+		t.Errorf("сбор без даты публикации не сохранился: %+v", st)
+	}
+	if got := linkPublishedAt(t, pool, projectID); got == nil || !got.Equal(want) {
+		t.Errorf("дата публикации пропала при сборе без неё: %v", got)
+	}
+
+	// Производное «когда ролик вышел» на выкладке — самое раннее среди
+	// площадок; у одной площадки это она же.
+	pubs, err := repo.ListByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("список выкладок: %v", err)
+	}
+	if len(pubs) == 0 || pubs[0].PublishedAt == nil {
+		t.Fatalf("у выкладки нет даты выхода: %+v", pubs)
+	}
+	if !pubs[0].PublishedAt.Equal(want) {
+		t.Errorf("дата выхода выкладки %v, ожидали %v", pubs[0].PublishedAt, want)
+	}
+}
+
+// Мусор в поле даты не пишется: «не знаем» честнее выдуманной даты.
+func TestPublishedAtIgnoresGarbage(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/pub43"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: okResultPublished(url, "позавчера", 500),
+	}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+
+	st, err := svc.RunCollection(ctx, time.Now().UTC(), 50)
+	if err != nil {
+		t.Fatalf("сбор: %v", err)
+	}
+	if st.Saved != 1 {
+		t.Fatalf("метрики не сохранились из-за мусора в дате: %+v", st)
+	}
+	if got := linkPublishedAt(t, pool, projectID); got != nil {
+		t.Errorf("в базу уехала дата из мусора: %v", got)
+	}
+}
+
+func linkPublishedAt(t *testing.T, pool *pgxpool.Pool, projectID uuid.UUID) *time.Time {
+	t.Helper()
+	var out *time.Time
+	if err := pool.QueryRow(context.Background(), `
+SELECT l.published_at
+FROM publication_links l
+JOIN project_publications p ON p.id = l.publication_id
+WHERE p.project_id = $1
+ORDER BY l.submitted_at
+LIMIT 1`, projectID).Scan(&out); err != nil {
+		t.Fatalf("дата публикации ссылки: %v", err)
+	}
+	return out
 }

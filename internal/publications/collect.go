@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -123,7 +125,7 @@ JOIN project_publications p ON p.id = t.publication_id`
 // PK (link_id, stat_date). Пропущенный день не искажает историю — просто
 // не будет строки за этот день.
 func (r *Repo) SaveStats(ctx context.Context, link LinkToCollect,
-	views, likes, comments *int64, now time.Time) error {
+	views, likes, comments *int64, publishedAt *time.Time, now time.Time) error {
 
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -148,16 +150,69 @@ SET views = EXCLUDED.views,
 UPDATE publication_links
 SET last_collected_at = $2::timestamptz,
     collect_interval_days = $3,
+    -- Дата публикации пишется один раз и больше не перезаписывается:
+    -- ролик не выходит дважды, а источник со временем начинает врать
+    -- (меняет часовой пояс, отдаёт дату перезалива). Первое непустое
+    -- значение и есть ответ; COALESCE тут именно про это, а не про
+    -- "подставить что-нибудь".
+    published_at = COALESCE(published_at, $4),
     -- Явные приведения обязательны. Без ::timestamptz Postgres не может
     -- выбрать оператор "+" (кандидатов несколько: date, time, timestamp)
     -- и выводит для параметра противоречивые типы — 42P08. А без
     -- make_interval пришлось бы писать ($3 || ' days'), где тот же
     -- параметр был бы и числом, и текстом.
     next_collect_at = $2::timestamptz + make_interval(days => $3)
-WHERE id = $1`, link.LinkID, now, interval); err != nil {
+WHERE id = $1`, link.LinkID, now, interval, publishedAt); err != nil {
 		return fmt.Errorf("reschedule link: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// publishedAtFormats — в каком виде источник отдаёт дату публикации.
+//
+// Он присылает строку, и какой именно формат — известно только по живым
+// данным: у каждой площадки своё, а сборщик отдаёт то, что нашёл. Поэтому
+// список, а не один формат, и молчаливый отказ вместо ошибки: мусор в
+// этом поле не должен ломать сбор метрик, ради которого мы и ходили.
+var publishedAtFormats = []string{
+	time.RFC3339,
+	"2006-01-02T15:04:05Z0700",
+	"2006-01-02 15:04:05Z07:00",
+	"2006-01-02 15:04:05",
+	"2006-01-02",
+}
+
+// parsePublishedAt — дата публикации из ответа сборщика. nil, если поля
+// нет или оно не разбирается: «не знаем» честнее выдуманной даты, и
+// колонка для того и nullable.
+func parsePublishedAt(raw string) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	// Секунды эпохи — тоже встречающийся вид. Проверяем до форматов:
+	// time.Parse на числе всё равно не сработает.
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		// Отсекаем заведомую чушь: до 2000 года площадок не было, а
+		// миллисекунды легко принять за секунды и уехать в 56-й век.
+		if n > 946_684_800 && n < 4_102_444_800 {
+			t := time.Unix(n, 0).UTC()
+			return &t
+		}
+		return nil
+	}
+	for _, layout := range publishedAtFormats {
+		if t, err := time.Parse(layout, raw); err == nil {
+			t = t.UTC()
+			// Тот же фильтр здравого смысла: нулевая дата и будущее
+			// говорят о том, что разобрали не то.
+			if t.Year() < 2000 || t.After(time.Now().AddDate(1, 0, 0)) {
+				return nil
+			}
+			return &t
+		}
+	}
+	return nil
 }
 
 // MarkFailed — сервис не отдал метрики (площадка не поддержана, ролик
@@ -205,7 +260,22 @@ func (r *Repo) CollapseFinished(ctx context.Context, now time.Time) (int, error)
 SELECT id FROM projects
 WHERE collection_stops_at IS NOT NULL
   AND collection_stops_at <= $1
-  AND NOT EXISTS (SELECT 1 FROM project_stat_summary s WHERE s.project_id = projects.id)`, now)
+  AND NOT EXISTS (SELECT 1 FROM project_stat_summary s WHERE s.project_id = projects.id)
+  -- Пока у проекта есть незафиксированный месяц, ежедневный ряд трогать
+  -- нельзя: месяц фиксируется срезом просмотров по каждой площадке, и
+  -- снимать его будет неоткуда. Схлопывание не отменяется, а ждёт —
+  -- месяцы закрытого проекта уже в прошлом, и фоновая фиксация доберётся
+  -- до них в ближайшие часы.
+  AND NOT EXISTS (
+      SELECT 1
+      FROM project_publications p
+      LEFT JOIN project_months m
+             ON m.project_id = p.project_id
+            AND m.period_month = date_trunc('month', p.due_date)::date
+      WHERE p.project_id = projects.id
+        AND p.status <> 'cancelled'
+        AND COALESCE(m.status, 'open') = 'open'
+  )`, now)
 	if err != nil {
 		return 0, fmt.Errorf("list projects to collapse: %w", err)
 	}
@@ -464,7 +534,8 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 				}
 				continue
 			}
-			if err := s.repo.SaveStats(ctx, link, m.Views, m.Likes, m.Comments, now); err != nil {
+			if err := s.repo.SaveStats(ctx, link, m.Views, m.Likes, m.Comments,
+				parsePublishedAt(m.PublishedAt), now); err != nil {
 				return st, err
 			}
 			// Полнота, а не только успех: сервис мог вернуть лайки и

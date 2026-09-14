@@ -1605,6 +1605,63 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/projects/{id}/billing/unlock_month": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Срез просмотров удаляется, месяц снова считается на лету.\nДействие пишется в журнал админских действий: расфиксация\nпереписывает историю расчёта, и след обязателен.\nИдемпотентно: месяц, который и так идёт, ручка оставляет как есть.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-billing"
+                ],
+                "summary": "Вернуть зафиксированный месяц в работу (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "ГГГГ-ММ, по умолчанию текущий",
+                        "name": "month",
+                        "in": "query"
+                    },
+                    {
+                        "description": "причина",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.unlockMonthReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.monthLockResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_month",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/projects/{id}/change_funnel": {
             "post": {
                 "security": [
@@ -4233,6 +4290,58 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "not_found — проект не найден, или прайс ещё не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/billing/lock_month": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пересчитывает месяц в последний раз и сохраняет срез\nпросмотров — по каждой выкладке и каждой площадке. После\nэтого числа месяца не меняются, даже если просмотры\nпродолжают расти. Идемпотентно: повторный вызов на уже\nзафиксированном месяце ничего не меняет и не ошибка.\nОбычно месяц фиксируется сам через 14 дней после его\nконца; эта ручка — «зафиксировать сейчас».",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Зафиксировать месяц (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "ГГГГ-ММ, по умолчанию текущий",
+                        "name": "month",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.monthLockResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_month",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.errorResponse"
                         }
@@ -11827,6 +11936,14 @@ const docTemplate = `{
                         "$ref": "#/definitions/internal_billing.ClientAccrual"
                     }
                 },
+                "month": {
+                    "description": "Month — состояние месяца. Заказчику оно нужно по той же причине,\nчто и менеджеру: пока месяц идёт, числа ещё изменятся, и счёт\nнельзя считать окончательным.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ProjectMonth"
+                        }
+                    ]
+                },
                 "payments": {
                     "type": "array",
                     "items": {
@@ -12177,6 +12294,14 @@ const docTemplate = `{
                         "$ref": "#/definitions/internal_billing.Accrual"
                     }
                 },
+                "month": {
+                    "description": "Month — состояние месяца: идёт или зафиксирован. Отсюда же\nпонятно, почему строки помечены «предварительно».",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ProjectMonth"
+                        }
+                    ]
+                },
                 "payments": {
                     "type": "array",
                     "items": {
@@ -12203,6 +12328,28 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_billing.UTMLink"
                     }
+                }
+            }
+        },
+        "internal_billing.ProjectMonth": {
+            "type": "object",
+            "properties": {
+                "locked_at": {
+                    "type": "string"
+                },
+                "locked_by": {
+                    "description": "LockedBy — кто зафиксировал. nil = фоновая задача.",
+                    "type": "string"
+                },
+                "period_month": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status — open | locked.",
+                    "type": "string"
                 }
             }
         },
@@ -12621,6 +12768,14 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_billing.monthLockResp": {
+            "type": "object",
+            "properties": {
+                "month": {
+                    "$ref": "#/definitions/internal_billing.ProjectMonth"
+                }
+            }
+        },
         "internal_billing.paymentReq": {
             "type": "object",
             "properties": {
@@ -12741,6 +12896,15 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_billing.TermsVersion"
                     }
+                }
+            }
+        },
+        "internal_billing.unlockMonthReq": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "description": "Reason — зачем переоткрыли. Необязательно, но попадает в журнал:\nчерез полгода «почему числа поменялись» отвечается только этим.",
+                    "type": "string"
                 }
             }
         },
@@ -16847,6 +17011,10 @@ const docTemplate = `{
                 "project_id": {
                     "type": "string"
                 },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел: самое раннее известное среди\nплощадок выкладки. Площадки выкладывают не одновременно, и «вышел»\n— это первая из них; на этой дате будет стоять возраст ролика и\nправило «зрелый» (14 дней).\n\nnil означает «не знаем»: ни одна площадка даты не отдала или ролик\nещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают\nи через неделю после выхода.",
+                    "type": "string"
+                },
                 "stats_collected_at": {
                     "description": "StatsCollectedAt — самый свежий сбор среди площадок выкладки.",
                     "type": "string"
@@ -17010,6 +17178,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "publication_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел на этой площадке, по данным\nсборщика. nil, пока площадка даты не отдала.",
                     "type": "string"
                 },
                 "submitted_at": {

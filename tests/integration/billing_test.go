@@ -1023,6 +1023,11 @@ func TestUnrecalculatedMonthShowsComputedTotals(t *testing.T) {
 
 // Пересчёт превращает расчёт в сохранённые строки — те же числа, но их
 // уже можно утвердить и выплатить.
+//
+// «Предварительно» при этом не снимается: пока месяц идёт, сохранённые
+// строки завтра станут другими. Признак снимает только фиксация месяца —
+// раньше он зависел от наличия строк в базе, и пересчитанный месяц
+// выглядел окончательным, не будучи им.
 func TestRecalculateReplacesPreviewWithStoredRows(t *testing.T) {
 	pool := integration.Pool(t)
 	pid, creators, cleanup := setupCreatorsProject(t, pool)
@@ -1052,11 +1057,25 @@ func TestRecalculateReplacesPreviewWithStoredRows(t *testing.T) {
 			before.Totals.Total, after.Totals.Total)
 	}
 	for _, a := range after.Accruals {
-		if a.IsPreview {
-			t.Error("после пересчёта строки сохранены и расчётными быть не могут")
+		if !a.IsPreview {
+			t.Error("месяц идёт — строки обязаны оставаться предварительными")
 		}
 		if a.ID == uuid.Nil {
 			t.Error("сохранённой строке нужен id — иначе её нечем утвердить")
+		}
+	}
+
+	// А вот фиксация месяца признак снимает.
+	if _, err := svc.LockMonth(ctx, pid, time.Now().UTC(), &creators[0], time.Now().UTC()); err != nil {
+		t.Fatalf("фиксация месяца: %v", err)
+	}
+	locked, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("billing after lock: %v", err)
+	}
+	for _, a := range locked.Accruals {
+		if a.IsPreview {
+			t.Error("месяц зафиксирован — строки больше не предварительные")
 		}
 	}
 }

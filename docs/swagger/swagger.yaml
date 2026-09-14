@@ -886,6 +886,13 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.ClientAccrual'
         type: array
+      month:
+        allOf:
+        - $ref: '#/definitions/internal_billing.ProjectMonth'
+        description: |-
+          Month — состояние месяца. Заказчику оно нужно по той же причине,
+          что и менеджеру: пока месяц идёт, числа ещё изменятся, и счёт
+          нельзя считать окончательным.
       payments:
         items:
           $ref: '#/definitions/internal_billing.Payment'
@@ -1159,6 +1166,12 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.Accrual'
         type: array
+      month:
+        allOf:
+        - $ref: '#/definitions/internal_billing.ProjectMonth'
+        description: |-
+          Month — состояние месяца: идёт или зафиксирован. Отсюда же
+          понятно, почему строки помечены «предварительно».
       payments:
         items:
           $ref: '#/definitions/internal_billing.Payment'
@@ -1180,6 +1193,21 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.UTMLink'
         type: array
+    type: object
+  internal_billing.ProjectMonth:
+    properties:
+      locked_at:
+        type: string
+      locked_by:
+        description: LockedBy — кто зафиксировал. nil = фоновая задача.
+        type: string
+      period_month:
+        type: string
+      project_id:
+        type: string
+      status:
+        description: Status — open | locked.
+        type: string
     type: object
   internal_billing.SideTerms:
     properties:
@@ -1567,6 +1595,11 @@ definitions:
         description: Message пустой у ручек, отдающих ошибку без текста.
         type: string
     type: object
+  internal_billing.monthLockResp:
+    properties:
+      month:
+        $ref: '#/definitions/internal_billing.ProjectMonth'
+    type: object
   internal_billing.paymentReq:
     properties:
       amount:
@@ -1662,6 +1695,14 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.TermsVersion'
         type: array
+    type: object
+  internal_billing.unlockMonthReq:
+    properties:
+      reason:
+        description: |-
+          Reason — зачем переоткрыли. Необязательно, но попадает в журнал:
+          через полгода «почему числа поменялись» отвечается только этим.
+        type: string
     type: object
   internal_billing.utmReq:
     properties:
@@ -4661,6 +4702,17 @@ definitions:
           выкладка не считается просроченной и пинги по ней не идут.
       project_id:
         type: string
+      published_at:
+        description: |-
+          PublishedAt — когда ролик вышел: самое раннее известное среди
+          площадок выкладки. Площадки выкладывают не одновременно, и «вышел»
+          — это первая из них; на этой дате будет стоять возраст ролика и
+          правило «зрелый» (14 дней).
+
+          nil означает «не знаем»: ни одна площадка даты не отдала или ролик
+          ещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают
+          и через неделю после выхода.
+        type: string
       stats_collected_at:
         description: StatsCollectedAt — самый свежий сбор среди площадок выкладки.
         type: string
@@ -4787,6 +4839,11 @@ definitions:
       platform:
         type: string
       publication_id:
+        type: string
+      published_at:
+        description: |-
+          PublishedAt — когда ролик вышел на этой площадке, по данным
+          сборщика. nil, пока площадка даты не отдала.
         type: string
       submitted_at:
         type: string
@@ -6695,6 +6752,46 @@ paths:
       summary: Назначить специалиста на проект (по UUID) — админ
       tags:
       - admin-projects
+  /admin/projects/{id}/billing/unlock_month:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Срез просмотров удаляется, месяц снова считается на лету.
+        Действие пишется в журнал админских действий: расфиксация
+        переписывает историю расчёта, и след обязателен.
+        Идемпотентно: месяц, который и так идёт, ручка оставляет как есть.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ГГГГ-ММ, по умолчанию текущий
+        in: query
+        name: month
+        type: string
+      - description: причина
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_billing.unlockMonthReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.monthLockResp'
+        "400":
+          description: bad_id; bad_month
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вернуть зафиксированный месяц в работу (админ)
+      tags:
+      - admin-billing
   /admin/projects/{id}/change_funnel:
     post:
       consumes:
@@ -8464,6 +8561,46 @@ paths:
       security:
       - BearerAuth: []
       summary: Взять условия из действующего прайса (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/billing/lock_month:
+    post:
+      description: |-
+        Пересчитывает месяц в последний раз и сохраняет срез
+        просмотров — по каждой выкладке и каждой площадке. После
+        этого числа месяца не меняются, даже если просмотры
+        продолжают расти. Идемпотентно: повторный вызов на уже
+        зафиксированном месяце ничего не меняет и не ошибка.
+        Обычно месяц фиксируется сам через 14 дней после его
+        конца; эта ручка — «зафиксировать сейчас».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ГГГГ-ММ, по умолчанию текущий
+        in: query
+        name: month
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.monthLockResp'
+        "400":
+          description: bad_id; bad_month
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Зафиксировать месяц (менеджер)
       tags:
       - manager-billing
   /manager/projects/{id}/checklist:

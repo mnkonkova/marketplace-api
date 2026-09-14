@@ -59,6 +59,15 @@ type Publication struct {
 	Comments int64 `json:"comments"`
 	// StatsCollectedAt — самый свежий сбор среди площадок выкладки.
 	StatsCollectedAt *time.Time `json:"stats_collected_at,omitempty"`
+	// PublishedAt — когда ролик вышел: самое раннее известное среди
+	// площадок выкладки. Площадки выкладывают не одновременно, и «вышел»
+	// — это первая из них; на этой дате будет стоять возраст ролика и
+	// правило «зрелый» (14 дней).
+	//
+	// nil означает «не знаем»: ни одна площадка даты не отдала или ролик
+	// ещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают
+	// и через неделю после выхода.
+	PublishedAt *time.Time `json:"published_at,omitempty"`
 
 	// Overdue — вычисляется, а не хранится: просрочка зависит от текущей
 	// даты и от того, не висит ли просьба о переносе. Хранить такое поле
@@ -79,6 +88,9 @@ type SubmittedLink struct {
 	ExternalMediaID string     `json:"external_media_id,omitempty"`
 	SubmittedAt     time.Time  `json:"submitted_at"`
 	LastCollectedAt *time.Time `json:"last_collected_at,omitempty"`
+	// PublishedAt — когда ролик вышел на этой площадке, по данным
+	// сборщика. nil, пока площадка даты не отдала.
+	PublishedAt *time.Time `json:"published_at,omitempty"`
 }
 
 // MissingPlatforms — каких площадок ещё нет. Именно этот список показывается

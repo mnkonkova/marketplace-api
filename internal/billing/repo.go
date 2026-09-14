@@ -320,6 +320,59 @@ GROUP BY pc.creator_user_id`, projectID, from, to, threshold)
 	return out, rows.Err()
 }
 
+// periodFactsLocked — то же, что periodFacts, но по срезу
+// зафиксированного месяца.
+//
+// Запрос повторяет форму живого не от лени: правила счёта у месяца одни,
+// меняется только источник чисел. Разойдись они — зафиксированный месяц
+// начал бы считаться иначе, чем считался в день фиксации, и весь смысл
+// фиксации пропал бы.
+//
+// Состав месяца тоже из среза: выкладку могли удалить или отменить после
+// фиксации, а в зафиксированном месяце она обязана остаться.
+func (r *Repo) periodFactsLocked(ctx context.Context, projectID uuid.UUID, month time.Time, threshold int64) ([]creatorPeriod, error) {
+	period := firstOfMonth(month)
+	rows, err := r.db.Query(ctx, `
+WITH pub AS (
+    SELECT sp.publication_id AS id, sp.creator_user_id, sp.status,
+           COALESCE(SUM(sv.views), 0) AS views
+    FROM project_month_publications sp
+    LEFT JOIN project_month_views sv
+           ON sv.project_id = sp.project_id
+          AND sv.period_month = sp.period_month
+          AND sv.publication_id = sp.publication_id
+    WHERE sp.project_id = $1 AND sp.period_month = $2
+    GROUP BY sp.publication_id, sp.creator_user_id, sp.status
+)
+SELECT pc.creator_user_id,
+       COUNT(pub.id),
+       COUNT(pub.id) FILTER (WHERE pub.status IN ('done', 'closed_manually')),
+       COALESCE(SUM(pub.views), 0),
+       COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $3)), 0),
+       COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $3, 0)), 0),
+       COALESCE(MAX(utm.clicks), 0)
+FROM project_creators pc
+LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
+LEFT JOIN creator_utm_links utm
+       ON utm.project_id = pc.project_id AND utm.creator_user_id = pc.creator_user_id
+WHERE pc.project_id = $1 AND pc.removed_at IS NULL
+GROUP BY pc.creator_user_id`, projectID, period, threshold)
+	if err != nil {
+		return nil, fmt.Errorf("locked period facts: %w", err)
+	}
+	defer rows.Close()
+	out := make([]creatorPeriod, 0)
+	for rows.Next() {
+		var c creatorPeriod
+		if err := rows.Scan(&c.CreatorID, &c.Planned, &c.Delivered,
+			&c.ViewsTotal, &c.ViewsBase, &c.ViewsOver, &c.Clicks); err != nil {
+			return nil, fmt.Errorf("scan locked period facts: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // SaveAccrual — записать пересчитанное. Утверждённое и выплаченное не
 // трогаем: цифра, по которой уже перевели деньги, задним числом не меняется.
 func (r *Repo) SaveAccrual(ctx context.Context, a Accrual) error {

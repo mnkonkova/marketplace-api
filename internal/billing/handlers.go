@@ -708,3 +708,100 @@ func (h *Handler) AdminPublishTerms(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusCreated, v)
 }
+
+// ---- фиксация месяца ----
+
+// monthLockResp — состояние месяца после действия.
+type monthLockResp struct {
+	Month ProjectMonth `json:"month"`
+}
+
+// ManagerLockMonth godoc
+// @Summary  Зафиксировать месяц (менеджер)
+// @Description Пересчитывает месяц в последний раз и сохраняет срез
+// @Description просмотров — по каждой выкладке и каждой площадке. После
+// @Description этого числа месяца не меняются, даже если просмотры
+// @Description продолжают расти. Идемпотентно: повторный вызов на уже
+// @Description зафиксированном месяце ничего не меняет и не ошибка.
+// @Description Обычно месяц фиксируется сам через 14 дней после его
+// @Description конца; эта ручка — «зафиксировать сейчас».
+// @Tags     manager-billing
+// @Produce  json
+// @Security BearerAuth
+// @Param    id    path  string true  "project id"
+// @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
+// @Success  200 {object} monthLockResp
+// @Failure  400 {object} errorResponse "bad_id; bad_month"
+// @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
+// @Router   /manager/projects/{id}/billing/lock_month [post]
+func (h *Handler) ManagerLockMonth(w http.ResponseWriter, r *http.Request) {
+	projectID, actor, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	month, ok := monthParam(r)
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
+		return
+	}
+	m, err := h.svc.LockMonth(r.Context(), projectID, month, &actor, time.Now().UTC())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, monthLockResp{Month: m})
+}
+
+type unlockMonthReq struct {
+	// Reason — зачем переоткрыли. Необязательно, но попадает в журнал:
+	// через полгода «почему числа поменялись» отвечается только этим.
+	Reason string `json:"reason,omitempty"`
+}
+
+// AdminUnlockMonth godoc
+// @Summary  Вернуть зафиксированный месяц в работу (админ)
+// @Description Срез просмотров удаляется, месяц снова считается на лету.
+// @Description Действие пишется в журнал админских действий: расфиксация
+// @Description переписывает историю расчёта, и след обязателен.
+// @Description Идемпотентно: месяц, который и так идёт, ручка оставляет как есть.
+// @Tags     admin-billing
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id    path  string true  "project id"
+// @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
+// @Param    body  body  unlockMonthReq false "причина"
+// @Success  200 {object} monthLockResp
+// @Failure  400 {object} errorResponse "bad_id; bad_month"
+// @Router   /admin/projects/{id}/billing/unlock_month [post]
+func (h *Handler) AdminUnlockMonth(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	projectID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	month, ok := monthParam(r)
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
+		return
+	}
+	var in unlockMonthReq
+	if r.ContentLength > 0 {
+		_ = json.NewDecoder(r.Body).Decode(&in)
+	}
+	if err := h.svc.UnlockMonth(r.Context(), projectID, month, actor, in.Reason); err != nil {
+		writeErr(w, err)
+		return
+	}
+	m, err := h.svc.Month(r.Context(), projectID, month)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, monthLockResp{Month: m})
+}
