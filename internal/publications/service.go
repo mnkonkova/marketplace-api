@@ -95,6 +95,30 @@ func (s *Service) PreviewBatch(scheme Scheme, creatorIDs []uuid.UUID, from, to t
 	return dates, len(dates) * len(dedupeIDs(creatorIDs)), nil
 }
 
+// AddSelfPublication — креатор заводит себе выкладку сам.
+//
+// Зачем это есть: план периода бывает выполнен, а до ступени просмотров
+// не хватает. Дать добрать самому — дешевле, чем гонять человека к
+// менеджеру за строкой в календаре. Подтверждения менеджером нет
+// намеренно: согласование убивает весь смысл кнопки.
+//
+// Дальше такая выкладка живёт как обычная: пять площадок, ссылки,
+// чеклист проекта, ежедневный сбор статистики. Отличается она ровно
+// одним — не участвует в знаменателе недосдачи (см. миграцию 00053).
+func (s *Service) AddSelfPublication(ctx context.Context, projectID, creatorID uuid.UUID, day, now time.Time) (Publication, error) {
+	day = truncateDay(day)
+	if day.Before(truncateDay(now)) {
+		// Задним числом выкладки не заводят: период считается по факту
+		// выхода, и дата в прошлом чинила бы уже посчитанное.
+		return Publication{}, fmt.Errorf("%w: выкладку заводят на сегодня или вперёд", ErrInvalidInput)
+	}
+	// Год вперёд — не «выкладка», а опечатка в году.
+	if day.After(truncateDay(now).AddDate(1, 0, 0)) {
+		return Publication{}, fmt.Errorf("%w: дата больше чем на год вперёд", ErrInvalidInput)
+	}
+	return s.repo.AddSelfPublication(ctx, projectID, creatorID, day)
+}
+
 // SubmitLinks — креатор сдаёт ролик ссылками.
 func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publication, error) {
 	if len(in.URLs) == 0 {

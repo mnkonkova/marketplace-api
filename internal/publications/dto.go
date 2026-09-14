@@ -44,6 +44,14 @@ type Publication struct {
 	ClosedBy     *uuid.UUID `json:"closed_by,omitempty"`
 	CloseReason  string     `json:"close_reason,omitempty"`
 	BatchID      *uuid.UUID `json:"batch_id,omitempty"`
+	// SelfAdded — выкладку завёл себе сам креатор, а не менеджер.
+	//
+	// Менеджеру это видно в списке и в карточке, чтобы он не искал в
+	// своих пачках ролик, которого туда не ставил. Считается признак не
+	// для отчётности: самодобавленные не участвуют в знаменателе
+	// недосдачи — иначе кнопка «добрать до ступени» уменьшала бы оклад
+	// тому, кто её нажал.
+	SelfAdded bool `json:"self_added,omitempty" extensions:"x-omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 

@@ -7122,6 +7122,74 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "План периода выполнен, а до ступени просмотров не хватает —\nкреатор заводит себе ролик сам, без согласования с менеджером.\nДальше выкладка живёт как обычная: пять площадок, чеклист проекта,\nсбор статистики. В знаменатель недосдачи она не попадает.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Добавить себе выкладку (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "дата выхода",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.addSelfReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; bad_date — дата не в формате YYYY-MM-DD; invalid_input — дата в прошлом",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "day_taken — на эту дату у вас уже есть выкладка; period_locked — период подытожен; wrong_project_kind",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
             }
         },
         "/me/creator/projects/{id}/report": {
@@ -17773,6 +17841,11 @@ const docTemplate = `{
                     "description": "PublishedAt — когда ролик вышел: самое раннее известное среди\nплощадок выкладки. Площадки выкладывают не одновременно, и «вышел»\n— это первая из них; на этой дате будет стоять возраст ролика и\nправило «зрелый» (14 дней).\n\nnil означает «не знаем»: ни одна площадка даты не отдала или ролик\nещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают\nи через неделю после выхода.",
                     "type": "string"
                 },
+                "self_added": {
+                    "description": "SelfAdded — выкладку завёл себе сам креатор, а не менеджер.\n\nМенеджеру это видно в списке и в карточке, чтобы он не искал в\nсвоих пачках ролик, которого туда не ставил. Считается признак не\nдля отчётности: самодобавленные не участвуют в знаменателе\nнедосдачи — иначе кнопка «добрать до ступени» уменьшала бы оклад\nтому, кто её нажал.",
+                    "type": "boolean",
+                    "x-omitempty": true
+                },
                 "shares": {
                     "description": "Shares — репосты по всем площадкам выкладки. Пусто, если хоть одна\nплощадка их не отдаёт: ноль означал бы «репостов нет».",
                     "type": "integer"
@@ -18012,6 +18085,16 @@ const docTemplate = `{
                 },
                 "views": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_publications.addSelfReq": {
+            "type": "object",
+            "properties": {
+                "due_date": {
+                    "description": "DueDate — день выхода ролика, YYYY-MM-DD. Сегодня или вперёд.",
+                    "type": "string",
+                    "example": "2026-09-20"
                 }
             }
         },

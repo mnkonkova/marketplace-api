@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -574,6 +575,59 @@ func (h *Handler) CreatorChecklist(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, checklistResp{Items: items})
 }
 
+// addSelfReq — креатор заводит себе выкладку.
+type addSelfReq struct {
+	// DueDate — день выхода ролика, YYYY-MM-DD. Сегодня или вперёд.
+	DueDate string `json:"due_date" example:"2026-09-20"`
+}
+
+// CreatorAddPublication godoc
+// @Summary  Добавить себе выкладку (креатор)
+// @Description План периода выполнен, а до ступени просмотров не хватает —
+// @Description креатор заводит себе ролик сам, без согласования с менеджером.
+// @Description Дальше выкладка живёт как обычная: пять площадок, чеклист проекта,
+// @Description сбор статистики. В знаменатель недосдачи она не попадает.
+// @Tags     creator-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Param    body body addSelfReq true "дата выхода"
+// @Success  201 {object} Publication
+// @Failure      400  {object}  errorResponse  "bad_json; bad_id; bad_date — дата не в формате YYYY-MM-DD; invalid_input — дата в прошлом"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — проект не найден или вы не в его составе"
+// @Failure      409  {object}  errorResponse  "day_taken — на эту дату у вас уже есть выкладка; period_locked — период подытожен; wrong_project_kind"
+// @Router   /me/creator/projects/{id}/publications [post]
+func (h *Handler) CreatorAddPublication(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	projectID, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	var req addSelfReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	day, err := time.Parse("2006-01-02", strings.TrimSpace(req.DueDate))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_date", "Дата в формате ГГГГ-ММ-ДД.")
+		return
+	}
+	p, err := h.svc.AddSelfPublication(r.Context(), projectID, uid, day, time.Now().UTC())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, p)
+}
+
 type submitReq struct {
 	URLs []string `json:"urls"`
 	// Title — название ролика. Досылая площадки, поле можно не повторять:
@@ -745,6 +799,12 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrCreatorNotInProject):
 		httpx.WriteErrMsg(w, http.StatusConflict, "creator_not_in_project",
 			"Этого креатора нет в составе проекта.")
+	case errors.Is(err, ErrDayTaken):
+		httpx.WriteErrMsg(w, http.StatusConflict, "day_taken",
+			"На эту дату у вас уже есть выкладка — выберите другой день.")
+	case errors.Is(err, ErrPeriodLocked):
+		httpx.WriteErrMsg(w, http.StatusConflict, "period_locked",
+			"Этот период уже подытожен — добавить в него ролик нельзя.")
 	case errors.Is(err, ErrPublicationClosed):
 		httpx.WriteErrMsg(w, http.StatusConflict, "publication_closed",
 			"Выкладка закрыта — досылать ссылки нельзя.")

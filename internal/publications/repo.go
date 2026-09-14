@@ -38,6 +38,15 @@ var (
 	// деактивированного пользователя. Без этой проверки такой человек
 	// получал бы доступ к выкладкам проекта наравне с исполнителями.
 	ErrNotACreator = errors.New("user cannot be a project creator")
+	// ErrDayTaken — на этот день у креатора уже есть выкладка. В базе это
+	// ловит publications_creator_day_uniq; отдельная ошибка нужна, чтобы
+	// человеку ответили «на эту дату у вас уже есть выкладка», а не
+	// пятисоткой из драйвера.
+	ErrDayTaken = errors.New("creator already has a publication on that day")
+	// ErrPeriodLocked — день попадает в подытоженный период. Такой период
+	// заморожен вместе со срезом и суммами: добавить в него ролик значит
+	// поменять то, по чему уже выставлен счёт.
+	ErrPeriodLocked = errors.New("period is already locked")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -209,6 +218,79 @@ RETURNING id, project_id, creator_user_id, due_date, draft_due_date, status,
 	return BatchResult{BatchID: batchID, Created: len(items), Items: items}, nil
 }
 
+// AddSelfPublication — креатор заводит себе выкладку сам.
+//
+// Отдельный метод, а не флаг у CreateBatch: у пачки менеджера другие
+// правила (несколько креаторов, черновики, ON CONFLICT DO NOTHING), и
+// смешать их значило бы однажды дать креатору чужого креатора в
+// CreatorUserIDs.
+//
+// Черновик не ставится: срок черновика — это договорённость с
+// менеджером о работе, которую он поручил. Ролик, добавленный
+// креатором, никто не поручал.
+func (r *Repo) AddSelfPublication(ctx context.Context, projectID, creatorID uuid.UUID, day time.Time) (Publication, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Publication{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := r.assertCreatorsProject(ctx, tx, projectID); err != nil {
+		return Publication{}, err
+	}
+	members, err := txCreatorSet(ctx, tx, projectID)
+	if err != nil {
+		return Publication{}, err
+	}
+	if !members[creatorID] {
+		// Не «нет доступа», а «нет такого проекта»: подтверждать чужому
+		// человеку существование проекта незачем. Хендлер отвечает 404.
+		return Publication{}, ErrForbidden
+	}
+
+	// Подытоженный период трогать нельзя. Проверка читает таблицу
+	// периодов напрямую — да, это чужой домен, но правило про выкладки, и
+	// живёт оно там, где выкладка заводится. Сегодняшний день в
+	// подытоженный период попасть не может (отсечка — конец периода плюс
+	// две недели), и всё же проверяем: период могли закрыть руками
+	// раньше, а молча дописать ролик в замороженный подытог — худший из
+	// возможных исходов.
+	var locked bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM project_periods
+    WHERE project_id = $1 AND status = 'locked' AND $2::date BETWEEN starts_on AND ends_on
+)`, projectID, day).Scan(&locked); err != nil {
+		return Publication{}, fmt.Errorf("check locked period: %w", err)
+	}
+	if locked {
+		return Publication{}, ErrPeriodLocked
+	}
+
+	var p Publication
+	err = tx.QueryRow(ctx, `
+INSERT INTO project_publications
+    (project_id, creator_user_id, due_date, created_by, self_added)
+VALUES ($1, $2, $3::date, $2, TRUE)
+RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, status,
+          created_batch_id, self_added, created_at, updated_at`,
+		projectID, creatorID, day).Scan(
+		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate,
+		&p.Status, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
+	if isUniqueViolation(err) {
+		// publications_creator_day_uniq: на этот день у него уже
+		// что-то стоит. Ограничение не обходим — отвечаем понятно.
+		return Publication{}, ErrDayTaken
+	}
+	if err != nil {
+		return Publication{}, fmt.Errorf("insert self publication: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Publication{}, fmt.Errorf("commit: %w", err)
+	}
+	return p, nil
+}
+
 // CancelBatch — снять пачку целиком. Отменяем только те выкладки, по
 // которым ещё ничего не сдано: если креатор уже прислал ссылки, стирать
 // его работу из-за ошибки менеджера нельзя.
@@ -230,12 +312,12 @@ WHERE project_id = $1 AND created_batch_id = $2
 func (r *Repo) Get(ctx context.Context, id uuid.UUID) (Publication, error) {
 	const q = `
 SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, status,
-       closed_by, COALESCE(close_reason, ''), created_batch_id, created_at, updated_at
+       closed_by, COALESCE(close_reason, ''), created_batch_id, self_added, created_at, updated_at
 FROM project_publications WHERE id = $1`
 	var p Publication
 	err := r.db.QueryRow(ctx, q, id).Scan(
 		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate, &p.Status,
-		&p.ClosedBy, &p.CloseReason, &p.BatchID, &p.CreatedAt, &p.UpdatedAt)
+		&p.ClosedBy, &p.CloseReason, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Publication{}, ErrNotFound
 	}
@@ -252,7 +334,7 @@ FROM project_publications WHERE id = $1`
 func (r *Repo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]Publication, error) {
 	return r.list(ctx, `
 SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, status,
-       closed_by, COALESCE(close_reason, ''), created_batch_id, created_at, updated_at
+       closed_by, COALESCE(close_reason, ''), created_batch_id, self_added, created_at, updated_at
 FROM project_publications
 WHERE project_id = $1
 ORDER BY due_date, created_at`, projectID)
@@ -265,7 +347,7 @@ ORDER BY due_date, created_at`, projectID)
 func (r *Repo) ListByCreator(ctx context.Context, projectID, creatorID uuid.UUID) ([]Publication, error) {
 	return r.list(ctx, `
 SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, status,
-       closed_by, COALESCE(close_reason, ''), created_batch_id, created_at, updated_at
+       closed_by, COALESCE(close_reason, ''), created_batch_id, self_added, created_at, updated_at
 FROM project_publications
 WHERE project_id = $1 AND creator_user_id = $2
 ORDER BY due_date, created_at`, projectID, creatorID)
@@ -282,7 +364,7 @@ func (r *Repo) list(ctx context.Context, q string, args ...any) ([]Publication, 
 		var p Publication
 		if err := rows.Scan(&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate,
 			&p.DraftDueDate, &p.Status, &p.ClosedBy, &p.CloseReason, &p.BatchID,
-			&p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.SelfAdded, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan publication: %w", err)
 		}
 		out = append(out, p)

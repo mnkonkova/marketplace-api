@@ -336,6 +336,8 @@ func aggregateFacts(facts []creatorPeriod) creatorPeriod {
 	for _, f := range facts {
 		agg.Planned += f.Planned
 		agg.Delivered += f.Delivered
+		agg.PlannedAssigned += f.PlannedAssigned
+		agg.DeliveredAssigned += f.DeliveredAssigned
 		agg.ViewsTotal += f.ViewsTotal
 		agg.ViewsBase += f.ViewsBase
 		agg.ViewsOver += f.ViewsOver
@@ -524,14 +526,20 @@ func money(t Terms, f creatorPeriod) amounts {
 
 	// Оклад платится за месяц работы. Месяц, на который креатору не
 	// поставили ни одной выкладки, работой не был — оклада за него нет.
-	if f.Planned > 0 {
+	//
+	// Считаем ТОЛЬКО по выкладкам менеджера. Ролик, который креатор
+	// добавил себе сам, работой по договорённости не является: ни оклада
+	// он не открывает, ни недосдачи не создаёт. Иначе кнопка «добрать до
+	// ступени» отнимала бы у нажавшего часть оклада за ролики, которых
+	// ему никто не поручал — человек своими руками сделал бы себе хуже.
+	if f.PlannedAssigned > 0 {
 		a.salary = t.SalaryPerMonth
 		// Недосданное не оплачивается: вычитаем долю невыполненного.
 		// Пропорционально, а не «всё или ничего»: сдавший 11 роликов из
 		// 12 сделал работу, а не провалил её.
-		if f.Delivered < f.Planned {
-			missing := int64(f.Planned - f.Delivered)
-			a.deduction = t.SalaryPerMonth * missing / int64(f.Planned)
+		if f.DeliveredAssigned < f.PlannedAssigned {
+			missing := int64(f.PlannedAssigned - f.DeliveredAssigned)
+			a.deduction = t.SalaryPerMonth * missing / int64(f.PlannedAssigned)
 		}
 	}
 

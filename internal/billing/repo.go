@@ -285,10 +285,24 @@ ORDER BY a.period_start DESC, COALESCE(oc.priority, 999), 4`, projectID, periodS
 
 // creatorPeriod — сырые числа по одному креатору за месяц.
 type creatorPeriod struct {
-	CreatorID  uuid.UUID
-	Planned    int
-	Delivered  int
-	ViewsTotal int64
+	CreatorID uuid.UUID
+	// Planned/Delivered — сколько роликов вышло в периоде и сколько из
+	// них сдано полностью. Это показатель работы: в него входят и те,
+	// что креатор добавил себе сам.
+	Planned   int
+	Delivered int
+	// PlannedAssigned/DeliveredAssigned — то же самое, но только по
+	// выкладкам, которые ПОСТАВИЛ МЕНЕДЖЕР. Недосдача считается по ним и
+	// только по ним.
+	//
+	// Иначе кнопка «добавить себе ролик» работала бы против того, кто её
+	// нажал: добавил пять, сдал два — и потерял часть оклада за три,
+	// которых ему никто не поручал. Человек своими руками сделал бы себе
+	// хуже. Просмотры самодобавленных при этом идут в счёт наравне:
+	// просмотры есть просмотры.
+	PlannedAssigned   int
+	DeliveredAssigned int
+	ViewsTotal        int64
 	// ViewsBase/ViewsOver — просмотры до порога и сверх него, посчитанные
 	// ПО КАЖДОМУ РОЛИКУ отдельно и потом сложенные. Считать по сумме за
 	// месяц нельзя: порог стоит на ролике, и два ролика по 600 000 — это
@@ -305,7 +319,7 @@ type creatorPeriod struct {
 func (r *Repo) periodFacts(ctx context.Context, projectID uuid.UUID, p ProjectPeriod, threshold int64) ([]creatorPeriod, error) {
 	rows, err := r.db.Query(ctx, `
 WITH pub AS (
-    SELECT f.id, f.creator_user_id, f.status,
+    SELECT f.id, f.creator_user_id, f.status, f.self_added,
            COALESCE(SUM(cur.views), 0) AS views
     FROM (`+publishedInPeriodSQL+`) f
     JOIN publication_links l ON l.publication_id = f.id
@@ -313,11 +327,16 @@ WITH pub AS (
         SELECT views FROM video_stat_daily d
         WHERE d.link_id = l.id ORDER BY d.stat_date DESC LIMIT 1
     ) cur ON TRUE
-    GROUP BY f.id, f.creator_user_id, f.status
+    GROUP BY f.id, f.creator_user_id, f.status, f.self_added
 )
 SELECT pc.creator_user_id,
        COUNT(pub.id),
        COUNT(pub.id) FILTER (WHERE pub.status IN ('done', 'closed_manually')),
+       -- Знаменатель недосдачи — только выкладки менеджера. См.
+       -- creatorPeriod.PlannedAssigned: самодобавленные сюда не идут.
+       COUNT(pub.id) FILTER (WHERE NOT pub.self_added),
+       COUNT(pub.id) FILTER (WHERE NOT pub.self_added
+                               AND pub.status IN ('done', 'closed_manually')),
        COALESCE(SUM(pub.views), 0),
        -- Ступени считаются по каждому ролику и складываются.
        --
@@ -342,6 +361,7 @@ GROUP BY pc.creator_user_id`, projectID, projectID, p.StartsOn, p.EndsOn, thresh
 	for rows.Next() {
 		var c creatorPeriod
 		if err := rows.Scan(&c.CreatorID, &c.Planned, &c.Delivered,
+			&c.PlannedAssigned, &c.DeliveredAssigned,
 			&c.ViewsTotal, &c.ViewsBase, &c.ViewsOver, &c.Clicks); err != nil {
 			return nil, fmt.Errorf("scan period facts: %w", err)
 		}
@@ -367,18 +387,21 @@ WITH pub AS (
     -- ноль. Для денег это верно — платить не за что, — но само отличие
     -- не теряется: в срезе у такой строки stat_date пуст, а период, где
     -- числа были уничтожены, помечен приблизительным.
-    SELECT sp.publication_id AS id, sp.creator_user_id, sp.status,
+    SELECT sp.publication_id AS id, sp.creator_user_id, sp.status, sp.self_added,
            COALESCE(SUM(sv.views), 0) AS views
     FROM project_period_publications sp
     LEFT JOIN project_period_views sv
            ON sv.period_id = sp.period_id
           AND sv.publication_id = sp.publication_id
     WHERE sp.period_id = $2
-    GROUP BY sp.publication_id, sp.creator_user_id, sp.status
+    GROUP BY sp.publication_id, sp.creator_user_id, sp.status, sp.self_added
 )
 SELECT pc.creator_user_id,
        COUNT(pub.id),
        COUNT(pub.id) FILTER (WHERE pub.status IN ('done', 'closed_manually')),
+       COUNT(pub.id) FILTER (WHERE NOT pub.self_added),
+       COUNT(pub.id) FILTER (WHERE NOT pub.self_added
+                               AND pub.status IN ('done', 'closed_manually')),
        COALESCE(SUM(pub.views), 0),
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $3)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $3, 0)), 0),
@@ -397,6 +420,7 @@ GROUP BY pc.creator_user_id`, projectID, p.ID, threshold)
 	for rows.Next() {
 		var c creatorPeriod
 		if err := rows.Scan(&c.CreatorID, &c.Planned, &c.Delivered,
+			&c.PlannedAssigned, &c.DeliveredAssigned,
 			&c.ViewsTotal, &c.ViewsBase, &c.ViewsOver, &c.Clicks); err != nil {
 			return nil, fmt.Errorf("scan locked period facts: %w", err)
 		}

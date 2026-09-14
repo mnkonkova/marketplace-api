@@ -297,6 +297,10 @@ func NewRouter(d Deps) http.Handler {
 			// creator_user_id, и чужие выкладки в неё не попадают.
 			if d.Publications != nil {
 				r.Get("/me/creator/projects/{id}/publications", d.Publications.CreatorList)
+				// Креатор заводит себе выкладку сам — чтобы добрать до
+				// ступени, когда план периода уже выполнен. Согласования
+				// менеджером нет намеренно.
+				r.Post("/me/creator/projects/{id}/publications", d.Publications.CreatorAddPublication)
 				r.Get("/me/creator/projects/{id}/checklist", d.Publications.CreatorChecklist)
 				r.Post("/me/creator/publications/{pub_id}/links", d.Publications.CreatorSubmitLinks)
 				r.Post("/me/creator/publications/{pub_id}/date_request", d.Publications.CreatorRequestDateChange)

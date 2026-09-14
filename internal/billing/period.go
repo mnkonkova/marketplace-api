@@ -382,8 +382,8 @@ func snapshotPeriod(ctx context.Context, tx pgx.Tx, p ProjectPeriod, asOf time.T
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_period_publications
-    (period_id, publication_id, creator_user_id, status, published_on)
-SELECT $1, f.id, f.creator_user_id, f.status, f.published_on
+    (period_id, publication_id, creator_user_id, status, self_added, published_on)
+SELECT $1, f.id, f.creator_user_id, f.status, f.self_added, f.published_on
 FROM (`+publishedInPeriodSQL+`) f`,
 		p.ID, p.ProjectID, p.StartsOn, p.EndsOn); err != nil {
 		return false, fmt.Errorf("snapshot publications: %w", err)
@@ -433,12 +433,12 @@ SELECT EXISTS (SELECT 1 FROM project_stat_summary s WHERE s.project_id = $1)
 // сдачи ссылки. У выкладки без ссылок даты нет вовсе, и ни в какой
 // период она не попадает: ролик не вышел.
 const publishedInPeriodSQL = `
-    SELECT p.id, p.creator_user_id, p.status::text AS status,
+    SELECT p.id, p.creator_user_id, p.status::text AS status, p.self_added,
            MIN(COALESCE(l.published_at, l.submitted_at))::date AS published_on
     FROM project_publications p
     JOIN publication_links l ON l.publication_id = p.id
     WHERE p.project_id = $2 AND p.status <> 'cancelled'
-    GROUP BY p.id, p.creator_user_id, p.status
+    GROUP BY p.id, p.creator_user_id, p.status, p.self_added
     HAVING MIN(COALESCE(l.published_at, l.submitted_at))::date BETWEEN $3 AND $4
 `
 
