@@ -1,5 +1,97 @@
 basePath: /api/v1
 definitions:
+  internal_admin.ActiveProjectRef:
+    properties:
+      id:
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_admin.Attention:
+    properties:
+      managers_unapproved:
+        allOf:
+        - $ref: '#/definitions/internal_admin.AttentionBlock'
+        description: ManagersUnapproved — менеджеры, которым не выдали доступ.
+      moderation:
+        allOf:
+        - $ref: '#/definitions/internal_admin.ModerationBlock'
+        description: Moderation — специалисты, ждущие решения о публикации.
+      projects_stale:
+        allOf:
+        - $ref: '#/definitions/internal_admin.AttentionBlock'
+        description: ProjectsStale — идущие проекты, которые не двигались неделю.
+      projects_unassigned:
+        allOf:
+        - $ref: '#/definitions/internal_admin.AttentionBlock'
+        description: ProjectsUnassigned — проекты без ответственного менеджера.
+      publications_overdue:
+        allOf:
+        - $ref: '#/definitions/internal_admin.AttentionBlock'
+        description: PublicationsOverdue — выкладки, у которых прошла дата.
+      revisions_exceeded:
+        allOf:
+        - $ref: '#/definitions/internal_admin.AttentionBlock'
+        description: |-
+          RevisionsExceeded — правок использовано больше, чем включено в
+          условия: дальше либо доплата, либо разговор с клиентом.
+      specialist_not_confirmed:
+        allOf:
+        - $ref: '#/definitions/internal_admin.AttentionBlock'
+        description: |-
+          SpecialistNotConfirmed — клиент выбрал специалиста в брифе, а
+          менеджер не подтвердил: работа не начнётся, пока не подтвердят.
+      work_without_prepayment:
+        allOf:
+        - $ref: '#/definitions/internal_admin.AttentionBlock'
+        description: |-
+          WorkWithoutPrepayment — проект в работе, а предоплата не
+          подтверждена. Самый дорогой пункт списка: работу уже делают.
+    type: object
+  internal_admin.AttentionBlock:
+    properties:
+      count:
+        type: integer
+      items:
+        description: |-
+          Items — первые несколько строк, не весь набор. Никогда не null:
+          пустой список фронт рисует как «чисто», отсутствующий — никак.
+        items:
+          $ref: '#/definitions/internal_admin.AttentionItem'
+        type: array
+    type: object
+  internal_admin.AttentionItem:
+    properties:
+      id:
+        description: |-
+          ID — проект или пользователь, смотря по пункту. Фронт по нему
+          открывает карточку.
+        type: string
+      note:
+        description: |-
+          Note — чем строка провинилась: «12 дн. без движения», «правок 5
+          из 2». Пусто, если название уже всё сказало.
+        type: string
+      title:
+        type: string
+    type: object
+  internal_admin.AuditResult:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/marketpclce_internal_audit.Entry'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
   internal_admin.CreateClientResult:
     properties:
       invite_token:
@@ -8,6 +100,17 @@ definitions:
         type: string
       user_id:
         type: string
+    type: object
+  internal_admin.GlobalSearchResult:
+    properties:
+      projects:
+        items:
+          $ref: '#/definitions/internal_admin.SearchProjectHit'
+        type: array
+      users:
+        items:
+          $ref: '#/definitions/internal_admin.SearchUserHit'
+        type: array
     type: object
   internal_admin.InviteGenerateResult:
     properties:
@@ -34,6 +137,199 @@ definitions:
         type: boolean
       is_approved:
         type: boolean
+      last_login_at:
+        description: LastLoginAt — nil = не входил ни разу.
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_admin.ModerationBlock:
+    properties:
+      count:
+        type: integer
+      items:
+        description: |-
+          Items — первые несколько строк, не весь набор. Никогда не null:
+          пустой список фронт рисует как «чисто», отсутствующий — никак.
+        items:
+          $ref: '#/definitions/internal_admin.AttentionItem'
+        type: array
+      over_day:
+        type: integer
+    type: object
+  internal_admin.ModerationInfo:
+    properties:
+      is_published:
+        type: boolean
+      reason:
+        type: string
+      reviewed_at:
+        type: string
+      reviewed_by:
+        type: string
+      status:
+        type: string
+    type: object
+  internal_admin.SearchProjectHit:
+    properties:
+      client_name:
+        description: ClientName — по чьему имени проект чаще всего и ищут.
+        type: string
+      id:
+        type: string
+      is_test:
+        type: boolean
+      kind:
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_admin.SearchUserHit:
+    properties:
+      display_name:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      is_admin:
+        type: boolean
+      is_manager:
+        type: boolean
+      kind:
+        type: string
+      phone:
+        type: string
+    type: object
+  internal_admin.Summary:
+    properties:
+      attention:
+        $ref: '#/definitions/internal_admin.Attention'
+      generated_at:
+        description: |-
+          GeneratedAt — момент расчёта. Сводку держат открытой часами, и без
+          отметки непонятно, насколько она устарела.
+        type: string
+      managers:
+        description: 'Managers — нагрузка команды: те же числа, что в /admin/team.'
+        items:
+          $ref: '#/definitions/internal_admin.TeamMember'
+        type: array
+      projects_by_kind:
+        additionalProperties:
+          type: integer
+        description: |-
+          ProjectsByKind/ProjectsByStatus — распределение всех нетестовых
+          проектов. Ключи присутствуют всегда, включая нулевые: иначе
+          пропавший столбец диаграммы читается как сбой, а не как ноль.
+        type: object
+      projects_by_status:
+        additionalProperties:
+          type: integer
+        type: object
+    type: object
+  internal_admin.TeamMember:
+    properties:
+      active_projects:
+        description: ActiveProjects — незавершённые проекты, где человек ответственный.
+        type: integer
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      is_active:
+        type: boolean
+      is_admin:
+        type: boolean
+      is_approved:
+        type: boolean
+      is_manager:
+        type: boolean
+      last_login_at:
+        description: |-
+          LastLoginAt — nil означает «не входил ни разу», а не «давно»:
+          сотрудника, который так и не зашёл, надо позвать.
+        type: string
+      overdue_projects:
+        description: OverdueProjects — из них те, где сроки уже сорваны.
+        type: integer
+      user_id:
+        type: string
+    type: object
+  internal_admin.UserCard:
+    properties:
+      audit:
+        description: |-
+          Audit — записи журнала: и те, где он объект, и его собственные
+          действия. Пустой список, если журнал по нему молчит.
+        items:
+          $ref: '#/definitions/marketpclce_internal_audit.Entry'
+        type: array
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      email_verified:
+        type: boolean
+      email_verified_at:
+        description: |-
+          EmailVerifiedAt — когда подтверждена почта. Сам факт лежит в
+          UserListItem.EmailVerified; дата нужна там, где выясняют,
+          подтверждал ли человек почту сам или это сделал админ.
+        type: string
+      is_active:
+        type: boolean
+      is_admin:
+        type: boolean
+      is_approved:
+        type: boolean
+      is_manager:
+        type: boolean
+      is_published:
+        description: |-
+          IsPublished — флаг is_published у specialist_profile. Нужен фронту
+          чтобы отличить «pending_review до клика "Опубликовать"» (= черновик,
+          модерации не ждёт) от «pending_review после публикации» (= висит в
+          очереди /admin/moderation).
+        type: boolean
+      is_test:
+        description: |-
+          IsTest — пользователь заведён для проверки. По умолчанию такие
+          в выдаче скрыты.
+        type: boolean
+      kind:
+        type: string
+      last_login_at:
+        description: |-
+          LastLoginAt — nil означает «не входил ни разу», а не «давно».
+          Разница важная: сотрудника, который так и не зашёл, надо позвать,
+          а не ждать.
+        type: string
+      moderation:
+        $ref: '#/definitions/internal_admin.ModerationInfo'
+      moderation_status:
+        description: |-
+          ModerationStatus — pending_review|approved|rejected. NULL для клиентов
+          (у них нет specialist_profile). omitempty в JSON: пустая строка =
+          «нет статуса» (клиент или спец без профиля).
+        type: string
+      phone:
+        type: string
+      projects:
+        description: Projects — участие во всех ролях, свежие сверху. Никогда не null.
+        items:
+          $ref: '#/definitions/internal_admin.UserProjectRef'
+        type: array
       user_id:
         type: string
     type: object
@@ -62,7 +358,18 @@ definitions:
           модерации не ждёт) от «pending_review после публикации» (= висит в
           очереди /admin/moderation).
         type: boolean
+      is_test:
+        description: |-
+          IsTest — пользователь заведён для проверки. По умолчанию такие
+          в выдаче скрыты.
+        type: boolean
       kind:
+        type: string
+      last_login_at:
+        description: |-
+          LastLoginAt — nil означает «не входил ни разу», а не «давно».
+          Разница важная: сотрудника, который так и не зашёл, надо позвать,
+          а не ждать.
         type: string
       moderation_status:
         description: |-
@@ -88,6 +395,27 @@ definitions:
       total:
         type: integer
     type: object
+  internal_admin.UserProjectRef:
+    properties:
+      id:
+        type: string
+      is_test:
+        type: boolean
+      kind:
+        type: string
+      role:
+        description: |-
+          Role — кем он в этом проекте: client | specialist | manager. Один и
+          тот же человек бывает и заказчиком, и исполнителем, поэтому проект
+          может попасть в список дважды с разными ролями.
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
   internal_admin.UserSearchResult:
     properties:
       display_name:
@@ -100,6 +428,17 @@ definitions:
         type: string
       user_id:
         type: string
+    type: object
+  internal_admin.activeProjectsResp:
+    properties:
+      error:
+        type: string
+      message:
+        type: string
+      projects:
+        items:
+          $ref: '#/definitions/internal_admin.ActiveProjectRef'
+        type: array
     type: object
   internal_admin.approveReq:
     properties:
@@ -136,6 +475,11 @@ definitions:
           $ref: '#/definitions/internal_admin.ManagerInfo'
         type: array
     type: object
+  internal_admin.markUserTestReq:
+    properties:
+      is_test:
+        type: boolean
+    type: object
   internal_admin.moderationCountResp:
     properties:
       pending_count:
@@ -170,6 +514,13 @@ definitions:
         type: string
       reason:
         type: string
+    type: object
+  internal_admin.teamResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_admin.TeamMember'
+        type: array
     type: object
   internal_admin.userSearchResp:
     properties:
@@ -670,6 +1021,152 @@ definitions:
       videos_next_months:
         type: integer
     type: object
+  internal_billing.TermsChange:
+    properties:
+      field:
+        description: Field — имя поля тарифа (то же, что в JSON условий).
+        type: string
+      from:
+        description: |-
+          From/To — прежнее и новое значение. Пусто (nil) = «не задано»:
+          креаторские ставки бывают незаполненными, и 0 от «как у клиента»
+          одним числом не отличить.
+        type: integer
+      label:
+        description: |-
+          Label — человеческое название для интерфейса: админ читает
+          «Ставка за 1000 просмотров», а не rate_per_1000_views.
+        type: string
+      to:
+        type: integer
+    type: object
+  internal_billing.TermsMargin:
+    properties:
+      has_margin:
+        description: |-
+          HasMargin — креаторская сторона заполнена хоть где-то. Пустая
+          означает «платим креатору ровно то, что берём», то есть нули ниже —
+          настоящие нули, а не «не задано».
+        type: boolean
+      rate_per_1000_views:
+        description: |-
+          RatePer1000Views/RatePer1000ViewsOver — маржа на ставке за тысячу
+          просмотров до порога и сверх него, копейки.
+        type: integer
+      rate_per_1000_views_over:
+        type: integer
+      salary_per_month:
+        description: SalaryPerMonth — маржа на окладе за месяц, копейки.
+        type: integer
+    type: object
+  internal_billing.TermsPublishResult:
+    properties:
+      body:
+        description: Body — текст условий, с которым соглашается клиент.
+        type: string
+      bonus_views_threshold:
+        description: |-
+          BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.
+          До него платим полную ставку, свыше — пониженную. 0 = порога нет,
+          весь объём идёт по полной ставке.
+        type: integer
+      changes:
+        description: |-
+          Changes — разница с прежней действующей версией. Пусто у самой
+          первой версии: сравнивать не с чем.
+        items:
+          $ref: '#/definitions/internal_billing.TermsChange'
+        type: array
+      click_bonus_rate:
+        description: |-
+          ClickBonusRate — ставка за переход по UTM до месячного порога,
+          копейки. nil = бонус за переходы не считается: источник кликов не
+          подключён, а поля в тарифе есть.
+        type: integer
+        x-nullable: true
+      click_bonus_rate_over:
+        description: ClickBonusRateOver — ставка за каждый следующий переход.
+        type: integer
+        x-nullable: true
+      click_bonus_threshold:
+        description: |-
+          ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной
+          ставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.
+        type: integer
+      consented_clients:
+        description: |-
+          ConsentedClients — сколько клиентов уже согласились именно с ней.
+          Показывает, что версию нельзя считать черновиком.
+        type: integer
+      consents_required:
+        description: |-
+          ConsentsRequired — сколько клиентов согласились с прежней
+          действующей версией и теперь должны согласиться заново.
+        type: integer
+      creator_rate_per_1000_views:
+        type: integer
+        x-nullable: true
+      creator_rate_per_1000_views_over:
+        type: integer
+        x-nullable: true
+      creator_salary_per_month:
+        description: |-
+          Креаторская сторона тарифа: что получает исполнитель.
+
+          nil означает «столько же, сколько платит клиент»: до заполнения этих
+          полей выплата равна счёту и маржи у платформы нет. Две стороны нужны
+          потому, что это разные деньги — счёт заказчику и обязательство перед
+          креатором; одно число за оба показывало креатору в личном кабинете
+          цену клиента как его собственный заработок.
+        type: integer
+        x-nullable: true
+      is_current:
+        description: |-
+          IsCurrent — эта версия сейчас действует. Действует всегда одна:
+          самая новая.
+        type: boolean
+      margin:
+        allOf:
+        - $ref: '#/definitions/internal_billing.TermsMargin'
+        description: |-
+          Margin — что из уплаченного клиентом остаётся площадке. Считается,
+          а не хранится: это разность двух сторон тарифа, и отдельная колонка
+          разошлась бы с ними на первой же правке ставок.
+      project_id:
+        type: string
+      published_at:
+        type: string
+      rate_per_1000_views:
+        description: RatePer1000Views — ставка за тысячу просмотров ДО порога, копейки.
+        type: integer
+      rate_per_1000_views_over:
+        description: |-
+          RatePer1000ViewsOver — ставка за тысячу просмотров СВЕРХ порога.
+          Ниже основной намеренно: так виральный ролик не съедает бюджет.
+        type: integer
+      salary_per_month:
+        description: SalaryPerMonth — оклад креатора за месяц, копейки.
+        type: integer
+      terms_version_id:
+        description: TermsVersionID — с какой версии сняты числа. Только для истории.
+        type: string
+      updated_at:
+        type: string
+      used_by_projects:
+        description: UsedByProjects — сколько проектов сняли с неё числа.
+        type: integer
+      version:
+        description: Version — номер версии; растёт на единицу.
+        type: integer
+      videos_first_month:
+        description: |-
+          VideosFirstMonth/VideosNextMonths — за какой объём назван оклад.
+          В тарифе это подпись «30 видео первый месяц, 60 со второго»: без
+          неё сумма оклада ни о чём не говорит.
+        type: integer
+      videos_next_months:
+        type: integer
+    type: object
   internal_billing.TermsVersion:
     properties:
       body:
@@ -724,6 +1221,13 @@ definitions:
           IsCurrent — эта версия сейчас действует. Действует всегда одна:
           самая новая.
         type: boolean
+      margin:
+        allOf:
+        - $ref: '#/definitions/internal_billing.TermsMargin'
+        description: |-
+          Margin — что из уплаченного клиентом остаётся площадке. Считается,
+          а не хранится: это разность двух сторон тарифа, и отдельная колонка
+          разошлась бы с ними на первой же правке ставок.
       project_id:
         type: string
       published_at:
@@ -1559,6 +2063,29 @@ definitions:
       version:
         type: integer
     type: object
+  internal_pipelines.PipelineListItem:
+    properties:
+      active_projects:
+        type: integer
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      is_default:
+        type: boolean
+      name:
+        type: string
+      revisions_included:
+        type: integer
+      updated_at:
+        type: string
+      version:
+        type: integer
+    type: object
   internal_pipelines.ReorderInput:
     properties:
       stages:
@@ -1725,7 +2252,7 @@ definitions:
     properties:
       items:
         items:
-          $ref: '#/definitions/internal_pipelines.Pipeline'
+          $ref: '#/definitions/internal_pipelines.PipelineListItem'
         type: array
     type: object
   internal_productions.Production:
@@ -1738,6 +2265,29 @@ definitions:
         type: string
       is_active:
         type: boolean
+      name:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  internal_productions.ProductionListItem:
+    properties:
+      active_projects:
+        description: |-
+          ActiveProjects — незавершённые проекты, где исполнитель из этого
+          продакшена.
+        type: integer
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      members:
+        description: Members — сколько специалистов указали этот продакшен в профиле.
+        type: integer
       name:
         type: string
       updated_at:
@@ -1775,6 +2325,13 @@ definitions:
         type: boolean
       name:
         type: string
+    type: object
+  internal_productions.usageListResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_productions.ProductionListItem'
+        type: array
     type: object
   internal_profilecheck.PartResult:
     properties:
@@ -2979,6 +3536,22 @@ definitions:
         type: string
       progress:
         type: number
+      progress_done:
+        description: |-
+          Прогресс числом, а не только процентом.
+
+          «62%» в списке не отвечает на вопрос, с которым в него смотрят:
+          сколько роликов ещё выложить и сколько шагов осталось пройти.
+          Единица измерения у видов проектов разная, поэтому рядом с числами
+          лежит ProgressUnit — иначе «3 из 5» читалось бы как что угодно.
+        type: integer
+      progress_total:
+        type: integer
+      progress_unit:
+        description: |-
+          ProgressUnit — publications у креаторов, steps у продакшна.
+          Пусто означает, что мерить нечего: ни выкладок, ни шагов.
+        type: string
       revisions_included:
         type: integer
       revisions_used:
@@ -3353,6 +3926,11 @@ definitions:
           $ref: '#/definitions/internal_projects.ProjectManagerView'
         type: array
     type: object
+  internal_projects.markTestReq:
+    properties:
+      is_test:
+        type: boolean
+    type: object
   internal_projects.moveStageReq:
     properties:
       target_stage_id:
@@ -3379,10 +3957,38 @@ definitions:
       reason:
         type: string
     type: object
+  internal_projects.restoreResp:
+    properties:
+      status:
+        $ref: '#/definitions/internal_projects.ProjectStatus'
+    type: object
   internal_projects.skipReq:
     properties:
       comment:
         type: string
+    type: object
+  internal_projects.transferReq:
+    properties:
+      project_ids:
+        description: |-
+          ProjectIDs — что передаём. Пусто = все незавершённые проекты
+          менеджера: это основной сценарий (сотрудник уходит).
+        items:
+          type: string
+        type: array
+      to_user_id:
+        description: ToUserID — кому передаём. Обязателен.
+        type: string
+    type: object
+  internal_projects.transferResp:
+    properties:
+      project_ids:
+        items:
+          type: string
+        type: array
+      transferred:
+        description: Transferred — сколько проектов переехало.
+        type: integer
     type: object
   internal_publications.BatchResult:
     properties:
@@ -3460,6 +4066,13 @@ definitions:
         type: integer
       name:
         type: string
+      projects_count:
+        description: |-
+          ProjectsCount — на скольких проектах эта версия подключена.
+          Отвечает на вопрос, который возникает перед правкой шаблона:
+          новая версия не тронет уже подключённые снимки, и знать, сколько
+          проектов останутся на старых пунктах, нужно ДО выпуска.
+        type: integer
       version:
         type: integer
     type: object
@@ -3477,6 +4090,13 @@ definitions:
         type: integer
       name:
         type: string
+      projects_count:
+        description: |-
+          ProjectsCount — на скольких проектах эта версия подключена.
+          Отвечает на вопрос, который возникает перед правкой шаблона:
+          новая версия не тронет уже подключённые снимки, и знать, сколько
+          проектов останутся на старых пунктах, нужно ДО выпуска.
+        type: integer
       version:
         type: integer
     type: object
@@ -4423,6 +5043,36 @@ definitions:
       target_category:
         type: string
     type: object
+  marketpclce_internal_audit.Entry:
+    properties:
+      action:
+        type: string
+      actor_display_name:
+        type: string
+      actor_email:
+        description: |-
+          ActorEmail/ActorDisplayName — заполняются только на чтении (JOIN
+          на users). На записи их нет: почта сотрудника может смениться, а
+          журнал должен показывать сегодняшнюю.
+        type: string
+      actor_user_id:
+        description: |-
+          ActorUserID — кто совершил действие. Nil означает «не человек»
+          (фоновая задача) либо вызов из теста мимо HTTP: такие записи
+          ложатся с NULL, а не с несуществующим пользователем.
+        type: string
+      created_at:
+        type: string
+      id:
+        type: integer
+      object_id:
+        type: string
+      object_type:
+        type: string
+      payload:
+        additionalProperties: {}
+        type: object
+    type: object
   marketpclce_internal_auth.TokenPair:
     properties:
       access_token:
@@ -4754,6 +5404,62 @@ info:
   title: marketpclce API
   version: "1.0"
 paths:
+  /admin/audit:
+    get:
+      description: |-
+        Фильтры: actor (uuid сотрудника), action (точный код,
+        например user.revoke_manager), object_type (user | project |
+        terms_version | checklist_template), object_id, from/to
+        (RFC3339, полуинтервал). Свежие сверху.
+      parameters:
+      - description: uuid сотрудника
+        in: query
+        name: actor
+        type: string
+      - description: код действия
+        in: query
+        name: action
+        type: string
+      - description: user | project | terms_version | checklist_template
+        in: query
+        name: object_type
+        type: string
+      - description: id объекта
+        in: query
+        name: object_id
+        type: string
+      - description: RFC3339, включительно
+        in: query
+        name: from
+        type: string
+      - description: RFC3339, не включая
+        in: query
+        name: to
+        type: string
+      - description: 1-200, default 50
+        in: query
+        name: limit
+        type: integer
+      - description: default 0
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.AuditResult'
+        "400":
+          description: bad_actor | bad_time | invalid_input
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Журнал админских действий
+      tags:
+      - admin-audit
   /admin/checklist_templates:
     get:
       produces:
@@ -4904,6 +5610,10 @@ paths:
       - admin-users
   /admin/managers/{id}/revoke:
     post:
+      description: |-
+        Если на человеке есть незавершённые проекты — 409 со
+        списком: сначала передайте их другому менеджеру
+        (POST /admin/managers/{id}/transfer_projects), потом снимайте роль.
       parameters:
       - description: user id
         in: path
@@ -4915,9 +5625,50 @@ paths:
       responses:
         "204":
           description: No Content
+        "409":
+          description: has_active_projects
+          schema:
+            $ref: '#/definitions/internal_admin.activeProjectsResp'
       security:
       - BearerAuth: []
-      summary: Снять аппрув с менеджера
+      summary: Снять роль менеджера
+      tags:
+      - admin-users
+  /admin/managers/{id}/transfer_projects:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Одна транзакция: либо переезжают все проекты, либо никто.
+        На каждый проект — своё событие и запись в outbox, как при
+        одиночном назначении. project_ids пусто = все незавершённые.
+      parameters:
+      - description: user id менеджера, с которого снимаем
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: to_user_id + опционально project_ids
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.transferReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.transferResp'
+        "400":
+          description: bad_user_id | invalid_input — передача самому себе или принимающий
+            не менеджер
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Передать проекты менеджера другому менеджеру
       tags:
       - admin-users
   /admin/managers/promote:
@@ -5073,6 +5824,8 @@ paths:
       - admin-moderation
   /admin/pipelines:
     get:
+      description: У каждой воронки — сколько незавершённых проектов сейчас по ней
+        идёт.
       produces:
       - application/json
       responses:
@@ -5384,13 +6137,16 @@ paths:
       - admin-pipelines
   /admin/productions:
     get:
+      description: |-
+        У каждой строки — сколько специалистов состоит в продакшене
+        и сколько незавершённых проектов за ними числится.
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_productions.listResp'
+            $ref: '#/definitions/internal_productions.usageListResp'
       security:
       - BearerAuth: []
       summary: Список всех продакшенов (включая деактивированные)
@@ -5496,8 +6252,11 @@ paths:
         имя на проекте у клиента без аккаунта, почта), мин 2 символа.
         manager — uuid ответственного либо "none" (без ответственного).
         include_test=true показывает проекты, помеченные как тестовые
-        (по умолчанию скрыты). sort: updated_asc | updated_desc |
-        created_asc | created_desc, default updated_desc.
+        (по умолчанию скрыты). kind — вид проекта. sort: updated_asc |
+        updated_desc | created_asc | created_desc, default updated_desc.
+        У каждой карточки прогресс ещё и числом: progress_done /
+        progress_total, единица в progress_unit (publications у
+        креаторов, steps у продакшна).
       parameters:
       - description: часть названия проекта или имени клиента, мин 2 симв
         in: query
@@ -5515,6 +6274,10 @@ paths:
         in: query
         name: include_test
         type: boolean
+      - description: creators_turnkey | production_turnkey | general
+        in: query
+        name: kind
+        type: string
       - description: updated_asc | updated_desc | created_asc | created_desc
         in: query
         name: sort
@@ -5810,6 +6573,39 @@ paths:
       summary: Лента активности любого проекта (админ)
       tags:
       - admin-projects
+  /admin/projects/{id}/mark_test:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Тестовые проекты по умолчанию скрыты из админских выдач
+        (include_test=true показывает их).
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: is_test
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_projects.markTestReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Пометить проект тестовым (или снять пометку)
+      tags:
+      - admin-projects
   /admin/projects/{id}/move_stage:
     post:
       consumes:
@@ -5870,6 +6666,101 @@ paths:
       summary: 'Админ-канбан: перенести проект на конкретный шаг'
       tags:
       - admin-projects
+  /admin/projects/{id}/restore:
+    post:
+      description: |-
+        Проект возвращается в тот статус, в котором был до отмены —
+        он сохранён в payload события project_cancelled. Если такого
+        события нет (отмена до появления ручки или правка статуса
+        руками), отвечаем 409: угаданный статус молча меняет, кого
+        проект ждёт.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_projects.restoreResp'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+        "409":
+          description: not_cancelled | no_cancel_event
+          schema:
+            $ref: '#/definitions/internal_projects.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вернуть отменённый проект
+      tags:
+      - admin-projects
+  /admin/search:
+    get:
+      description: |-
+        Одна строка ищется и по названию проекта с именем клиента,
+        и по почте, телефону и имени человека. Короче двух символов —
+        пустой ответ. Тестовые записи не показываются.
+      parameters:
+      - description: строка поиска, мин 2 символа
+        in: query
+        name: q
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.GlobalSearchResult'
+      security:
+      - BearerAuth: []
+      summary: Быстрый поиск по проектам и людям (⌘K)
+      tags:
+      - admin-search
+  /admin/summary:
+    get:
+      description: |-
+        Пункты считаются на сервере по единым правилам и приходят
+        всегда, в том числе нулевыми — решает фронт. Тестовые
+        проекты и пользователи не учитываются нигде.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.Summary'
+      security:
+      - BearerAuth: []
+      summary: 'Сводка: что требует внимания'
+      tags:
+      - admin-summary
+  /admin/team:
+    get:
+      description: |-
+        У каждого — сколько незавершённых проектов он ведёт,
+        сколько из них просрочено (прошёл срок проекта либо дата
+        невыложенной выкладки) и когда он последний раз входил.
+        last_login_at отсутствует = не входил ни разу.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.teamResp'
+      security:
+      - BearerAuth: []
+      summary: 'Команда: админы и менеджеры с нагрузкой'
+      tags:
+      - admin-users
   /admin/terms:
     get:
       produces:
@@ -5895,8 +6786,10 @@ paths:
     post:
       consumes:
       - application/json
-      description: 'Существующая версия не переписывается: под ней стоит согласие
-        клиентов, а проекты сняли с неё числа снимком.'
+      description: |-
+        Существующая версия не переписывается: под ней стоит согласие клиентов, а проекты сняли с неё числа снимком.
+        В ответе — разница с прежней действующей версией (changes) и
+        сколько клиентов должны согласиться заново (consents_required).
       parameters:
       - description: ставки и текст условий
         in: body
@@ -5908,9 +6801,10 @@ paths:
       - application/json
       responses:
         "201":
-          description: Created
+          description: версия + разница с прежней + сколько клиентов должны согласиться
+            заново
           schema:
-            $ref: '#/definitions/internal_billing.TermsVersion'
+            $ref: '#/definitions/internal_billing.TermsPublishResult'
         "400":
           description: bad_json, invalid_input — текст пуст или доля креатора больше
             цены клиента
@@ -5933,7 +6827,8 @@ paths:
     get:
       description: |-
         Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),
-        kind (client|specialist), role (manager|admin|regular).
+        kind (client|specialist), role (manager|admin|regular),
+        include_test (по умолчанию тестовые скрыты).
         Сортировка created_at DESC. limit 1..100, default 20.
       parameters:
       - description: часть email/phone/имени, мин 2 симв
@@ -5948,6 +6843,10 @@ paths:
         in: query
         name: role
         type: string
+      - description: показать тестовых пользователей, default false
+        in: query
+        name: include_test
+        type: boolean
       - description: 1-100, default 20
         in: query
         name: limit
@@ -5988,6 +6887,34 @@ paths:
       security:
       - BearerAuth: []
       summary: Создать клиента вручную (опц. сгенерить инвайт)
+      tags:
+      - admin-users
+  /admin/users/{id}:
+    get:
+      description: |-
+        Проекты — во всех ролях сразу (заказчик, исполнитель,
+        ответственный менеджер). last_login_at отсутствует =
+        не входил ни разу.
+      parameters:
+      - description: user id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.UserCard'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Карточка человека: профиль, роли, модерация, проекты, журнал'
       tags:
       - admin-users
   /admin/users/{id}/activate:
@@ -6047,6 +6974,44 @@ paths:
       security:
       - BearerAuth: []
       summary: Сгенерировать инвайт для существующего юзера
+      tags:
+      - admin-users
+  /admin/users/{id}/mark_test:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Тестовые пользователи по умолчанию скрыты из админских
+        выдач (include_test=true показывает их). Админа пометить
+        нельзя — он пропал бы из списка команды.
+      parameters:
+      - description: user id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: is_test
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_admin.markUserTestReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: invalid_input — попытка пометить админа
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Пометить пользователя тестовым (или снять пометку)
       tags:
       - admin-users
   /admin/users/{id}/verify_email:

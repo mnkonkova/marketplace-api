@@ -15,6 +15,87 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/audit": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Фильтры: actor (uuid сотрудника), action (точный код,\nнапример user.revoke_manager), object_type (user | project |\nterms_version | checklist_template), object_id, from/to\n(RFC3339, полуинтервал). Свежие сверху.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-audit"
+                ],
+                "summary": "Журнал админских действий",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "uuid сотрудника",
+                        "name": "actor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "код действия",
+                        "name": "action",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "user | project | terms_version | checklist_template",
+                        "name": "object_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "id объекта",
+                        "name": "object_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339, включительно",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339, не включая",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "1-200, default 50",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "default 0",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.AuditResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_actor | bad_time | invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/checklist_templates": {
             "get": {
                 "security": [
@@ -294,13 +375,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Если на человеке есть незавершённые проекты — 409 со\nсписком: сначала передайте их другому менеджеру\n(POST /admin/managers/{id}/transfer_projects), потом снимайте роль.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "admin-users"
                 ],
-                "summary": "Снять аппрув с менеджера",
+                "summary": "Снять роль менеджера",
                 "parameters": [
                     {
                         "type": "string",
@@ -313,6 +395,64 @@ const docTemplate = `{
                 "responses": {
                     "204": {
                         "description": "No Content"
+                    },
+                    "409": {
+                        "description": "has_active_projects",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.activeProjectsResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/managers/{id}/transfer_projects": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Одна транзакция: либо переезжают все проекты, либо никто.\nНа каждый проект — своё событие и запись в outbox, как при\nодиночном назначении. project_ids пусто = все незавершённые.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Передать проекты менеджера другому менеджеру",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id менеджера, с которого снимаем",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "to_user_id + опционально project_ids",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.transferReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.transferResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_user_id | invalid_input — передача самому себе или принимающий не менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
                     }
                 }
             }
@@ -521,6 +661,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "У каждой воронки — сколько незавершённых проектов сейчас по ней идёт.",
                 "produces": [
                     "application/json"
                 ],
@@ -1018,6 +1159,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "У каждой строки — сколько специалистов состоит в продакшене\nи сколько незавершённых проектов за ними числится.",
                 "produces": [
                     "application/json"
                 ],
@@ -1029,7 +1171,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_productions.listResp"
+                            "$ref": "#/definitions/internal_productions.usageListResp"
                         }
                     }
                 }
@@ -1188,7 +1330,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Поиск, фильтры, сортировка и пагинация считаются на сервере.\nq — ILIKE по названию проекта и по клиенту (имя в профиле,\nимя на проекте у клиента без аккаунта, почта), мин 2 символа.\nmanager — uuid ответственного либо \"none\" (без ответственного).\ninclude_test=true показывает проекты, помеченные как тестовые\n(по умолчанию скрыты). sort: updated_asc | updated_desc |\ncreated_asc | created_desc, default updated_desc.",
+                "description": "Поиск, фильтры, сортировка и пагинация считаются на сервере.\nq — ILIKE по названию проекта и по клиенту (имя в профиле,\nимя на проекте у клиента без аккаунта, почта), мин 2 символа.\nmanager — uuid ответственного либо \"none\" (без ответственного).\ninclude_test=true показывает проекты, помеченные как тестовые\n(по умолчанию скрыты). kind — вид проекта. sort: updated_asc |\nupdated_desc | created_asc | created_desc, default updated_desc.\nУ каждой карточки прогресс ещё и числом: progress_done /\nprogress_total, единица в progress_unit (publications у\nкреаторов, steps у продакшна).",
                 "produces": [
                     "application/json"
                 ],
@@ -1219,6 +1361,12 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "показать тестовые проекты, default false",
                         "name": "include_test",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "creators_turnkey | production_turnkey | general",
+                        "name": "kind",
                         "in": "query"
                     },
                     {
@@ -1679,6 +1827,55 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/projects/{id}/mark_test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Тестовые проекты по умолчанию скрыты из админских выдач\n(include_test=true показывает их).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Пометить проект тестовым (или снять пометку)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "is_test",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.markTestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/projects/{id}/move_stage": {
             "post": {
                 "security": [
@@ -1775,6 +1972,136 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/projects/{id}/restore": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проект возвращается в тот статус, в котором был до отмены —\nон сохранён в payload события project_cancelled. Если такого\nсобытия нет (отмена до появления ручки или правка статуса\nруками), отвечаем 409: угаданный статус молча меняет, кого\nпроект ждёт.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Вернуть отменённый проект",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.restoreResp"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "not_cancelled | no_cancel_event",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/search": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Одна строка ищется и по названию проекта с именем клиента,\nи по почте, телефону и имени человека. Короче двух символов —\nпустой ответ. Тестовые записи не показываются.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-search"
+                ],
+                "summary": "Быстрый поиск по проектам и людям (⌘K)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "строка поиска, мин 2 символа",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.GlobalSearchResult"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пункты считаются на сервере по единым правилам и приходят\nвсегда, в том числе нулевыми — решает фронт. Тестовые\nпроекты и пользователи не учитываются нигде.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-summary"
+                ],
+                "summary": "Сводка: что требует внимания",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.Summary"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/team": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "У каждого — сколько незавершённых проектов он ведёт,\nсколько из них просрочено (прошёл срок проекта либо дата\nневыложенной выкладки) и когда он последний раз входил.\nlast_login_at отсутствует = не входил ни разу.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Команда: админы и менеджеры с нагрузкой",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.teamResp"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/terms": {
             "get": {
                 "security": [
@@ -1816,7 +2143,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Существующая версия не переписывается: под ней стоит согласие клиентов, а проекты сняли с неё числа снимком.",
+                "description": "Существующая версия не переписывается: под ней стоит согласие клиентов, а проекты сняли с неё числа снимком.\nВ ответе — разница с прежней действующей версией (changes) и\nсколько клиентов должны согласиться заново (consents_required).",
                 "consumes": [
                     "application/json"
                 ],
@@ -1840,9 +2167,9 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "Created",
+                        "description": "версия + разница с прежней + сколько клиентов должны согласиться заново",
                         "schema": {
-                            "$ref": "#/definitions/internal_billing.TermsVersion"
+                            "$ref": "#/definitions/internal_billing.TermsPublishResult"
                         }
                     },
                     "400": {
@@ -1873,7 +2200,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),\nkind (client|specialist), role (manager|admin|regular).\nСортировка created_at DESC. limit 1..100, default 20.",
+                "description": "Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),\nkind (client|specialist), role (manager|admin|regular),\ninclude_test (по умолчанию тестовые скрыты).\nСортировка created_at DESC. limit 1..100, default 20.",
                 "produces": [
                     "application/json"
                 ],
@@ -1898,6 +2225,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "manager | admin | regular",
                         "name": "role",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "показать тестовых пользователей, default false",
+                        "name": "include_test",
                         "in": "query"
                     },
                     {
@@ -2000,6 +2333,46 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/users/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проекты — во всех ролях сразу (заказчик, исполнитель,\nответственный менеджер). last_login_at отсутствует =\nне входил ни разу.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Карточка человека: профиль, роли, модерация, проекты, журнал",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.UserCard"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/users/{id}/activate": {
             "post": {
                 "security": [
@@ -2089,6 +2462,61 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_admin.InviteGenerateResult"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/users/{id}/mark_test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Тестовые пользователи по умолчанию скрыты из админских\nвыдач (include_test=true показывает их). Админа пометить\nнельзя — он пропал бы из списка команды.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Пометить пользователя тестовым (или снять пометку)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "is_test",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.markUserTestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "invalid_input — попытка пометить админа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
                         }
                     }
                 }
@@ -10186,6 +10614,143 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "internal_admin.ActiveProjectRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.Attention": {
+            "type": "object",
+            "properties": {
+                "managers_unapproved": {
+                    "description": "ManagersUnapproved — менеджеры, которым не выдали доступ.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "moderation": {
+                    "description": "Moderation — специалисты, ждущие решения о публикации.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.ModerationBlock"
+                        }
+                    ]
+                },
+                "projects_stale": {
+                    "description": "ProjectsStale — идущие проекты, которые не двигались неделю.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "projects_unassigned": {
+                    "description": "ProjectsUnassigned — проекты без ответственного менеджера.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "publications_overdue": {
+                    "description": "PublicationsOverdue — выкладки, у которых прошла дата.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "revisions_exceeded": {
+                    "description": "RevisionsExceeded — правок использовано больше, чем включено в\nусловия: дальше либо доплата, либо разговор с клиентом.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "specialist_not_confirmed": {
+                    "description": "SpecialistNotConfirmed — клиент выбрал специалиста в брифе, а\nменеджер не подтвердил: работа не начнётся, пока не подтвердят.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "work_without_prepayment": {
+                    "description": "WorkWithoutPrepayment — проект в работе, а предоплата не\nподтверждена. Самый дорогой пункт списка: работу уже делают.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                }
+            }
+        },
+        "internal_admin.AttentionBlock": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "description": "Items — первые несколько строк, не весь набор. Никогда не null:\nпустой список фронт рисует как «чисто», отсутствующий — никак.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.AttentionItem"
+                    }
+                }
+            }
+        },
+        "internal_admin.AttentionItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "description": "ID — проект или пользователь, смотря по пункту. Фронт по нему\nоткрывает карточку.",
+                    "type": "string"
+                },
+                "note": {
+                    "description": "Note — чем строка провинилась: «12 дн. без движения», «правок 5\nиз 2». Пусто, если название уже всё сказало.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.AuditResult": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_audit.Entry"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_admin.CreateClientResult": {
             "type": "object",
             "properties": {
@@ -10197,6 +10762,23 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_admin.GlobalSearchResult": {
+            "type": "object",
+            "properties": {
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.SearchProjectHit"
+                    }
+                },
+                "users": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.SearchUserHit"
+                    }
                 }
             }
         },
@@ -10238,6 +10820,252 @@ const docTemplate = `{
                 "is_approved": {
                     "type": "boolean"
                 },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil = не входил ни разу.",
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.ModerationBlock": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "description": "Items — первые несколько строк, не весь набор. Никогда не null:\nпустой список фронт рисует как «чисто», отсутствующий — никак.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.AttentionItem"
+                    }
+                },
+                "over_day": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_admin.ModerationInfo": {
+            "type": "object",
+            "properties": {
+                "is_published": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "reviewed_at": {
+                    "type": "string"
+                },
+                "reviewed_by": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.SearchProjectHit": {
+            "type": "object",
+            "properties": {
+                "client_name": {
+                    "description": "ClientName — по чьему имени проект чаще всего и ищут.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_test": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.SearchUserHit": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_admin": {
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.Summary": {
+            "type": "object",
+            "properties": {
+                "attention": {
+                    "$ref": "#/definitions/internal_admin.Attention"
+                },
+                "generated_at": {
+                    "description": "GeneratedAt — момент расчёта. Сводку держат открытой часами, и без\nотметки непонятно, насколько она устарела.",
+                    "type": "string"
+                },
+                "managers": {
+                    "description": "Managers — нагрузка команды: те же числа, что в /admin/team.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.TeamMember"
+                    }
+                },
+                "projects_by_kind": {
+                    "description": "ProjectsByKind/ProjectsByStatus — распределение всех нетестовых\nпроектов. Ключи присутствуют всегда, включая нулевые: иначе\nпропавший столбец диаграммы читается как сбой, а не как ноль.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "projects_by_status": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "internal_admin.TeamMember": {
+            "type": "object",
+            "properties": {
+                "active_projects": {
+                    "description": "ActiveProjects — незавершённые проекты, где человек ответственный.",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_admin": {
+                    "type": "boolean"
+                },
+                "is_approved": {
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "type": "boolean"
+                },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil означает «не входил ни разу», а не «давно»:\nсотрудника, который так и не зашёл, надо позвать.",
+                    "type": "string"
+                },
+                "overdue_projects": {
+                    "description": "OverdueProjects — из них те, где сроки уже сорваны.",
+                    "type": "integer"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.UserCard": {
+            "type": "object",
+            "properties": {
+                "audit": {
+                    "description": "Audit — записи журнала: и те, где он объект, и его собственные\nдействия. Пустой список, если журнал по нему молчит.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_audit.Entry"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "email_verified": {
+                    "type": "boolean"
+                },
+                "email_verified_at": {
+                    "description": "EmailVerifiedAt — когда подтверждена почта. Сам факт лежит в\nUserListItem.EmailVerified; дата нужна там, где выясняют,\nподтверждал ли человек почту сам или это сделал админ.",
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_admin": {
+                    "type": "boolean"
+                },
+                "is_approved": {
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "type": "boolean"
+                },
+                "is_published": {
+                    "description": "IsPublished — флаг is_published у specialist_profile. Нужен фронту\nчтобы отличить «pending_review до клика \"Опубликовать\"» (= черновик,\nмодерации не ждёт) от «pending_review после публикации» (= висит в\nочереди /admin/moderation).",
+                    "type": "boolean"
+                },
+                "is_test": {
+                    "description": "IsTest — пользователь заведён для проверки. По умолчанию такие\nв выдаче скрыты.",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil означает «не входил ни разу», а не «давно».\nРазница важная: сотрудника, который так и не зашёл, надо позвать,\nа не ждать.",
+                    "type": "string"
+                },
+                "moderation": {
+                    "$ref": "#/definitions/internal_admin.ModerationInfo"
+                },
+                "moderation_status": {
+                    "description": "ModerationStatus — pending_review|approved|rejected. NULL для клиентов\n(у них нет specialist_profile). omitempty в JSON: пустая строка =\n«нет статуса» (клиент или спец без профиля).",
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "projects": {
+                    "description": "Projects — участие во всех ролях, свежие сверху. Никогда не null.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.UserProjectRef"
+                    }
+                },
                 "user_id": {
                     "type": "string"
                 }
@@ -10274,7 +11102,15 @@ const docTemplate = `{
                     "description": "IsPublished — флаг is_published у specialist_profile. Нужен фронту\nчтобы отличить «pending_review до клика \"Опубликовать\"» (= черновик,\nмодерации не ждёт) от «pending_review после публикации» (= висит в\nочереди /admin/moderation).",
                     "type": "boolean"
                 },
+                "is_test": {
+                    "description": "IsTest — пользователь заведён для проверки. По умолчанию такие\nв выдаче скрыты.",
+                    "type": "boolean"
+                },
                 "kind": {
+                    "type": "string"
+                },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil означает «не входил ни разу», а не «давно».\nРазница важная: сотрудника, который так и не зашёл, надо позвать,\nа не ждать.",
                     "type": "string"
                 },
                 "moderation_status": {
@@ -10309,6 +11145,33 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_admin.UserProjectRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "is_test": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "role": {
+                    "description": "Role — кем он в этом проекте: client | specialist | manager. Один и\nтот же человек бывает и заказчиком, и исполнителем, поэтому проект\nможет попасть в список дважды с разными ролями.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_admin.UserSearchResult": {
             "type": "object",
             "properties": {
@@ -10326,6 +11189,23 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_admin.activeProjectsResp": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.ActiveProjectRef"
+                    }
                 }
             }
         },
@@ -10372,6 +11252,14 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_admin.ManagerInfo"
                     }
+                }
+            }
+        },
+        "internal_admin.markUserTestReq": {
+            "type": "object",
+            "properties": {
+                "is_test": {
+                    "type": "boolean"
                 }
             }
         },
@@ -10427,6 +11315,17 @@ const docTemplate = `{
                 },
                 "reason": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_admin.teamResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.TeamMember"
+                    }
                 }
             }
         },
@@ -11034,6 +11933,153 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_billing.TermsChange": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "description": "Field — имя поля тарифа (то же, что в JSON условий).",
+                    "type": "string"
+                },
+                "from": {
+                    "description": "From/To — прежнее и новое значение. Пусто (nil) = «не задано»:\nкреаторские ставки бывают незаполненными, и 0 от «как у клиента»\nодним числом не отличить.",
+                    "type": "integer"
+                },
+                "label": {
+                    "description": "Label — человеческое название для интерфейса: админ читает\n«Ставка за 1000 просмотров», а не rate_per_1000_views.",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsMargin": {
+            "type": "object",
+            "properties": {
+                "has_margin": {
+                    "description": "HasMargin — креаторская сторона заполнена хоть где-то. Пустая\nозначает «платим креатору ровно то, что берём», то есть нули ниже —\nнастоящие нули, а не «не задано».",
+                    "type": "boolean"
+                },
+                "rate_per_1000_views": {
+                    "description": "RatePer1000Views/RatePer1000ViewsOver — маржа на ставке за тысячу\nпросмотров до порога и сверх него, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth — маржа на окладе за месяц, копейки.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsPublishResult": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "description": "Body — текст условий, с которым соглашается клиент.",
+                    "type": "string"
+                },
+                "bonus_views_threshold": {
+                    "description": "BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.\nДо него платим полную ставку, свыше — пониженную. 0 = порога нет,\nвесь объём идёт по полной ставке.",
+                    "type": "integer"
+                },
+                "changes": {
+                    "description": "Changes — разница с прежней действующей версией. Пусто у самой\nпервой версии: сравнивать не с чем.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsChange"
+                    }
+                },
+                "click_bonus_rate": {
+                    "description": "ClickBonusRate — ставка за переход по UTM до месячного порога,\nкопейки. nil = бонус за переходы не считается: источник кликов не\nподключён, а поля в тарифе есть.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "description": "ClickBonusRateOver — ставка за каждый следующий переход.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "description": "ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной\nставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.",
+                    "type": "integer"
+                },
+                "consented_clients": {
+                    "description": "ConsentedClients — сколько клиентов уже согласились именно с ней.\nПоказывает, что версию нельзя считать черновиком.",
+                    "type": "integer"
+                },
+                "consents_required": {
+                    "description": "ConsentsRequired — сколько клиентов согласились с прежней\nдействующей версией и теперь должны согласиться заново.",
+                    "type": "integer"
+                },
+                "creator_rate_per_1000_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_salary_per_month": {
+                    "description": "Креаторская сторона тарифа: что получает исполнитель.\n\nnil означает «столько же, сколько платит клиент»: до заполнения этих\nполей выплата равна счёту и маржи у платформы нет. Две стороны нужны\nпотому, что это разные деньги — счёт заказчику и обязательство перед\nкреатором; одно число за оба показывало креатору в личном кабинете\nцену клиента как его собственный заработок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "is_current": {
+                    "description": "IsCurrent — эта версия сейчас действует. Действует всегда одна:\nсамая новая.",
+                    "type": "boolean"
+                },
+                "margin": {
+                    "description": "Margin — что из уплаченного клиентом остаётся площадке. Считается,\nа не хранится: это разность двух сторон тарифа, и отдельная колонка\nразошлась бы с ними на первой же правке ставок.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.TermsMargin"
+                        }
+                    ]
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "description": "RatePer1000Views — ставка за тысячу просмотров ДО порога, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "description": "RatePer1000ViewsOver — ставка за тысячу просмотров СВЕРХ порога.\nНиже основной намеренно: так виральный ролик не съедает бюджет.",
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth — оклад креатора за месяц, копейки.",
+                    "type": "integer"
+                },
+                "terms_version_id": {
+                    "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "used_by_projects": {
+                    "description": "UsedByProjects — сколько проектов сняли с неё числа.",
+                    "type": "integer"
+                },
+                "version": {
+                    "description": "Version — номер версии; растёт на единицу.",
+                    "type": "integer"
+                },
+                "videos_first_month": {
+                    "description": "VideosFirstMonth/VideosNextMonths — за какой объём назван оклад.\nВ тарифе это подпись «30 видео первый месяц, 60 со второго»: без\nнеё сумма оклада ни о чём не говорит.",
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_billing.TermsVersion": {
             "type": "object",
             "properties": {
@@ -11079,6 +12125,14 @@ const docTemplate = `{
                 "is_current": {
                     "description": "IsCurrent — эта версия сейчас действует. Действует всегда одна:\nсамая новая.",
                     "type": "boolean"
+                },
+                "margin": {
+                    "description": "Margin — что из уплаченного клиентом остаётся площадке. Считается,\nа не хранится: это разность двух сторон тарифа, и отдельная колонка\nразошлась бы с ними на первой же правке ставок.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.TermsMargin"
+                        }
+                    ]
                 },
                 "project_id": {
                     "type": "string"
@@ -12242,6 +13296,41 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_pipelines.PipelineListItem": {
+            "type": "object",
+            "properties": {
+                "active_projects": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_pipelines.ReorderInput": {
             "type": "object",
             "properties": {
@@ -12494,7 +13583,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_pipelines.Pipeline"
+                        "$ref": "#/definitions/internal_pipelines.PipelineListItem"
                     }
                 }
             }
@@ -12513,6 +13602,37 @@ const docTemplate = `{
                 },
                 "is_active": {
                     "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_productions.ProductionListItem": {
+            "type": "object",
+            "properties": {
+                "active_projects": {
+                    "description": "ActiveProjects — незавершённые проекты, где исполнитель из этого\nпродакшена.",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "members": {
+                    "description": "Members — сколько специалистов указали этот продакшен в профиле.",
+                    "type": "integer"
                 },
                 "name": {
                     "type": "string"
@@ -12567,6 +13687,17 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_productions.usageListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_productions.ProductionListItem"
+                    }
                 }
             }
         },
@@ -14150,6 +15281,17 @@ const docTemplate = `{
                 "progress": {
                     "type": "number"
                 },
+                "progress_done": {
+                    "description": "Прогресс числом, а не только процентом.\n\n«62%» в списке не отвечает на вопрос, с которым в него смотрят:\nсколько роликов ещё выложить и сколько шагов осталось пройти.\nЕдиница измерения у видов проектов разная, поэтому рядом с числами\nлежит ProgressUnit — иначе «3 из 5» читалось бы как что угодно.",
+                    "type": "integer"
+                },
+                "progress_total": {
+                    "type": "integer"
+                },
+                "progress_unit": {
+                    "description": "ProgressUnit — publications у креаторов, steps у продакшна.\nПусто означает, что мерить нечего: ни выкладок, ни шагов.",
+                    "type": "string"
+                },
                 "revisions_included": {
                     "type": "integer"
                 },
@@ -14664,6 +15806,14 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.markTestReq": {
+            "type": "object",
+            "properties": {
+                "is_test": {
+                    "type": "boolean"
+                }
+            }
+        },
         "internal_projects.moveStageReq": {
             "type": "object",
             "properties": {
@@ -14705,11 +15855,50 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.restoreResp": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                }
+            }
+        },
         "internal_projects.skipReq": {
             "type": "object",
             "properties": {
                 "comment": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_projects.transferReq": {
+            "type": "object",
+            "properties": {
+                "project_ids": {
+                    "description": "ProjectIDs — что передаём. Пусто = все незавершённые проекты\nменеджера: это основной сценарий (сотрудник уходит).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "to_user_id": {
+                    "description": "ToUserID — кому передаём. Обязателен.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.transferResp": {
+            "type": "object",
+            "properties": {
+                "project_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "transferred": {
+                    "description": "Transferred — сколько проектов переехало.",
+                    "type": "integer"
                 }
             }
         },
@@ -14826,6 +16015,10 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
+                "projects_count": {
+                    "description": "ProjectsCount — на скольких проектах эта версия подключена.\nОтвечает на вопрос, который возникает перед правкой шаблона:\nновая версия не тронет уже подключённые снимки, и знать, сколько\nпроектов останутся на старых пунктах, нужно ДО выпуска.",
+                    "type": "integer"
+                },
                 "version": {
                     "type": "integer"
                 }
@@ -14851,6 +16044,10 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "projects_count": {
+                    "description": "ProjectsCount — на скольких проектах эта версия подключена.\nОтвечает на вопрос, который возникает перед правкой шаблона:\nновая версия не тронет уже подключённые снимки, и знать, сколько\nпроектов останутся на старых пунктах, нужно ДО выпуска.",
+                    "type": "integer"
                 },
                 "version": {
                     "type": "integer"
@@ -16172,6 +17369,41 @@ const docTemplate = `{
                 },
                 "target_category": {
                     "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_audit.Entry": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "actor_display_name": {
+                    "type": "string"
+                },
+                "actor_email": {
+                    "description": "ActorEmail/ActorDisplayName — заполняются только на чтении (JOIN\nна users). На записи их нет: почта сотрудника может смениться, а\nжурнал должен показывать сегодняшнюю.",
+                    "type": "string"
+                },
+                "actor_user_id": {
+                    "description": "ActorUserID — кто совершил действие. Nil означает «не человек»\n(фоновая задача) либо вызов из теста мимо HTTP: такие записи\nложатся с NULL, а не с несуществующим пользователем.",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "object_id": {
+                    "type": "string"
+                },
+                "object_type": {
+                    "type": "string"
+                },
+                "payload": {
+                    "type": "object",
+                    "additionalProperties": {}
                 }
             }
         },
