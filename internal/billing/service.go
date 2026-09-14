@@ -528,6 +528,13 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 		return out, err
 	}
 
+	// Что даст следующая ступень. Считается тем же кодом, что и само
+	// начисление: отдельная формула «для прогноза» разошлась бы с
+	// фактической выплатой молча.
+	if out.NextStep, err = s.nextStepForecast(ctx, projectID, creatorID, terms, now); err != nil {
+		return out, err
+	}
+
 	// Периоды — его стороной. Пока не вышел ни один ролик, периодов нет
 	// вовсе, и это не ошибка: у креатора просто пустой кабинет.
 	periods, err := s.Periods(ctx, projectID, now)
@@ -548,4 +555,87 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 		out.Period = &last
 	}
 	return out, nil
+}
+
+// nextStepForecast — сколько просмотров осталось до следующей ступени и
+// сколько денег они принесут креатору.
+//
+// Прогноз считается разницей двух прогонов ОДНОЙ И ТОЙ ЖЕ функции
+// расчёта: сколько ему причитается сейчас и сколько причиталось бы при
+// выросших просмотрах. Поэтому он не может разойтись с фактической
+// выплатой из-за отдельной формулы — расходиться будет только там, где
+// реальность разойдётся с допущением о росте (см. ниже).
+//
+// nil, если считать не по чему: у проекта нет периодов или пустой тариф.
+// Ноль в этом случае читался бы как «ступень ничего не даст», а это
+// другое утверждение.
+func (s *Service) nextStepForecast(
+	ctx context.Context, projectID, creatorID uuid.UUID, terms Terms, now time.Time,
+) (*NextStepForecast, error) {
+	if terms.SalaryPerMonth == 0 && terms.RatePer1000Views == 0 {
+		return nil, nil
+	}
+	period, err := s.Period(ctx, projectID, 0, now)
+	if errors.Is(err, ErrNoPeriods) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	facts, err := s.periodFacts(ctx, projectID, period, viewsThreshold(terms))
+	if err != nil {
+		return nil, err
+	}
+	var mine creatorPeriod
+	found := false
+	for _, f := range facts {
+		if f.CreatorID == creatorID {
+			mine, found = f, true
+			break
+		}
+	}
+	if !found {
+		// Он в проекте, но не в составе периода: считать нечего.
+		return nil, nil
+	}
+
+	// Перенесённый остаток уже в счёте — значит и до ступени с ним ближе.
+	counted := mine.ViewsTotal + period.CarryInCreator
+	toGo := StepViews - counted%StepViews
+
+	// Куда лягут будущие просмотры — в полную ставку или в пониженную,
+	// зависит от того, на каком ролике они наберутся. Раскладываем их в
+	// той же пропорции, в какой стоят нынешние: это лучшее, что можно
+	// сказать заранее. Если прирост случится на ролике, уже
+	// перешагнувшем порог, факт окажется ниже — потому это и прогноз,
+	// а не обещание.
+	grown := mine
+	grown.ViewsTotal += toGo
+	switch {
+	case mine.ViewsTotal <= 0:
+		// Просмотров ещё нет, делить нечего: первые идут по полной
+		// ставке — так же, как посчитал бы их расчёт.
+		grown.ViewsBase += toGo
+	default:
+		base := toGo * mine.ViewsBase / mine.ViewsTotal
+		grown.ViewsBase += base
+		grown.ViewsOver += toGo - base
+	}
+
+	nowAccrual := calcAccrual(terms, mine, projectID, period.StartsOn)
+	thenAccrual := calcAccrual(terms, grown, projectID, period.StartsOn)
+	gain := thenAccrual.PayoutTotal - nowAccrual.PayoutTotal
+	if gain < 0 {
+		// Отрицательный прогноз означал бы, что рост просмотров
+		// уменьшает выплату: такого в тарифе нет, и показывать это
+		// человеку нельзя.
+		gain = 0
+	}
+	return &NextStepForecast{
+		StepViews:       StepViews,
+		ViewsToGo:       toGo,
+		CarryInIncluded: period.CarryInCreator,
+		ForecastPayout:  gain,
+	}, nil
 }

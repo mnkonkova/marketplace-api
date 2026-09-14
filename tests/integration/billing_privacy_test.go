@@ -40,6 +40,9 @@ var forbiddenForClient = []string{
 	"carry_in_creator", "carry_out_creator",
 	// Идентификаторы периода и цепочка переноса — наша механика.
 	"prev_period_id",
+	// Прогноз выплаты креатору — его сторона денег; заказчику её не
+	// показываем, как и саму выплату.
+	"forecast_payout",
 	// UTM — рабочий инструмент менеджера, заказчику не отдаётся.
 	"utm",
 }
@@ -589,4 +592,169 @@ func currentTypicalVideoViews(t *testing.T, pool *pgxpool.Pool) int64 {
 		t.Fatalf("справочник порогов: %v", err)
 	}
 	return views
+}
+
+// Прогноз следующей ступени: сколько просмотров осталось и сколько они
+// принесут креатору.
+//
+// Главная проверка — прогноз совпадает с тем, что даст НАСТОЯЩИЙ расчёт
+// при таких просмотрах. Отдельная формула «для прогноза» разошлась бы с
+// выплатой молча, и заметили бы это по жалобе, а не по тесту.
+func TestNextStepForecastMatchesRealRecalculation(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	terms := demoTerms(pid)
+	// Порог на ролик заведомо выше, чем наберётся: весь прирост идёт по
+	// полной ставке, и прогноз с фактом обязаны сойтись копейка в копейку.
+	terms.BonusViewsThreshold = 100_000_000
+	creatorRate := int64(7_000)
+	terms.CreatorRatePer1000Views = &creatorRate
+	if _, err := svc.SaveTerms(ctx, terms, creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	publishOn(t, pool, pid, creators[0], time.Now().UTC().AddDate(0, 0, -3), "step01", 40_000)
+
+	earn, err := svc.CreatorEarnings(ctx, pid, creators[0], time.Now().UTC())
+	if err != nil {
+		t.Fatalf("кабинет креатора: %v", err)
+	}
+	if earn.NextStep == nil {
+		t.Fatal("нет прогноза следующей ступени")
+	}
+	next := earn.NextStep
+	if next.StepViews != 100_000 {
+		t.Errorf("ступень %d, ожидали 100000", next.StepViews)
+	}
+	// 40 000 своих плюс перенесённый остаток (пока ноль) — до ступени
+	// 60 000.
+	wantToGo := int64(100_000) - (40_000 + next.CarryInIncluded)
+	if next.ViewsToGo != wantToGo {
+		t.Fatalf("до ступени %d, ожидали %d", next.ViewsToGo, wantToGo)
+	}
+	if next.ForecastPayout <= 0 {
+		t.Fatalf("прогноз %d — ступень обязана что-то принести", next.ForecastPayout)
+	}
+
+	// А теперь считаем по-настоящему: доращиваем просмотры ровно на
+	// остаток и пересчитываем период.
+	before := creatorPayout(t, svc, pid, creators[0])
+	seedDailyViews(t, pool, pid, time.Now().UTC(), 40_000+next.ViewsToGo)
+	after := creatorPayout(t, svc, pid, creators[0])
+
+	if got := after - before; got != next.ForecastPayout {
+		t.Errorf("прогноз обещал %d, а настоящий расчёт дал %d — формулы разошлись",
+			next.ForecastPayout, got)
+	}
+}
+
+// Пустой тариф — поля нет вовсе: ноль читался бы как «ступень ничего не
+// даст», а это неправда.
+func TestNextStepForecastAbsentWithoutTerms(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	h := newAPIHarness(t, pool)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	publishOn(t, pool, pid, creators[0], time.Now().UTC().AddDate(0, 0, -3), "step02", 10_000)
+	svc := billing.NewService(billing.NewRepo(pool))
+	earn, err := svc.CreatorEarnings(ctx, pid, creators[0], time.Now().UTC())
+	if err != nil {
+		t.Fatalf("кабинет креатора: %v", err)
+	}
+	if earn.NextStep != nil {
+		t.Errorf("при пустом тарифе прогноза быть не должно: %+v", earn.NextStep)
+	}
+
+	// И по сети поля тоже нет — не ноль.
+	raw := rawBody(t, h,
+		"/api/v1/me/creator/projects/"+pid.String()+"/earnings", h.Token(t, creators[0]))
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("разобрать ответ: %v", err)
+	}
+	if _, ok := body["next_step_forecast"]; ok {
+		t.Errorf("поле прогноза приехало при пустом тарифе: %v", body["next_step_forecast"])
+	}
+	// Клиентских чисел в ответе по-прежнему нет.
+	assertNoForbiddenKeys(t, raw, forbiddenForCreator, allowedCreatorKeys)
+}
+
+// creatorPayout — сколько причитается креатору по текущему периоду ПО
+// НАСТОЯЩЕМУ расчёту: пересчитываем период и читаем сохранённую строку.
+func creatorPayout(t *testing.T, svc *billing.Service, pid, creator uuid.UUID) int64 {
+	t.Helper()
+	ctx := context.Background()
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("период: %v", err)
+	}
+	if _, err := svc.Recalculate(ctx, pid, p); err != nil {
+		t.Fatalf("пересчёт: %v", err)
+	}
+	earn, err := svc.CreatorEarnings(ctx, pid, creator, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("кабинет креатора: %v", err)
+	}
+	var total int64
+	for _, a := range earn.Accruals {
+		total += a.Total
+	}
+	return total
+}
+
+// Перенесённый остаток учитывается: он уже в счёте, и до ступени с ним
+// ближе. Отправить человека добирать то, что у него уже есть, — худший
+// вид ошибки в такой полосе.
+func TestNextStepForecastCountsCarryIn(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	terms := demoTerms(pid)
+	terms.BonusViewsThreshold = 100_000_000
+	if _, err := svc.SaveTerms(ctx, terms, creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	publishOn(t, pool, pid, creators[0], time.Now().UTC().AddDate(0, 0, -3), "step03", 30_000)
+
+	before, err := svc.CreatorEarnings(ctx, pid, creators[0], time.Now().UTC())
+	if err != nil {
+		t.Fatalf("кабинет креатора: %v", err)
+	}
+	if before.NextStep == nil || before.NextStep.ViewsToGo != 70_000 {
+		t.Fatalf("до ступени без переноса: %+v", before.NextStep)
+	}
+
+	// Арифметики переноса ещё нет, поэтому кладём остаток руками — так
+	// же, как её положит расчёт, когда выпустят ступенчатый тариф.
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("период: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE project_periods SET carry_in_creator = 25000 WHERE id = $1`, p.ID); err != nil {
+		t.Fatalf("перенос: %v", err)
+	}
+
+	after, err := svc.CreatorEarnings(ctx, pid, creators[0], time.Now().UTC())
+	if err != nil {
+		t.Fatalf("кабинет креатора: %v", err)
+	}
+	if after.NextStep == nil {
+		t.Fatal("прогноз пропал")
+	}
+	if after.NextStep.CarryInIncluded != 25_000 {
+		t.Errorf("учтённый перенос %d, ожидали 25000", after.NextStep.CarryInIncluded)
+	}
+	// 30 000 своих + 25 000 перенесённых = 55 000, до ступени 45 000.
+	if after.NextStep.ViewsToGo != 45_000 {
+		t.Errorf("до ступени %d, ожидали 45000 — перенос не учтён", after.NextStep.ViewsToGo)
+	}
 }
