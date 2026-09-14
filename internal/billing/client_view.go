@@ -82,7 +82,7 @@ type ClientAccrual struct {
 	ProjectID     uuid.UUID `json:"project_id"`
 	CreatorUserID uuid.UUID `json:"creator_user_id"`
 	CreatorName   string    `json:"creator_name,omitempty"`
-	PeriodMonth   time.Time `json:"period_month"`
+	PeriodStart   time.Time `json:"period_start"`
 	Salary        int64     `json:"salary"`
 	// VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько
 	// закрыто; разница объясняет вычет.
@@ -130,14 +130,12 @@ type ClientBillingView struct {
 	Terms    SideTerms `json:"terms"`
 	Payments []Payment `json:"payments"`
 	// Accruals — за запрошенный месяц. Пусто, пока не считали.
-	Accruals []ClientAccrual `json:"accruals"`
-	// PeriodMonth — за какой месяц отданы начисления.
-	PeriodMonth time.Time          `json:"period_month"`
-	Totals      ClientPeriodTotals `json:"totals"`
-	// Month — состояние месяца. Заказчику оно нужно по той же причине,
-	// что и менеджеру: пока месяц идёт, числа ещё изменятся, и счёт
-	// нельзя считать окончательным.
-	Month ProjectMonth `json:"month"`
+	Accruals []ClientAccrual    `json:"accruals"`
+	Totals   ClientPeriodTotals `json:"totals"`
+	// Period — какой период показан и в каком он состоянии. Заказчику
+	// это нужно по той же причине, что и менеджеру: пока период идёт,
+	// числа ещё изменятся, и счёт нельзя считать окончательным.
+	Period ProjectPeriod `json:"period"`
 }
 
 // clientAccrual — строка начисления глазами заказчика.
@@ -147,7 +145,7 @@ func clientAccrual(a Accrual) ClientAccrual {
 		ProjectID:       a.ProjectID,
 		CreatorUserID:   a.CreatorUserID,
 		CreatorName:     a.CreatorName,
-		PeriodMonth:     a.PeriodMonth,
+		PeriodStart:     a.PeriodStart,
 		Salary:          a.Salary,
 		VideosPlanned:   a.VideosPlanned,
 		VideosDelivered: a.VideosDelivered,
@@ -195,7 +193,7 @@ type CreatorAccrual struct {
 	// CreatorUserID — он сам. Не тайна и не лишнее: строки приходят по
 	// месяцам, и фронту нужно, чем их метить.
 	CreatorUserID uuid.UUID `json:"creator_user_id"`
-	PeriodMonth   time.Time `json:"period_month"`
+	PeriodStart   time.Time `json:"period_start"`
 	// Salary/Deduction — оклад и вычет за недосданное, по его ставкам.
 	Salary    int64 `json:"salary"`
 	Deduction int64 `json:"deduction"`
@@ -225,7 +223,7 @@ func creatorAccrual(a Accrual) CreatorAccrual {
 		ID:              a.ID,
 		ProjectID:       a.ProjectID,
 		CreatorUserID:   a.CreatorUserID,
-		PeriodMonth:     a.PeriodMonth,
+		PeriodStart:     a.PeriodStart,
 		Salary:          a.PayoutSalary,
 		Deduction:       a.PayoutDeduction,
 		VideosPlanned:   a.VideosPlanned,

@@ -158,29 +158,29 @@ func (s *Service) ConfirmPayment(ctx context.Context, projectID uuid.UUID, kind 
 
 // ---- начисления ----
 
-// Recalculate — пересчитать начисления проекта за месяц.
+// Recalculate — пересчитать начисления проекта за период.
 //
-// Считается по фактам, а не по вводу руками: выкладки за месяц, их статус
-// и просмотры собранные ежедневным сбором. Утверждённые и выплаченные
-// строки не трогаются — цифра, по которой уже перевели деньги, задним
-// числом не меняется.
-func (s *Service) Recalculate(ctx context.Context, projectID uuid.UUID, month time.Time) ([]Accrual, error) {
+// Считается по фактам, а не по вводу руками: ролики, вышедшие в границах
+// периода, их статус и просмотры, собранные ежедневным сбором.
+// Утверждённые и выплаченные строки не трогаются — цифра, по которой уже
+// перевели деньги, задним числом не меняется.
+func (s *Service) Recalculate(ctx context.Context, projectID uuid.UUID, p ProjectPeriod) ([]Accrual, error) {
 	terms, err := s.repo.Terms(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
-	facts, err := s.monthFacts(ctx, projectID, month, viewsThreshold(terms))
+	facts, err := s.periodFacts(ctx, projectID, p, viewsThreshold(terms))
 	if err != nil {
 		return nil, err
 	}
-	period := firstOfMonth(month)
 	for _, f := range facts {
-		a := calcAccrual(terms, f, projectID, period)
+		a := calcAccrual(terms, f, projectID, p.StartsOn)
 		if err := s.repo.SaveAccrual(ctx, a); err != nil {
 			return nil, err
 		}
 	}
-	return s.repo.Accruals(ctx, projectID, &period, nil)
+	start := p.StartsOn
+	return s.repo.Accruals(ctx, projectID, &start, nil)
 }
 
 // viewsThreshold — порог просмотров на ролик для SQL. Ноль в условиях
@@ -200,7 +200,7 @@ func calcAccrual(t Terms, f creatorPeriod, projectID uuid.UUID, period time.Time
 	a := Accrual{
 		ProjectID:       projectID,
 		CreatorUserID:   f.CreatorID,
-		PeriodMonth:     period,
+		PeriodStart:     period,
 		VideosPlanned:   f.Planned,
 		VideosDelivered: f.Delivered,
 		ViewsTotal:      f.ViewsTotal,
@@ -315,53 +315,52 @@ func (s *Service) SaveUTM(ctx context.Context, projectID, creatorID uuid.UUID, l
 // ---- сборные ответы ----
 
 // ProjectBilling — весь денежный экран менеджера за один запрос.
-func (s *Service) ProjectBilling(ctx context.Context, projectID uuid.UUID, month time.Time) (ProjectBilling, error) {
+//
+// seq — какой период показать; seq <= 0 означает текущий.
+func (s *Service) ProjectBilling(ctx context.Context, projectID uuid.UUID, seq int, now time.Time) (ProjectBilling, error) {
 	var out ProjectBilling
-	var err error
-	out.PeriodMonth = firstOfMonth(month)
+	period, err := s.Period(ctx, projectID, seq, now)
+	if err != nil {
+		return out, err
+	}
+	out.Period = period
 	if out.Terms, err = s.repo.Terms(ctx, projectID); err != nil {
 		return out, err
 	}
 	if out.Payments, err = s.repo.Payments(ctx, projectID); err != nil {
 		return out, err
 	}
-	if out.Accruals, err = s.accrualsOrPreview(ctx, projectID, out.PeriodMonth, out.Terms); err != nil {
+	if out.Accruals, err = s.accrualsOrPreview(ctx, projectID, period, out.Terms); err != nil {
 		return out, err
 	}
 	if out.UTM, err = s.repo.UTM(ctx, projectID, nil); err != nil {
-		return out, err
-	}
-	if out.Month, err = s.repo.Month(ctx, projectID, out.PeriodMonth); err != nil {
 		return out, err
 	}
 	out.Totals = totals(out.Accruals)
 	return out, nil
 }
 
-// accrualsOrPreview — строки месяца: сохранённые, а если их ещё нет —
+// accrualsOrPreview — строки периода: сохранённые, а если их ещё нет —
 // посчитанные на лету по тем же правилам.
 //
-// Раньше непересчитанный месяц выглядел нулём: у заказчика «к оплате
+// Раньше непересчитанный период выглядел нулём: у заказчика «к оплате
 // 0 ₽» при вышедшем ролике на три миллиона просмотров. Данные для счёта
 // при этом были все — не было только нажатой кнопки.
 //
-// «Предварительно» означает «месяц ещё идёт», а не «строк в базе нет».
-// Разница не косметическая: пересчитанный, но не зафиксированный месяц —
+// «Предварительно» означает «период ещё идёт», а не «строк в базе нет».
+// Разница не косметическая: пересчитанный, но не подытоженный период —
 // это сохранённые строки, которые завтра станут другими, и показывать
 // их как окончательные нельзя.
 func (s *Service) accrualsOrPreview(
-	ctx context.Context, projectID uuid.UUID, period time.Time, terms Terms,
+	ctx context.Context, projectID uuid.UUID, p ProjectPeriod, terms Terms,
 ) ([]Accrual, error) {
-	m, err := s.repo.Month(ctx, projectID, period)
-	if err != nil {
-		return nil, err
-	}
-	saved, err := s.repo.Accruals(ctx, projectID, &period, nil)
+	start := p.StartsOn
+	saved, err := s.repo.Accruals(ctx, projectID, &start, nil)
 	if err != nil {
 		return nil, err
 	}
 	if len(saved) > 0 {
-		if !m.IsLocked() {
+		if !p.IsLocked() {
 			for i := range saved {
 				saved[i].IsPreview = true
 			}
@@ -373,13 +372,13 @@ func (s *Service) accrualsOrPreview(
 	if terms.SalaryPerMonth == 0 && terms.RatePer1000Views == 0 {
 		return saved, nil
 	}
-	facts, err := s.monthFacts(ctx, projectID, period, viewsThreshold(terms))
+	facts, err := s.periodFacts(ctx, projectID, p, viewsThreshold(terms))
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Accrual, 0, len(facts))
 	for _, f := range facts {
-		a := calcAccrual(terms, f, projectID, period)
+		a := calcAccrual(terms, f, projectID, p.StartsOn)
 		// Строка, которой нет в базе, предварительна всегда: её просто
 		// ещё не пересчитали.
 		a.IsPreview = true
@@ -388,21 +387,17 @@ func (s *Service) accrualsOrPreview(
 	return out, nil
 }
 
-// monthFacts — числа месяца: живые, пока месяц идёт, и из среза, когда
-// он зафиксирован.
+// periodFacts — числа периода: живые, пока период идёт, и из среза,
+// когда он подытожен.
 //
 // Развилка ровно одна и ровно здесь. Разложи её по вызывающим — и
-// какой-нибудь экран однажды посчитает зафиксированный месяц по живым
-// просмотрам, то есть покажет то, чего в этом месяце не было.
-func (s *Service) monthFacts(ctx context.Context, projectID uuid.UUID, month time.Time, threshold int64) ([]creatorPeriod, error) {
-	m, err := s.repo.Month(ctx, projectID, month)
-	if err != nil {
-		return nil, err
+// какой-нибудь экран однажды посчитает подытоженный период по живым
+// просмотрам, то есть покажет то, чего в этом периоде не было.
+func (s *Service) periodFacts(ctx context.Context, projectID uuid.UUID, p ProjectPeriod, threshold int64) ([]creatorPeriod, error) {
+	if p.IsLocked() {
+		return s.repo.periodFactsLocked(ctx, projectID, p, threshold)
 	}
-	if m.IsLocked() {
-		return s.repo.periodFactsLocked(ctx, projectID, month, threshold)
-	}
-	return s.repo.periodFacts(ctx, projectID, month, threshold)
+	return s.repo.periodFacts(ctx, projectID, p, threshold)
 }
 
 // totals — сводка месяца. Считается на сервере, потому что показывается
@@ -429,7 +424,7 @@ func totals(items []Accrual) PeriodTotals {
 	return t
 }
 
-// ClientBilling — что видит заказчик: условия, платежи и состав месяца.
+// ClientBilling — что видит заказчик: условия, платежи и состав периода.
 //
 // Начисления креаторам он видит тоже. Сначала я их спрятал как «чужие
 // данные», и это была ошибка: заказчик за эту команду платит, и строка
@@ -442,8 +437,13 @@ func totals(items []Accrual) PeriodTotals {
 // выплаты креаторам, маржа площадки и креаторская сторона тарифа —
 // фронт их просто не рисовал. Вёрстка не граница доступа: вкладки
 // «Сеть» в браузере достаточно, чтобы всё это прочитать.
-func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, month time.Time) (ClientBillingView, error) {
-	out := ClientBillingView{PeriodMonth: firstOfMonth(month)}
+func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, seq int, now time.Time) (ClientBillingView, error) {
+	var out ClientBillingView
+	period, err := s.Period(ctx, projectID, seq, now)
+	if err != nil {
+		return out, err
+	}
+	out.Period = period
 	terms, err := s.repo.Terms(ctx, projectID)
 	if err != nil {
 		return out, err
@@ -452,7 +452,7 @@ func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, month 
 	if out.Payments, err = s.repo.Payments(ctx, projectID); err != nil {
 		return out, err
 	}
-	accruals, err := s.accrualsOrPreview(ctx, projectID, out.PeriodMonth, terms)
+	accruals, err := s.accrualsOrPreview(ctx, projectID, period, terms)
 	if err != nil {
 		return out, err
 	}
@@ -464,9 +464,6 @@ func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, month 
 	// отбрасываем наши деньги: два экрана не должны складывать
 	// по-разному.
 	out.Totals = clientTotals(totals(accruals))
-	if out.Month, err = s.repo.Month(ctx, projectID, out.PeriodMonth); err != nil {
-		return out, err
-	}
 	return out, nil
 }
 

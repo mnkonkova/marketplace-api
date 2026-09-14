@@ -84,6 +84,37 @@ ON CONFLICT (link_id, stat_date) DO UPDATE SET views = EXCLUDED.views`,
 	return pubID
 }
 
+// seedPartialPublication — ролик вышел, но не на всех площадках.
+//
+// В период он попадает (ссылка есть, значит вышел), а сданным не
+// считается: статус partial. Это и есть современная «недосдача» —
+// «не вышел вовсе» в период не попадает, у него нет даты публикации.
+func seedPartialPublication(t *testing.T, projectID, creator uuid.UUID, due time.Time, url string) uuid.UUID {
+	t.Helper()
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	svc := publications.NewService(publications.NewRepo(pool))
+
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creator},
+		Dates:          []time.Time{due},
+		CreatedBy:      creator,
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	pubID := res.Items[0].ID
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: pubID,
+		ActorUserID:   creator,
+		URLs:          []string{"https://www.tiktok.com/@a/video/" + url},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+	return pubID
+}
+
 // ---- ТЕСТ: как считается начисление ----
 
 func TestAccrualArithmetic(t *testing.T) {
@@ -97,15 +128,19 @@ func TestAccrualArithmetic(t *testing.T) {
 		t.Fatalf("terms: %v", err)
 	}
 
-	// Первый креатор: три выкладки, две сданы. Одна перешагнула порог
-	// (2 000 000 просмотров — миллион по полной ставке и миллион по
-	// пониженной), вторая нет (500 000, вся по полной).
-	month := time.Now().UTC()
+	// Первый креатор: три вышедших ролика, полностью сданы два. Один
+	// перешагнул порог (2 000 000 просмотров — миллион по полной ставке
+	// и миллион по пониженной), второй нет (500 000, вся по полной),
+	// третий вышел, но не на всех площадках.
+	//
+	// Третий именно «вышел неполностью», а не «не вышел»: в период
+	// попадают ролики по факту публикации, и не вышедший не попадает в
+	// него вовсе — вычитать за него нечего и не из чего.
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "aaa1", 2_000_000, true)
 	seedPublicationViews(t, pid, creators[0], pubDay(0).AddDate(0, 0, 1), "aaa2", 500_000, true)
-	seedPublicationViews(t, pid, creators[0], pubDay(0).AddDate(0, 0, 2), "aaa3", 0, false)
+	seedPartialPublication(t, pid, creators[0], pubDay(0).AddDate(0, 0, 2), "aaa3")
 
-	items, err := svc.Recalculate(ctx, pid, month)
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
@@ -173,7 +208,7 @@ func TestThresholdIsPerVideoNotPerMonth(t *testing.T) {
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "fff1", 600_000, true)
 	seedPublicationViews(t, pid, creators[0], pubDay(0).AddDate(0, 0, 1), "fff2", 600_000, true)
 
-	items, err := svc.Recalculate(ctx, pid, time.Now().UTC())
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
@@ -207,7 +242,7 @@ func TestAccrualButtonsOrder(t *testing.T) {
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "bbb1", 1_500_000, true)
 
-	items, err := svc.Recalculate(ctx, pid, time.Now().UTC())
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
@@ -262,8 +297,7 @@ func TestApprovedAccrualSurvivesRecalc(t *testing.T) {
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "ccc1", 1_200_000, true)
 
-	month := time.Now().UTC()
-	items, _ := svc.Recalculate(ctx, pid, month)
+	items, _ := recalcCurrent(t, svc, pid)
 	var acc billing.Accrual
 	for _, a := range items {
 		if a.CreatorUserID == creators[0] {
@@ -283,7 +317,7 @@ WHERE link_id IN (SELECT l.id FROM publication_links l
                   WHERE p.project_id = $1)`, pid); err != nil {
 		t.Fatalf("bump views: %v", err)
 	}
-	after, err := svc.Recalculate(ctx, pid, month)
+	after, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc 2: %v", err)
 	}
@@ -344,7 +378,7 @@ func TestBillingVisibility(t *testing.T) {
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "ddd1", 1_100_000, true)
 	seedPublicationViews(t, pid, creators[1], pubDay(0), "ddd2", 1_100_000, true)
-	if _, err := svc.Recalculate(ctx, pid, time.Now().UTC()); err != nil {
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
 
@@ -363,7 +397,7 @@ func TestBillingVisibility(t *testing.T) {
 	// Заказчик видит состав месяца: он за эту команду платит, и строка
 	// «60 000 + 5 850» — его счёт. А вот UTM-метки ему не отдаются:
 	// это рабочий инструмент менеджера.
-	client, err := svc.ClientBilling(ctx, pid, time.Now().UTC())
+	client, err := svc.ClientBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("client billing: %v", err)
 	}
@@ -379,7 +413,7 @@ func TestBillingVisibility(t *testing.T) {
 	// проверка по сырому JSON, а не по структуре Go.
 
 	// Менеджер видит обе строки.
-	all, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	all, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("project billing: %v", err)
 	}
@@ -455,7 +489,7 @@ func TestClickBonusOnlyWhenEnabled(t *testing.T) {
 		t.Fatalf("clicks: %v", err)
 	}
 
-	items, err := svc.Recalculate(ctx, pid, time.Now().UTC())
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
@@ -486,11 +520,11 @@ func TestPeriodTotals(t *testing.T) {
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "ggg1", 1_000_000, true)
 	seedPublicationViews(t, pid, creators[1], pubDay(0), "ggg2", 1_000_000, true)
-	if _, err := svc.Recalculate(ctx, pid, time.Now().UTC()); err != nil {
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
 
-	out, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	out, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("billing: %v", err)
 	}
@@ -619,7 +653,7 @@ func TestAccrualCarriesOrderPriority(t *testing.T) {
 		t.Fatalf("terms: %v", err)
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "iii1", 100_000, true)
-	if _, err := svc.Recalculate(ctx, pid, time.Now().UTC()); err != nil {
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
 
@@ -686,7 +720,7 @@ func TestPayoutEqualsChargeWithoutMargin(t *testing.T) {
 		t.Fatalf("terms: %v", err)
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "jjj1", 1_500_000, true)
-	items, err := svc.Recalculate(ctx, pid, time.Now().UTC())
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
@@ -699,7 +733,7 @@ func TestPayoutEqualsChargeWithoutMargin(t *testing.T) {
 				a.PayoutTotal, a.Total)
 		}
 	}
-	out, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	out, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("billing: %v", err)
 	}
@@ -731,7 +765,7 @@ func TestPayoutDiffersWhenCreatorRatesSet(t *testing.T) {
 	// Один ролик на 2 000 000: миллион по полной ставке, миллион по
 	// пониженной — на каждой стороне по своим числам.
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "kkk1", 2_000_000, true)
-	items, err := svc.Recalculate(ctx, pid, time.Now().UTC())
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
@@ -754,7 +788,7 @@ func TestPayoutDiffersWhenCreatorRatesSet(t *testing.T) {
 		t.Errorf("оклад креатора: %d", acc.PayoutSalary)
 	}
 
-	out, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	out, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("billing: %v", err)
 	}
@@ -782,7 +816,7 @@ func TestCreatorSeesOwnPayoutNotClientPrice(t *testing.T) {
 		t.Fatalf("terms: %v", err)
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "lll1", 100_000, true)
-	if _, err := svc.Recalculate(ctx, pid, time.Now().UTC()); err != nil {
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
 
@@ -805,7 +839,7 @@ func TestCreatorSeesOwnPayoutNotClientPrice(t *testing.T) {
 	}
 	// Цена клиента за тот же месяц заведомо другая — убеждаемся, что в
 	// итог креатора она не просочилась.
-	all, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	all, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("project billing: %v", err)
 	}
@@ -842,7 +876,7 @@ func TestCreatorWithoutPublicationsGetsNothing(t *testing.T) {
 	// Работает только первый; второй в составе, но выкладок ему не ставили.
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "mmm1", 2_000_000, true)
 
-	items, err := svc.Recalculate(ctx, pid, time.Now().UTC())
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
@@ -991,7 +1025,7 @@ func TestUnrecalculatedMonthShowsComputedTotals(t *testing.T) {
 		t.Fatalf("до пересчёта сохранённых строк быть не должно, их %d", stored)
 	}
 
-	out, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	out, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("billing: %v", err)
 	}
@@ -1011,7 +1045,7 @@ func TestUnrecalculatedMonthShowsComputedTotals(t *testing.T) {
 	}
 
 	// Заказчик видит ровно тот же счёт: он по нему платит.
-	cli, err := svc.ClientBilling(ctx, pid, time.Now().UTC())
+	cli, err := svc.ClientBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("client billing: %v", err)
 	}
@@ -1040,14 +1074,14 @@ func TestRecalculateReplacesPreviewWithStoredRows(t *testing.T) {
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "prv2", 800_000, true)
 
-	before, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	before, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("billing: %v", err)
 	}
-	if _, err := svc.Recalculate(ctx, pid, time.Now().UTC()); err != nil {
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
 		t.Fatalf("recalc: %v", err)
 	}
-	after, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	after, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("billing after: %v", err)
 	}
@@ -1058,30 +1092,39 @@ func TestRecalculateReplacesPreviewWithStoredRows(t *testing.T) {
 	}
 	for _, a := range after.Accruals {
 		if !a.IsPreview {
-			t.Error("месяц идёт — строки обязаны оставаться предварительными")
+			t.Error("период идёт — строки обязаны оставаться предварительными")
 		}
 		if a.ID == uuid.Nil {
 			t.Error("сохранённой строке нужен id — иначе её нечем утвердить")
 		}
 	}
 
-	// А вот фиксация месяца признак снимает.
-	if _, err := svc.LockMonth(ctx, pid, time.Now().UTC(), &creators[0], time.Now().UTC(), time.Now().UTC()); err != nil {
-		t.Fatalf("фиксация месяца: %v", err)
+	// А вот подытог периода признак снимает.
+	period, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("период: %v", err)
 	}
-	locked, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	if _, err := svc.LockPeriod(ctx, period, nil, time.Now().UTC(), time.Now().UTC()); err != nil {
+		t.Fatalf("подытог периода: %v", err)
+	}
+	locked, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("billing after lock: %v", err)
 	}
 	for _, a := range locked.Accruals {
 		if a.IsPreview {
-			t.Error("месяц зафиксирован — строки больше не предварительные")
+			t.Error("период подытожен — строки больше не предварительные")
 		}
 	}
 }
 
-// А без выкладок в месяце считать нечего, и выдумывать строки нельзя.
-func TestMonthWithoutPublicationsStaysEmpty(t *testing.T) {
+// Пока не вышел ни один ролик, периодов у проекта нет вовсе — и это
+// внятный ответ, а не пустой счёт.
+//
+// Отсчёт начинается датой первой публикации: до неё отсчитывать не от
+// чего, и показывать «за период 1 к оплате 0 ₽» значило бы придумать
+// период, которого не было.
+func TestProjectWithoutPublicationsHasNoPeriods(t *testing.T) {
 	pool := integration.Pool(t)
 	pid, creators, cleanup := setupCreatorsProject(t, pool)
 	defer cleanup()
@@ -1091,12 +1134,25 @@ func TestMonthWithoutPublicationsStaysEmpty(t *testing.T) {
 	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
 		t.Fatalf("terms: %v", err)
 	}
-	out, err := svc.ProjectBilling(ctx, pid, time.Now().UTC().AddDate(0, -6, 0))
-	if err != nil {
-		t.Fatalf("billing: %v", err)
+	if _, err := svc.ProjectBilling(ctx, pid, 0, time.Now().UTC()); !errors.Is(err, billing.ErrNoPeriods) {
+		t.Fatalf("ожидали ErrNoPeriods, получили %v", err)
 	}
-	if out.Totals.Total != 0 {
-		t.Errorf("в пустом месяце счёт обязан быть нулевым, получили %d", out.Totals.Total)
+	periods, err := svc.Periods(ctx, pid, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("периоды: %v", err)
+	}
+	if len(periods) != 0 {
+		t.Errorf("периодов %d, ожидали ни одного", len(periods))
+	}
+
+	// Вышел первый ролик — появился первый период.
+	publishOn(t, pool, pid, creators[0], time.Now().UTC().AddDate(0, 0, -1), "emp01", 1000)
+	periods, err = svc.Periods(ctx, pid, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("периоды: %v", err)
+	}
+	if len(periods) != 1 || periods[0].Seq != 1 {
+		t.Errorf("после первой публикации периодов %d: %+v", len(periods), periods)
 	}
 }
 
@@ -1124,7 +1180,7 @@ func TestZeroThresholdMeansNoThreshold(t *testing.T) {
 	// Два миллиона просмотров — вдвое больше «обычного» порога.
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "zt1", 2_000_000, true)
 
-	items, err := svc.Recalculate(ctx, pid, time.Now().UTC())
+	items, err := recalcCurrent(t, svc, pid)
 	if err != nil {
 		t.Fatalf("recalc: %v", err)
 	}

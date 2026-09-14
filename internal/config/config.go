@@ -187,17 +187,17 @@ type Config struct {
 	// числа — чтобы один тик не работал бесконечно.
 	StatsCollectBatchesPerTick int `env:"STATS_COLLECT_BATCHES_PER_TICK" envDefault:"20"`
 
-	// BillingMonthLockDelay — через сколько после конца месяца он
-	// фиксируется сам. Четырнадцать дней — правило площадки: за две
+	// BillingPeriodLockDelay — через сколько после конца периода он
+	// подытоживается сам. Четырнадцать дней — правило площадки: за две
 	// недели ролик набирает основную массу просмотров, дальше счёт почти
 	// не меняется. До появления этого срока правило нигде не
 	// исполнялось — всё держалось на том, что менеджер вовремя нажал
 	// «Пересчитать».
-	BillingMonthLockDelay time.Duration `env:"BILLING_MONTH_LOCK_DELAY" envDefault:"336h"`
-	// BillingMonthLockInterval — как часто искать месяцы, которым пора
+	BillingPeriodLockDelay time.Duration `env:"BILLING_PERIOD_LOCK_DELAY" envDefault:"336h"`
+	// BillingPeriodLockInterval — как часто искать периоды, которым пора
 	// закрыться. Час: опоздание на час после двухнедельной отсрочки
 	// никого не трогает, а проход по пустой выборке ничего не стоит.
-	BillingMonthLockInterval time.Duration `env:"BILLING_MONTH_LOCK_INTERVAL" envDefault:"1h"`
+	BillingPeriodLockInterval time.Duration `env:"BILLING_PERIOD_LOCK_INTERVAL" envDefault:"1h"`
 
 	// OrderExpiryInterval — как часто проверять протухшие приглашения.
 	// Приглашение живёт трое суток, но место надо отдавать следующему

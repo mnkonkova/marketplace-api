@@ -140,8 +140,10 @@ type Accrual struct {
 	ProjectID     uuid.UUID `json:"project_id"`
 	CreatorUserID uuid.UUID `json:"creator_user_id"`
 	CreatorName   string    `json:"creator_name,omitempty"`
-	// PeriodMonth — первое число месяца.
-	PeriodMonth time.Time `json:"period_month"`
+	// PeriodStart — начало периода, которому принадлежит начисление.
+	// Периоды катятся от первой публикации проекта, а не по календарю,
+	// поэтому это не первое число месяца (см. billing.ProjectPeriod).
+	PeriodStart time.Time `json:"period_start"`
 	Salary      int64     `json:"salary"`
 	// VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько
 	// закрыто. Разница — недостача.
@@ -212,16 +214,14 @@ type ProjectBilling struct {
 	// поэтому строка «60 000 + 5 850» — его счёт, а не чужие данные.
 	Accruals []Accrual `json:"accruals"`
 	UTM      []UTMLink `json:"utm,omitempty"`
-	// PeriodMonth — за какой месяц отданы начисления.
-	PeriodMonth time.Time `json:"period_month"`
 	// Totals — итог периода. Считается из тех же строк, но на сервере:
 	// «оклады 180 000 + бонус 24 678 · 746 ₽ за 1000» показывают и
 	// менеджеру, и заказчику, и складывать это дважды на двух экранах
 	// значит получить два разных числа.
 	Totals PeriodTotals `json:"totals"`
-	// Month — состояние месяца: идёт или зафиксирован. Отсюда же
+	// Period — какой период показан и в каком он состоянии. Отсюда же
 	// понятно, почему строки помечены «предварительно».
-	Month ProjectMonth `json:"month"`
+	Period ProjectPeriod `json:"period"`
 }
 
 // PeriodTotals — сводка по месяцу.

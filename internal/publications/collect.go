@@ -261,20 +261,32 @@ SELECT id FROM projects
 WHERE collection_stops_at IS NOT NULL
   AND collection_stops_at <= $1
   AND NOT EXISTS (SELECT 1 FROM project_stat_summary s WHERE s.project_id = projects.id)
-  -- Пока у проекта есть незафиксированный месяц, ежедневный ряд трогать
-  -- нельзя: месяц фиксируется срезом просмотров по каждой площадке, и
-  -- снимать его будет неоткуда. Схлопывание не отменяется, а ждёт —
-  -- месяцы закрытого проекта уже в прошлом, и фоновая фиксация доберётся
-  -- до них в ближайшие часы.
+  -- Схлопывать можно только то, что уже подытожено: период
+  -- подытоживается срезом просмотров по каждой площадке, и снимать его
+  -- будет неоткуда, если ежедневный ряд удалить раньше.
+  --
+  -- Условие ставим на РОЛИКИ, а не на периоды: пока есть вышедший
+  -- ролик, который не накрыт ни одним подытоженным периодом, историю
+  -- держим. Проверять «нет открытых периодов» нельзя (текущий открыт
+  -- всегда, ряд не схлопнулся бы никогда), а проверять только
+  -- заведённые периоды мало: у проекта, которого фоновая задача ещё не
+  -- касалась, их нет вовсе.
+  --
+  -- Схлопывание не отменяется, а ждёт: периоды закрытого проекта уже в
+  -- прошлом, и подытог доберётся до них в ближайшие часы.
   AND NOT EXISTS (
       SELECT 1
       FROM project_publications p
-      LEFT JOIN project_months m
-             ON m.project_id = p.project_id
-            AND m.period_month = date_trunc('month', p.due_date)::date
-      WHERE p.project_id = projects.id
-        AND p.status <> 'cancelled'
-        AND COALESCE(m.status, 'open') = 'open'
+      WHERE p.project_id = projects.id AND p.status <> 'cancelled'
+        AND (SELECT MIN(COALESCE(l.published_at, l.submitted_at))::date
+             FROM publication_links l WHERE l.publication_id = p.id) IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM project_periods pp
+            WHERE pp.project_id = p.project_id AND pp.status = 'locked'
+              AND (SELECT MIN(COALESCE(l2.published_at, l2.submitted_at))::date
+                   FROM publication_links l2 WHERE l2.publication_id = p.id)
+                  BETWEEN pp.starts_on AND pp.ends_on
+        )
   )`, now)
 	if err != nil {
 		return 0, fmt.Errorf("list projects to collapse: %w", err)

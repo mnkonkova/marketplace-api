@@ -204,9 +204,9 @@ RETURNING id, project_id, kind::text, amount, status::text, note,
 
 // ---- начисления ----
 
-func (r *Repo) Accruals(ctx context.Context, projectID uuid.UUID, month *time.Time, creatorID *uuid.UUID) ([]Accrual, error) {
+func (r *Repo) Accruals(ctx context.Context, projectID uuid.UUID, periodStart *time.Time, creatorID *uuid.UUID) ([]Accrual, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT a.id, a.project_id, a.creator_user_id, `+nameExpr+`, a.period_month,
+SELECT a.id, a.project_id, a.creator_user_id, `+nameExpr+`, a.period_start,
        a.salary, a.videos_planned, a.videos_delivered, a.deduction,
        a.views_total, a.views_base, a.views_over, a.views_bonus,
        a.clicks, a.click_bonus, a.total,
@@ -224,9 +224,9 @@ LEFT JOIN creator_orders o       ON o.project_id = a.project_id
 LEFT JOIN order_candidates oc    ON oc.order_id = o.id
                                 AND oc.creator_user_id = a.creator_user_id
 WHERE a.project_id = $1
-  AND ($2::date IS NULL OR a.period_month = $2)
+  AND ($2::date IS NULL OR a.period_start = $2)
   AND ($3::uuid IS NULL OR a.creator_user_id = $3)
-ORDER BY a.period_month DESC, COALESCE(oc.priority, 999), 4`, projectID, month, creatorID)
+ORDER BY a.period_start DESC, COALESCE(oc.priority, 999), 4`, projectID, periodStart, creatorID)
 	if err != nil {
 		return nil, fmt.Errorf("list accruals: %w", err)
 	}
@@ -235,7 +235,7 @@ ORDER BY a.period_month DESC, COALESCE(oc.priority, 999), 4`, projectID, month, 
 	for rows.Next() {
 		var a Accrual
 		if err := rows.Scan(&a.ID, &a.ProjectID, &a.CreatorUserID, &a.CreatorName,
-			&a.PeriodMonth, &a.Salary, &a.VideosPlanned, &a.VideosDelivered,
+			&a.PeriodStart, &a.Salary, &a.VideosPlanned, &a.VideosDelivered,
 			&a.Deduction, &a.ViewsTotal, &a.ViewsBase, &a.ViewsOver, &a.ViewsBonus,
 			&a.Clicks, &a.ClickBonus, &a.Total,
 			&a.PayoutSalary, &a.PayoutDeduction, &a.PayoutViewsBonus,
@@ -267,23 +267,18 @@ type creatorPeriod struct {
 //
 // Просмотры берутся по последнему снимку каждой ссылки и складываются в
 // ролик целиком: порог «миллион» стоит на ролике, а не на площадке.
-func (r *Repo) periodFacts(ctx context.Context, projectID uuid.UUID, month time.Time, threshold int64) ([]creatorPeriod, error) {
-	from := firstOfMonth(month)
-	to := from.AddDate(0, 1, 0)
+func (r *Repo) periodFacts(ctx context.Context, projectID uuid.UUID, p ProjectPeriod, threshold int64) ([]creatorPeriod, error) {
 	rows, err := r.db.Query(ctx, `
 WITH pub AS (
-    SELECT p.id, p.creator_user_id, p.status::text AS status,
+    SELECT f.id, f.creator_user_id, f.status,
            COALESCE(SUM(cur.views), 0) AS views
-    FROM project_publications p
-    LEFT JOIN publication_links l ON l.publication_id = p.id
+    FROM (`+publishedInPeriodSQL+`) f
+    JOIN publication_links l ON l.publication_id = f.id
     LEFT JOIN LATERAL (
         SELECT views FROM video_stat_daily d
         WHERE d.link_id = l.id ORDER BY d.stat_date DESC LIMIT 1
     ) cur ON TRUE
-    WHERE p.project_id = $1
-      AND p.due_date >= $2 AND p.due_date < $3
-      AND p.status <> 'cancelled'
-    GROUP BY p.id, p.creator_user_id, p.status
+    GROUP BY f.id, f.creator_user_id, f.status
 )
 SELECT pc.creator_user_id,
        COUNT(pub.id),
@@ -295,15 +290,15 @@ SELECT pc.creator_user_id,
        -- даёт строку с NULL, а LEAST(NULL, порог) в PostgreSQL — это не
        -- NULL, а порог: NULL'ы он молча пропускает. Человек без единого
        -- ролика получал бонус за миллион просмотров.
-       COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $4)), 0),
-       COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $4, 0)), 0),
+       COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $5)), 0),
+       COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $5, 0)), 0),
        COALESCE(MAX(utm.clicks), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
        ON utm.project_id = pc.project_id AND utm.creator_user_id = pc.creator_user_id
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
-GROUP BY pc.creator_user_id`, projectID, from, to, threshold)
+GROUP BY pc.creator_user_id`, projectID, projectID, p.StartsOn, p.EndsOn, threshold)
 	if err != nil {
 		return nil, fmt.Errorf("period facts: %w", err)
 	}
@@ -330,22 +325,20 @@ GROUP BY pc.creator_user_id`, projectID, from, to, threshold)
 //
 // Состав месяца тоже из среза: выкладку могли удалить или отменить после
 // фиксации, а в зафиксированном месяце она обязана остаться.
-func (r *Repo) periodFactsLocked(ctx context.Context, projectID uuid.UUID, month time.Time, threshold int64) ([]creatorPeriod, error) {
-	period := firstOfMonth(month)
+func (r *Repo) periodFactsLocked(ctx context.Context, projectID uuid.UUID, p ProjectPeriod, threshold int64) ([]creatorPeriod, error) {
 	rows, err := r.db.Query(ctx, `
 WITH pub AS (
     -- SUM пропускает NULL, и «данных на отсечку не было» превращается в
     -- ноль. Для денег это верно — платить не за что, — но само отличие
-    -- не теряется: в срезе у такой строки stat_date пуст, а месяц, где
+    -- не теряется: в срезе у такой строки stat_date пуст, а период, где
     -- числа были уничтожены, помечен приблизительным.
     SELECT sp.publication_id AS id, sp.creator_user_id, sp.status,
            COALESCE(SUM(sv.views), 0) AS views
-    FROM project_month_publications sp
-    LEFT JOIN project_month_views sv
-           ON sv.project_id = sp.project_id
-          AND sv.period_month = sp.period_month
+    FROM project_period_publications sp
+    LEFT JOIN project_period_views sv
+           ON sv.period_id = sp.period_id
           AND sv.publication_id = sp.publication_id
-    WHERE sp.project_id = $1 AND sp.period_month = $2
+    WHERE sp.period_id = $2
     GROUP BY sp.publication_id, sp.creator_user_id, sp.status
 )
 SELECT pc.creator_user_id,
@@ -360,7 +353,7 @@ LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
        ON utm.project_id = pc.project_id AND utm.creator_user_id = pc.creator_user_id
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
-GROUP BY pc.creator_user_id`, projectID, period, threshold)
+GROUP BY pc.creator_user_id`, projectID, p.ID, threshold)
 	if err != nil {
 		return nil, fmt.Errorf("locked period facts: %w", err)
 	}
@@ -382,13 +375,13 @@ GROUP BY pc.creator_user_id`, projectID, period, threshold)
 func (r *Repo) SaveAccrual(ctx context.Context, a Accrual) error {
 	tag, err := r.db.Exec(ctx, `
 INSERT INTO creator_accruals
-  (project_id, creator_user_id, period_month, salary, videos_planned,
+  (project_id, creator_user_id, period_start, salary, videos_planned,
    videos_delivered, deduction, views_total, views_base, views_over, views_bonus,
    clicks, click_bonus, total,
    payout_salary, payout_deduction, payout_views_bonus, payout_click_bonus, payout_total,
    calculated_at)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
-ON CONFLICT (project_id, creator_user_id, period_month) DO UPDATE SET
+ON CONFLICT (project_id, creator_user_id, period_start) DO UPDATE SET
   salary = EXCLUDED.salary, videos_planned = EXCLUDED.videos_planned,
   videos_delivered = EXCLUDED.videos_delivered, deduction = EXCLUDED.deduction,
   views_total = EXCLUDED.views_total, views_base = EXCLUDED.views_base,
@@ -402,7 +395,7 @@ ON CONFLICT (project_id, creator_user_id, period_month) DO UPDATE SET
   payout_total = EXCLUDED.payout_total,
   calculated_at = now()
 WHERE creator_accruals.status = 'draft'`,
-		a.ProjectID, a.CreatorUserID, a.PeriodMonth, a.Salary, a.VideosPlanned,
+		a.ProjectID, a.CreatorUserID, a.PeriodStart, a.Salary, a.VideosPlanned,
 		a.VideosDelivered, a.Deduction, a.ViewsTotal, a.ViewsBase, a.ViewsOver,
 		a.ViewsBonus, a.Clicks, a.ClickBonus, a.Total,
 		a.PayoutSalary, a.PayoutDeduction, a.PayoutViewsBonus,
@@ -436,13 +429,13 @@ func (r *Repo) DecideAccrual(ctx context.Context, accrualID, actor uuid.UUID, to
 	}
 	var projectID uuid.UUID
 	var creatorID uuid.UUID
-	var month time.Time
+	var periodStart time.Time
 	err := r.db.QueryRow(ctx, `
 UPDATE creator_accruals
 SET status = $3, `+col+`_by = $2, `+col+`_at = now()
 WHERE id = $1 AND status = $4
-RETURNING project_id, creator_user_id, period_month`,
-		accrualID, actor, to, from).Scan(&projectID, &creatorID, &month)
+RETURNING project_id, creator_user_id, period_start`,
+		accrualID, actor, to, from).Scan(&projectID, &creatorID, &periodStart)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var exists bool
 		if err := r.db.QueryRow(ctx,
@@ -458,7 +451,7 @@ RETURNING project_id, creator_user_id, period_month`,
 	if err != nil {
 		return Accrual{}, fmt.Errorf("decide accrual: %w", err)
 	}
-	list, err := r.Accruals(ctx, projectID, &month, &creatorID)
+	list, err := r.Accruals(ctx, projectID, &periodStart, &creatorID)
 	if err != nil || len(list) == 0 {
 		return Accrual{}, err
 	}

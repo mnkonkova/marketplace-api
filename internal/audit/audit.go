@@ -52,10 +52,10 @@ const (
 	ActionProjectAssignManager = "project.assign_manager"
 	ActionProjectMarkTest      = "project.mark_test"
 	ActionProjectTransferBatch = "project.transfer_batch"
-	// ActionMonthUnlock — админ вернул зафиксированный месяц в работу.
-	// Расфиксация переписывает историю расчёта, поэтому след в журнале
+	// ActionPeriodUnlock — админ вернул подытоженный период в работу.
+	// Переоткрытие переписывает историю расчёта, поэтому след в журнале
 	// обязателен: иначе «почему числа поменялись» отвечается ничем.
-	ActionMonthUnlock = "project.month_unlock"
+	ActionPeriodUnlock = "project.period_unlock"
 )
 
 // Entry — одна запись журнала.

@@ -314,12 +314,13 @@ func TestCollapseWritesSummaryBeforeDeleting(t *testing.T) {
 		t.Fatalf("StopCollectionAfter: %v", err)
 	}
 
-	// Месяц выкладки фиксируем: пока он идёт, схлопывать ежедневный ряд
-	// нельзя — из него снимается срез месяца. Здесь это предусловие, а
-	// не предмет проверки (см. TestCollapseKeepsLockedSnapshot).
-	if _, err := billing.NewService(billing.NewRepo(pool)).
-		LockMonth(ctx, projectID, pubDay(0), nil, now, now); err != nil {
-		t.Fatalf("зафиксировать месяц: %v", err)
+	// Периоды выкладки подытоживаем: пока период идёт, схлопывать
+	// ежедневный ряд нельзя — из него снимается срез. Здесь это
+	// предусловие, а не предмет проверки (см.
+	// TestCollapseKeepsLockedPeriodSnapshot).
+	if _, _, err := billing.NewService(billing.NewRepo(pool)).
+		LockDuePeriods(ctx, now.AddDate(0, 2, 0), billing.DefaultPeriodLockDelay); err != nil {
+		t.Fatalf("подытожить периоды: %v", err)
 	}
 
 	n, err := repo.CollapseFinished(ctx, now)

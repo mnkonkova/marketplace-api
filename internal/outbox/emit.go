@@ -137,6 +137,14 @@ const (
 
 	// EventPublicationClosed — менеджер закрыл неполную выкладку руками.
 	EventPublicationClosed = "project.publication_closed"
+
+	// EventProjectPeriodClosed — период проекта подытожен: просмотры
+	// заморожены срезом, суммы посчитаны в последний раз. payload:
+	// {project_id, title, period_seq, starts_on, ends_on, videos, views,
+	// total, snapshot_as_of, snapshot_approx}. Уходит в общий чат:
+	// это единственный момент, когда по периоду становится что
+	// обсуждать, и происходит он сам, без человека.
+	EventProjectPeriodClosed = "project.period_closed"
 )
 
 // Самостоятельный подбор креаторов клиентом (00033). Как и остальные

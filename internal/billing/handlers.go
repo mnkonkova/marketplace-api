@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -12,9 +14,6 @@ import (
 	"marketpclce/internal/auth"
 	"marketpclce/internal/httpx"
 )
-
-// monthLayout — месяц в запросах, как в заказах: ГГГГ-ММ.
-const monthLayout = "2006-01"
 
 type Handler struct{ svc *Service }
 
@@ -78,6 +77,11 @@ func writeErr(w http.ResponseWriter, err error) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект или начисление не найдены.")
+	case errors.Is(err, ErrNoPeriods):
+		// Не ошибка данных, а состояние проекта: периоды начинаются с
+		// первой публикации, и до неё отсчитывать не от чего.
+		httpx.WriteErrMsg(w, http.StatusNotFound, "no_periods",
+			"У проекта ещё нет периодов: не вышло ни одного ролика.")
 	case errors.Is(err, ErrAlreadyConfirmed):
 		httpx.WriteErrMsg(w, http.StatusConflict, "already_confirmed",
 			"Платёж уже подтверждён — сумму задним числом не меняем.")
@@ -116,16 +120,21 @@ func (h *Handler) managerProject(w http.ResponseWriter, r *http.Request) (uuid.U
 }
 
 // monthParam — месяц из query. Пусто = текущий.
-func monthParam(r *http.Request) (time.Time, bool) {
-	raw := r.URL.Query().Get("month")
+// periodParam — какой период показать. Пусто = текущий.
+//
+// Номер, а не дата: период — сущность проекта со своим счётом («второй
+// месяц креатора»), и адресовать его календарной датой значило бы
+// вернуться к тому, от чего ушли.
+func periodParam(r *http.Request) (int, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("period"))
 	if raw == "" {
-		return time.Now().UTC(), true
+		return 0, true
 	}
-	m, err := time.Parse(monthLayout, raw)
-	if err != nil {
-		return time.Time{}, false
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, false
 	}
-	return m, true
+	return n, true
 }
 
 // ---- менеджер ----
@@ -156,12 +165,13 @@ func (h *Handler) ManagerBilling(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	month, ok := monthParam(r)
+	seq, ok := periodParam(r)
 	if !ok {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
+			"period — номер периода, целое число начиная с единицы.")
 		return
 	}
-	out, err := h.svc.ProjectBilling(r.Context(), projectID, month)
+	out, err := h.svc.ProjectBilling(r.Context(), projectID, seq, time.Now().UTC())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -330,12 +340,18 @@ func (h *Handler) ManagerRecalcAccruals(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	month, ok := monthParam(r)
+	seq, ok := periodParam(r)
 	if !ok {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
+			"period — номер периода, целое число начиная с единицы.")
 		return
 	}
-	items, err := h.svc.Recalculate(r.Context(), projectID, month)
+	period, err := h.svc.Period(r.Context(), projectID, seq, time.Now().UTC())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	items, err := h.svc.Recalculate(r.Context(), projectID, period)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -484,12 +500,13 @@ func (h *Handler) ClientBilling(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект не найден.")
 		return
 	}
-	month, ok := monthParam(r)
+	seq, ok := periodParam(r)
 	if !ok {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
+			"period — номер периода, целое число начиная с единицы.")
 		return
 	}
-	out, err := h.svc.ClientBilling(r.Context(), projectID, month)
+	out, err := h.svc.ClientBilling(r.Context(), projectID, seq, time.Now().UTC())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -709,76 +726,43 @@ func (h *Handler) AdminPublishTerms(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, v)
 }
 
-// ---- фиксация месяца ----
+// ---- подытог периода ----
 
-// monthLockResp — состояние месяца после действия.
-type monthLockResp struct {
-	Month ProjectMonth `json:"month"`
+// periodResp — состояние периода после действия.
+type periodResp struct {
+	Period ProjectPeriod `json:"period"`
 }
 
-// ManagerLockMonth godoc
-// @Summary  Зафиксировать месяц (менеджер)
-// @Description Сохраняет срез просмотров — по каждой выкладке и каждой
-// @Description площадке, на сегодняшнюю отсечку — и пересчитывает месяц
-// @Description уже по нему. После этого числа месяца не меняются, даже
-// @Description если просмотры продолжают расти. Идемпотентно: повторный вызов на уже
-// @Description зафиксированном месяце ничего не меняет и не ошибка.
-// @Description Обычно месяц фиксируется сам через 14 дней после его
-// @Description конца; эта ручка — «зафиксировать сейчас».
-// @Tags     manager-billing
-// @Produce  json
-// @Security BearerAuth
-// @Param    id    path  string true  "project id"
-// @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
-// @Success  200 {object} monthLockResp
-// @Failure  400 {object} errorResponse "bad_id; bad_month"
-// @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
-// @Router   /manager/projects/{id}/billing/lock_month [post]
-func (h *Handler) ManagerLockMonth(w http.ResponseWriter, r *http.Request) {
-	projectID, actor, ok := h.managerProject(w, r)
-	if !ok {
-		return
-	}
-	month, ok := monthParam(r)
-	if !ok {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
-		return
-	}
-	// Ручная фиксация: отсечка сегодняшняя. Числа всё равно берутся из
-	// поденного ряда, а не последним снимком, — чтобы ручная и
-	// автоматическая дороги на одних данных давали одно и то же.
-	now := time.Now().UTC()
-	m, err := h.svc.LockMonth(r.Context(), projectID, month, &actor, now, now)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, monthLockResp{Month: m})
-}
-
-type unlockMonthReq struct {
+type unlockPeriodReq struct {
 	// Reason — зачем переоткрыли. Необязательно, но попадает в журнал:
 	// через полгода «почему числа поменялись» отвечается только этим.
 	Reason string `json:"reason,omitempty"`
 }
 
-// AdminUnlockMonth godoc
-// @Summary  Вернуть зафиксированный месяц в работу (админ)
-// @Description Срез просмотров удаляется, месяц снова считается на лету.
-// @Description Действие пишется в журнал админских действий: расфиксация
+// AdminUnlockPeriod godoc
+// @Summary  Вернуть подытоженный период в работу (админ)
+// @Description Срез просмотров удаляется, период снова считается на лету.
+// @Description Действие пишется в журнал админских действий: переоткрытие
 // @Description переписывает историю расчёта, и след обязателен.
-// @Description Идемпотентно: месяц, который и так идёт, ручка оставляет как есть.
+// @Description Идемпотентно: период, который и так идёт, ручка оставляет как есть.
+// @Description
+// @Description ПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан
+// @Description от выхода этого, и после переоткрытия он недостоверен —
+// @Description как и вся цепочка дальше. Пока арифметики переноса нет,
+// @Description это предупреждение; в ответе видно, сколько подытоженных
+// @Description периодов идёт следом.
 // @Tags     admin-billing
 // @Accept   json
 // @Produce  json
 // @Security BearerAuth
-// @Param    id    path  string true  "project id"
-// @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
-// @Param    body  body  unlockMonthReq false "причина"
-// @Success  200 {object} monthLockResp
-// @Failure  400 {object} errorResponse "bad_id; bad_month"
-// @Router   /admin/projects/{id}/billing/unlock_month [post]
-func (h *Handler) AdminUnlockMonth(w http.ResponseWriter, r *http.Request) {
+// @Param    id     path  string true  "project id"
+// @Param    period query int    false "номер периода, по умолчанию текущий"
+// @Param    body   body  unlockPeriodReq false "причина"
+// @Success  200 {object} periodResp
+// @Failure  400 {object} errorResponse "bad_id; bad_period"
+// @Failure  404 {object} errorResponse "not_found — у проекта ещё нет периодов"
+// @Router   /admin/projects/{id}/billing/unlock_period [post]
+func (h *Handler) AdminUnlockPeriod(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		writeNoUser(w)
@@ -789,23 +773,54 @@ func (h *Handler) AdminUnlockMonth(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
-	month, ok := monthParam(r)
+	seq, ok := periodParam(r)
 	if !ok {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
+			"period — номер периода, целое число начиная с единицы.")
 		return
 	}
-	var in unlockMonthReq
+	var in unlockPeriodReq
 	if r.ContentLength > 0 {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 	}
-	if err := h.svc.UnlockMonth(r.Context(), projectID, month, actor, in.Reason); err != nil {
-		writeErr(w, err)
-		return
-	}
-	m, err := h.svc.Month(r.Context(), projectID, month)
+	period, err := h.svc.Period(r.Context(), projectID, seq, time.Now().UTC())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, monthLockResp{Month: m})
+	out, err := h.svc.UnlockPeriod(r.Context(), period.ID, actor, in.Reason)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, periodResp{Period: out})
+}
+
+// ManagerPeriods godoc
+// @Summary  Периоды проекта (менеджер)
+// @Description Периоды катятся от даты первой публикации: вышел первый
+// @Description ролик 15-го — периоды идут с 15-го по 14-е. Пока не вышло
+// @Description ничего, периодов нет — и это не ошибка.
+// @Tags     manager-billing
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Success  200 {object} periodsResp
+// @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
+// @Router   /manager/projects/{id}/billing/periods [get]
+func (h *Handler) ManagerPeriods(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.svc.Periods(r.Context(), projectID, time.Now().UTC())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, periodsResp{Items: items})
+}
+
+type periodsResp struct {
+	Items []ProjectPeriod `json:"items"`
 }

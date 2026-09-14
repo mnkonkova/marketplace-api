@@ -762,8 +762,11 @@ definitions:
         type: integer
       payout_views_bonus:
         type: integer
-      period_month:
-        description: PeriodMonth — первое число месяца.
+      period_start:
+        description: |-
+          PeriodStart — начало периода, которому принадлежит начисление.
+          Периоды катятся от первой публикации проекта, а не по календарю,
+          поэтому это не первое число месяца (см. billing.ProjectPeriod).
         type: string
       priority:
         description: |-
@@ -838,7 +841,7 @@ definitions:
         type: string
       paid_at:
         type: string
-      period_month:
+      period_start:
         type: string
       priority:
         description: |-
@@ -886,20 +889,17 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.ClientAccrual'
         type: array
-      month:
-        allOf:
-        - $ref: '#/definitions/internal_billing.ProjectMonth'
-        description: |-
-          Month — состояние месяца. Заказчику оно нужно по той же причине,
-          что и менеджеру: пока месяц идёт, числа ещё изменятся, и счёт
-          нельзя считать окончательным.
       payments:
         items:
           $ref: '#/definitions/internal_billing.Payment'
         type: array
-      period_month:
-        description: PeriodMonth — за какой месяц отданы начисления.
-        type: string
+      period:
+        allOf:
+        - $ref: '#/definitions/internal_billing.ProjectPeriod'
+        description: |-
+          Period — какой период показан и в каком он состоянии. Заказчику
+          это нужно по той же причине, что и менеджеру: пока период идёт,
+          числа ещё изменятся, и счёт нельзя считать окончательным.
       terms:
         $ref: '#/definitions/internal_billing.SideTerms'
       totals:
@@ -952,7 +952,7 @@ definitions:
         type: string
       paid_at:
         type: string
-      period_month:
+      period_start:
         type: string
       project_id:
         type: string
@@ -1166,19 +1166,16 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.Accrual'
         type: array
-      month:
-        allOf:
-        - $ref: '#/definitions/internal_billing.ProjectMonth'
-        description: |-
-          Month — состояние месяца: идёт или зафиксирован. Отсюда же
-          понятно, почему строки помечены «предварительно».
       payments:
         items:
           $ref: '#/definitions/internal_billing.Payment'
         type: array
-      period_month:
-        description: PeriodMonth — за какой месяц отданы начисления.
-        type: string
+      period:
+        allOf:
+        - $ref: '#/definitions/internal_billing.ProjectPeriod'
+        description: |-
+          Period — какой период показан и в каком он состоянии. Отсюда же
+          понятно, почему строки помечены «предварительно».
       terms:
         $ref: '#/definitions/internal_billing.Terms'
       totals:
@@ -1194,36 +1191,68 @@ definitions:
           $ref: '#/definitions/internal_billing.UTMLink'
         type: array
     type: object
-  internal_billing.ProjectMonth:
+  internal_billing.ProjectPeriod:
     properties:
+      carry_in_client:
+        description: |-
+          Carry* — перенос остатка ступени тарифа, в просмотрах.
+
+          Ступень — 100 000 просмотров; остаток, не добравший до полной,
+          едет в следующий период и складывается с его просмотрами. Стороны
+          разные: клиентская и креаторская считаются по своим ставкам и
+          разъедутся, одно число на двоих скрыло бы это.
+
+          Сейчас нули: арифметику включат, когда утвердят тариф. Место под
+          неё — в подытоженном периоде, потому что перенос такая же
+          замороженная величина, как просмотры.
+        type: integer
+      carry_in_creator:
+        type: integer
+      carry_out_client:
+        type: integer
+      carry_out_creator:
+        type: integer
+      ends_on:
+        type: string
+      id:
+        type: string
       locked_at:
         type: string
       locked_by:
-        description: LockedBy — кто зафиксировал. nil = фоновая задача.
+        description: |-
+          LockedBy — кто подытожил. nil = фоновая задача; ручного подытога
+          нет вовсе, так что сейчас здесь всегда nil.
         type: string
-      period_month:
+      prev_period_id:
+        description: |-
+          PrevPeriodID — предыдущий период. nil только у первого: остаток
+          ступени переносится по цепочке, и она должна быть явной.
         type: string
       project_id:
         type: string
+      seq:
+        description: 'Seq — какой это период по счёту: первый, второй, третий.'
+        type: integer
       snapshot_approx:
         description: |-
           SnapshotApprox — числам не на что опереться: поденный ряд к моменту
-          фиксации уже схлопнули, и восстановить просмотры на отсечку
-          неоткуда.
+          фиксации уже схлопнули.
 
-          Не путать с «предварительно» (Accrual.IsPreview): то про месяц,
-          который ещё идёт, это — про месяц, который зафиксирован, но
+          Не путать с «предварительно» (Accrual.IsPreview): то про период,
+          который ещё идёт, это — про период, который подытожен, но
           опирается на пустоту. Могут стоять одновременно, и в интерфейсе их
           нельзя схлопывать в одну плашку.
         type: boolean
       snapshot_as_of:
         description: |-
-          SnapshotAsOf — на какую дату сняты числа месяца. Это отсечка
-          (конец месяца плюс две недели), а не момент фиксации: воркер мог
-          опоздать, и числа всё равно должны быть теми, что были на отсечку.
+          SnapshotAsOf — на какую дату сняты числа: конец периода плюс две
+          недели. Это отсечка, а не момент фиксации: воркер мог опоздать, и
+          числа всё равно должны быть теми, что были на отсечку.
+        type: string
+      starts_on:
+        description: StartsOn/EndsOn — границы, обе включительно.
         type: string
       status:
-        description: Status — open | locked.
         type: string
     type: object
   internal_billing.SideTerms:
@@ -1612,17 +1641,24 @@ definitions:
         description: Message пустой у ручек, отдающих ошибку без текста.
         type: string
     type: object
-  internal_billing.monthLockResp:
-    properties:
-      month:
-        $ref: '#/definitions/internal_billing.ProjectMonth'
-    type: object
   internal_billing.paymentReq:
     properties:
       amount:
         type: integer
       note:
         type: string
+    type: object
+  internal_billing.periodResp:
+    properties:
+      period:
+        $ref: '#/definitions/internal_billing.ProjectPeriod'
+    type: object
+  internal_billing.periodsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_billing.ProjectPeriod'
+        type: array
     type: object
   internal_billing.publishTermsReq:
     properties:
@@ -1713,7 +1749,7 @@ definitions:
           $ref: '#/definitions/internal_billing.TermsVersion'
         type: array
     type: object
-  internal_billing.unlockMonthReq:
+  internal_billing.unlockPeriodReq:
     properties:
       reason:
         description: |-
@@ -6769,44 +6805,54 @@ paths:
       summary: Назначить специалиста на проект (по UUID) — админ
       tags:
       - admin-projects
-  /admin/projects/{id}/billing/unlock_month:
+  /admin/projects/{id}/billing/unlock_period:
     post:
       consumes:
       - application/json
       description: |-
-        Срез просмотров удаляется, месяц снова считается на лету.
-        Действие пишется в журнал админских действий: расфиксация
+        Срез просмотров удаляется, период снова считается на лету.
+        Действие пишется в журнал админских действий: переоткрытие
         переписывает историю расчёта, и след обязателен.
-        Идемпотентно: месяц, который и так идёт, ручка оставляет как есть.
+        Идемпотентно: период, который и так идёт, ручка оставляет как есть.
+
+        ПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан
+        от выхода этого, и после переоткрытия он недостоверен —
+        как и вся цепочка дальше. Пока арифметики переноса нет,
+        это предупреждение; в ответе видно, сколько подытоженных
+        периодов идёт следом.
       parameters:
       - description: project id
         in: path
         name: id
         required: true
         type: string
-      - description: ГГГГ-ММ, по умолчанию текущий
+      - description: номер периода, по умолчанию текущий
         in: query
-        name: month
-        type: string
+        name: period
+        type: integer
       - description: причина
         in: body
         name: body
         schema:
-          $ref: '#/definitions/internal_billing.unlockMonthReq'
+          $ref: '#/definitions/internal_billing.unlockPeriodReq'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_billing.monthLockResp'
+            $ref: '#/definitions/internal_billing.periodResp'
         "400":
-          description: bad_id; bad_month
+          description: bad_id; bad_period
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — у проекта ещё нет периодов
           schema:
             $ref: '#/definitions/internal_billing.errorResponse'
       security:
       - BearerAuth: []
-      summary: Вернуть зафиксированный месяц в работу (админ)
+      summary: Вернуть подытоженный период в работу (админ)
       tags:
       - admin-billing
   /admin/projects/{id}/change_funnel:
@@ -8580,25 +8626,17 @@ paths:
       summary: Взять условия из действующего прайса (менеджер)
       tags:
       - manager-billing
-  /manager/projects/{id}/billing/lock_month:
-    post:
+  /manager/projects/{id}/billing/periods:
+    get:
       description: |-
-        Сохраняет срез просмотров — по каждой выкладке и каждой
-        площадке, на сегодняшнюю отсечку — и пересчитывает месяц
-        уже по нему. После этого числа месяца не меняются, даже
-        если просмотры продолжают расти. Идемпотентно: повторный вызов на уже
-        зафиксированном месяце ничего не меняет и не ошибка.
-        Обычно месяц фиксируется сам через 14 дней после его
-        конца; эта ручка — «зафиксировать сейчас».
+        Периоды катятся от даты первой публикации: вышел первый
+        ролик 15-го — периоды идут с 15-го по 14-е. Пока не вышло
+        ничего, периодов нет — и это не ошибка.
       parameters:
       - description: project id
         in: path
         name: id
         required: true
-        type: string
-      - description: ГГГГ-ММ, по умолчанию текущий
-        in: query
-        name: month
         type: string
       produces:
       - application/json
@@ -8606,18 +8644,14 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_billing.monthLockResp'
-        "400":
-          description: bad_id; bad_month
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
+            $ref: '#/definitions/internal_billing.periodsResp'
         "404":
           description: not_found — проект не найден или ведёт другой менеджер
           schema:
             $ref: '#/definitions/internal_billing.errorResponse'
       security:
       - BearerAuth: []
-      summary: Зафиксировать месяц (менеджер)
+      summary: Периоды проекта (менеджер)
       tags:
       - manager-billing
   /manager/projects/{id}/checklist:

@@ -445,10 +445,10 @@ func NewRouter(d Deps) http.Handler {
 					r.Put("/manager/projects/{id}/payments/{kind}", d.Billing.ManagerSetPayment)
 					r.Post("/manager/projects/{id}/payments/{kind}/confirm", d.Billing.ManagerConfirmPayment)
 					r.Post("/manager/projects/{id}/accruals/recalc", d.Billing.ManagerRecalcAccruals)
-					// «Зафиксировать сейчас». Обычно месяц закрывается
-					// сам через 14 дней после конца (тикер в воркере),
-					// но ждать их не всегда нужно.
-					r.Post("/manager/projects/{id}/billing/lock_month", d.Billing.ManagerLockMonth)
+					// Периоды проекта: катятся от первой публикации, а
+					// подытоживаются сами через 14 дней после конца
+					// (тикер в воркере). Ручного подытога нет намеренно.
+					r.Get("/manager/projects/{id}/billing/periods", d.Billing.ManagerPeriods)
 					r.Post("/manager/projects/{id}/accruals/{accrual_id}/approve", d.Billing.ManagerApproveAccrual)
 					r.Post("/manager/projects/{id}/accruals/{accrual_id}/paid", d.Billing.ManagerPayAccrual)
 					r.Put("/manager/projects/{id}/creators/{creator_id}/utm", d.Billing.ManagerSaveUTM)
@@ -569,10 +569,10 @@ func NewRouter(d Deps) http.Handler {
 				if d.Billing != nil {
 					r.Get("/admin/terms", d.Billing.AdminListTerms)
 					r.Post("/admin/terms", d.Billing.AdminPublishTerms)
-					// Расфиксация месяца — только админ и только со
-					// следом в журнале: она переписывает историю
+					// Переоткрытие периода — только админ и только со
+					// следом в журнале: оно переписывает историю
 					// расчёта.
-					r.Post("/admin/projects/{id}/billing/unlock_month", d.Billing.AdminUnlockMonth)
+					r.Post("/admin/projects/{id}/billing/unlock_period", d.Billing.AdminUnlockPeriod)
 				}
 			})
 		}

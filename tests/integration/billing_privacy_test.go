@@ -105,7 +105,7 @@ func TestClientBillingHidesOurMoney(t *testing.T) {
 	// Счёт заказчику — это цена клиента, а не выплата креатору: если бы
 	// в клиентский ответ поехали payout-числа, итог совпал бы с ними.
 	svc := billing.NewService(billing.NewRepo(pool))
-	full, err := svc.ProjectBilling(context.Background(), pid, time.Now().UTC())
+	full, err := svc.ProjectBilling(context.Background(), pid, 0, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("менеджерский биллинг: %v", err)
 	}
@@ -287,7 +287,7 @@ func setupBillingWithMargin(t *testing.T, pool *pgxpool.Pool) (projectID, client
 	}
 	seedPublicationViews(t, projectID, creators[0], pubDay(0),
 		fmt.Sprintf("priv%s", uuid.NewString()[:6]), 1_200_000, true)
-	if _, err := svc.Recalculate(ctx, projectID, time.Now().UTC()); err != nil {
+	if _, err := recalcCurrent(t, svc, projectID); err != nil {
 		cleanup()
 		t.Fatalf("пересчёт: %v", err)
 	}

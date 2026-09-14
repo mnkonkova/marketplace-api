@@ -1605,14 +1605,14 @@ const docTemplate = `{
                 }
             }
         },
-        "/admin/projects/{id}/billing/unlock_month": {
+        "/admin/projects/{id}/billing/unlock_period": {
             "post": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Срез просмотров удаляется, месяц снова считается на лету.\nДействие пишется в журнал админских действий: расфиксация\nпереписывает историю расчёта, и след обязателен.\nИдемпотентно: месяц, который и так идёт, ручка оставляет как есть.",
+                "description": "Срез просмотров удаляется, период снова считается на лету.\nДействие пишется в журнал админских действий: переоткрытие\nпереписывает историю расчёта, и след обязателен.\nИдемпотентно: период, который и так идёт, ручка оставляет как есть.\n\nПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан\nот выхода этого, и после переоткрытия он недостоверен —\nкак и вся цепочка дальше. Пока арифметики переноса нет,\nэто предупреждение; в ответе видно, сколько подытоженных\nпериодов идёт следом.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1622,7 +1622,7 @@ const docTemplate = `{
                 "tags": [
                     "admin-billing"
                 ],
-                "summary": "Вернуть зафиксированный месяц в работу (админ)",
+                "summary": "Вернуть подытоженный период в работу (админ)",
                 "parameters": [
                     {
                         "type": "string",
@@ -1632,9 +1632,9 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "ГГГГ-ММ, по умолчанию текущий",
-                        "name": "month",
+                        "type": "integer",
+                        "description": "номер периода, по умолчанию текущий",
+                        "name": "period",
                         "in": "query"
                     },
                     {
@@ -1642,7 +1642,7 @@ const docTemplate = `{
                         "name": "body",
                         "in": "body",
                         "schema": {
-                            "$ref": "#/definitions/internal_billing.unlockMonthReq"
+                            "$ref": "#/definitions/internal_billing.unlockPeriodReq"
                         }
                     }
                 ],
@@ -1650,11 +1650,17 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_billing.monthLockResp"
+                            "$ref": "#/definitions/internal_billing.periodResp"
                         }
                     },
                     "400": {
-                        "description": "bad_id; bad_month",
+                        "description": "bad_id; bad_period",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — у проекта ещё нет периодов",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.errorResponse"
                         }
@@ -4297,21 +4303,21 @@ const docTemplate = `{
                 }
             }
         },
-        "/manager/projects/{id}/billing/lock_month": {
-            "post": {
+        "/manager/projects/{id}/billing/periods": {
+            "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Сохраняет срез просмотров — по каждой выкладке и каждой\nплощадке, на сегодняшнюю отсечку — и пересчитывает месяц\nуже по нему. После этого числа месяца не меняются, даже\nесли просмотры продолжают расти. Идемпотентно: повторный вызов на уже\nзафиксированном месяце ничего не меняет и не ошибка.\nОбычно месяц фиксируется сам через 14 дней после его\nконца; эта ручка — «зафиксировать сейчас».",
+                "description": "Периоды катятся от даты первой публикации: вышел первый\nролик 15-го — периоды идут с 15-го по 14-е. Пока не вышло\nничего, периодов нет — и это не ошибка.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "manager-billing"
                 ],
-                "summary": "Зафиксировать месяц (менеджер)",
+                "summary": "Периоды проекта (менеджер)",
                 "parameters": [
                     {
                         "type": "string",
@@ -4319,25 +4325,13 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "ГГГГ-ММ, по умолчанию текущий",
-                        "name": "month",
-                        "in": "query"
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_billing.monthLockResp"
-                        }
-                    },
-                    "400": {
-                        "description": "bad_id; bad_month",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
+                            "$ref": "#/definitions/internal_billing.periodsResp"
                         }
                     },
                     "404": {
@@ -11778,8 +11772,8 @@ const docTemplate = `{
                 "payout_views_bonus": {
                     "type": "integer"
                 },
-                "period_month": {
-                    "description": "PeriodMonth — первое число месяца.",
+                "period_start": {
+                    "description": "PeriodStart — начало периода, которому принадлежит начисление.\nПериоды катятся от первой публикации проекта, а не по календарю,\nпоэтому это не первое число месяца (см. billing.ProjectPeriod).",
                     "type": "string"
                 },
                 "priority": {
@@ -11874,7 +11868,7 @@ const docTemplate = `{
                 "paid_at": {
                     "type": "string"
                 },
-                "period_month": {
+                "period_start": {
                     "type": "string"
                 },
                 "priority": {
@@ -11936,23 +11930,19 @@ const docTemplate = `{
                         "$ref": "#/definitions/internal_billing.ClientAccrual"
                     }
                 },
-                "month": {
-                    "description": "Month — состояние месяца. Заказчику оно нужно по той же причине,\nчто и менеджеру: пока месяц идёт, числа ещё изменятся, и счёт\nнельзя считать окончательным.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/internal_billing.ProjectMonth"
-                        }
-                    ]
-                },
                 "payments": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_billing.Payment"
                     }
                 },
-                "period_month": {
-                    "description": "PeriodMonth — за какой месяц отданы начисления.",
-                    "type": "string"
+                "period": {
+                    "description": "Period — какой период показан и в каком он состоянии. Заказчику\nэто нужно по той же причине, что и менеджеру: пока период идёт,\nчисла ещё изменятся, и счёт нельзя считать окончательным.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                        }
+                    ]
                 },
                 "terms": {
                     "$ref": "#/definitions/internal_billing.SideTerms"
@@ -12025,7 +12015,7 @@ const docTemplate = `{
                 "paid_at": {
                     "type": "string"
                 },
-                "period_month": {
+                "period_start": {
                     "type": "string"
                 },
                 "project_id": {
@@ -12294,23 +12284,19 @@ const docTemplate = `{
                         "$ref": "#/definitions/internal_billing.Accrual"
                     }
                 },
-                "month": {
-                    "description": "Month — состояние месяца: идёт или зафиксирован. Отсюда же\nпонятно, почему строки помечены «предварительно».",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/internal_billing.ProjectMonth"
-                        }
-                    ]
-                },
                 "payments": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_billing.Payment"
                     }
                 },
-                "period_month": {
-                    "description": "PeriodMonth — за какой месяц отданы начисления.",
-                    "type": "string"
+                "period": {
+                    "description": "Period — какой период показан и в каком он состоянии. Отсюда же\nпонятно, почему строки помечены «предварительно».",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                        }
+                    ]
                 },
                 "terms": {
                     "$ref": "#/definitions/internal_billing.Terms"
@@ -12331,32 +12317,59 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_billing.ProjectMonth": {
+        "internal_billing.ProjectPeriod": {
             "type": "object",
             "properties": {
+                "carry_in_client": {
+                    "description": "Carry* — перенос остатка ступени тарифа, в просмотрах.\n\nСтупень — 100 000 просмотров; остаток, не добравший до полной,\nедет в следующий период и складывается с его просмотрами. Стороны\nразные: клиентская и креаторская считаются по своим ставкам и\nразъедутся, одно число на двоих скрыло бы это.\n\nСейчас нули: арифметику включат, когда утвердят тариф. Место под\nнеё — в подытоженном периоде, потому что перенос такая же\nзамороженная величина, как просмотры.",
+                    "type": "integer"
+                },
+                "carry_in_creator": {
+                    "type": "integer"
+                },
+                "carry_out_client": {
+                    "type": "integer"
+                },
+                "carry_out_creator": {
+                    "type": "integer"
+                },
+                "ends_on": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
                 "locked_at": {
                     "type": "string"
                 },
                 "locked_by": {
-                    "description": "LockedBy — кто зафиксировал. nil = фоновая задача.",
+                    "description": "LockedBy — кто подытожил. nil = фоновая задача; ручного подытога\nнет вовсе, так что сейчас здесь всегда nil.",
                     "type": "string"
                 },
-                "period_month": {
+                "prev_period_id": {
+                    "description": "PrevPeriodID — предыдущий период. nil только у первого: остаток\nступени переносится по цепочке, и она должна быть явной.",
                     "type": "string"
                 },
                 "project_id": {
                     "type": "string"
                 },
+                "seq": {
+                    "description": "Seq — какой это период по счёту: первый, второй, третий.",
+                    "type": "integer"
+                },
                 "snapshot_approx": {
-                    "description": "SnapshotApprox — числам не на что опереться: поденный ряд к моменту\nфиксации уже схлопнули, и восстановить просмотры на отсечку\nнеоткуда.\n\nНе путать с «предварительно» (Accrual.IsPreview): то про месяц,\nкоторый ещё идёт, это — про месяц, который зафиксирован, но\nопирается на пустоту. Могут стоять одновременно, и в интерфейсе их\nнельзя схлопывать в одну плашку.",
+                    "description": "SnapshotApprox — числам не на что опереться: поденный ряд к моменту\nфиксации уже схлопнули.\n\nНе путать с «предварительно» (Accrual.IsPreview): то про период,\nкоторый ещё идёт, это — про период, который подытожен, но\nопирается на пустоту. Могут стоять одновременно, и в интерфейсе их\nнельзя схлопывать в одну плашку.",
                     "type": "boolean"
                 },
                 "snapshot_as_of": {
-                    "description": "SnapshotAsOf — на какую дату сняты числа месяца. Это отсечка\n(конец месяца плюс две недели), а не момент фиксации: воркер мог\nопоздать, и числа всё равно должны быть теми, что были на отсечку.",
+                    "description": "SnapshotAsOf — на какую дату сняты числа: конец периода плюс две\nнедели. Это отсечка, а не момент фиксации: воркер мог опоздать, и\nчисла всё равно должны быть теми, что были на отсечку.",
+                    "type": "string"
+                },
+                "starts_on": {
+                    "description": "StartsOn/EndsOn — границы, обе включительно.",
                     "type": "string"
                 },
                 "status": {
-                    "description": "Status — open | locked.",
                     "type": "string"
                 }
             }
@@ -12776,14 +12789,6 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_billing.monthLockResp": {
-            "type": "object",
-            "properties": {
-                "month": {
-                    "$ref": "#/definitions/internal_billing.ProjectMonth"
-                }
-            }
-        },
         "internal_billing.paymentReq": {
             "type": "object",
             "properties": {
@@ -12792,6 +12797,25 @@ const docTemplate = `{
                 },
                 "note": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_billing.periodResp": {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                }
+            }
+        },
+        "internal_billing.periodsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                    }
                 }
             }
         },
@@ -12907,7 +12931,7 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_billing.unlockMonthReq": {
+        "internal_billing.unlockPeriodReq": {
             "type": "object",
             "properties": {
                 "reason": {

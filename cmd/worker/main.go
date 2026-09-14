@@ -238,11 +238,11 @@ func main() {
 	go runOrderExpiryTicker(rootCtx, orders.NewService(orders.NewRepo(pool)),
 		cfg.OrderExpiryInterval, logger)
 
-	// Фиксация месяцев. До неё правило «через две недели после конца
-	// месяца просмотры больше не меняются» не исполнялось нигде: оно
+	// Подытог периодов. До него правило «через две недели после конца
+	// периода просмотры больше не меняются» не исполнялось нигде: оно
 	// держалось на том, что менеджер вовремя нажал «Пересчитать».
-	go runMonthLockTicker(rootCtx, billing.NewService(billing.NewRepo(pool)),
-		cfg.BillingMonthLockInterval, cfg.BillingMonthLockDelay, logger)
+	go runPeriodLockTicker(rootCtx, billing.NewService(billing.NewRepo(pool)),
+		cfg.BillingPeriodLockInterval, cfg.BillingPeriodLockDelay, logger)
 
 	go runPublicationGaugeTicker(rootCtx,
 		publications.NewService(publications.NewRepo(pool)), 5*time.Minute, logger)
@@ -525,29 +525,29 @@ func runOrderExpiryTicker(ctx context.Context, svc *orders.Service,
 	}
 }
 
-// runMonthLockTicker — закрывает месяцы, которым пора.
+// runPeriodLockTicker — подытоживает периоды, которым пора.
 //
-// Месяц фиксируется через delay после своего конца: суммы пересчитываются
-// в последний раз, просмотры сохраняются срезом. Дальше числа месяца не
-// меняются, даже если ролики продолжают набирать просмотры, — в этом и
-// смысл.
+// Период закрывается через delay после своего конца: просмотры
+// сохраняются срезом на отсечку, суммы пересчитываются по нему, в общий
+// чат уходит сообщение. Дальше числа периода не меняются, даже если
+// ролики продолжают набирать просмотры, — в этом и смысл.
 //
-// Ошибка на одном месяце не роняет проход: остальные проекты в ней не
+// Ошибка на одном периоде не роняет проход: остальные проекты в ней не
 // виноваты, а следующий тик попробует снова.
-func runMonthLockTicker(ctx context.Context, svc *billing.Service,
+func runPeriodLockTicker(ctx context.Context, svc *billing.Service,
 	interval, delay time.Duration, logger *slog.Logger) {
 
 	if interval <= 0 {
 		interval = time.Hour
 	}
 	run := func() {
-		locked, failed, err := svc.LockDueMonths(ctx, time.Now().UTC(), delay)
+		locked, failed, err := svc.LockDuePeriods(ctx, time.Now().UTC(), delay)
 		if err != nil {
-			logger.Warn("month lock scan failed", "err", err)
+			logger.Warn("period lock scan failed", "err", err)
 			return
 		}
 		if locked > 0 || failed > 0 {
-			logger.Info("months locked", "locked", locked, "failed", failed)
+			logger.Info("periods locked", "locked", locked, "failed", failed)
 		}
 	}
 	run()
