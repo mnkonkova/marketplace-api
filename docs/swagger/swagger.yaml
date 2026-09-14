@@ -170,6 +170,46 @@ definitions:
       status:
         type: string
     type: object
+  internal_admin.NavCounts:
+    properties:
+      checklists:
+        description: |-
+          Checklists/Pipelines/Productions — только действующие. Архивные
+          версии шаблонов и выключенные воронки в меню не считаем: их нельзя
+          подключить, и цифра у пункта означала бы объём мусора.
+        type: integer
+      clients:
+        type: integer
+      moderation_pending:
+        description: |-
+          ModerationPending — заявки специалистов, ждущие решения. Это число
+          фронт красит отдельно: оно означает, что кого-то держат в очереди.
+        type: integer
+      pipelines:
+        type: integer
+      productions:
+        type: integer
+      projects_active:
+        description: |-
+          ProjectsActive — незавершённые и неотменённые проекты.
+
+          Внимание: список /admin/projects по умолчанию прячет только
+          отменённые, а завершённые показывает, поэтому его total бывает
+          больше этого числа ровно на количество done. Здесь намеренно
+          «сколько в работе» — цифра у пункта меню отвечает на этот вопрос,
+          а не «сколько строк в таблице».
+        type: integer
+      specialists:
+        description: |-
+          Specialists/Clients — по users.kind, как в фильтре /admin/users.
+          Пользователь с kind='both' не попадает ни в один из двух: фильтр
+          списка тоже сверяет kind точным совпадением, и счётчик обязан
+          сходиться со списком, который откроют по клику.
+        type: integer
+      team:
+        description: Team — админы и менеджеры вместе, как в /admin/team.
+        type: integer
+    type: object
   internal_admin.SearchProjectHit:
     properties:
       client_name:
@@ -221,6 +261,10 @@ definitions:
         items:
           $ref: '#/definitions/internal_admin.TeamMember'
         type: array
+      nav_counts:
+        allOf:
+        - $ref: '#/definitions/internal_admin.NavCounts'
+        description: NavCounts — счётчики у пунктов бокового меню.
       projects_by_kind:
         additionalProperties:
           type: integer
@@ -6730,6 +6774,8 @@ paths:
         Пункты считаются на сервере по единым правилам и приходят
         всегда, в том числе нулевыми — решает фронт. Тестовые
         проекты и пользователи не учитываются нигде.
+        В nav_counts — цифры у пунктов бокового меню: отдельными
+        ручками это было бы восемь запросов на каждый заход в CRM.
       produces:
       - application/json
       responses:

@@ -2052,7 +2052,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Пункты считаются на сервере по единым правилам и приходят\nвсегда, в том числе нулевыми — решает фронт. Тестовые\nпроекты и пользователи не учитываются нигде.",
+                "description": "Пункты считаются на сервере по единым правилам и приходят\nвсегда, в том числе нулевыми — решает фронт. Тестовые\nпроекты и пользователи не учитываются нигде.\nВ nav_counts — цифры у пунктов бокового меню: отдельными\nручками это было бы восемь запросов на каждый заход в CRM.",
                 "produces": [
                     "application/json"
                 ],
@@ -10912,6 +10912,40 @@
                 }
             }
         },
+        "internal_admin.NavCounts": {
+            "type": "object",
+            "properties": {
+                "checklists": {
+                    "description": "Checklists/Pipelines/Productions — только действующие. Архивные\nверсии шаблонов и выключенные воронки в меню не считаем: их нельзя\nподключить, и цифра у пункта означала бы объём мусора.",
+                    "type": "integer"
+                },
+                "clients": {
+                    "type": "integer"
+                },
+                "moderation_pending": {
+                    "description": "ModerationPending — заявки специалистов, ждущие решения. Это число\nфронт красит отдельно: оно означает, что кого-то держат в очереди.",
+                    "type": "integer"
+                },
+                "pipelines": {
+                    "type": "integer"
+                },
+                "productions": {
+                    "type": "integer"
+                },
+                "projects_active": {
+                    "description": "ProjectsActive — незавершённые и неотменённые проекты.\n\nВнимание: список /admin/projects по умолчанию прячет только\nотменённые, а завершённые показывает, поэтому его total бывает\nбольше этого числа ровно на количество done. Здесь намеренно\n«сколько в работе» — цифра у пункта меню отвечает на этот вопрос,\nа не «сколько строк в таблице».",
+                    "type": "integer"
+                },
+                "specialists": {
+                    "description": "Specialists/Clients — по users.kind, как в фильтре /admin/users.\nПользователь с kind='both' не попадает ни в один из двух: фильтр\nсписка тоже сверяет kind точным совпадением, и счётчик обязан\nсходиться со списком, который откроют по клику.",
+                    "type": "integer"
+                },
+                "team": {
+                    "description": "Team — админы и менеджеры вместе, как в /admin/team.",
+                    "type": "integer"
+                }
+            }
+        },
         "internal_admin.SearchProjectHit": {
             "type": "object",
             "properties": {
@@ -10984,6 +11018,14 @@
                     "items": {
                         "$ref": "#/definitions/internal_admin.TeamMember"
                     }
+                },
+                "nav_counts": {
+                    "description": "NavCounts — счётчики у пунктов бокового меню.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.NavCounts"
+                        }
+                    ]
                 },
                 "projects_by_kind": {
                     "description": "ProjectsByKind/ProjectsByStatus — распределение всех нетестовых\nпроектов. Ключи присутствуют всегда, включая нулевые: иначе\nпропавший столбец диаграммы читается как сбой, а не как ноль.",

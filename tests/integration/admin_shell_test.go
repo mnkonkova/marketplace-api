@@ -214,6 +214,160 @@ WHERE id = $1`, over, manager); err != nil {
 	}
 }
 
+// Счётчики меню сходятся с тем, что реально отдают соответствующие
+// списки, и тестовые записи не попадают ни в один из них.
+//
+// Абсолютные значения в общей базе ничего не значат, поэтому заводим по
+// объекту каждого вида и сверяем прирост.
+func TestAdminSummaryNavCounts(t *testing.T) {
+	pool := integration.Pool(t)
+	s := newAdminShell(t, pool)
+	ctx := context.Background()
+
+	before := navCounts(t, s)
+
+	client := s.user(t, userOpts{Kind: "client"})
+	specialist := s.user(t, userOpts{Kind: "specialist"})
+	// Менеджер идёт и в «команду», и в «клиентов»: харнесс заводит его
+	// с kind=client, роль живёт отдельным флагом.
+	s.user(t, userOpts{Kind: "client", IsManager: true})
+	s.project(t, projects.StartProjectInput{ClientUserID: &client, Title: "R2 меню активный"})
+
+	// Специалист в очереди модерации — коралловый бейдж.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO specialist_profiles (user_id, display_name, is_published, moderation_status)
+VALUES ($1, 'R2 на модерации', TRUE, 'pending_review')
+ON CONFLICT (user_id) DO UPDATE SET is_published = TRUE, moderation_status = 'pending_review'`,
+		specialist); err != nil {
+		t.Fatalf("профиль на модерации: %v", err)
+	}
+
+	name := "R2 меню " + uuid.NewString()[:8]
+	code, tpl := s.post(t, "/api/v1/admin/checklist_templates", map[string]any{
+		"name":  name,
+		"items": []map[string]any{{"text": "Пункт", "is_required": true}},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("шаблон чеклиста: код %d, тело %v", code, tpl)
+	}
+	s.defer_(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM checklist_templates WHERE id = $1`, tpl["id"])
+	})
+
+	var pipelineID, productionID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO pipelines (name) VALUES ($1) RETURNING id`, name+" воронка").Scan(&pipelineID); err != nil {
+		t.Fatalf("воронка: %v", err)
+	}
+	s.defer_(func() { _, _ = pool.Exec(ctx, `DELETE FROM pipelines WHERE id = $1`, pipelineID) })
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO productions (name) VALUES ($1) RETURNING id`, name+" продакшен").Scan(&productionID); err != nil {
+		t.Fatalf("продакшен: %v", err)
+	}
+	s.defer_(func() { _, _ = pool.Exec(ctx, `DELETE FROM productions WHERE id = $1`, productionID) })
+
+	after := navCounts(t, s)
+	for _, c := range []struct {
+		key  string
+		want int
+	}{
+		{"projects_active", 1},
+		{"moderation_pending", 1},
+		{"team", 1}, // менеджер; админ теста завёлся до первого замера
+		{"specialists", 1},
+		{"clients", 2}, // заказчик и менеджер: менеджер заведён с kind=client
+		{"checklists", 1},
+		{"pipelines", 1},
+		{"productions", 1},
+	} {
+		if got := after[c.key] - before[c.key]; got != c.want {
+			t.Errorf("счётчик %q: прирост %d, ожидали %d", c.key, got, c.want)
+		}
+	}
+
+	// Числа сходятся со списками, которые откроют по клику.
+	_, body := s.get(t, "/api/v1/admin/team")
+	if got := len(list(t, body, "items")); got != after["team"] {
+		t.Errorf("в счётчике команды %d, а в списке %d", after["team"], got)
+	}
+	_, body = s.get(t, "/api/v1/admin/users?kind=specialist&limit=1")
+	if got := num(t, body, "total"); got != after["specialists"] {
+		t.Errorf("в счётчике специалистов %d, а в списке %d", after["specialists"], got)
+	}
+	_, body = s.get(t, "/api/v1/admin/users?kind=client&limit=1")
+	if got := num(t, body, "total"); got != after["clients"] {
+		t.Errorf("в счётчике клиентов %d, а в списке %d", after["clients"], got)
+	}
+	_, body = s.get(t, "/api/v1/admin/checklist_templates")
+	if got := len(list(t, body, "items")); got != after["checklists"] {
+		t.Errorf("в счётчике чеклистов %d, а в библиотеке %d", after["checklists"], got)
+	}
+
+	// Тестовые не попадают никуда: ни проект, ни человек.
+	s.project(t, projects.StartProjectInput{
+		ClientUserID: &client, Title: "R2 меню тестовый", IsTest: true,
+	})
+	s.user(t, userOpts{Kind: "specialist", IsTest: true})
+	s.user(t, userOpts{Kind: "client", IsManager: true, IsTest: true})
+	withTest := navCounts(t, s)
+	for _, key := range []string{"projects_active", "team", "specialists", "clients"} {
+		if withTest[key] != after[key] {
+			t.Errorf("тестовые записи попали в счётчик %q: было %d, стало %d",
+				key, after[key], withTest[key])
+		}
+	}
+
+	// Завершённый проект уходит из «в работе»: цифра у пункта меню
+	// отвечает на вопрос «сколько в работе», а не «сколько строк».
+	donePID := s.project(t, projects.StartProjectInput{
+		ClientUserID: &client, Title: "R2 меню завершённый",
+	})
+	if _, err := pool.Exec(ctx,
+		`UPDATE projects SET status = 'done', completed_at = now() WHERE id = $1`, donePID); err != nil {
+		t.Fatalf("завершить проект: %v", err)
+	}
+	if got := navCounts(t, s)["projects_active"]; got != after["projects_active"] {
+		t.Errorf("завершённый проект попал в «в работе»: было %d, стало %d",
+			after["projects_active"], got)
+	}
+
+	// Выключенная воронка и деактивированный продакшен — архив, в меню
+	// им делать нечего.
+	if _, err := pool.Exec(ctx, `UPDATE pipelines SET is_active = FALSE WHERE id = $1`, pipelineID); err != nil {
+		t.Fatalf("выключить воронку: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE productions SET is_active = FALSE WHERE id = $1`, productionID); err != nil {
+		t.Fatalf("выключить продакшен: %v", err)
+	}
+	archived := navCounts(t, s)
+	if archived["pipelines"] != before["pipelines"] {
+		t.Errorf("выключенная воронка осталась в счётчике: %d против %d",
+			archived["pipelines"], before["pipelines"])
+	}
+	if archived["productions"] != before["productions"] {
+		t.Errorf("выключенный продакшен остался в счётчике: %d против %d",
+			archived["productions"], before["productions"])
+	}
+}
+
+// navCounts — блок счётчиков меню из сводки.
+func navCounts(t *testing.T, s *adminShell) map[string]int {
+	t.Helper()
+	code, body := s.get(t, "/api/v1/admin/summary")
+	if code != http.StatusOK {
+		t.Fatalf("сводка: код %d, тело %v", code, body)
+	}
+	block := subMap(t, body, "nav_counts")
+	out := map[string]int{}
+	for _, key := range []string{
+		"projects_active", "moderation_pending", "team",
+		"specialists", "clients", "checklists", "pipelines", "productions",
+	} {
+		out[key] = num(t, block, key)
+	}
+	return out
+}
+
 func summaryCounts(t *testing.T, s *adminShell) map[string]int {
 	t.Helper()
 	code, body := s.get(t, "/api/v1/admin/summary")
