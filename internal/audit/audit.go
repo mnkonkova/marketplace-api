@@ -39,6 +39,7 @@ const (
 	ActionUserActivate       = "user.activate"
 	ActionUserVerifyEmail    = "user.verify_email"
 	ActionUserMarkTest       = "user.mark_test"
+	ActionUserLoginLink      = "user.login_link"
 
 	ActionModerationApprove = "moderation.approve"
 	ActionModerationReject  = "moderation.reject"

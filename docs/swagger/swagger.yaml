@@ -6976,6 +6976,47 @@ paths:
       summary: Сгенерировать инвайт для существующего юзера
       tags:
       - admin-users
+  /admin/users/{id}/login_link:
+    post:
+      description: |-
+        Действует 72 часа и гасит предыдущую невостребованную
+        ссылку этого человека. В отличие от
+        /admin/users/{id}/generate_invite, цель может быть
+        менеджером или админом — поэтому ручка смонтирована только
+        в админской секции и отдельно перепроверяет, что просит
+        действительно админ (роль могли снять после выдачи токена).
+        Права при входе берутся из базы в момент обмена ссылки, а
+        не из неё самой: ссылка не носит в себе никакой роли.
+      parameters:
+      - description: user id сотрудника
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_admin.InviteGenerateResult'
+        "403":
+          description: forbidden_actor — роль админа снята
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+        "409":
+          description: inactive_user — аккаунт отключён
+          schema:
+            $ref: '#/definitions/internal_admin.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Одноразовая ссылка для входа сотруднику (админ)
+      tags:
+      - admin-users
   /admin/users/{id}/mark_test:
     post:
       consumes:

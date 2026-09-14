@@ -2467,6 +2467,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/users/{id}/login_link": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Действует 72 часа и гасит предыдущую невостребованную\nссылку этого человека. В отличие от\n/admin/users/{id}/generate_invite, цель может быть\nменеджером или админом — поэтому ручка смонтирована только\nв админской секции и отдельно перепроверяет, что просит\nдействительно админ (роль могли снять после выдачи токена).\nПрава при входе берутся из базы в момент обмена ссылки, а\nне из неё самой: ссылка не носит в себе никакой роли.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Одноразовая ссылка для входа сотруднику (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id сотрудника",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.InviteGenerateResult"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden_actor — роль админа снята",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "inactive_user — аккаунт отключён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/users/{id}/mark_test": {
             "post": {
                 "security": [

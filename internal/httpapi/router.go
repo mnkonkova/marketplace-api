@@ -498,6 +498,11 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/admin/users", d.Admin.AdminListAllUsers)
 					r.Post("/admin/users", d.Admin.AdminCreateClient)
 					r.Post("/admin/users/{id}/generate_invite", d.Admin.AdminGenerateInvite)
+					// Ссылка для входа сотруднику. Только здесь, в
+					// админской секции: цель может быть менеджером или
+					// админом, и под ролью manager такой ручки быть не
+					// должно (data-sec D1 — см. internal/admin/login_link.go).
+					r.Post("/admin/users/{id}/login_link", d.Admin.AdminStaffLoginLink)
 					r.Post("/admin/users/{id}/verify_email", d.Admin.AdminVerifyEmail)
 					r.Post("/admin/users/{id}/deactivate", d.Admin.AdminDeactivateUser)
 					r.Post("/admin/users/{id}/activate", d.Admin.AdminActivateUser)

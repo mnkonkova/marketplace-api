@@ -54,6 +54,13 @@ func writeServiceErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, profiles.ErrConflict):
 		httpx.WriteErrMsg(w, http.StatusConflict, "conflict",
 			"Специалист отредактировал профиль с момента открытия — перезагрузите карточку и проверьте изменения.")
+	case errors.Is(err, ErrForbiddenActor):
+		// Не 401: сессия жива, прав больше нет.
+		httpx.WriteErrMsg(w, http.StatusForbidden, "forbidden_actor",
+			"Выписать ссылку для входа может только админ — обновите страницу, ваши права изменились.")
+	case errors.Is(err, ErrInactiveTarget):
+		httpx.WriteErrMsg(w, http.StatusConflict, "inactive_user",
+			"Аккаунт отключён — сначала включите его, иначе войти по ссылке не получится.")
 	case errors.Is(err, ErrNotManager):
 		httpx.WriteErrMsg(w, http.StatusConflict, "not_manager",
 			"Этот пользователь не имеет роли менеджера.")
