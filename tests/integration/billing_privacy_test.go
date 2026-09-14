@@ -408,8 +408,21 @@ func TestCreatorBenchmarkHiddenBelowAnonymityThreshold(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		t.Fatalf("разобрать ответ: %v", err)
 	}
-	if _, ok := body["benchmark"]; ok {
-		t.Fatalf("ниже порога обезличивания ориентир отдавать нельзя: %v", body["benchmark"])
+	// Ниже порога обезличивания проектных чисел в блоке нет, но
+	// «типичный ролик» всё равно назван — значением по умолчанию.
+	bench := subMap(t, body, "benchmark")
+	if _, ok := bench["project_median_views"]; ok {
+		t.Errorf("ниже порога обезличивания медиану проекта отдавать нельзя: %v", bench["project_median_views"])
+	}
+	if _, ok := bench["mature_videos"]; ok {
+		t.Errorf("ниже порога обезличивания состав проекта отдавать нельзя: %v", bench["mature_videos"])
+	}
+	if got := int64(num(t, bench, "typical_video_views")); got != billing.DefaultTypicalVideoViews {
+		t.Errorf("типичный ролик %d, ожидали значение по умолчанию %d",
+			got, billing.DefaultTypicalVideoViews)
+	}
+	if got, _ := bench["typical_video_source"].(string); got != "default" {
+		t.Errorf("источник %q, ожидали default — своих роликов мало и проект мал", got)
 	}
 
 	// Добавляем третьего креатора и добиваем до десяти зрелых роликов.
@@ -434,7 +447,7 @@ func TestCreatorBenchmarkHiddenBelowAnonymityThreshold(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
 		t.Fatalf("разобрать ответ: %v", err)
 	}
-	bench := subMap(t, body, "benchmark")
+	bench = subMap(t, body, "benchmark")
 	mature := num(t, bench, "mature_videos")
 	if mature != 10 {
 		t.Fatalf("зрелых роликов в расчёте %d, ожидали 10 (свежий не в счёт)", mature)
@@ -448,10 +461,20 @@ func TestCreatorBenchmarkHiddenBelowAnonymityThreshold(t *testing.T) {
 		t.Errorf("медиана %d — в неё попал ролик моложе двух недель", median)
 	}
 
+	// Своих зрелых роликов у него меньше десяти — считаем по проекту, и
+	// говорим об этом прямо.
+	if got, _ := bench["typical_video_source"].(string); got != "project" {
+		t.Errorf("источник %q, ожидали project", got)
+	}
+	if got := int64(num(t, bench, "typical_video_views")); got != median {
+		t.Errorf("типичный ролик %d, ожидали медиану проекта %d", got, median)
+	}
+
 	// В блоке нет ничьих идентификаторов и ничьих отдельных чисел.
 	for key := range bench {
 		switch key {
-		case "project_median_views", "my_percentile", "mature_videos":
+		case "project_median_views", "my_percentile", "mature_videos",
+			"typical_video_views", "typical_video_source", "my_mature_videos":
 		default:
 			t.Errorf("в обезличенном блоке лишнее поле %q", key)
 		}
@@ -489,4 +512,65 @@ SELECT COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY views), 0)::bigint F
 		t.Fatalf("медиана: %v", err)
 	}
 	return median
+}
+
+// Своя история побеждает: у креатора с десятью зрелыми роликами
+// «типичный ролик» считается по нему, а не по проекту.
+//
+// Лесенка идёт от общего к личному, и сервер обязан пройти её целиком:
+// фронту выбор не отдаётся, иначе в браузере заведётся вторая копия
+// правила со своей константой.
+func TestTypicalVideoPrefersOwnHistory(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	third, cleanupThird := h.NewUser(t, userOpts{Kind: "specialist"})
+	defer cleanupThird()
+	if err := publicationsRepoAddCreator(t, pool, pid, third); err != nil {
+		t.Fatalf("третий креатор: %v", err)
+	}
+
+	old := time.Now().UTC().AddDate(0, 0, -30)
+	// Десять своих зрелых роликов по 100 000 — его медиана ровно 100 000.
+	for i := 0; i < 10; i++ {
+		publishOn(t, pool, pid, creators[0], old, fmt.Sprintf("own%d", i), 100_000)
+	}
+	// Остальных роликов больше, и они заметно сильнее: проектная медиана
+	// выйдет другой, и подмену источника будет видно. Двенадцать, а не
+	// шесть: с шестью медиана проекта упала бы в ту же сотню тысяч, и
+	// тест перестал бы различать источники.
+	for i := 0; i < 12; i++ {
+		author := creators[1]
+		if i%2 == 0 {
+			author = third
+		}
+		publishOn(t, pool, pid, author, old, fmt.Sprintf("oth%d", i), 900_000)
+	}
+	// Свежий ролик-гигант: моложе двух недель, ни в одну медиану не идёт.
+	publishOn(t, pool, pid, creators[0], time.Now().UTC().AddDate(0, 0, -3), "fresh", 90_000_000)
+
+	raw := rawBody(t, h,
+		"/api/v1/me/creator/projects/"+pid.String()+"/earnings", h.Token(t, creators[0]))
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("разобрать ответ: %v", err)
+	}
+	bench := subMap(t, body, "benchmark")
+
+	if got, _ := bench["typical_video_source"].(string); got != "creator" {
+		t.Fatalf("источник %q, ожидали creator — своих зрелых роликов хватает", got)
+	}
+	if got := int64(num(t, bench, "typical_video_views")); got != 100_000 {
+		t.Errorf("типичный ролик %d, ожидали его собственную медиану 100000", got)
+	}
+	if got := num(t, bench, "my_mature_videos"); got != 10 {
+		t.Errorf("своих зрелых роликов %d, ожидали 10 (свежий не в счёт)", got)
+	}
+	// Медиана проекта при этом тоже отдаётся — порог обезличивания
+	// пройден, и она заведомо другая.
+	if got := int64(num(t, bench, "project_median_views")); got == 100_000 {
+		t.Error("медиана проекта совпала с его собственной — тест не различит источники")
+	}
 }

@@ -499,8 +499,9 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 		out.UTM = &links[0]
 	}
 
-	// Обезличенный ориентир проекта. Порог обезличивания внутри: ниже
-	// него ответ пустой, и поля в JSON не будет.
+	// «Типичный ролик» и обезличенный ориентир проекта. Лесенку выбора
+	// (своя история → проект → значение по умолчанию) целиком проходит
+	// репозиторий; порог обезличивания там же.
 	if out.Benchmark, err = s.repo.ProjectBenchmark(ctx, projectID, creatorID, now); err != nil {
 		return out, err
 	}

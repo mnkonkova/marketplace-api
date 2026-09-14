@@ -461,23 +461,28 @@ func (h *Handler) ClientOverviewHandler(w http.ResponseWriter, r *http.Request) 
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
-// ProjectBenchmark — обезличенный ориентир проекта для кабинета
-// креатора: медиана просмотров зрелых роликов и место человека
-// относительно неё.
+// ProjectBenchmark — «типичный ролик» для кабинета креатора и
+// обезличенный ориентир проекта.
+//
+// Лесенка от общего к личному, целиком на сервере:
+//
+//  1. своя история, если зрелых роликов хватает — самое точное;
+//  2. иначе медиана проекта, но только пока она остаётся агрегатом;
+//  3. иначе значение по умолчанию.
+//
+// Фронту выбор не отдаётся намеренно: вторая копия правила в браузере
+// разойдётся с этой при первой же правке, и обещание «до ступени
+// столько-то» станет зависеть от того, чей код старше.
 //
 // Зрелым считается ролик старше двух недель — тех же, что у отсечки
 // периода: пока он растёт, сравнивать его с отлежавшимися нечестно.
 // Возраст берём от фактической даты публикации, а где её нет — от сдачи
 // ссылки, как и везде.
-//
-// Порог обезличивания проверяется ЗДЕСЬ, а не в вызывающем: иначе рано
-// или поздно появится второй вызывающий, который про порог не знает.
-// Не прошли порог — возвращаем nil, и поля в ответе не будет.
 func (r *Repo) ProjectBenchmark(ctx context.Context, projectID, creatorID uuid.UUID, now time.Time) (*ProjectBenchmark, error) {
 	cutoff := now.Add(-matureVideoAge)
 
 	// Одна выкладка — один ролик: просмотры суммируются по площадкам, и
-	// считать ролик пять раз значило бы завысить и медиану, и порог.
+	// считать ролик пять раз значило бы завысить и медианы, и пороги.
 	const q = `
 WITH mature AS (
     SELECT p.id, p.creator_user_id,
@@ -496,8 +501,8 @@ SELECT
     COUNT(*)::int,
     COUNT(DISTINCT creator_user_id)::int,
     COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY views), 0)::bigint,
-    -- Медиана самого спрашивающего: с ней и сравниваем. NULL, если
-    -- зрелых роликов у него нет.
+    (SELECT COUNT(*)::int FROM mature WHERE creator_user_id = $2),
+    -- Медиана самого спрашивающего. NULL, если зрелых роликов у него нет.
     (SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY views)
      FROM mature WHERE creator_user_id = $2),
     -- Доля роликов проекта, которые слабее его медианного.
@@ -507,23 +512,51 @@ SELECT
 FROM mature`
 
 	var (
-		videos, creators, weaker int
-		median                   int64
-		mine                     *float64
+		videos, creators, myVideos, weaker int
+		projectMedian                      int64
+		myMedian                           *float64
 	)
 	if err := r.db.QueryRow(ctx, q, projectID, creatorID, cutoff).
-		Scan(&videos, &creators, &median, &mine, &weaker); err != nil {
+		Scan(&videos, &creators, &projectMedian, &myVideos, &myMedian, &weaker); err != nil {
 		return nil, fmt.Errorf("project benchmark: %w", err)
 	}
-	// Порог обезличивания: мало роликов или мало людей — это уже не
-	// агрегат, а чужой показатель. Отдаём пусто.
-	if videos < medianMinVideos || creators < medianMinCreators {
-		return nil, nil
+
+	out := &ProjectBenchmark{
+		MyMatureVideos:     myVideos,
+		TypicalVideoViews:  DefaultTypicalVideoViews,
+		TypicalVideoSource: TypicalFromDefault,
 	}
-	out := &ProjectBenchmark{MedianViews: median, MatureVideos: videos}
-	if mine != nil && videos > 0 {
-		p := weaker * 100 / videos
-		out.MyPercentile = &p
+
+	// Порог обезличивания: мало роликов или мало людей — это уже не
+	// агрегат, а чужой показатель, и в ответе его быть не должно. На
+	// «типичный ролик» это влияет тоже: опереться на такую медиану
+	// значит опереться на соседа.
+	anonymous := videos >= medianMinVideos && creators >= medianMinCreators
+	if anonymous {
+		median := projectMedian
+		count := videos
+		out.ProjectMedianViews = &median
+		out.MatureVideos = &count
+		if myMedian != nil {
+			p := weaker * 100 / videos
+			out.MyPercentile = &p
+		}
+		out.TypicalVideoViews = projectMedian
+		out.TypicalVideoSource = TypicalFromProject
+	}
+
+	// Своя история точнее всего — она и побеждает, если её хватает.
+	if myVideos >= creatorMinMatureVideos && myMedian != nil {
+		out.TypicalVideoViews = int64(*myMedian)
+		out.TypicalVideoSource = TypicalFromCreator
+	}
+
+	// Медиана может выйти нулевой: ролики есть, просмотров по ним нет.
+	// Ноль как «типичный ролик» сломал бы любой расчёт «сколько
+	// осталось», поэтому в этом случае честнее значение по умолчанию.
+	if out.TypicalVideoViews <= 0 {
+		out.TypicalVideoViews = DefaultTypicalVideoViews
+		out.TypicalVideoSource = TypicalFromDefault
 	}
 	return out, nil
 }
