@@ -550,7 +550,7 @@ func (h *Handler) CreatorEarnings(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект не найден.")
 		return
 	}
-	out, err := h.svc.CreatorEarnings(r.Context(), projectID, uid)
+	out, err := h.svc.CreatorEarnings(r.Context(), projectID, uid, time.Now().UTC())
 	if err != nil {
 		writeErr(w, err)
 		return

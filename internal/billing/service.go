@@ -469,8 +469,8 @@ func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, seq in
 
 // CreatorEarnings — «мой заработок». Только свои строки: чужих цифр
 // креатор не видит нигде, и здесь тоже.
-func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid.UUID) (CreatorEarnings, error) {
-	var out CreatorEarnings
+func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid.UUID, now time.Time) (CreatorEarnings, error) {
+	out := CreatorEarnings{Periods: []CreatorPeriod{}}
 	terms, err := s.repo.Terms(ctx, projectID)
 	if err != nil {
 		return out, err
@@ -497,6 +497,26 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 	}
 	if len(links) > 0 {
 		out.UTM = &links[0]
+	}
+
+	// Периоды — его стороной. Пока не вышел ни один ролик, периодов нет
+	// вовсе, и это не ошибка: у креатора просто пустой кабинет.
+	periods, err := s.Periods(ctx, projectID, now)
+	if err != nil && !errors.Is(err, ErrNoPeriods) {
+		return out, err
+	}
+	for _, p := range periods {
+		out.Periods = append(out.Periods, creatorPeriodView(p))
+		if p.Contains(now) {
+			cur := creatorPeriodView(p)
+			out.Period = &cur
+		}
+	}
+	// Проект мог давно ничего не выкладывать: тогда «текущий» — это
+	// последний заведённый период, а не пустота.
+	if out.Period == nil && len(out.Periods) > 0 {
+		last := out.Periods[len(out.Periods)-1]
+		out.Period = &last
 	}
 	return out, nil
 }

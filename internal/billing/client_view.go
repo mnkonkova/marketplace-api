@@ -181,6 +181,55 @@ func clientTotals(t PeriodTotals) ClientPeriodTotals {
 	}
 }
 
+// CreatorPeriod — период глазами креатора.
+//
+// Отдельный тип, а не ProjectPeriod с вырезанными полями: в периоде
+// лежит перенос остатка ПО ОБЕИМ сторонам, и клиентская — такая же
+// коммерческая тайна, как креаторские ставки для заказчика. С общим
+// типом каждое новое поле уезжало бы креатору само; здесь наоборот —
+// пока его не положат сюда руками, оно остаётся внутри.
+//
+// Идентификаторов периода (id, prev_period_id) тоже нет: цепочка
+// переноса — наша механика, а креатору нужно «какой это месяц по счёту,
+// с какого по какое и посчитан ли он».
+type CreatorPeriod struct {
+	// Seq — какой это период по счёту: первый, второй, третий.
+	Seq int `json:"seq"`
+	// StartsOn/EndsOn — границы, обе включительно. Отдаём с сервера, а
+	// не оставляем фронту прибавлять месяц: правило периода живёт в
+	// одном месте, иначе браузер продолжит рисовать старые границы после
+	// первой же правки правила.
+	StartsOn time.Time `json:"starts_on"`
+	EndsOn   time.Time `json:"ends_on"`
+	// Status — open (идёт, числа ещё изменятся) | locked (подытожен).
+	Status string `json:"status"`
+	// SnapshotAsOf — на какую дату сняты числа подытоженного периода.
+	SnapshotAsOf *time.Time `json:"snapshot_as_of,omitempty"`
+	// SnapshotApprox — числам не на что опереться: поденная статистика к
+	// моменту подытога уже удалена. Не то же самое, что «предварительно»
+	// у строки начисления.
+	SnapshotApprox bool `json:"snapshot_approx,omitempty"`
+	// CarryIn/CarryOut — перенос остатка ступени, ЕГО сторона: сколько
+	// просмотров пришло из прошлого периода и сколько уходит в
+	// следующий. Пока нули — арифметику включат вместе с тарифом.
+	CarryIn  int64 `json:"carry_in_creator"`
+	CarryOut int64 `json:"carry_out_creator"`
+}
+
+// creatorPeriodView — период креатора из общего периода проекта.
+func creatorPeriodView(p ProjectPeriod) CreatorPeriod {
+	return CreatorPeriod{
+		Seq:            p.Seq,
+		StartsOn:       p.StartsOn,
+		EndsOn:         p.EndsOn,
+		Status:         p.Status,
+		SnapshotAsOf:   p.SnapshotAsOf,
+		SnapshotApprox: p.SnapshotApprox,
+		CarryIn:        p.CarryInCreator,
+		CarryOut:       p.CarryOutCreator,
+	}
+}
+
 // CreatorAccrual — строка заработка креатора: его числа и только его.
 //
 // Клиентской стороны здесь нет ни под каким именем. Раньше креатору

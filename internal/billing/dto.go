@@ -253,7 +253,17 @@ type CreatorEarnings struct {
 	// Terms — его сторона тарифа. Клиентской цены здесь нет: см.
 	// SideTerms в client_view.go.
 	Terms SideTerms `json:"terms"`
-	// Accruals — мои начисления по всем месяцам проекта, свежие первыми.
+	// Accruals — мои начисления по всем периодам проекта, свежие первыми.
 	Accruals []CreatorAccrual `json:"accruals"`
 	UTM      *UTMLink         `json:"utm,omitempty"`
+	// Period — текущий период проекта. nil, пока не вышел ни один ролик:
+	// периоды отсчитываются от первой публикации, и до неё периода нет.
+	Period *CreatorPeriod `json:"period,omitempty"`
+	// Periods — все периоды проекта, от первого к последнему.
+	//
+	// Здесь же, а не отдельной ручкой: строки начислений приходят по
+	// всем периодам сразу, и у каждой из них фронту нужны границы. Без
+	// списка он считал бы их сам — прибавлял месяц к period_start, — то
+	// есть держал бы второе описание правила периода.
+	Periods []CreatorPeriod `json:"periods"`
 }

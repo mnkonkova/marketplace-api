@@ -12066,10 +12066,25 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "accruals": {
-                    "description": "Accruals — мои начисления по всем месяцам проекта, свежие первыми.",
+                    "description": "Accruals — мои начисления по всем периодам проекта, свежие первыми.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_billing.CreatorAccrual"
+                    }
+                },
+                "period": {
+                    "description": "Period — текущий период проекта. nil, пока не вышел ни один ролик:\nпериоды отсчитываются от первой публикации, и до неё периода нет.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.CreatorPeriod"
+                        }
+                    ]
+                },
+                "periods": {
+                    "description": "Periods — все периоды проекта, от первого к последнему.\n\nЗдесь же, а не отдельной ручкой: строки начислений приходят по\nвсем периодам сразу, и у каждой из них фронту нужны границы. Без\nсписка он считал бы их сам — прибавлял месяц к period_start, — то\nесть держал бы второе описание правила периода.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.CreatorPeriod"
                     }
                 },
                 "terms": {
@@ -12100,6 +12115,41 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "creator_user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.CreatorPeriod": {
+            "type": "object",
+            "properties": {
+                "carry_in_creator": {
+                    "description": "CarryIn/CarryOut — перенос остатка ступени, ЕГО сторона: сколько\nпросмотров пришло из прошлого периода и сколько уходит в\nследующий. Пока нули — арифметику включат вместе с тарифом.",
+                    "type": "integer"
+                },
+                "carry_out_creator": {
+                    "type": "integer"
+                },
+                "ends_on": {
+                    "type": "string"
+                },
+                "seq": {
+                    "description": "Seq — какой это период по счёту: первый, второй, третий.",
+                    "type": "integer"
+                },
+                "snapshot_approx": {
+                    "description": "SnapshotApprox — числам не на что опереться: поденная статистика к\nмоменту подытога уже удалена. Не то же самое, что «предварительно»\nу строки начисления.",
+                    "type": "boolean"
+                },
+                "snapshot_as_of": {
+                    "description": "SnapshotAsOf — на какую дату сняты числа подытоженного периода.",
+                    "type": "string"
+                },
+                "starts_on": {
+                    "description": "StartsOn/EndsOn — границы, обе включительно. Отдаём с сервера, а\nне оставляем фронту прибавлять месяц: правило периода живёт в\nодном месте, иначе браузер продолжит рисовать старые границы после\nпервой же правки правила.",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status — open (идёт, числа ещё изменятся) | locked (подытожен).",
                     "type": "string"
                 }
             }

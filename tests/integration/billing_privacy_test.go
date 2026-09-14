@@ -166,6 +166,66 @@ func TestCreatorEarningsHideClientPrice(t *testing.T) {
 	}
 }
 
+// Период в ответе креатора — его стороной: границы и его перенос есть,
+// клиентского переноса нет.
+//
+// Без периода фронт выводил границы сам, прибавляя месяц к дате начала:
+// второе описание правила периода, которое разъедется с сервером на
+// первой же правке. А клиентский перенос — та же коммерческая тайна,
+// что и цена клиента.
+func TestCreatorEarningsCarryPeriodWithoutClientSide(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	pid, _, creators, cleanup := setupBillingWithMargin(t, pool)
+	defer cleanup()
+
+	// Ролик вышел — значит у проекта есть период.
+	if _, err := pool.Exec(context.Background(), `
+UPDATE publication_links SET published_at = now() - interval '3 days'
+WHERE publication_id IN (SELECT id FROM project_publications WHERE project_id = $1)`,
+		pid); err != nil {
+		t.Fatalf("дата публикации: %v", err)
+	}
+
+	raw := rawBody(t, h,
+		"/api/v1/me/creator/projects/"+pid.String()+"/earnings", h.Token(t, creators[0]))
+
+	// Клиентской стороны переноса в ответе нет ни на какой глубине.
+	assertNoForbiddenKeys(t, raw, []string{
+		"carry_in_client", "carry_out_client",
+		"creator_salary_per_month", "creator_rate_per_1000_views",
+		"creator_rate_per_1000_views_over",
+		"margin", "payouts",
+	}, allowedCreatorKeys)
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("разобрать ответ: %v", err)
+	}
+	period := subMap(t, body, "period")
+	for _, key := range []string{
+		"seq", "starts_on", "ends_on", "status", "carry_in_creator", "carry_out_creator",
+	} {
+		if _, ok := period[key]; !ok {
+			t.Errorf("в периоде креатора нет %q — фронту снова считать границы самому", key)
+		}
+	}
+	if got := num(t, period, "seq"); got != 1 {
+		t.Errorf("номер периода %d, ожидали первый", got)
+	}
+	if got, _ := period["status"].(string); got != "open" {
+		t.Errorf("состояние периода %q, ожидали open", got)
+	}
+	// Перенос пока нулевой, но поле есть: арифметику включат с тарифом.
+	if got := num(t, period, "carry_in_creator"); got != 0 {
+		t.Errorf("перенос на входе %d, ожидали ноль до появления тарифа", got)
+	}
+	// Периоды списком — по ним же приходят строки начислений.
+	if items := list(t, body, "periods"); len(items) == 0 {
+		t.Error("список периодов пуст — фронту нечем подписать прошлые строки")
+	}
+}
+
 // Список проектов специалиста не отдаёт внутренние заметки менеджера.
 //
 // Карточка проекта их уже не отдавала (data-sec D4), а список —

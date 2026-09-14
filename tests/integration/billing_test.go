@@ -383,7 +383,7 @@ func TestBillingVisibility(t *testing.T) {
 	}
 
 	// Креатор видит только свою строку.
-	mine, err := svc.CreatorEarnings(ctx, pid, creators[0])
+	mine, err := svc.CreatorEarnings(ctx, pid, creators[0], time.Now().UTC())
 	if err != nil {
 		t.Fatalf("earnings: %v", err)
 	}
@@ -820,7 +820,7 @@ func TestCreatorSeesOwnPayoutNotClientPrice(t *testing.T) {
 		t.Fatalf("recalc: %v", err)
 	}
 
-	earn, err := svc.CreatorEarnings(ctx, pid, creators[0])
+	earn, err := svc.CreatorEarnings(ctx, pid, creators[0], time.Now().UTC())
 	if err != nil {
 		t.Fatalf("earnings: %v", err)
 	}

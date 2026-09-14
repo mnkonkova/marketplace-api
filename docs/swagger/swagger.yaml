@@ -988,9 +988,26 @@ definitions:
   internal_billing.CreatorEarnings:
     properties:
       accruals:
-        description: Accruals — мои начисления по всем месяцам проекта, свежие первыми.
+        description: Accruals — мои начисления по всем периодам проекта, свежие первыми.
         items:
           $ref: '#/definitions/internal_billing.CreatorAccrual'
+        type: array
+      period:
+        allOf:
+        - $ref: '#/definitions/internal_billing.CreatorPeriod'
+        description: |-
+          Period — текущий период проекта. nil, пока не вышел ни один ролик:
+          периоды отсчитываются от первой публикации, и до неё периода нет.
+      periods:
+        description: |-
+          Periods — все периоды проекта, от первого к последнему.
+
+          Здесь же, а не отдельной ручкой: строки начислений приходят по
+          всем периодам сразу, и у каждой из них фронту нужны границы. Без
+          списка он считал бы их сам — прибавлял месяц к period_start, — то
+          есть держал бы второе описание правила периода.
+        items:
+          $ref: '#/definitions/internal_billing.CreatorPeriod'
         type: array
       terms:
         allOf:
@@ -1016,6 +1033,41 @@ definitions:
       creator_name:
         type: string
       creator_user_id:
+        type: string
+    type: object
+  internal_billing.CreatorPeriod:
+    properties:
+      carry_in_creator:
+        description: |-
+          CarryIn/CarryOut — перенос остатка ступени, ЕГО сторона: сколько
+          просмотров пришло из прошлого периода и сколько уходит в
+          следующий. Пока нули — арифметику включат вместе с тарифом.
+        type: integer
+      carry_out_creator:
+        type: integer
+      ends_on:
+        type: string
+      seq:
+        description: 'Seq — какой это период по счёту: первый, второй, третий.'
+        type: integer
+      snapshot_approx:
+        description: |-
+          SnapshotApprox — числам не на что опереться: поденная статистика к
+          моменту подытога уже удалена. Не то же самое, что «предварительно»
+          у строки начисления.
+        type: boolean
+      snapshot_as_of:
+        description: SnapshotAsOf — на какую дату сняты числа подытоженного периода.
+        type: string
+      starts_on:
+        description: |-
+          StartsOn/EndsOn — границы, обе включительно. Отдаём с сервера, а
+          не оставляем фронту прибавлять месяц: правило периода живёт в
+          одном месте, иначе браузер продолжит рисовать старые границы после
+          первой же правки правила.
+        type: string
+      status:
+        description: Status — open (идёт, числа ещё изменятся) | locked (подытожен).
         type: string
     type: object
   internal_billing.OrderEstimate:
