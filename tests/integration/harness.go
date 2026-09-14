@@ -14,10 +14,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"marketpclce/internal/admin"
+	"marketpclce/internal/audit"
 	"marketpclce/internal/auth"
 	"marketpclce/internal/billing"
 	"marketpclce/internal/httpapi"
 	"marketpclce/internal/orders"
+	"marketpclce/internal/pipelines"
+	"marketpclce/internal/productions"
+	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
 	"marketpclce/internal/publications"
 )
@@ -55,6 +60,13 @@ func NewAPIHarness(t *testing.T, pool *pgxpool.Pool) *APIHarness {
 	pubSvc := publications.NewService(publications.NewRepo(pool))
 	ordersSvc := orders.NewService(orders.NewRepo(pool))
 
+	// Админские ручки поднимаем здесь же: половина правил CRM живёт
+	// именно в них (журнал, 409 при снятии роли, скрытие тестовых), и
+	// проверять их мимо роутера — значит не проверять роль админа.
+	adminSvc := admin.NewService(admin.NewRepo(pool), issuer, "http://harness.local", time.Hour).
+		WithProfilesRepo(profiles.NewRepo(pool)).
+		WithAuditRepo(audit.NewRepo(pool))
+
 	srv := httpapi.NewRouter(httpapi.Deps{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})),
 		TokenIssuer: issuer,
@@ -66,6 +78,9 @@ func NewAPIHarness(t *testing.T, pool *pgxpool.Pool) *APIHarness {
 		Publications:   publications.NewHandler(pubSvc),
 		Orders:         orders.NewHandler(ordersSvc),
 		Billing:        billing.NewHandler(billing.NewService(billing.NewRepo(pool))),
+		Admin:          admin.NewHandler(adminSvc),
+		Productions:    productions.NewHandler(productions.NewService(productions.NewRepo(pool))),
+		Pipelines:      pipelines.NewHandler(pipelines.NewService(pipelines.NewRepo(pool))),
 	})
 	return &APIHarness{Pool: pool, srv: srv, issuer: issuer}
 }
@@ -133,6 +148,9 @@ type UserOpts struct {
 	IsAdmin    bool
 	NotActive  bool
 	NotApprove bool
+	// IsTest — пользователь «для проверки». По умолчанию такие скрыты из
+	// админских выдач, и тесты этого правила заводят их именно так.
+	IsTest bool
 }
 
 // newUser — пользователь в БД плюс функция уборки.
@@ -145,11 +163,11 @@ func (h *APIHarness) NewUser(t *testing.T, o UserOpts) (uuid.UUID, func()) {
 	var id uuid.UUID
 	err := h.Pool.QueryRow(ctx, `
 INSERT INTO users (email, password_hash, kind, is_manager, is_admin,
-                   is_approved, is_active, email_verified_at)
-VALUES ($1, 'x', $2, $3, $4, $5, $6, now())
+                   is_approved, is_active, email_verified_at, is_test)
+VALUES ($1, 'x', $2, $3, $4, $5, $6, now(), $7)
 RETURNING id`,
 		"harness-"+uuid.NewString()+"@example.com", o.Kind,
-		o.IsManager, o.IsAdmin, !o.NotApprove, !o.NotActive).Scan(&id)
+		o.IsManager, o.IsAdmin, !o.NotApprove, !o.NotActive, o.IsTest).Scan(&id)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
