@@ -125,7 +125,7 @@ func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
 // @Param    limit        query int    false "1-1000, default 20"
 // @Param    offset       query int    false "default 0"
 // @Success  200 {object} AdminListResult
-// @Failure  400 {object} errorResponse "bad_manager_id | invalid_input"
+// @Failure  400 {object} errorResponse "bad_manager_id | invalid_input — незнакомое значение status, kind или sort; сообщение перечисляет допустимые"
 // @Router   /admin/projects [get]
 func (h *Handler) AdminListProjects(w http.ResponseWriter, r *http.Request) {
 	qs := r.URL.Query()

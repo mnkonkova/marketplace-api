@@ -442,6 +442,73 @@ func TestAdminUserCardCollectsEverything(t *testing.T) {
 	}
 }
 
+// В карточке специалиста — все пять площадок, включая незаполненные:
+// блок называется «Площадки · 3 из 5», и пустые строки в нём и есть
+// ответ на вопрос «чего не хватает».
+func TestAdminUserCardShowsAllFivePlatforms(t *testing.T) {
+	pool := integration.Pool(t)
+	s := newAdminShell(t, pool)
+	ctx := context.Background()
+
+	specialist := s.user(t, userOpts{Kind: "specialist"})
+	// Ники живут там же, где их правит сам специалист, — в social_links
+	// профиля. Второго места для них нет.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO specialist_profiles (user_id, display_name, social_links)
+VALUES ($1, 'R2 площадки', $2::jsonb)
+ON CONFLICT (user_id) DO UPDATE SET social_links = EXCLUDED.social_links`,
+		specialist, `{"tiktok":"@r2tt","youtube":"https://youtube.com/@r2","telegram":"@r2tg"}`); err != nil {
+		t.Fatalf("профиль специалиста: %v", err)
+	}
+
+	_, body := s.get(t, "/api/v1/admin/users/"+specialist.String())
+	items := list(t, body, "platforms")
+	if len(items) != 5 {
+		t.Fatalf("площадок в карточке %d, ожидали 5: %v", len(items), items)
+	}
+	got := map[string]string{}
+	order := make([]string, 0, 5)
+	for _, raw := range items {
+		m, _ := raw.(map[string]any)
+		name, _ := m["platform"].(string)
+		handle, _ := m["handle"].(string)
+		got[name] = handle
+		order = append(order, name)
+	}
+	if got["tiktok"] != "@r2tt" || got["youtube"] != "https://youtube.com/@r2" {
+		t.Errorf("заполненные площадки приехали не те: %v", got)
+	}
+	for _, empty := range []string{"instagram", "vk", "likee"} {
+		v, ok := got[empty]
+		if !ok {
+			t.Errorf("площадки %q нет в карточке — фронту нечем показать «не заполнено»", empty)
+		}
+		if v != "" {
+			t.Errorf("площадка %q неожиданно заполнена: %q", empty, v)
+		}
+	}
+	// Телеграм — контакт, а не площадка выкладки: в блоке ему не место.
+	if _, ok := got["telegram"]; ok {
+		t.Error("в площадки затесался телеграм из контактов")
+	}
+	// Порядок фиксирован: он же порядок колонок в интерфейсе.
+	want := []string{"tiktok", "instagram", "youtube", "vk", "likee"}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Errorf("порядок площадок %v, ожидали %v", order, want)
+			break
+		}
+	}
+
+	// У клиента профиля специалиста нет — и площадок не бывает: блок
+	// фронт не нарисует.
+	client := s.user(t, userOpts{Kind: "client"})
+	_, body = s.get(t, "/api/v1/admin/users/"+client.String())
+	if raw, ok := body["platforms"]; ok {
+		t.Errorf("у клиента приехали площадки: %v", raw)
+	}
+}
+
 func hasAction(entries []any, action string) bool {
 	for _, raw := range entries {
 		e, _ := raw.(map[string]any)
@@ -839,11 +906,22 @@ func TestAdminProjectsUnfinishedMatchesNavCount(t *testing.T) {
 		t.Errorf("status=cancelled отдал %d проектов, ожидали 1", n)
 	}
 
-	// Незнакомое значение ведёт себя как раньше: enum его не принимает.
-	// Поведение не улучшаем — фронт на него не завязан, а менять его
-	// заодно с добавлением unfinished значило бы менять две вещи сразу.
-	if code, _ := s.get(t, "/api/v1/admin/projects?status=nonsense"); code != http.StatusInternalServerError {
-		t.Errorf("незнакомый статус: код %d, раньше был 500", code)
+	// Незнакомое значение — понятный отказ, а не «что-то пошло не так».
+	// Фильтры живут в адресе и ссылками делятся: устаревшая ссылка или
+	// опечатка в ней роняли экран пятисотой. Отказ обязан перечислить,
+	// что принимается, — иначе с чужой ссылкой не догадаться, что чинить.
+	code, body := s.get(t, "/api/v1/admin/projects?status=nonsense")
+	if code != http.StatusBadRequest {
+		t.Fatalf("незнакомый статус: код %d, ожидали 400 (тело %v)", code, body)
+	}
+	if body["error"] != "invalid_input" {
+		t.Errorf("код ошибки %v, ожидали invalid_input", body["error"])
+	}
+	msg, _ := body["message"].(string)
+	for _, want := range []string{"unfinished", "cancelled"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("в сообщении нет допустимого значения %q: %q", want, msg)
+		}
 	}
 }
 
@@ -934,7 +1012,18 @@ VALUES ($1, $2, CURRENT_DATE + $3::int, $4::publication_status)`,
 	// Неизвестный вид — отказ с объяснением, а не молча весь список.
 	code, body := s.get(t, "/api/v1/admin/projects?kind=unknown_kind")
 	if code != http.StatusBadRequest {
-		t.Errorf("неизвестный вид: код %d, ожидали 400 (тело %v)", code, body)
+		t.Fatalf("неизвестный вид: код %d, ожидали 400 (тело %v)", code, body)
+	}
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "creators_turnkey") {
+		t.Errorf("отказ по виду не перечисляет допустимые значения: %q", msg)
+	}
+	// И то же самое у сортировки — третий параметр той же ручки.
+	code, body = s.get(t, "/api/v1/admin/projects?sort=by_wish")
+	if code != http.StatusBadRequest {
+		t.Fatalf("неизвестная сортировка: код %d, ожидали 400 (тело %v)", code, body)
+	}
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "updated_asc") {
+		t.Errorf("отказ по сортировке не перечисляет допустимые значения: %q", msg)
 	}
 }
 

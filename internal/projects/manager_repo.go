@@ -129,7 +129,8 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 	}
 	order, ok := adminSortOrder[p.Sort]
 	if p.Sort != "" && !ok {
-		return nil, 0, fmt.Errorf("invalid sort %q", p.Sort)
+		return nil, 0, fmt.Errorf("invalid sort %q: допустимые значения — %s",
+			p.Sort, allowedSortsHint)
 	}
 	if !ok {
 		// Без параметра — прежний порядок ручки. Таблица в админке просит
@@ -143,11 +144,13 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 
 	switch {
 	case p.Status == AdminStatusUnfinished:
-		// Единственное неточное значение. Остальные по-прежнему идут в
-		// запрос как есть и приводятся к enum'у — незнакомое значение
-		// ломается ровно так же, как ломалось раньше.
+		// Единственное неточное значение — четыре статуса разом.
 		conds = append(conds, "p.status IN "+unfinishedStatusesSQL)
 	case p.Status != "":
+		if !isKnownProjectStatus(ProjectStatus(p.Status)) {
+			return nil, 0, fmt.Errorf("invalid status %q: допустимые значения — %s",
+				p.Status, allowedStatusesHint)
+		}
 		args = append(args, p.Status)
 		conds = append(conds, fmt.Sprintf("p.status = $%d", len(args)))
 	default:
@@ -160,7 +163,8 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 		switch ProjectKind(p.Kind) {
 		case KindCreatorsTurnkey, KindProductionTurnkey, KindGeneral:
 		default:
-			return nil, 0, fmt.Errorf("invalid kind %q", p.Kind)
+			return nil, 0, fmt.Errorf("invalid kind %q: допустимые значения — %s",
+				p.Kind, allowedKindsHint)
 		}
 		args = append(args, p.Kind)
 		conds = append(conds, fmt.Sprintf("p.kind = $%d", len(args)))

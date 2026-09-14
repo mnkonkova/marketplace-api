@@ -1396,7 +1396,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "bad_manager_id | invalid_input",
+                        "description": "bad_manager_id | invalid_input — незнакомое значение status, kind или sort; сообщение перечисляет допустимые",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.errorResponse"
                         }
@@ -10953,6 +10953,18 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_admin.PlatformHandle": {
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "description": "Handle — ник или ссылка. Пусто = площадка не заполнена.",
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_admin.SearchProjectHit": {
             "type": "object",
             "properties": {
@@ -11152,6 +11164,13 @@ const docTemplate = `{
                 },
                 "phone": {
                     "type": "string"
+                },
+                "platforms": {
+                    "description": "Platforms — пять площадок в фиксированном порядке (он же порядок\nколонок в интерфейсе). Пусто у тех, у кого нет профиля\nспециалиста: площадок у них не бывает, и блок рисовать нечем.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.PlatformHandle"
+                    }
                 },
                 "projects": {
                     "description": "Projects — участие во всех ролях, свежие сверху. Никогда не null.",

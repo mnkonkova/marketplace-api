@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"marketpclce/internal/audit"
 	"marketpclce/internal/httpx"
+	"marketpclce/internal/publications"
 )
 
 // Карточка человека в админке.
@@ -36,6 +38,19 @@ type UserProjectRef struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// PlatformHandle — одна из пяти площадок в карточке специалиста.
+//
+// Отдаём все пять, даже незаполненные: в карточке блок называется
+// «Площадки · 3 из 5», и пустые строки — половина его смысла. Список
+// только заполненных отвечал бы «где он есть», а спрашивают обратное —
+// «чего не хватает». Сколько из пяти заполнено, считается по этому же
+// списку: второе поле с тем же числом рано или поздно разошлось бы с ним.
+type PlatformHandle struct {
+	Platform string `json:"platform"`
+	// Handle — ник или ссылка. Пусто = площадка не заполнена.
+	Handle string `json:"handle"`
+}
+
 // ModerationInfo — решение модерации по специалисту. nil у тех, у кого
 // профиля специалиста нет: у клиента модерации не бывает.
 type ModerationInfo struct {
@@ -54,6 +69,10 @@ type UserCard struct {
 	// подтверждал ли человек почту сам или это сделал админ.
 	EmailVerifiedAt *time.Time      `json:"email_verified_at,omitempty"`
 	Moderation      *ModerationInfo `json:"moderation,omitempty"`
+	// Platforms — пять площадок в фиксированном порядке (он же порядок
+	// колонок в интерфейсе). Пусто у тех, у кого нет профиля
+	// специалиста: площадок у них не бывает, и блок рисовать нечем.
+	Platforms []PlatformHandle `json:"platforms,omitempty"`
 	// Projects — участие во всех ролях, свежие сверху. Никогда не null.
 	Projects []UserProjectRef `json:"projects"`
 	// Audit — записи журнала: и те, где он объект, и его собственные
@@ -70,12 +89,14 @@ const userProjectsLimit = 50
 // Журнал прикладывает сервис: он живёт в отдельном пакете.
 func (r *Repo) GetUserCard(ctx context.Context, userID uuid.UUID) (UserCard, error) {
 	var (
-		c         UserCard
-		modStatus *string
-		modReason *string
-		modAt     *time.Time
-		modBy     *uuid.UUID
-		published bool
+		c           UserCard
+		modStatus   *string
+		modReason   *string
+		modAt       *time.Time
+		modBy       *uuid.UUID
+		published   bool
+		hasSpecProf bool
+		socialLinks []byte
 	)
 	err := r.db.QueryRow(ctx, `
 SELECT u.id, COALESCE(u.email::text, ''), COALESCE(u.phone, ''),
@@ -84,7 +105,8 @@ SELECT u.id, COALESCE(u.email::text, ''), COALESCE(u.phone, ''),
        u.email_verified_at IS NOT NULL, u.email_verified_at,
        u.created_at, u.last_login_at, u.is_test,
        sp.moderation_status, sp.moderation_reason, sp.moderation_reviewed_at,
-       sp.moderation_reviewed_by, COALESCE(sp.is_published, FALSE)
+       sp.moderation_reviewed_by, COALESCE(sp.is_published, FALSE),
+       sp.user_id IS NOT NULL, sp.social_links
 FROM users u
 LEFT JOIN client_profiles     cp ON cp.user_id = u.id
 LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
@@ -93,7 +115,8 @@ WHERE u.id = $1`, userID).Scan(
 		&c.Kind, &c.IsAdmin, &c.IsManager, &c.IsApproved, &c.IsActive,
 		&c.EmailVerified, &c.EmailVerifiedAt,
 		&c.CreatedAt, &c.LastLoginAt, &c.IsTest,
-		&modStatus, &modReason, &modAt, &modBy, &published)
+		&modStatus, &modReason, &modAt, &modBy, &published,
+		&hasSpecProf, &socialLinks)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserCard{}, ErrNotFound
 	}
@@ -101,6 +124,9 @@ WHERE u.id = $1`, userID).Scan(
 		return UserCard{}, fmt.Errorf("get user card: %w", err)
 	}
 	c.IsPublished = published
+	if hasSpecProf {
+		c.Platforms = platformHandles(socialLinks)
+	}
 	if modStatus != nil {
 		c.ModerationStatus = *modStatus
 		m := ModerationInfo{Status: *modStatus, ReviewedAt: modAt, ReviewedBy: modBy, IsPublished: published}
@@ -140,6 +166,29 @@ LIMIT $2`, userID, userProjectsLimit)
 		c.Projects = append(c.Projects, p)
 	}
 	return c, rows.Err()
+}
+
+// platformHandles — пять площадок из social_links профиля.
+//
+// Источник тот же, что у состава проекта (publications.platformLinks):
+// ники живут в specialist_profiles.social_links, и второго места для них
+// заводить нельзя — разошлись бы на первой же правке профиля. Отличие
+// одно: там нужны только заполненные, здесь — все пять.
+//
+// В social_links лежат и телеграм с сайтом; сюда они не попадают — блок
+// в карточке про площадки выкладки, а не про контакты.
+func platformHandles(raw []byte) []PlatformHandle {
+	all := map[string]string{}
+	if len(raw) > 0 {
+		// Профиль с битым JSON не должен ронять карточку: покажем пустые
+		// площадки, это честнее пятисотой.
+		_ = json.Unmarshal(raw, &all)
+	}
+	out := make([]PlatformHandle, 0, len(publications.AllPlatforms))
+	for _, p := range publications.AllPlatforms {
+		out = append(out, PlatformHandle{Platform: p, Handle: all[p]})
+	}
+	return out
 }
 
 // GetUserCard — карточка человека вместе с журналом по нему.

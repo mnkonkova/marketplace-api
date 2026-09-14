@@ -84,6 +84,29 @@ const AdminStatusUnfinished = "unfinished"
 // рядом показывали бы разные числа про одно и то же.
 const unfinishedStatusesSQL = `('draft','active','on_hold','dispute')`
 
+// Подсказки в отказах фильтров. Фильтры живут в адресе и ссылками
+// делятся: устаревшая ссылка или опечатка в ней не должны ронять экран в
+// «что-то пошло не так». Отказ обязан говорить, что именно принято —
+// иначе человек с чужой ссылкой не догадается, что в ней поправить.
+const (
+	allowedStatusesHint = "draft, active, on_hold, done, cancelled, dispute, " +
+		"unfinished (в работе) или пусто (всё, кроме отменённых)"
+	allowedKindsHint = "creators_turnkey, production_turnkey, general или пусто (все виды)"
+	allowedSortsHint = "updated_asc, updated_desc, created_asc, created_desc"
+)
+
+// isKnownProjectStatus — статус из enum'а project_status. Проверяем в Go,
+// а не приведением к типу в SQL: незнакомое значение иначе доходит до
+// базы и возвращается ошибкой enum'а, то есть пятисотой.
+func isKnownProjectStatus(s ProjectStatus) bool {
+	switch s {
+	case ProjectStatusDraft, ProjectStatusActive, ProjectStatusOnHold,
+		ProjectStatusDone, ProjectStatusCancelled, ProjectStatusDispute:
+		return true
+	}
+	return false
+}
+
 // AdminListParams — поиск, фильтры, сортировка и страница для
 // GET /admin/projects. Все поля опциональны; Limit clamp'ится 1..1000.
 type AdminListParams struct {
