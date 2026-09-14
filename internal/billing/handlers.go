@@ -154,9 +154,9 @@ func periodParam(r *http.Request) (int, bool) {
 // @Produce  json
 // @Security BearerAuth
 // @Param    id    path  string true  "project id"
-// @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
+// @Param    period query int false "номер периода проекта, по умолчанию текущий"
 // @Success  200 {object} ProjectBilling
-// @Failure  400 {object} errorResponse "bad_id; bad_month — месяц не в формате ГГГГ-ММ"
+// @Failure  400 {object} errorResponse "bad_id; bad_period — номер периода не целое число"
 // @Failure  401 {object} errorResponse "no_user — сессия истекла"
 // @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
 // @Router   /manager/projects/{id}/billing [get]
@@ -329,9 +329,9 @@ func (h *Handler) ManagerConfirmPayment(w http.ResponseWriter, r *http.Request) 
 // @Produce  json
 // @Security BearerAuth
 // @Param    id    path  string true  "project id"
-// @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
+// @Param    period query int false "номер периода проекта, по умолчанию текущий"
 // @Success  200 {object} accrualsResp
-// @Failure  400 {object} errorResponse "bad_id; bad_month"
+// @Failure  400 {object} errorResponse "bad_id; bad_period"
 // @Failure  401 {object} errorResponse "no_user — сессия истекла"
 // @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
 // @Router   /manager/projects/{id}/accruals/recalc [post]
@@ -474,9 +474,9 @@ func (h *Handler) ManagerSaveUTM(w http.ResponseWriter, r *http.Request) {
 // @Produce  json
 // @Security BearerAuth
 // @Param    id    path  string true  "project id"
-// @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
+// @Param    period query int false "номер периода проекта, по умолчанию текущий"
 // @Success  200 {object} ClientBillingView
-// @Failure  400 {object} errorResponse "bad_id; bad_month — месяц не в формате ГГГГ-ММ"
+// @Failure  400 {object} errorResponse "bad_id; bad_period — номер периода не целое число"
 // @Failure  401 {object} errorResponse "no_user — сессия истекла"
 // @Failure  404 {object} errorResponse "not_found — проект не найден или он не ваш"
 // @Router   /me/projects/{id}/billing [get]

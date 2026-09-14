@@ -443,7 +443,7 @@ func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, seq in
 	if err != nil {
 		return out, err
 	}
-	out.Period = period
+	out.Period = clientPeriodView(period)
 	terms, err := s.repo.Terms(ctx, projectID)
 	if err != nil {
 		return out, err
@@ -497,6 +497,12 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 	}
 	if len(links) > 0 {
 		out.UTM = &links[0]
+	}
+
+	// Обезличенный ориентир проекта. Порог обезличивания внутри: ниже
+	// него ответ пустой, и поля в JSON не будет.
+	if out.Benchmark, err = s.repo.ProjectBenchmark(ctx, projectID, creatorID, now); err != nil {
+		return out, err
 	}
 
 	// Периоды — его стороной. Пока не вышел ни один ролик, периодов нет

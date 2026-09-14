@@ -48,7 +48,7 @@ func seedStats(t *testing.T, projectID, creator uuid.UUID, urls []string, days m
 			v := views
 			likes := views / 10
 			comments := views / 100
-			if err := repo.SaveStats(ctx, l, &v, &likes, &comments, nil,
+			if err := repo.SaveStats(ctx, l, &v, &likes, &comments, nil, nil,
 				now.AddDate(0, 0, offset)); err != nil {
 				t.Fatalf("SaveStats: %v", err)
 			}

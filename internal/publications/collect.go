@@ -125,7 +125,7 @@ JOIN project_publications p ON p.id = t.publication_id`
 // PK (link_id, stat_date). Пропущенный день не искажает историю — просто
 // не будет строки за этот день.
 func (r *Repo) SaveStats(ctx context.Context, link LinkToCollect,
-	views, likes, comments *int64, publishedAt *time.Time, now time.Time) error {
+	views, likes, comments, shares *int64, publishedAt *time.Time, now time.Time) error {
 
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -133,15 +133,19 @@ func (r *Repo) SaveStats(ctx context.Context, link LinkToCollect,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// shares пишем как есть, включая NULL: «площадка не отдала репосты» и
+	// «репостов ноль» — разные ответы, и подставлять ноль вместо
+	// неизвестного значит занижать вовлечённость молча.
 	if _, err := tx.Exec(ctx, `
-INSERT INTO video_stat_daily (link_id, stat_date, views, likes, comments, collected_at)
-VALUES ($1, $2::date, $3, $4, $5, $6)
+INSERT INTO video_stat_daily (link_id, stat_date, views, likes, comments, shares, collected_at)
+VALUES ($1, $2::date, $3, $4, $5, $6, $7)
 ON CONFLICT (link_id, stat_date) DO UPDATE
 SET views = EXCLUDED.views,
     likes = EXCLUDED.likes,
     comments = EXCLUDED.comments,
+    shares = EXCLUDED.shares,
     collected_at = EXCLUDED.collected_at`,
-		link.LinkID, now, views, likes, comments, now); err != nil {
+		link.LinkID, now, views, likes, comments, shares, now); err != nil {
 		return fmt.Errorf("upsert daily stat: %w", err)
 	}
 
@@ -546,7 +550,7 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 				}
 				continue
 			}
-			if err := s.repo.SaveStats(ctx, link, m.Views, m.Likes, m.Comments,
+			if err := s.repo.SaveStats(ctx, link, m.Views, m.Likes, m.Comments, m.Shares,
 				parsePublishedAt(m.PublishedAt), now); err != nil {
 				return st, err
 			}

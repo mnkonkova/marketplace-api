@@ -135,7 +135,7 @@ type ClientBillingView struct {
 	// Period — какой период показан и в каком он состоянии. Заказчику
 	// это нужно по той же причине, что и менеджеру: пока период идёт,
 	// числа ещё изменятся, и счёт нельзя считать окончательным.
-	Period ProjectPeriod `json:"period"`
+	Period ClientPeriod `json:"period"`
 }
 
 // clientAccrual — строка начисления глазами заказчика.
@@ -178,6 +178,46 @@ func clientTotals(t PeriodTotals) ClientPeriodTotals {
 		VideosDelivered: t.VideosDelivered,
 		Views:           t.Views,
 		CostPer1000:     t.CostPer1000,
+	}
+}
+
+// ClientPeriod — период глазами заказчика.
+//
+// Отдельный тип по той же причине, что и CreatorPeriod: в периоде лежит
+// перенос остатка ПО ОБЕИМ сторонам, и креаторская — не его дело. До
+// этого типа в клиентский ответ уезжал ProjectPeriod целиком, вместе с
+// carry_*_creator: та же утечка, что с выплатами и маржой, просто
+// моложе на один день.
+type ClientPeriod struct {
+	// Seq — какой это период по счёту.
+	Seq int `json:"seq"`
+	// StartsOn/EndsOn — границы, обе включительно. Считает сервер: иначе
+	// правило периода описано и в браузере тоже, и разъедется.
+	StartsOn time.Time `json:"starts_on"`
+	EndsOn   time.Time `json:"ends_on"`
+	// Status — open (идёт, числа ещё изменятся) | locked (подытожен).
+	Status string `json:"status"`
+	// SnapshotAsOf — на какую дату сняты числа подытоженного периода.
+	SnapshotAsOf *time.Time `json:"snapshot_as_of,omitempty"`
+	// SnapshotApprox — числам не на что опереться: поденная статистика к
+	// моменту подытога уже удалена.
+	SnapshotApprox bool `json:"snapshot_approx,omitempty"`
+	// CarryIn/CarryOut — перенос остатка ступени, его сторона. Пока нули.
+	CarryIn  int64 `json:"carry_in_client"`
+	CarryOut int64 `json:"carry_out_client"`
+}
+
+// clientPeriodView — период заказчика из общего периода проекта.
+func clientPeriodView(p ProjectPeriod) ClientPeriod {
+	return ClientPeriod{
+		Seq:            p.Seq,
+		StartsOn:       p.StartsOn,
+		EndsOn:         p.EndsOn,
+		Status:         p.Status,
+		SnapshotAsOf:   p.SnapshotAsOf,
+		SnapshotApprox: p.SnapshotApprox,
+		CarryIn:        p.CarryInClient,
+		CarryOut:       p.CarryOutClient,
 	}
 }
 
@@ -289,4 +329,50 @@ func creatorAccrual(a Accrual) CreatorAccrual {
 		PaidAt:          a.PaidAt,
 		CalculatedAt:    a.CalculatedAt,
 	}
+}
+
+// Обезличенный ориентир для кабинета креатора.
+//
+// Своих зрелых роликов у человека может быть мало — тогда «сколько
+// роликов до следующей ступени» считать не по чему. Медиана по проекту
+// эту дыру закрывает, но только пока она остаётся АГРЕГАТОМ.
+
+const (
+	// matureVideoAge — со скольких дней ролик считается зрелым. Те же
+	// две недели, что у отсечки периода: за это время ролик набирает
+	// основную массу просмотров, и раньше сравнивать его с другими
+	// нечестно — он ещё растёт.
+	matureVideoAge = 14 * 24 * time.Hour
+
+	// medianMinVideos/medianMinCreators — порог обезличивания.
+	//
+	// Это не оптимизация, а граница между агрегатом и чужими данными. В
+	// проекте с двумя креаторами и пятью роликами «медиана проекта» —
+	// это, по сути, показатель соседа, и отдав её, мы своими руками
+	// покажем одному креатору результаты другого. Десять роликов минимум
+	// от трёх человек: при таком составе ни одно отдельное число из
+	// медианы не восстанавливается, даже если знать свои.
+	//
+	// Ниже порога поля просто нет — «мало данных» честнее, чем число, за
+	// которым стоит один человек.
+	medianMinVideos   = 10
+	medianMinCreators = 3
+)
+
+// ProjectBenchmark — обезличенный ориентир проекта.
+//
+// Имён, идентификаторов и чьих-либо отдельных чисел здесь нет и быть не
+// может: это агрегат, и любая строка, по которой угадывается человек,
+// превращает его в чужие данные.
+type ProjectBenchmark struct {
+	// MedianViews — медиана просмотров зрелых роликов проекта.
+	MedianViews int64 `json:"project_median_views"`
+	// MyPercentile — где человек относительно этой медианы: доля зрелых
+	// роликов проекта, у которых просмотров меньше, чем у его медианного
+	// ролика. 0 — ниже всех, 100 — выше всех. Пусто, если своих зрелых
+	// роликов нет вовсе: сравнивать нечего.
+	MyPercentile *int `json:"my_percentile,omitempty"`
+	// MatureVideos — сколько зрелых роликов вошло в расчёт. Число само по
+	// себе обезличено и объясняет, насколько ориентиру можно верить.
+	MatureVideos int `json:"mature_videos"`
 }

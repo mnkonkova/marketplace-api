@@ -3719,9 +3719,9 @@
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "ГГГГ-ММ, по умолчанию текущий",
-                        "name": "month",
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
                         "in": "query"
                     }
                 ],
@@ -3733,7 +3733,7 @@
                         }
                     },
                     "400": {
-                        "description": "bad_id; bad_month",
+                        "description": "bad_id; bad_period",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.errorResponse"
                         }
@@ -4149,9 +4149,9 @@
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "ГГГГ-ММ, по умолчанию текущий",
-                        "name": "month",
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
                         "in": "query"
                     }
                 ],
@@ -4163,7 +4163,7 @@
                         }
                     },
                     "400": {
-                        "description": "bad_id; bad_month — месяц не в формате ГГГГ-ММ",
+                        "description": "bad_id; bad_period — номер периода не целое число",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.errorResponse"
                         }
@@ -8271,6 +8271,37 @@
                 }
             }
         },
+        "/me/overview": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Кросс-проектный срез: просмотры по пяти площадкам и всего,\nсчёт по подытоженным периодам и по текущим, сколько уже\nпереведено, стоимость тысячи просмотров и разбивка по\nпроектам. Стоимость считается из фактических сумм и\nпросмотров, а не из ставки тарифа: у проектов бывают\nразные версии условий.\nПодытоженные периоды дают числа из среза, текущие — живые.\nsnapshot_approx означает, что часть чисел подтянута:\nподенную статистику к моменту подытога уже удалили.\nТестовые проекты не учитываются.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-billing"
+                ],
+                "summary": "Сводка по всем моим проектам (заказчик)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.ClientOverview"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/portfolio": {
             "get": {
                 "security": [
@@ -9373,9 +9404,9 @@
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "ГГГГ-ММ, по умолчанию текущий",
-                        "name": "month",
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
                         "in": "query"
                     }
                 ],
@@ -9387,7 +9418,7 @@
                         }
                     },
                     "400": {
-                        "description": "bad_id; bad_month — месяц не в формате ГГГГ-ММ",
+                        "description": "bad_id; bad_period — номер периода не целое число",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.errorResponse"
                         }
@@ -11933,7 +11964,7 @@
                     "description": "Period — какой период показан и в каком он состоянии. Заказчику\nэто нужно по той же причине, что и менеджеру: пока период идёт,\nчисла ещё изменятся, и счёт нельзя считать окончательным.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                            "$ref": "#/definitions/internal_billing.ClientPeriod"
                         }
                     ]
                 },
@@ -11942,6 +11973,79 @@
                 },
                 "totals": {
                     "$ref": "#/definitions/internal_billing.ClientPeriodTotals"
+                }
+            }
+        },
+        "internal_billing.ClientOverview": {
+            "type": "object",
+            "properties": {
+                "cost_per_1000": {
+                    "description": "CostPer1000 — стоимость тысячи просмотров по всем проектам, в\nкопейках. Считается из ФАКТИЧЕСКИХ сумм и фактических просмотров,\nа не из ставки тарифа: у разных проектов разные версии условий, и\nсредняя ставка соврала бы. nil, пока просмотров нет.",
+                    "type": "integer"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "money": {
+                    "$ref": "#/definitions/internal_billing.OverviewMoney"
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewProject"
+                    }
+                },
+                "projects_total": {
+                    "type": "integer"
+                },
+                "series": {
+                    "description": "Series — ряд для графика, последние 90 дней.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewPoint"
+                    }
+                },
+                "snapshot_approx": {
+                    "description": "SnapshotApprox — хотя бы у одного подытоженного периода числа\nподтянуты: поденную статистику к моменту подытога уже удалили.\nСводка, часть чисел которой приблизительна, обязана сказать об\nэтом, а не выглядеть точной.",
+                    "type": "boolean"
+                },
+                "views": {
+                    "$ref": "#/definitions/internal_billing.OverviewViews"
+                }
+            }
+        },
+        "internal_billing.ClientPeriod": {
+            "type": "object",
+            "properties": {
+                "carry_in_client": {
+                    "description": "CarryIn/CarryOut — перенос остатка ступени, его сторона. Пока нули.",
+                    "type": "integer"
+                },
+                "carry_out_client": {
+                    "type": "integer"
+                },
+                "ends_on": {
+                    "type": "string"
+                },
+                "seq": {
+                    "description": "Seq — какой это период по счёту.",
+                    "type": "integer"
+                },
+                "snapshot_approx": {
+                    "description": "SnapshotApprox — числам не на что опереться: поденная статистика к\nмоменту подытога уже удалена.",
+                    "type": "boolean"
+                },
+                "snapshot_as_of": {
+                    "description": "SnapshotAsOf — на какую дату сняты числа подытоженного периода.",
+                    "type": "string"
+                },
+                "starts_on": {
+                    "description": "StartsOn/EndsOn — границы, обе включительно. Считает сервер: иначе\nправило периода описано и в браузере тоже, и разъедется.",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status — open (идёт, числа ещё изменятся) | locked (подытожен).",
+                    "type": "string"
                 }
             }
         },
@@ -12064,6 +12168,14 @@
                     "items": {
                         "$ref": "#/definitions/internal_billing.CreatorAccrual"
                     }
+                },
+                "benchmark": {
+                    "description": "Benchmark — обезличенный ориентир проекта: медиана просмотров\nзрелых роликов и место человека относительно неё.\n\nnil, пока в проекте мало зрелых роликов или они принадлежат\nодному-двум людям: тогда «медиана проекта» — это показатель\nсоседа, а не агрегат. Своих данных у креатора может не хватать на\nрасчёт, но чужие ему видеть нечего, и второе важнее первого.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ProjectBenchmark"
+                        }
+                    ]
                 },
                 "period": {
                     "description": "Period — текущий период проекта. nil, пока не вышел ни один ролик:\nпериоды отсчитываются от первой публикации, и до неё периода нет.",
@@ -12202,6 +12314,89 @@
                 }
             }
         },
+        "internal_billing.OverviewMoney": {
+            "type": "object",
+            "properties": {
+                "current": {
+                    "description": "Current — по текущим периодам: предварительная, числа ещё вырастут.",
+                    "type": "integer"
+                },
+                "locked": {
+                    "description": "Locked — сумма по подытоженным периодам: окончательная, из срезов.",
+                    "type": "integer"
+                },
+                "paid": {
+                    "description": "Paid — сколько заказчик уже перевёл: подтверждённые платежи.\nОтдельно от Total намеренно — это разные вопросы: «сколько стоит»\nи «сколько внесено».",
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total — Locked + Current, «сколько всего стоит работа на сегодня».",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewPoint": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "views_gained": {
+                    "description": "ViewsGained — сколько просмотров набрали за этот день, а не всего\nна эту дату. Поденный ряд накопительный, и «всего на дату»\nпришлось бы достраивать по каждой ссылке за каждый день; прирост\nпоказывает ровно то, ради чего график и смотрят.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewProject": {
+            "type": "object",
+            "properties": {
+                "cost_per_1000": {
+                    "description": "CostPer1000 — стоимость тысячи просмотров по этому проекту. nil,\nпока просмотров нет: делить не на что.",
+                    "type": "integer"
+                },
+                "period": {
+                    "description": "Period — текущий период проекта. nil у не начавшегося.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ClientPeriod"
+                        }
+                    ]
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State — running | not_started.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "total": {
+                    "description": "Total — счёт по проекту: подытоженные периоды плюс текущий.",
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewViews": {
+            "type": "object",
+            "properties": {
+                "by_platform": {
+                    "description": "ByPlatform — все пять площадок всегда, включая нулевые: пропавший\nстолбик читается как сбой, а не как ноль.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_billing.Payment": {
             "type": "object",
             "properties": {
@@ -12313,6 +12508,23 @@
                     "type": "integer"
                 },
                 "views_bonus": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.ProjectBenchmark": {
+            "type": "object",
+            "properties": {
+                "mature_videos": {
+                    "description": "MatureVideos — сколько зрелых роликов вошло в расчёт. Число само по\nсебе обезличено и объясняет, насколько ориентиру можно верить.",
+                    "type": "integer"
+                },
+                "my_percentile": {
+                    "description": "MyPercentile — где человек относительно этой медианы: доля зрелых\nроликов проекта, у которых просмотров меньше, чем у его медианного\nролика. 0 — ниже всех, 100 — выше всех. Пусто, если своих зрелых\nроликов нет вовсе: сравнивать нечего.",
+                    "type": "integer"
+                },
+                "project_median_views": {
+                    "description": "MedianViews — медиана просмотров зрелых роликов проекта.",
                     "type": "integer"
                 }
             }
@@ -17001,11 +17213,22 @@
                 "comments": {
                     "type": "integer"
                 },
+                "er_percent": {
+                    "description": "ERPercent/ERWithoutShares — вовлечённость площадки и признак, что\nона посчитана без репостов.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "type": "boolean"
+                },
                 "likes": {
                     "type": "integer"
                 },
                 "platform": {
                     "type": "string"
+                },
+                "shares": {
+                    "description": "Shares — репосты. Пусто, если площадка их не отдаёт: ноль означал\nбы «репостов нет», а это другое утверждение.",
+                    "type": "integer"
                 },
                 "videos": {
                     "type": "integer"
@@ -17059,6 +17282,14 @@
                 "due_date": {
                     "type": "string"
                 },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость: (лайки + комментарии + репосты) ÷\nпросмотры, в процентах.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — посчитана без репостов: их не отдала хотя бы одна\nплощадка либо ролик собирали до того, как мы начали их писать.\nПрошлое не пересчитывается, поэтому у старых роликов признак\nостанется навсегда — и это честнее скачка на графике.",
+                    "type": "boolean"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -17089,6 +17320,10 @@
                 "published_at": {
                     "description": "PublishedAt — когда ролик вышел: самое раннее известное среди\nплощадок выкладки. Площадки выкладывают не одновременно, и «вышел»\n— это первая из них; на этой дате будет стоять возраст ролика и\nправило «зрелый» (14 дней).\n\nnil означает «не знаем»: ни одна площадка даты не отдала или ролик\nещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают\nи через неделю после выхода.",
                     "type": "string"
+                },
+                "shares": {
+                    "description": "Shares — репосты по всем площадкам выкладки. Пусто, если хоть одна\nплощадка их не отдаёт: ноль означал бы «репостов нет».",
+                    "type": "integer"
                 },
                 "stats_collected_at": {
                     "description": "StatsCollectedAt — самый свежий сбор среди площадок выкладки.",
@@ -17170,6 +17405,10 @@
                 "er_percent": {
                     "type": "number"
                 },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — хоть одна площадка, вошедшая в расчёт, репостов\nне отдала. Показатель занижен, и сказать об этом обязаны.",
+                    "type": "boolean"
+                },
                 "growth_24h": {
                     "type": "integer"
                 },
@@ -17178,6 +17417,9 @@
                 },
                 "project_id": {
                     "type": "string"
+                },
+                "shares": {
+                    "type": "integer"
                 },
                 "videos": {
                     "type": "integer"
@@ -17288,6 +17530,10 @@
                 "er_percent": {
                     "type": "number"
                 },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — вовлечённость посчитана без репостов: площадка\nих не отдала или ролик собирали до того, как мы начали их писать.",
+                    "type": "boolean"
+                },
                 "growth_24h": {
                     "type": "integer"
                 },
@@ -17302,6 +17548,9 @@
                 },
                 "publication_id": {
                     "type": "string"
+                },
+                "shares": {
+                    "type": "integer"
                 },
                 "submitted_at": {
                     "type": "string"

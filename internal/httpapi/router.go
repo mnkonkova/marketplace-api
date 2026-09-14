@@ -315,6 +315,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/projects/{id}/report.csv", d.Publications.ClientReportCSV)
 			}
 			if d.Billing != nil {
+				// Сводка по всем проектам заказчика: кросс-проектного
+				// среза в продукте не было вовсе, и «сколько мне стоит
+				// тысяча просмотров» внутри одного проекта не считается.
+				r.Get("/me/overview", d.Billing.ClientOverviewHandler)
 				// Деньги глазами тех, кто их платит и получает.
 				r.Get("/me/projects/{id}/billing", d.Billing.ClientBilling)
 				r.Get("/me/creator/projects/{id}/earnings", d.Billing.CreatorEarnings)

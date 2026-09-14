@@ -379,13 +379,19 @@ WHERE publication_id = ANY($1) AND status = 'pending'`, ids)
 	// Цифры по выкладке — сумма последних снимков её площадок. Один
 	// запрос на пачку: LATERAL берёт свежую строку статистики по каждой
 	// ссылке, снаружи всё складывается по выкладке.
+	// Репосты складываем только если они известны по ВСЕМ площадкам
+	// выкладки: bool_or по «репостов нет» отвечает, знаем ли мы их
+	// целиком. Сумма известных вперемешку с неизвестными — занижение,
+	// которое ничем не отличить от настоящего числа.
 	statRows, err := r.db.Query(ctx, `
 SELECT l.publication_id,
        COALESCE(SUM(cur.views), 0), COALESCE(SUM(cur.likes), 0),
-       COALESCE(SUM(cur.comments), 0), MAX(cur.collected_at)
+       COALESCE(SUM(cur.comments), 0),
+       COALESCE(SUM(cur.shares), 0), bool_or(cur.shares IS NULL),
+       MAX(cur.collected_at)
 FROM publication_links l
 LEFT JOIN LATERAL (
-    SELECT views, likes, comments, collected_at
+    SELECT views, likes, comments, shares, collected_at
     FROM video_stat_daily d WHERE d.link_id = l.id
     ORDER BY d.stat_date DESC LIMIT 1
 ) cur ON TRUE
@@ -396,15 +402,27 @@ GROUP BY l.publication_id`, ids)
 	}
 	defer statRows.Close()
 	for statRows.Next() {
-		var pubID uuid.UUID
-		var views, likes, comments int64
-		var collectedAt *time.Time
-		if err := statRows.Scan(&pubID, &views, &likes, &comments, &collectedAt); err != nil {
+		var (
+			pubID                  uuid.UUID
+			views, likes, comments int64
+			shares                 int64
+			sharesMissing          *bool
+			collectedAt            *time.Time
+		)
+		if err := statRows.Scan(&pubID, &views, &likes, &comments,
+			&shares, &sharesMissing, &collectedAt); err != nil {
 			return fmt.Errorf("scan publication stats: %w", err)
 		}
-		if p := byID[pubID]; p != nil {
-			p.Views, p.Likes, p.Comments, p.StatsCollectedAt = views, likes, comments, collectedAt
+		p := byID[pubID]
+		if p == nil {
+			continue
 		}
+		p.Views, p.Likes, p.Comments, p.StatsCollectedAt = views, likes, comments, collectedAt
+		if sharesMissing == nil || !*sharesMissing {
+			v := shares
+			p.Shares = &v
+		}
+		p.ERPercent, p.ERWithoutShares = erPercent(likes, comments, p.Shares, views)
 	}
 	if err := statRows.Err(); err != nil {
 		return err

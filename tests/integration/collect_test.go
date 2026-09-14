@@ -163,11 +163,11 @@ func TestCollectionSnapshotIsIdempotent(t *testing.T) {
 	}
 
 	v1, l1, c1 := int64(100), int64(1), int64(0)
-	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, nil, now); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, nil, nil, now); err != nil {
 		t.Fatalf("SaveStats: %v", err)
 	}
 	v2, l2, c2 := int64(250), int64(9), int64(3)
-	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, nil, now); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, nil, nil, now); err != nil {
 		t.Fatalf("SaveStats (повтор): %v", err)
 	}
 
@@ -300,11 +300,11 @@ func TestCollapseWritesSummaryBeforeDeleting(t *testing.T) {
 	// Два дня истории: итог должен взять последний день, а не сумму —
 	// просмотры накопительные.
 	v1, l1, c1 := int64(400), int64(10), int64(2)
-	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, nil, now.AddDate(0, 0, -1)); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v1, &l1, &c1, nil, nil, now.AddDate(0, 0, -1)); err != nil {
 		t.Fatalf("SaveStats day1: %v", err)
 	}
 	v2, l2, c2 := int64(900), int64(31), int64(5)
-	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, nil, now); err != nil {
+	if err := repo.SaveStats(ctx, links[0], &v2, &l2, &c2, nil, nil, now); err != nil {
 		t.Fatalf("SaveStats day2: %v", err)
 	}
 
@@ -871,4 +871,112 @@ LIMIT 1`, projectID).Scan(&out); err != nil {
 		t.Fatalf("дата публикации ссылки: %v", err)
 	}
 	return out
+}
+
+// Репосты сохраняются при сборе, участвуют в вовлечённости, а их
+// отсутствие поднимает звёздочку.
+//
+// ER = (лайки + комментарии + репосты) ÷ просмотры. Площадки отдают
+// репосты не все, и показатель, посчитанный без них, занижен — молчать
+// об этом нельзя.
+func TestSharesFeedEngagementAndRaiseFlag(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const tiktok = "https://www.tiktok.com/@u/video/er01"
+	const youtube = "https://www.youtube.com/shorts/er01"
+	projectID, _, cleanup := setupSubmittedLinks(t, tiktok, youtube)
+	defer cleanup()
+
+	// TikTok отдал репосты, YouTube — нет.
+	withShares := okResult(tiktok, 10_000, 500, 100)
+	shares := int64(400)
+	withShares.Posts[0].Shares = &shares
+	noShares := okResult(youtube, 10_000, 500, 100)
+	noShares.Platform = "youtube"
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		tiktok: withShares, youtube: noShares,
+	}}
+	repo := publications.NewRepo(pool)
+	svc := publications.NewService(repo).WithCollector(fake)
+	if _, err := svc.RunCollection(ctx, time.Now().UTC(), 50); err != nil {
+		t.Fatalf("сбор: %v", err)
+	}
+
+	rep, err := svc.Report(ctx, projectID, publications.ReportFilter{})
+	if err != nil {
+		t.Fatalf("отчёт: %v", err)
+	}
+
+	byPlatform := map[string]publications.PlatformRow{}
+	for _, p := range rep.ByPlatform {
+		byPlatform[p.Platform] = p
+	}
+	tt := byPlatform["tiktok"]
+	if tt.Shares == nil || *tt.Shares != 400 {
+		t.Fatalf("репосты tiktok: %v", tt.Shares)
+	}
+	if tt.ERWithoutShares {
+		t.Error("у площадки с репостами звёздочки быть не должно")
+	}
+	// (500 + 100 + 400) / 10000 = 10%
+	if tt.ERPercent == nil || *tt.ERPercent < 9.99 || *tt.ERPercent > 10.01 {
+		t.Errorf("ER tiktok %v, ожидали 10%%", tt.ERPercent)
+	}
+
+	yt := byPlatform["youtube"]
+	if yt.Shares != nil {
+		t.Errorf("у площадки без репостов сумма репостов %v — ноль означал бы «репостов нет»", yt.Shares)
+	}
+	if !yt.ERWithoutShares {
+		t.Error("площадка без репостов не подняла звёздочку")
+	}
+	// (500 + 100) / 10000 = 6%: считаем без репостов, но признаёмся.
+	if yt.ERPercent == nil || *yt.ERPercent < 5.99 || *yt.ERPercent > 6.01 {
+		t.Errorf("ER youtube %v, ожидали 6%%", yt.ERPercent)
+	}
+
+	// По проекту звёздочка поднята: одна неизвестная площадка делает
+	// приблизительным весь итог.
+	if !rep.ERWithoutShares {
+		t.Error("в отчёте проекта нет звёздочки, хотя одна площадка репостов не отдала")
+	}
+	if rep.Shares != nil {
+		t.Errorf("сумма репостов по проекту %v, ожидали пусто", rep.Shares)
+	}
+}
+
+// Ноль репостов и отсутствие репостов — разные вещи.
+func TestZeroSharesDifferFromUnknown(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/er02"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	zero := int64(0)
+	res := okResult(url, 1000, 10, 5)
+	res.Posts[0].Shares = &zero
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: res}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+	if _, err := svc.RunCollection(ctx, time.Now().UTC(), 50); err != nil {
+		t.Fatalf("сбор: %v", err)
+	}
+
+	rep, err := svc.Report(ctx, projectID, publications.ReportFilter{})
+	if err != nil {
+		t.Fatalf("отчёт: %v", err)
+	}
+	if rep.ERWithoutShares {
+		t.Error("ноль репостов — это ответ, а не отсутствие: звёздочки быть не должно")
+	}
+	if rep.Shares == nil || *rep.Shares != 0 {
+		t.Errorf("репосты %v, ожидали ноль", rep.Shares)
+	}
+	// (10 + 5 + 0) / 1000 = 1.5%
+	if rep.ERPercent == nil || *rep.ERPercent < 1.49 || *rep.ERPercent > 1.51 {
+		t.Errorf("ER %v, ожидали 1.5%%", rep.ERPercent)
+	}
 }

@@ -365,13 +365,13 @@ FROM (`+publishedInPeriodSQL+`) f`,
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_period_views
-    (period_id, publication_id, platform, link_id, views, likes, comments, stat_date, published_at)
+    (period_id, publication_id, platform, link_id, views, likes, comments, shares, stat_date, published_at)
 SELECT $1, f.id, l.platform, l.id,
-       v.views, v.likes, v.comments, v.stat_date, l.published_at
+       v.views, v.likes, v.comments, v.shares, v.stat_date, l.published_at
 FROM (`+publishedInPeriodSQL+`) f
 JOIN publication_links l ON l.publication_id = f.id
 LEFT JOIN LATERAL (
-    SELECT views, likes, comments, stat_date
+    SELECT views, likes, comments, shares, stat_date
     FROM video_stat_daily d
     WHERE d.link_id = l.id AND d.stat_date <= $5::date
     ORDER BY d.stat_date DESC

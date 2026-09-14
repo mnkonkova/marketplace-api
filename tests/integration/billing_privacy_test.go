@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"marketpclce/internal/billing"
+	"marketpclce/internal/publications"
 	"marketpclce/tests/integration"
 )
 
@@ -33,8 +34,25 @@ var forbiddenForClient = []string{
 	"payout_click_bonus", "payout_total",
 	"creator_salary_per_month", "creator_rate_per_1000_views",
 	"creator_rate_per_1000_views_over",
+	// Перенос остатка ступени креаторской стороны — внутренняя механика
+	// выплат. Его тут не было, и дыру в периоде поэтому никто не поймал:
+	// список запретных ключей должен расти вместе с полями про деньги.
+	"carry_in_creator", "carry_out_creator",
+	// Идентификаторы периода и цепочка переноса — наша механика.
+	"prev_period_id",
 	// UTM — рабочий инструмент менеджера, заказчику не отдаётся.
 	"utm",
+}
+
+// forbiddenForCreator — то же для креатора: клиентская сторона денег и
+// наша механика.
+var forbiddenForCreator = []string{
+	"carry_in_client", "carry_out_client",
+	"creator_salary_per_month", "creator_rate_per_1000_views",
+	"creator_rate_per_1000_views_over",
+	"payout_salary", "payout_deduction", "payout_views_bonus",
+	"payout_click_bonus", "payout_total",
+	"margin", "payouts", "prev_period_id",
 }
 
 // allowedCreatorKeys — ключи со словом creator, которые заказчику
@@ -62,6 +80,23 @@ func TestClientBillingHidesOurMoney(t *testing.T) {
 		if strings.Contains(raw, key) {
 			t.Errorf("в ответе заказчику встретился %s", key)
 		}
+	}
+
+	// Период в ответе — его стороной: границы и его перенос есть,
+	// креаторского и наших идентификаторов нет (их отсутствие уже
+	// проверено выше по списку запретных ключей).
+	var periodBody map[string]any
+	if err := json.Unmarshal([]byte(raw), &periodBody); err != nil {
+		t.Fatalf("разобрать ответ: %v", err)
+	}
+	period := subMap(t, periodBody, "period")
+	for _, key := range []string{"seq", "starts_on", "ends_on", "status", "carry_in_client", "carry_out_client"} {
+		if _, ok := period[key]; !ok {
+			t.Errorf("в периоде заказчика нет %q", key)
+		}
+	}
+	if _, ok := period["id"]; ok {
+		t.Error("в периоде заказчика есть id — это наша механика, не его")
 	}
 
 	// Чистка не должна была выкинуть лишнего: заказчик по-прежнему
@@ -191,12 +226,7 @@ WHERE publication_id IN (SELECT id FROM project_publications WHERE project_id = 
 		"/api/v1/me/creator/projects/"+pid.String()+"/earnings", h.Token(t, creators[0]))
 
 	// Клиентской стороны переноса в ответе нет ни на какой глубине.
-	assertNoForbiddenKeys(t, raw, []string{
-		"carry_in_client", "carry_out_client",
-		"creator_salary_per_month", "creator_rate_per_1000_views",
-		"creator_rate_per_1000_views_over",
-		"margin", "payouts",
-	}, allowedCreatorKeys)
+	assertNoForbiddenKeys(t, raw, forbiddenForCreator, allowedCreatorKeys)
 
 	var body map[string]any
 	if err := json.Unmarshal([]byte(raw), &body); err != nil {
@@ -352,4 +382,111 @@ func setupBillingWithMargin(t *testing.T, pool *pgxpool.Pool) (projectID, client
 		t.Fatalf("пересчёт: %v", err)
 	}
 	return projectID, clientID, creators, cleanup
+}
+
+// Обезличенный ориентир проекта в кабинете креатора: ниже порога его
+// нет, выше — есть и считается по зрелым роликам.
+//
+// Порог здесь не оптимизация, а граница: в проекте с двумя креаторами
+// «медиана проекта» — это показатель соседа, и отдать её значит своими
+// руками показать одному креатору результаты другого.
+func TestCreatorBenchmarkHiddenBelowAnonymityThreshold(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	// Двое креаторов и три зрелых ролика — порог не пройден.
+	old := time.Now().UTC().AddDate(0, 0, -30)
+	publishOn(t, pool, pid, creators[0], old, "bmk01", 100_000)
+	publishOn(t, pool, pid, creators[1], old, "bmk02", 200_000)
+	publishOn(t, pool, pid, creators[0], old, "bmk03", 300_000)
+
+	raw := rawBody(t, h,
+		"/api/v1/me/creator/projects/"+pid.String()+"/earnings", h.Token(t, creators[0]))
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("разобрать ответ: %v", err)
+	}
+	if _, ok := body["benchmark"]; ok {
+		t.Fatalf("ниже порога обезличивания ориентир отдавать нельзя: %v", body["benchmark"])
+	}
+
+	// Добавляем третьего креатора и добиваем до десяти зрелых роликов.
+	third, cleanupThird := h.NewUser(t, userOpts{Kind: "specialist"})
+	defer cleanupThird()
+	if err := publicationsRepoAddCreator(t, pool, pid, third); err != nil {
+		t.Fatalf("третий креатор: %v", err)
+	}
+	views := []int64{400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000}
+	for i, v := range views {
+		author := creators[i%2]
+		if i%3 == 0 {
+			author = third
+		}
+		publishOn(t, pool, pid, author, old, fmt.Sprintf("bmk1%d", i), v)
+	}
+	// Ролик моложе двух недель в медиану входить не должен.
+	publishOn(t, pool, pid, creators[0], time.Now().UTC().AddDate(0, 0, -2), "bmkYoung", 50_000_000)
+
+	raw = rawBody(t, h,
+		"/api/v1/me/creator/projects/"+pid.String()+"/earnings", h.Token(t, creators[0]))
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatalf("разобрать ответ: %v", err)
+	}
+	bench := subMap(t, body, "benchmark")
+	mature := num(t, bench, "mature_videos")
+	if mature != 10 {
+		t.Fatalf("зрелых роликов в расчёте %d, ожидали 10 (свежий не в счёт)", mature)
+	}
+	median := int64(num(t, bench, "project_median_views"))
+	if median != medianOfMature(t, pool, pid) {
+		t.Errorf("медиана %d не совпала с медианой зрелых роликов проекта", median)
+	}
+	// Свежий ролик на 50 млн не утащил медиану вверх.
+	if median > 1_000_000 {
+		t.Errorf("медиана %d — в неё попал ролик моложе двух недель", median)
+	}
+
+	// В блоке нет ничьих идентификаторов и ничьих отдельных чисел.
+	for key := range bench {
+		switch key {
+		case "project_median_views", "my_percentile", "mature_videos":
+		default:
+			t.Errorf("в обезличенном блоке лишнее поле %q", key)
+		}
+	}
+	// И весь ответ по-прежнему без клиентской стороны денег.
+	assertNoForbiddenKeys(t, raw, forbiddenForCreator, allowedCreatorKeys)
+}
+
+// publicationsRepoAddCreator — добавить креатора в проект.
+func publicationsRepoAddCreator(t *testing.T, pool *pgxpool.Pool, pid, creator uuid.UUID) error {
+	t.Helper()
+	return publications.NewRepo(pool).AddCreator(context.Background(), pid, creator, creator)
+}
+
+// medianOfMature — медиана просмотров зрелых роликов проекта, считанная
+// независимо от кода приложения.
+func medianOfMature(t *testing.T, pool *pgxpool.Pool, pid uuid.UUID) int64 {
+	t.Helper()
+	var median int64
+	if err := pool.QueryRow(context.Background(), `
+WITH mature AS (
+    SELECT p.id, COALESCE(SUM(cur.views), 0) AS views
+    FROM project_publications p
+    JOIN publication_links l ON l.publication_id = p.id
+    LEFT JOIN LATERAL (
+        SELECT views FROM video_stat_daily d
+        WHERE d.link_id = l.id ORDER BY d.stat_date DESC LIMIT 1
+    ) cur ON TRUE
+    WHERE p.project_id = $1 AND p.status <> 'cancelled'
+    GROUP BY p.id
+    HAVING MIN(COALESCE(l.published_at, l.submitted_at)) <= now() - interval '14 days'
+)
+SELECT COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY views), 0)::bigint FROM mature`,
+		pid).Scan(&median); err != nil {
+		t.Fatalf("медиана: %v", err)
+	}
+	return median
 }

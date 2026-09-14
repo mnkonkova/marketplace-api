@@ -57,6 +57,17 @@ type Publication struct {
 	Views    int64 `json:"views"`
 	Likes    int64 `json:"likes"`
 	Comments int64 `json:"comments"`
+	// Shares — репосты по всем площадкам выкладки. Пусто, если хоть одна
+	// площадка их не отдаёт: ноль означал бы «репостов нет».
+	Shares *int64 `json:"shares,omitempty"`
+	// ERPercent — вовлечённость: (лайки + комментарии + репосты) ÷
+	// просмотры, в процентах.
+	ERPercent *float64 `json:"er_percent,omitempty"`
+	// ERWithoutShares — посчитана без репостов: их не отдала хотя бы одна
+	// площадка либо ролик собирали до того, как мы начали их писать.
+	// Прошлое не пересчитывается, поэтому у старых роликов признак
+	// останется навсегда — и это честнее скачка на графике.
+	ERWithoutShares bool `json:"er_without_shares,omitempty"`
 	// StatsCollectedAt — самый свежий сбор среди площадок выкладки.
 	StatsCollectedAt *time.Time `json:"stats_collected_at,omitempty"`
 	// PublishedAt — когда ролик вышел: самое раннее известное среди

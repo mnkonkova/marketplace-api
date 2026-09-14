@@ -561,3 +561,81 @@ func sameDay(a, b time.Time) bool {
 	by, bm, bd := b.UTC().Date()
 	return ay == by && am == bm && ad == bd
 }
+
+// Поденный ряд удалён — период всё равно подытоживается, но помечен
+// приблизительным, и сохранённые суммы при этом не обнуляются.
+//
+// Покрытие на это жило в тестах месяца и при переезде на периоды не
+// переехало: греп по tests/ не находил ни одного snapshot_approx.
+func TestApproximateSnapshotWhenSeriesCollapsed(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	first := time.Now().UTC().AddDate(0, -2, 0)
+	publishOn(t, pool, pid, creators[0], first, "apx02", 650_000)
+
+	// Считаем период, пока данные ещё есть: именно эти суммы и должны
+	// пережить чистку.
+	p1, err := svc.Period(ctx, pid, 1, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("период: %v", err)
+	}
+	if _, err := svc.Recalculate(ctx, pid, p1); err != nil {
+		t.Fatalf("пересчёт: %v", err)
+	}
+	before, err := svc.ProjectBilling(ctx, pid, 1, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("биллинг: %v", err)
+	}
+	if before.Totals.Total == 0 {
+		t.Fatal("до чистки счёт нулевой — тест ничего не проверит")
+	}
+
+	// Чистильщик уже схлопнул ряд: итоговый снимок есть, поденных строк нет.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO project_stat_summary (project_id, views, likes, comments, videos_count, as_of, collapsed_at)
+VALUES ($1, 650000, 0, 0, 1, CURRENT_DATE, now())
+ON CONFLICT (project_id) DO NOTHING`, pid); err != nil {
+		t.Fatalf("итоговый снимок: %v", err)
+	}
+	resetDailyViews(t, pool, pid)
+
+	locked, err := svc.LockPeriod(ctx, p1, nil, p1.LockDueAt(billing.DefaultPeriodLockDelay), time.Now().UTC())
+	if err != nil {
+		t.Fatalf("подытог: %v", err)
+	}
+	if !locked.IsLocked() {
+		t.Fatal("период не подытожился — открытым навсегда он остаться не должен")
+	}
+	if !locked.SnapshotApprox {
+		t.Fatal("срез снят с пустоты, а приблизительным не помечен")
+	}
+
+	after, err := svc.ProjectBilling(ctx, pid, 1, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("биллинг после подытога: %v", err)
+	}
+	if after.Totals.Total != before.Totals.Total {
+		t.Errorf("подытог обнулил посчитанные суммы: было %d, стало %d",
+			before.Totals.Total, after.Totals.Total)
+	}
+	if !after.Period.SnapshotApprox {
+		t.Error("приблизительность не доехала до ответа менеджера")
+	}
+
+	// И до заказчика тоже: сводка, часть чисел которой подтянута,
+	// обязана об этом сказать.
+	client, err := svc.ClientBilling(ctx, pid, 1, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("биллинг заказчика: %v", err)
+	}
+	if !client.Period.SnapshotApprox {
+		t.Error("заказчик не видит, что числа приблизительные")
+	}
+}

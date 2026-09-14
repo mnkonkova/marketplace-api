@@ -59,40 +59,55 @@ type PlatformRow struct {
 	Views    int64  `json:"views"`
 	Likes    int64  `json:"likes"`
 	Comments int64  `json:"comments"`
+	// Shares — репосты. Пусто, если площадка их не отдаёт: ноль означал
+	// бы «репостов нет», а это другое утверждение.
+	Shares *int64 `json:"shares,omitempty"`
+	// ERPercent/ERWithoutShares — вовлечённость площадки и признак, что
+	// она посчитана без репостов.
+	ERPercent       *float64 `json:"er_percent,omitempty"`
+	ERWithoutShares bool     `json:"er_without_shares,omitempty"`
 }
 
 // VideoRow — строка таблицы роликов.
 type VideoRow struct {
-	PublicationID uuid.UUID  `json:"publication_id"`
-	LinkID        uuid.UUID  `json:"link_id"`
-	CreatorUserID uuid.UUID  `json:"creator_user_id"`
-	CreatorName   string     `json:"creator_name,omitempty"`
-	Platform      string     `json:"platform"`
-	URL           string     `json:"url"`
-	SubmittedAt   time.Time  `json:"submitted_at"`
-	Views         int64      `json:"views"`
-	Likes         int64      `json:"likes"`
-	Comments      int64      `json:"comments"`
-	Growth24h     int64      `json:"growth_24h"`
-	ERPercent     *float64   `json:"er_percent,omitempty"`
-	CollectedAt   *time.Time `json:"collected_at,omitempty"`
+	PublicationID uuid.UUID `json:"publication_id"`
+	LinkID        uuid.UUID `json:"link_id"`
+	CreatorUserID uuid.UUID `json:"creator_user_id"`
+	CreatorName   string    `json:"creator_name,omitempty"`
+	Platform      string    `json:"platform"`
+	URL           string    `json:"url"`
+	SubmittedAt   time.Time `json:"submitted_at"`
+	Views         int64     `json:"views"`
+	Likes         int64     `json:"likes"`
+	Comments      int64     `json:"comments"`
+	Shares        *int64    `json:"shares,omitempty"`
+	Growth24h     int64     `json:"growth_24h"`
+	ERPercent     *float64  `json:"er_percent,omitempty"`
+	// ERWithoutShares — вовлечённость посчитана без репостов: площадка
+	// их не отдала или ролик собирали до того, как мы начали их писать.
+	ERWithoutShares bool       `json:"er_without_shares,omitempty"`
+	CollectedAt     *time.Time `json:"collected_at,omitempty"`
 }
 
 // Report — всё, что показывает страница отчёта.
 type Report struct {
-	ProjectID  uuid.UUID     `json:"project_id"`
-	Views      int64         `json:"views"`
-	Likes      int64         `json:"likes"`
-	Comments   int64         `json:"comments"`
-	Videos     int           `json:"videos"`
-	Growth24h  int64         `json:"growth_24h"`
-	ERPercent  *float64      `json:"er_percent,omitempty"`
-	AsOf       *time.Time    `json:"as_of,omitempty"`
-	Collapsed  bool          `json:"collapsed"`
-	ByDay      []DayPoint    `json:"by_day"`
-	ByCreator  []CreatorRow  `json:"by_creator"`
-	ByPlatform []PlatformRow `json:"by_platform"`
-	VideoRows  []VideoRow    `json:"videos_table"`
+	ProjectID uuid.UUID `json:"project_id"`
+	Views     int64     `json:"views"`
+	Likes     int64     `json:"likes"`
+	Comments  int64     `json:"comments"`
+	Shares    *int64    `json:"shares,omitempty"`
+	Videos    int       `json:"videos"`
+	Growth24h int64     `json:"growth_24h"`
+	ERPercent *float64  `json:"er_percent,omitempty"`
+	// ERWithoutShares — хоть одна площадка, вошедшая в расчёт, репостов
+	// не отдала. Показатель занижен, и сказать об этом обязаны.
+	ERWithoutShares bool          `json:"er_without_shares,omitempty"`
+	AsOf            *time.Time    `json:"as_of,omitempty"`
+	Collapsed       bool          `json:"collapsed"`
+	ByDay           []DayPoint    `json:"by_day"`
+	ByCreator       []CreatorRow  `json:"by_creator"`
+	ByPlatform      []PlatformRow `json:"by_platform"`
+	VideoRows       []VideoRow    `json:"videos_table"`
 }
 
 // Report — собрать отчёт. Пять запросов вместо одного: каждый агрегат
@@ -126,7 +141,9 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 		}
 		out.Views, out.Likes, out.Comments = stats.Views, stats.Likes, stats.Comments
 		out.Videos, out.AsOf, out.Collapsed = stats.VideosCount, stats.AsOf, true
-		out.ERPercent = erPercent(stats.Likes, stats.Comments, stats.Views)
+		// В итоговом снимке репостов нет: он сворачивался до того, как мы
+		// начали их собирать, и достраивать их задним числом неоткуда.
+		out.ERPercent, out.ERWithoutShares = erPercent(stats.Likes, stats.Comments, nil, stats.Views)
 		return out, nil
 	}
 
@@ -141,10 +158,16 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 	byPlatform := make(map[string]*PlatformRow, len(AllPlatforms))
 	seenPub := make(map[uuid.UUID]bool, len(rows))
 
+	// Репосты копим отдельно от остальных чисел: у них есть третье
+	// состояние — «неизвестно», и обычным int64 его не выразить.
+	var totalShares sharesTotal
+	platformShares := map[string]*sharesTotal{}
+
 	for _, v := range rows {
 		out.Views += v.Views
 		out.Likes += v.Likes
 		out.Comments += v.Comments
+		totalShares.add(v.Shares)
 		out.Growth24h += v.Growth24h
 		if v.CollectedAt != nil && (out.AsOf == nil || v.CollectedAt.After(*out.AsOf)) {
 			out.AsOf = v.CollectedAt
@@ -173,8 +196,20 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 		p.Likes += v.Likes
 		p.Comments += v.Comments
 		p.Videos++
+		ps, ok := platformShares[v.Platform]
+		if !ok {
+			ps = &sharesTotal{}
+			platformShares[v.Platform] = ps
+		}
+		ps.add(v.Shares)
 	}
-	out.ERPercent = erPercent(out.Likes, out.Comments, out.Views)
+	out.Shares = totalShares.value()
+	out.ERPercent, out.ERWithoutShares = erPercent(out.Likes, out.Comments, out.Shares, out.Views)
+	for platform, ps := range platformShares {
+		p := byPlatform[platform]
+		p.Shares = ps.value()
+		p.ERPercent, p.ERWithoutShares = erPercent(p.Likes, p.Comments, p.Shares, p.Views)
+	}
 
 	// Ролики по креаторам считаем по выкладкам, иначе у каждого выйдет
 	// впятеро больше, чем он снял.
@@ -241,13 +276,13 @@ func (r *Repo) nameRows(ctx context.Context, out *Report) error {
 func (r *Repo) videoRows(ctx context.Context, projectID uuid.UUID, f ReportFilter) ([]VideoRow, error) {
 	const q = `
 SELECT p.id, l.id, p.creator_user_id, l.platform, l.url_canonical, l.submitted_at,
-       COALESCE(cur.views, 0), COALESCE(cur.likes, 0), COALESCE(cur.comments, 0),
+       COALESCE(cur.views, 0), COALESCE(cur.likes, 0), COALESCE(cur.comments, 0), cur.shares,
        GREATEST(COALESCE(cur.views, 0) - COALESCE(prev.views, COALESCE(cur.views, 0)), 0),
        cur.collected_at
 FROM project_publications p
 JOIN publication_links l ON l.publication_id = p.id
 LEFT JOIN LATERAL (
-    SELECT views, likes, comments, collected_at, stat_date
+    SELECT views, likes, comments, shares, collected_at, stat_date
     FROM video_stat_daily d WHERE d.link_id = l.id
     ORDER BY d.stat_date DESC LIMIT 1
 ) cur ON TRUE
@@ -270,11 +305,11 @@ ORDER BY l.submitted_at DESC`
 	for rows.Next() {
 		var v VideoRow
 		if err := rows.Scan(&v.PublicationID, &v.LinkID, &v.CreatorUserID, &v.Platform,
-			&v.URL, &v.SubmittedAt, &v.Views, &v.Likes, &v.Comments,
+			&v.URL, &v.SubmittedAt, &v.Views, &v.Likes, &v.Comments, &v.Shares,
 			&v.Growth24h, &v.CollectedAt); err != nil {
 			return nil, fmt.Errorf("scan report row: %w", err)
 		}
-		v.ERPercent = erPercent(v.Likes, v.Comments, v.Views)
+		v.ERPercent, v.ERWithoutShares = erPercent(v.Likes, v.Comments, v.Shares, v.Views)
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -381,11 +416,50 @@ ORDER BY d.stat_date`
 // Считаем от просмотров, а не от подписчиков: подписчики принадлежат
 // аккаунту креатора, а отчёт — про ролики проекта. Nil, когда просмотров
 // нет: делить на ноль и показывать 0% — разные вещи, и второе врёт.
-func erPercent(likes, comments, views int64) *float64 {
+// erPercent — вовлечённость: (лайки + комментарии + репосты) ÷ просмотры.
+//
+// shares == nil означает «репостов не знаем»: площадка их не отдала либо
+// ролик собирали до того, как мы начали их сохранять. Считаем без них и
+// возвращаем вторым значением признак — показатель занижен, и молчать об
+// этом нельзя. Ноль репостов и отсутствие репостов — разные вещи, и
+// разница видна ровно здесь.
+func erPercent(likes, comments int64, shares *int64, views int64) (*float64, bool) {
 	if views <= 0 {
+		return nil, shares == nil
+	}
+	sum := likes + comments
+	if shares != nil {
+		sum += *shares
+	}
+	v := float64(sum) / float64(views) * 100
+	return &v, shares == nil
+}
+
+// sharesTotal — сумма репостов по набору строк и признак «где-то их нет».
+//
+// Признак поднимается, если репостов нет ХОТЬ У ОДНОЙ площадки, вошедшей
+// в расчёт: одна неизвестная площадка делает приблизительным весь итог.
+type sharesTotal struct {
+	sum     int64
+	missing bool
+}
+
+func (s *sharesTotal) add(shares *int64) {
+	if shares == nil {
+		s.missing = true
+		return
+	}
+	s.sum += *shares
+}
+
+// value — сумма для расчёта ER. nil, если хоть где-то репосты неизвестны:
+// складывать известные с неизвестными и выдавать это за полное число —
+// то же занижение, только спрятанное.
+func (s sharesTotal) value() *int64 {
+	if s.missing {
 		return nil
 	}
-	v := float64(likes+comments) / float64(views) * 100
+	v := s.sum
 	return &v
 }
 

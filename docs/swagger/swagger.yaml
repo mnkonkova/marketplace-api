@@ -895,7 +895,7 @@ definitions:
         type: array
       period:
         allOf:
-        - $ref: '#/definitions/internal_billing.ProjectPeriod'
+        - $ref: '#/definitions/internal_billing.ClientPeriod'
         description: |-
           Period — какой период показан и в каком он состоянии. Заказчику
           это нужно по той же причине, что и менеджеру: пока период идёт,
@@ -904,6 +904,70 @@ definitions:
         $ref: '#/definitions/internal_billing.SideTerms'
       totals:
         $ref: '#/definitions/internal_billing.ClientPeriodTotals'
+    type: object
+  internal_billing.ClientOverview:
+    properties:
+      cost_per_1000:
+        description: |-
+          CostPer1000 — стоимость тысячи просмотров по всем проектам, в
+          копейках. Считается из ФАКТИЧЕСКИХ сумм и фактических просмотров,
+          а не из ставки тарифа: у разных проектов разные версии условий, и
+          средняя ставка соврала бы. nil, пока просмотров нет.
+        type: integer
+      generated_at:
+        type: string
+      money:
+        $ref: '#/definitions/internal_billing.OverviewMoney'
+      projects:
+        items:
+          $ref: '#/definitions/internal_billing.OverviewProject'
+        type: array
+      projects_total:
+        type: integer
+      series:
+        description: Series — ряд для графика, последние 90 дней.
+        items:
+          $ref: '#/definitions/internal_billing.OverviewPoint'
+        type: array
+      snapshot_approx:
+        description: |-
+          SnapshotApprox — хотя бы у одного подытоженного периода числа
+          подтянуты: поденную статистику к моменту подытога уже удалили.
+          Сводка, часть чисел которой приблизительна, обязана сказать об
+          этом, а не выглядеть точной.
+        type: boolean
+      views:
+        $ref: '#/definitions/internal_billing.OverviewViews'
+    type: object
+  internal_billing.ClientPeriod:
+    properties:
+      carry_in_client:
+        description: CarryIn/CarryOut — перенос остатка ступени, его сторона. Пока
+          нули.
+        type: integer
+      carry_out_client:
+        type: integer
+      ends_on:
+        type: string
+      seq:
+        description: Seq — какой это период по счёту.
+        type: integer
+      snapshot_approx:
+        description: |-
+          SnapshotApprox — числам не на что опереться: поденная статистика к
+          моменту подытога уже удалена.
+        type: boolean
+      snapshot_as_of:
+        description: SnapshotAsOf — на какую дату сняты числа подытоженного периода.
+        type: string
+      starts_on:
+        description: |-
+          StartsOn/EndsOn — границы, обе включительно. Считает сервер: иначе
+          правило периода описано и в браузере тоже, и разъедется.
+        type: string
+      status:
+        description: Status — open (идёт, числа ещё изменятся) | locked (подытожен).
+        type: string
     type: object
   internal_billing.ClientPeriodTotals:
     properties:
@@ -992,6 +1056,17 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.CreatorAccrual'
         type: array
+      benchmark:
+        allOf:
+        - $ref: '#/definitions/internal_billing.ProjectBenchmark'
+        description: |-
+          Benchmark — обезличенный ориентир проекта: медиана просмотров
+          зрелых роликов и место человека относительно неё.
+
+          nil, пока в проекте мало зрелых роликов или они принадлежат
+          одному-двум людям: тогда «медиана проекта» — это показатель
+          соседа, а не агрегат. Своих данных у креатора может не хватать на
+          расчёт, но чужие ему видеть нечего, и второе важнее первого.
       period:
         allOf:
         - $ref: '#/definitions/internal_billing.CreatorPeriod'
@@ -1121,6 +1196,73 @@ definitions:
           много, прогноз опирается на меньшинство, и это надо показать.
         type: integer
     type: object
+  internal_billing.OverviewMoney:
+    properties:
+      current:
+        description: 'Current — по текущим периодам: предварительная, числа ещё вырастут.'
+        type: integer
+      locked:
+        description: 'Locked — сумма по подытоженным периодам: окончательная, из срезов.'
+        type: integer
+      paid:
+        description: |-
+          Paid — сколько заказчик уже перевёл: подтверждённые платежи.
+          Отдельно от Total намеренно — это разные вопросы: «сколько стоит»
+          и «сколько внесено».
+        type: integer
+      total:
+        description: Total — Locked + Current, «сколько всего стоит работа на сегодня».
+        type: integer
+    type: object
+  internal_billing.OverviewPoint:
+    properties:
+      date:
+        type: string
+      views_gained:
+        description: |-
+          ViewsGained — сколько просмотров набрали за этот день, а не всего
+          на эту дату. Поденный ряд накопительный, и «всего на дату»
+          пришлось бы достраивать по каждой ссылке за каждый день; прирост
+          показывает ровно то, ради чего график и смотрят.
+        type: integer
+    type: object
+  internal_billing.OverviewProject:
+    properties:
+      cost_per_1000:
+        description: |-
+          CostPer1000 — стоимость тысячи просмотров по этому проекту. nil,
+          пока просмотров нет: делить не на что.
+        type: integer
+      period:
+        allOf:
+        - $ref: '#/definitions/internal_billing.ClientPeriod'
+        description: Period — текущий период проекта. nil у не начавшегося.
+      project_id:
+        type: string
+      state:
+        description: State — running | not_started.
+        type: string
+      title:
+        type: string
+      total:
+        description: 'Total — счёт по проекту: подытоженные периоды плюс текущий.'
+        type: integer
+      views:
+        type: integer
+    type: object
+  internal_billing.OverviewViews:
+    properties:
+      by_platform:
+        additionalProperties:
+          format: int64
+          type: integer
+        description: |-
+          ByPlatform — все пять площадок всегда, включая нулевые: пропавший
+          столбик читается как сбой, а не как ноль.
+        type: object
+      total:
+        type: integer
+    type: object
   internal_billing.Payment:
     properties:
       amount:
@@ -1204,6 +1346,24 @@ definitions:
       views:
         type: integer
       views_bonus:
+        type: integer
+    type: object
+  internal_billing.ProjectBenchmark:
+    properties:
+      mature_videos:
+        description: |-
+          MatureVideos — сколько зрелых роликов вошло в расчёт. Число само по
+          себе обезличено и объясняет, насколько ориентиру можно верить.
+        type: integer
+      my_percentile:
+        description: |-
+          MyPercentile — где человек относительно этой медианы: доля зрелых
+          роликов проекта, у которых просмотров меньше, чем у его медианного
+          ролика. 0 — ниже всех, 100 — выше всех. Пусто, если своих зрелых
+          роликов нет вовсе: сравнивать нечего.
+        type: integer
+      project_median_views:
+        description: MedianViews — медиана просмотров зрелых роликов проекта.
         type: integer
     type: object
   internal_billing.ProjectBilling:
@@ -4744,10 +4904,22 @@ definitions:
     properties:
       comments:
         type: integer
+      er_percent:
+        description: |-
+          ERPercent/ERWithoutShares — вовлечённость площадки и признак, что
+          она посчитана без репостов.
+        type: number
+      er_without_shares:
+        type: boolean
       likes:
         type: integer
       platform:
         type: string
+      shares:
+        description: |-
+          Shares — репосты. Пусто, если площадка их не отдаёт: ноль означал
+          бы «репостов нет», а это другое утверждение.
+        type: integer
       videos:
         type: integer
       views:
@@ -4785,6 +4957,18 @@ definitions:
         type: string
       due_date:
         type: string
+      er_percent:
+        description: |-
+          ERPercent — вовлечённость: (лайки + комментарии + репосты) ÷
+          просмотры, в процентах.
+        type: number
+      er_without_shares:
+        description: |-
+          ERWithoutShares — посчитана без репостов: их не отдала хотя бы одна
+          площадка либо ролик собирали до того, как мы начали их писать.
+          Прошлое не пересчитывается, поэтому у старых роликов признак
+          останется навсегда — и это честнее скачка на графике.
+        type: boolean
       id:
         type: string
       likes:
@@ -4818,6 +5002,11 @@ definitions:
           ещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают
           и через неделю после выхода.
         type: string
+      shares:
+        description: |-
+          Shares — репосты по всем площадкам выкладки. Пусто, если хоть одна
+          площадка их не отдаёт: ноль означал бы «репостов нет».
+        type: integer
       stats_collected_at:
         description: StatsCollectedAt — самый свежий сбор среди площадок выкладки.
         type: string
@@ -4882,12 +5071,19 @@ definitions:
         type: integer
       er_percent:
         type: number
+      er_without_shares:
+        description: |-
+          ERWithoutShares — хоть одна площадка, вошедшая в расчёт, репостов
+          не отдала. Показатель занижен, и сказать об этом обязаны.
+        type: boolean
       growth_24h:
         type: integer
       likes:
         type: integer
       project_id:
         type: string
+      shares:
+        type: integer
       videos:
         type: integer
       videos_table:
@@ -4969,6 +5165,11 @@ definitions:
         type: string
       er_percent:
         type: number
+      er_without_shares:
+        description: |-
+          ERWithoutShares — вовлечённость посчитана без репостов: площадка
+          их не отдала или ролик собирали до того, как мы начали их писать.
+        type: boolean
       growth_24h:
         type: integer
       likes:
@@ -4979,6 +5180,8 @@ definitions:
         type: string
       publication_id:
         type: string
+      shares:
+        type: integer
       submitted_at:
         type: string
       url:
@@ -8362,10 +8565,10 @@ paths:
         name: id
         required: true
         type: string
-      - description: ГГГГ-ММ, по умолчанию текущий
+      - description: номер периода проекта, по умолчанию текущий
         in: query
-        name: month
-        type: string
+        name: period
+        type: integer
       produces:
       - application/json
       responses:
@@ -8374,7 +8577,7 @@ paths:
           schema:
             $ref: '#/definitions/internal_billing.accrualsResp'
         "400":
-          description: bad_id; bad_month
+          description: bad_id; bad_period
           schema:
             $ref: '#/definitions/internal_billing.errorResponse'
         "401":
@@ -8573,10 +8776,10 @@ paths:
         name: id
         required: true
         type: string
-      - description: ГГГГ-ММ, по умолчанию текущий
+      - description: номер периода проекта, по умолчанию текущий
         in: query
-        name: month
-        type: string
+        name: period
+        type: integer
       produces:
       - application/json
       responses:
@@ -8585,7 +8788,7 @@ paths:
           schema:
             $ref: '#/definitions/internal_billing.ProjectBilling'
         "400":
-          description: bad_id; bad_month — месяц не в формате ГГГГ-ММ
+          description: bad_id; bad_period — номер периода не целое число
           schema:
             $ref: '#/definitions/internal_billing.errorResponse'
         "401":
@@ -11375,6 +11578,35 @@ paths:
       summary: Принять условия работы (заказчик)
       tags:
       - client-orders
+  /me/overview:
+    get:
+      description: |-
+        Кросс-проектный срез: просмотры по пяти площадкам и всего,
+        счёт по подытоженным периодам и по текущим, сколько уже
+        переведено, стоимость тысячи просмотров и разбивка по
+        проектам. Стоимость считается из фактических сумм и
+        просмотров, а не из ставки тарифа: у проектов бывают
+        разные версии условий.
+        Подытоженные периоды дают числа из среза, текущие — живые.
+        snapshot_approx означает, что часть чисел подтянута:
+        поденную статистику к моменту подытога уже удалили.
+        Тестовые проекты не учитываются.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.ClientOverview'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сводка по всем моим проектам (заказчик)
+      tags:
+      - client-billing
   /me/portfolio:
     get:
       produces:
@@ -12077,10 +12309,10 @@ paths:
         name: id
         required: true
         type: string
-      - description: ГГГГ-ММ, по умолчанию текущий
+      - description: номер периода проекта, по умолчанию текущий
         in: query
-        name: month
-        type: string
+        name: period
+        type: integer
       produces:
       - application/json
       responses:
@@ -12089,7 +12321,7 @@ paths:
           schema:
             $ref: '#/definitions/internal_billing.ClientBillingView'
         "400":
-          description: bad_id; bad_month — месяц не в формате ГГГГ-ММ
+          description: bad_id; bad_period — номер периода не целое число
           schema:
             $ref: '#/definitions/internal_billing.errorResponse'
         "401":
