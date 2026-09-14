@@ -262,7 +262,21 @@ func (s *Service) Login(ctx context.Context, login, password string) (TokenPair,
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
 		return TokenPair{}, ErrBadCredentials
 	}
-	return s.tokens.Issue(u.ID, s.now())
+	pair, err := s.tokens.Issue(u.ID, s.now())
+	if err != nil {
+		return TokenPair{}, err
+	}
+	s.touchLastLogin(ctx, u.ID)
+	return pair, nil
+}
+
+// touchLastLogin — отметка о входе, best-effort. Вход уже состоялся, и
+// падать на записи отметки нельзя: человек остался бы без сессии из-за
+// строки в админском списке команды.
+func (s *Service) touchLastLogin(ctx context.Context, userID uuid.UUID) {
+	if err := s.repo.TouchLastLogin(ctx, userID); err != nil {
+		slog.Warn("auth: touch last_login_at failed", "user_id", userID.String(), "err", err)
+	}
 }
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {
@@ -288,7 +302,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	if c.IssuedAt != nil && c.IssuedAt.Time.Add(1500*time.Millisecond).Before(u.PasswordChangedAt) {
 		return TokenPair{}, ErrInvalidToken
 	}
-	return s.tokens.Issue(u.ID, s.now())
+	pair, err := s.tokens.Issue(u.ID, s.now())
+	if err != nil {
+		return TokenPair{}, err
+	}
+	s.touchLastLogin(ctx, u.ID)
+	return pair, nil
 }
 
 // EmailTaken — свободен ли адрес для регистрации.
@@ -336,6 +355,9 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 	// 1. Уже входил через Яндекс.
 	if id, have, err := s.repo.FindByIdentity(ctx, ProviderYandex, profile.ID); err == nil {
 		pair, err := s.tokens.Issue(id, s.now())
+		if err == nil {
+			s.touchLastLogin(ctx, id)
+		}
 		return RegisterResult{UserID: id, Tokens: pair, Kind: have}, err
 	} else if !errors.Is(err, ErrNotFound) {
 		return RegisterResult{}, err
@@ -351,6 +373,9 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 				return RegisterResult{}, err
 			}
 			pair, err := s.tokens.Issue(id, s.now())
+			if err == nil {
+				s.touchLastLogin(ctx, id)
+			}
 			// Аккаунт был раньше — это вход, а не регистрация.
 			return RegisterResult{UserID: id, Tokens: pair, Kind: have}, err
 		} else if !errors.Is(err, ErrNotFound) {
