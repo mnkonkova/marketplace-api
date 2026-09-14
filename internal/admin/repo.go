@@ -402,6 +402,11 @@ func (r *Repo) VerifyEmail(ctx context.Context, userID, actorID uuid.UUID) error
 // RoleManager независимо от is_approved, и middleware режет с 403
 // forbidden_unapproved — юзер ни менеджер (заблокирован), ни клиент.
 // Now drop the flag вообще.
+//
+// Отказывает с *ActiveProjectsError, если на человеке висят
+// незавершённые проекты: снятая роль оставила бы их за тем, кто их
+// больше не видит, и всплыло бы это через неделю вопросом клиента
+// «почему тишина».
 func (r *Repo) DemoteFromManager(ctx context.Context, userID, actorID uuid.UUID) error {
 	return r.withTx(ctx, func(tx pgx.Tx) error {
 		// Проекты считаем в той же транзакции и с блокировкой строк:
