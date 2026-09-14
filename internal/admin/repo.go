@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+
+	"marketpclce/internal/audit"
 )
 
 var (
@@ -28,6 +30,27 @@ var (
 type Repo struct{ db *pgxpool.Pool }
 
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
+
+// withTx — одно действие и запись о нём в журнале одной транзакцией.
+//
+// Раньше админские мутации были одиночными UPDATE'ами, и журнала не
+// было вовсе. Теперь у каждой из них есть парная запись в
+// admin_audit_log, и писать её отдельным подключением нельзя: при
+// откате действия в истории осталось бы «сделал», хотя не сделал.
+func (r *Repo) withTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
 
 // ListManagers — все пользователи с is_manager=true, отсортированные:
 // сначала ожидающие аппрува, потом одобренные. Включает счётчик assigned.
@@ -258,42 +281,48 @@ LIMIT $%d OFFSET $%d`, base, len(args)-1, len(args))
 // PromoteToManager — выставляет is_manager=TRUE и is_approved=TRUE.
 // Используется в /admin/managers/promote: админ нашёл юзера по email/имени,
 // делает его менеджером без отдельного approve-шага. Идемпотентно.
-func (r *Repo) PromoteToManager(ctx context.Context, userID uuid.UUID) error {
-	tag, err := r.db.Exec(ctx,
-		`UPDATE users SET is_manager = TRUE, is_approved = TRUE, updated_at = now()
-		 WHERE id = $1 AND is_active = TRUE`,
-		userID)
-	if err != nil {
-		return fmt.Errorf("promote to manager: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+func (r *Repo) PromoteToManager(ctx context.Context, userID, actorID uuid.UUID) error {
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE users SET is_manager = TRUE, is_approved = TRUE, updated_at = now()
+			 WHERE id = $1 AND is_active = TRUE`,
+			userID)
+		if err != nil {
+			return fmt.Errorf("promote to manager: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return audit.Write(ctx, tx, actorID, audit.ActionUserPromoteManager,
+			audit.ObjectUser, userID.String(), nil)
+	})
 }
 
 // SetApproved — менеджеру (только!) меняем is_approved. Если юзер не manager —
 // ErrNotManager (защита от случайного одобрения кого попало). Идемпотентен.
-func (r *Repo) SetApproved(ctx context.Context, userID uuid.UUID, approved bool) error {
-	tag, err := r.db.Exec(ctx,
-		`UPDATE users SET is_approved = $2, updated_at = now()
-		 WHERE id = $1 AND is_manager = TRUE`,
-		userID, approved)
-	if err != nil {
-		return fmt.Errorf("set approved: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		// либо юзер не существует, либо не manager — различим probe-запросом.
-		var exists bool
-		if perr := r.db.QueryRow(ctx, `SELECT TRUE FROM users WHERE id = $1`, userID).Scan(&exists); perr != nil {
-			if errors.Is(perr, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("probe user: %w", perr)
+func (r *Repo) SetApproved(ctx context.Context, userID uuid.UUID, approved bool, actorID uuid.UUID) error {
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE users SET is_approved = $2, updated_at = now()
+			 WHERE id = $1 AND is_manager = TRUE`,
+			userID, approved)
+		if err != nil {
+			return fmt.Errorf("set approved: %w", err)
 		}
-		return ErrNotManager
-	}
-	return nil
+		if tag.RowsAffected() == 0 {
+			// либо юзер не существует, либо не manager — различим probe-запросом.
+			var exists bool
+			if perr := tx.QueryRow(ctx, `SELECT TRUE FROM users WHERE id = $1`, userID).Scan(&exists); perr != nil {
+				if errors.Is(perr, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("probe user: %w", perr)
+			}
+			return ErrNotManager
+		}
+		return audit.Write(ctx, tx, actorID, audit.ActionUserApproveManager,
+			audit.ObjectUser, userID.String(), map[string]any{"is_approved": approved})
+	})
 }
 
 // SetActive — деактивировать/реактивировать юзера. is_active=false
@@ -302,30 +331,36 @@ func (r *Repo) SetApproved(ctx context.Context, userID uuid.UUID, approved bool)
 //
 // data-sec: запрещаем деактивировать админов через этот endpoint (защита
 // от случайного «выстрела в ногу»). Если очень надо — через psql.
-func (r *Repo) SetActive(ctx context.Context, userID uuid.UUID, active bool) error {
-	tag, err := r.db.Exec(ctx,
-		`UPDATE users SET is_active = $2, updated_at = now()
-		 WHERE id = $1 AND is_admin = FALSE`,
-		userID, active)
-	if err != nil {
-		return fmt.Errorf("set active: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		// либо юзера нет, либо он админ — диагностируем через probe.
-		var isAdmin bool
-		if perr := r.db.QueryRow(ctx,
-			`SELECT is_admin FROM users WHERE id = $1`, userID).Scan(&isAdmin); perr != nil {
-			if errors.Is(perr, pgx.ErrNoRows) {
-				return ErrNotFound
+func (r *Repo) SetActive(ctx context.Context, userID uuid.UUID, active bool, actorID uuid.UUID) error {
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE users SET is_active = $2, updated_at = now()
+			 WHERE id = $1 AND is_admin = FALSE`,
+			userID, active)
+		if err != nil {
+			return fmt.Errorf("set active: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			// либо юзера нет, либо он админ — диагностируем через probe.
+			var isAdmin bool
+			if perr := tx.QueryRow(ctx,
+				`SELECT is_admin FROM users WHERE id = $1`, userID).Scan(&isAdmin); perr != nil {
+				if errors.Is(perr, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("probe user: %w", perr)
 			}
-			return fmt.Errorf("probe user: %w", perr)
+			if isAdmin {
+				return fmt.Errorf("%w: нельзя деактивировать админа через UI", ErrInvalidInputRepo)
+			}
+			return ErrNotFound
 		}
-		if isAdmin {
-			return fmt.Errorf("%w: нельзя деактивировать админа через UI", ErrInvalidInputRepo)
+		action := audit.ActionUserActivate
+		if !active {
+			action = audit.ActionUserDeactivate
 		}
-		return ErrNotFound
-	}
-	return nil
+		return audit.Write(ctx, tx, actorID, action, audit.ObjectUser, userID.String(), nil)
+	})
 }
 
 // ErrInvalidInputRepo — repo-уровневая «битый ввод» ошибка. Маппится в
@@ -335,19 +370,22 @@ var ErrInvalidInputRepo = errors.New("invalid input")
 // VerifyEmail — ручная пометка email подтверждённым (для админского заноса
 // клиента). Если email_verified_at уже не NULL — no-op (идемпотентно).
 // Возвращает ErrNotFound если юзер не существует.
-func (r *Repo) VerifyEmail(ctx context.Context, userID uuid.UUID) error {
-	tag, err := r.db.Exec(ctx,
-		`UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()),
-		                  updated_at = now()
-		 WHERE id = $1`,
-		userID)
-	if err != nil {
-		return fmt.Errorf("verify email: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+func (r *Repo) VerifyEmail(ctx context.Context, userID, actorID uuid.UUID) error {
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()),
+			                  updated_at = now()
+			 WHERE id = $1`,
+			userID)
+		if err != nil {
+			return fmt.Errorf("verify email: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return audit.Write(ctx, tx, actorID, audit.ActionUserVerifyEmail,
+			audit.ObjectUser, userID.String(), nil)
+	})
 }
 
 // DemoteFromManager — полностью снимает manager-роль: is_manager=FALSE,
@@ -359,18 +397,31 @@ func (r *Repo) VerifyEmail(ctx context.Context, userID uuid.UUID) error {
 // RoleManager независимо от is_approved, и middleware режет с 403
 // forbidden_unapproved — юзер ни менеджер (заблокирован), ни клиент.
 // Now drop the flag вообще.
-func (r *Repo) DemoteFromManager(ctx context.Context, userID uuid.UUID) error {
-	tag, err := r.db.Exec(ctx,
-		`UPDATE users SET is_manager = FALSE, is_approved = FALSE, updated_at = now()
-		 WHERE id = $1`,
-		userID)
-	if err != nil {
-		return fmt.Errorf("demote manager: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+func (r *Repo) DemoteFromManager(ctx context.Context, userID, actorID uuid.UUID) error {
+	return r.withTx(ctx, func(tx pgx.Tx) error {
+		// Проекты считаем в той же транзакции и с блокировкой строк:
+		// иначе между проверкой и снятием роли кто-то успевает назначить
+		// менеджеру проект, и проект остаётся за человеком без прав.
+		active, err := activeProjectsOfTx(ctx, tx, userID, true)
+		if err != nil {
+			return err
+		}
+		if len(active) > 0 {
+			return &ActiveProjectsError{Projects: active}
+		}
+		tag, err := tx.Exec(ctx,
+			`UPDATE users SET is_manager = FALSE, is_approved = FALSE, updated_at = now()
+			 WHERE id = $1`,
+			userID)
+		if err != nil {
+			return fmt.Errorf("demote manager: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return audit.Write(ctx, tx, actorID, audit.ActionUserRevokeManager,
+			audit.ObjectUser, userID.String(), nil)
+	})
 }
 
 // CreateClient — заводит юзера (kind=client, без manager/admin-флагов;

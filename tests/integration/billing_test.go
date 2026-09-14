@@ -873,7 +873,7 @@ func TestPublishTermsVersionKeepsPrevious(t *testing.T) {
 			CreatorRatePer1000ViewsOver: &creatorOver,
 		},
 		Body: "Условия работы, версия из теста.",
-	})
+	}, uuid.Nil)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestPublishTermsRejectsCreatorShareAboveClientPrice(t *testing.T) {
 			CreatorRatePer1000Views: &tooMuch,
 		},
 		Body: "Условия работы.",
-	})
+	}, uuid.Nil)
 	if !errors.Is(err, billing.ErrInvalidInput) {
 		t.Fatalf("ожидали отказ по ставке креатора, получили %v", err)
 	}
@@ -936,7 +936,7 @@ func TestPublishTermsRequiresBody(t *testing.T) {
 	_, err := svc.PublishTermsVersion(ctx, billing.TermsVersion{
 		Terms: billing.Terms{SalaryPerMonth: 6_000_000, RatePer1000Views: 9_000},
 		Body:  "   ",
-	})
+	}, uuid.Nil)
 	if !errors.Is(err, billing.ErrInvalidInput) {
 		t.Fatalf("ожидали отказ по пустому тексту, получили %v", err)
 	}

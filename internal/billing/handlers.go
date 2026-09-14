@@ -662,17 +662,20 @@ func (h *Handler) AdminListTerms(w http.ResponseWriter, r *http.Request) {
 // AdminPublishTerms godoc
 // @Summary  Выпустить новую версию прайса (админ)
 // @Description Существующая версия не переписывается: под ней стоит согласие клиентов, а проекты сняли с неё числа снимком.
+// @Description В ответе — разница с прежней действующей версией (changes) и
+// @Description сколько клиентов должны согласиться заново (consents_required).
 // @Tags     admin-billing
 // @Accept   json
 // @Produce  json
 // @Security BearerAuth
 // @Param    body body publishTermsReq true "ставки и текст условий"
-// @Success  201 {object} TermsVersion
+// @Success  201 {object} TermsPublishResult "версия + разница с прежней + сколько клиентов должны согласиться заново"
 // @Failure  400 {object} errorResponse "bad_json, invalid_input — текст пуст или доля креатора больше цены клиента"
 // @Failure  401 {object} errorResponse "no_user — сессия истекла"
 // @Failure  403 {object} errorResponse "forbidden — нужна роль admin"
 // @Router   /admin/terms [post]
 func (h *Handler) AdminPublishTerms(w http.ResponseWriter, r *http.Request) {
+	actor, _ := auth.UserIDFrom(r.Context())
 	var req publishTermsReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
@@ -695,7 +698,7 @@ func (h *Handler) AdminPublishTerms(w http.ResponseWriter, r *http.Request) {
 			CreatorRatePer1000ViewsOver: req.CreatorRatePer1000ViewsOver,
 		},
 		Body: req.Body,
-	})
+	}, actor)
 	if err != nil {
 		writeErr(w, err)
 		return

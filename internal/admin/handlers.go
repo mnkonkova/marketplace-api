@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -207,7 +208,8 @@ func (h *Handler) AdminApproveManager(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.ApproveManager(r.Context(), id); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.ApproveManager(r.Context(), id, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -215,20 +217,45 @@ func (h *Handler) AdminApproveManager(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// activeProjectsResp — тело 409 при снятии роли с занятого менеджера.
+// Список отдаём целиком: админу нужно решить, кому передать проекты, а
+// не узнать, что их «несколько».
+type activeProjectsResp struct {
+	Error    string             `json:"error"`
+	Message  string             `json:"message"`
+	Projects []ActiveProjectRef `json:"projects"`
+}
+
 // AdminRevokeManager godoc
-// @Summary  Снять аппрув с менеджера
+// @Summary  Снять роль менеджера
+// @Description Если на человеке есть незавершённые проекты — 409 со
+// @Description списком: сначала передайте их другому менеджеру
+// @Description (POST /admin/managers/{id}/transfer_projects), потом снимайте роль.
 // @Tags     admin-users
 // @Produce  json
 // @Security BearerAuth
 // @Param    id path string true "user id"
 // @Success  204
+// @Failure  409 {object} activeProjectsResp "has_active_projects"
 // @Router   /admin/managers/{id}/revoke [post]
 func (h *Handler) AdminRevokeManager(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r, "id")
 	if !ok {
 		return
 	}
-	if err := h.svc.RevokeManager(r.Context(), id); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.RevokeManager(r.Context(), id, actor); err != nil {
+		var busy *ActiveProjectsError
+		if errors.As(err, &busy) {
+			httpx.WriteJSON(w, http.StatusConflict, activeProjectsResp{
+				Error: "has_active_projects",
+				Message: fmt.Sprintf(
+					"На менеджере %d незавершённых проектов — передайте их другому менеджеру, иначе они останутся без ответственного.",
+					len(busy.Projects)),
+				Projects: busy.Projects,
+			})
+			return
+		}
 		writeServiceErr(w, err)
 		return
 	}
@@ -251,7 +278,8 @@ func (h *Handler) AdminDeactivateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.SetActive(r.Context(), id, false); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.SetActive(r.Context(), id, false, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -272,7 +300,8 @@ func (h *Handler) AdminActivateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.SetActive(r.Context(), id, true); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.SetActive(r.Context(), id, true, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -294,7 +323,8 @@ func (h *Handler) AdminVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.VerifyEmail(r.Context(), id); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.VerifyEmail(r.Context(), id, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -303,9 +333,9 @@ func (h *Handler) AdminVerifyEmail(w http.ResponseWriter, r *http.Request) {
 }
 
 type createClientReq struct {
-	Email           string `json:"email"`
-	DisplayName     string `json:"display_name"`
-	GenerateInvite  bool   `json:"generate_invite"`
+	Email          string `json:"email"`
+	DisplayName    string `json:"display_name"`
+	GenerateInvite bool   `json:"generate_invite"`
 }
 
 // AdminCreateClient godoc

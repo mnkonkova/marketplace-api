@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"marketpclce/internal/audit"
 )
 
 var (
@@ -256,6 +258,18 @@ func (r *Repo) AssignManager(ctx context.Context, projectID uuid.UUID, managerID
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := assignManagerInTx(ctx, tx, projectID, managerID, actorID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// assignManagerInTx — назначение одного проекта внутри чужой транзакции.
+// Вынесено, чтобы пакетная передача проектов (TransferProjects) делала с
+// каждым проектом ровно то же, что одиночное назначение: те же события,
+// тот же outbox. Разъехавшись, эти два пути дали бы проекты, о которых
+// n8n не узнал.
+func assignManagerInTx(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, managerID *uuid.UUID, actorID uuid.UUID) error {
 	tag, err := tx.Exec(ctx,
 		`UPDATE projects SET assigned_to_user_id = $2, updated_at = now() WHERE id = $1`,
 		projectID, managerID)
@@ -300,7 +314,12 @@ VALUES ($1, NULL, $2, 'human', $3, $4)`,
 	if err := emit(ctx, tx, projectID, nil, actorID, "project."+eventKind, outboxPayload); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	auditPayload := map[string]any{}
+	if managerID != nil {
+		auditPayload["manager_user_id"] = managerID.String()
+	}
+	return audit.Write(ctx, tx, actorID, audit.ActionProjectAssignManager,
+		audit.ObjectProject, projectID.String(), auditPayload)
 }
 
 // ErrNoProposedSpecialist — попытка аппрувнуть/реджектнуть, когда у проекта
@@ -352,6 +371,13 @@ VALUES ($1, NULL, $2, 'human', 'project_cancelled', $3, $4)`,
 	if err := emit(ctx, tx, projectID, nil, actorID, "project.cancelled",
 		map[string]string{
 			"project_id":  projectID.String(),
+			"from_status": string(currentStatus),
+			"reason":      reason,
+		}); err != nil {
+		return err
+	}
+	if err := audit.Write(ctx, tx, actorID, audit.ActionProjectCancel,
+		audit.ObjectProject, projectID.String(), map[string]any{
 			"from_status": string(currentStatus),
 			"reason":      reason,
 		}); err != nil {

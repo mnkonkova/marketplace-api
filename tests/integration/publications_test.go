@@ -715,7 +715,7 @@ func TestChecklistTemplateIsReplacedNotEdited(t *testing.T) {
 	svc := publications.NewService(publications.NewRepo(pool))
 
 	name := "Чеклист " + uuid.NewString()[:8]
-	v1, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, name, "первый", []publications.ChecklistTemplateItem{
+	v1, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, uuid.Nil, name, "первый", []publications.ChecklistTemplateItem{
 		{Text: "Товар в кадре первые 3 секунды", IsRequired: true},
 		{Text: "Ссылка в закрепе", Platform: "tiktok", IsRequired: false},
 	})
@@ -729,7 +729,7 @@ func TestChecklistTemplateIsReplacedNotEdited(t *testing.T) {
 		t.Fatalf("первая версия: version=%d items=%d", v1.Version, len(v1.Items))
 	}
 
-	v2, err := svc.SaveChecklistTemplate(ctx, v1.ID, name, "второй", []publications.ChecklistTemplateItem{
+	v2, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, v1.ID, name, "второй", []publications.ChecklistTemplateItem{
 		{Text: "Товар в кадре первые 3 секунды", IsRequired: true},
 	})
 	if err != nil {
@@ -772,16 +772,16 @@ func TestChecklistTemplateNeedsNameAndItems(t *testing.T) {
 	ctx := context.Background()
 	svc := publications.NewService(publications.NewRepo(pool))
 
-	if _, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, "  ", "", []publications.ChecklistTemplateItem{
+	if _, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, uuid.Nil, "  ", "", []publications.ChecklistTemplateItem{
 		{Text: "пункт"},
 	}); !errors.Is(err, publications.ErrInvalidInput) {
 		t.Errorf("пустое название: ожидали отказ, получили %v", err)
 	}
-	if _, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, "Без пунктов", "",
+	if _, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, uuid.Nil, "Без пунктов", "",
 		[]publications.ChecklistTemplateItem{{Text: "   "}}); !errors.Is(err, publications.ErrInvalidInput) {
 		t.Errorf("шаблон без пунктов: ожидали отказ, получили %v", err)
 	}
-	if _, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, "Кривая площадка", "",
+	if _, err := svc.SaveChecklistTemplate(ctx, uuid.Nil, uuid.Nil, "Кривая площадка", "",
 		[]publications.ChecklistTemplateItem{{Text: "пункт", Platform: "telegram"}}); !errors.Is(err, publications.ErrInvalidInput) {
 		t.Errorf("чужая площадка: ожидали отказ, получили %v", err)
 	}

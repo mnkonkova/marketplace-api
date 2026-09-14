@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"marketpclce/internal/audit"
 )
 
 // Библиотека чек-листов. Снимок в проект уже умели делать (SnapshotChecklist),
@@ -19,13 +21,22 @@ type ChecklistTemplate struct {
 	Description string    `json:"description,omitempty"`
 	Version     int       `json:"version"`
 	ItemsCount  int       `json:"items_count"`
+	// ProjectsCount — на скольких проектах эта версия подключена.
+	// Отвечает на вопрос, который возникает перед правкой шаблона:
+	// новая версия не тронет уже подключённые снимки, и знать, сколько
+	// проектов останутся на старых пунктах, нужно ДО выпуска.
+	ProjectsCount int `json:"projects_count"`
 }
 
 // ChecklistTemplates — действующая библиотека. Выключенные шаблоны не
 // показываем: подключать их всё равно нельзя.
 func (r *Repo) ChecklistTemplates(ctx context.Context) ([]ChecklistTemplate, error) {
+	// Подключения считаем подзапросом, а не вторым LEFT JOIN: два join'а
+	// к одной группировке перемножили бы строки, и число пунктов уехало
+	// бы вслед за числом проектов.
 	rows, err := r.db.Query(ctx, `
-SELECT t.id, t.name, t.description, t.version, COUNT(i.id)
+SELECT t.id, t.name, t.description, t.version, COUNT(i.id),
+       (SELECT COUNT(*) FROM project_checklist_snapshot s WHERE s.template_id = t.id)
 FROM checklist_templates t
 LEFT JOIN checklist_template_items i ON i.template_id = t.id
 WHERE t.is_active
@@ -38,7 +49,8 @@ ORDER BY t.name, t.version DESC`)
 	out := make([]ChecklistTemplate, 0)
 	for rows.Next() {
 		var t ChecklistTemplate
-		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Version, &t.ItemsCount); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Version, &t.ItemsCount,
+			&t.ProjectsCount); err != nil {
 			return nil, fmt.Errorf("scan checklist template: %w", err)
 		}
 		out = append(out, t)
@@ -75,8 +87,10 @@ type ChecklistTemplateFull struct {
 func (r *Repo) ChecklistTemplateWithItems(ctx context.Context, id uuid.UUID) (ChecklistTemplateFull, error) {
 	var out ChecklistTemplateFull
 	err := r.db.QueryRow(ctx, `
-SELECT id, name, description, version FROM checklist_templates WHERE id = $1`, id).
-		Scan(&out.ID, &out.Name, &out.Description, &out.Version)
+SELECT t.id, t.name, t.description, t.version,
+       (SELECT COUNT(*) FROM project_checklist_snapshot s WHERE s.template_id = t.id)
+FROM checklist_templates t WHERE t.id = $1`, id).
+		Scan(&out.ID, &out.Name, &out.Description, &out.Version, &out.ProjectsCount)
 	if err != nil {
 		return ChecklistTemplateFull{}, ErrNotFound
 	}
@@ -105,7 +119,7 @@ FROM checklist_template_items WHERE template_id = $1 ORDER BY sort_order`, id)
 // гасится (is_active = FALSE) в той же транзакции: уникальный индекс по
 // имени среди активных иначе не пустил бы вторую.
 func (r *Repo) SaveChecklistTemplate(
-	ctx context.Context, replaces uuid.UUID, name, description string, items []ChecklistTemplateItem,
+	ctx context.Context, actorID, replaces uuid.UUID, name, description string, items []ChecklistTemplateItem,
 ) (ChecklistTemplateFull, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -143,6 +157,14 @@ VALUES ($1, $2, $3, $4, $5)`, out.ID, it.Text, platform, it.IsRequired, i); err 
 			return ChecklistTemplateFull{}, fmt.Errorf("insert template item: %w", err)
 		}
 	}
+	payload := map[string]any{"name": out.Name, "version": out.Version, "items": len(items)}
+	if replaces != uuid.Nil {
+		payload["replaces"] = replaces.String()
+	}
+	if err := audit.Write(ctx, tx, actorID, audit.ActionChecklistPublish,
+		audit.ObjectChecklist, out.ID.String(), payload); err != nil {
+		return ChecklistTemplateFull{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ChecklistTemplateFull{}, fmt.Errorf("commit: %w", err)
 	}
@@ -172,7 +194,7 @@ func (s *Service) ChecklistTemplate(ctx context.Context, id uuid.UUID) (Checklis
 
 // SaveChecklistTemplate — проверить и выпустить версию шаблона.
 func (s *Service) SaveChecklistTemplate(
-	ctx context.Context, replaces uuid.UUID, name, description string, items []ChecklistTemplateItem,
+	ctx context.Context, actorID, replaces uuid.UUID, name, description string, items []ChecklistTemplateItem,
 ) (ChecklistTemplateFull, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -204,7 +226,7 @@ func (s *Service) SaveChecklistTemplate(
 		return ChecklistTemplateFull{}, fmt.Errorf(
 			"%w: шестьдесят пунктов креатор не отметит — это не чеклист", ErrInvalidInput)
 	}
-	return s.repo.SaveChecklistTemplate(ctx, replaces, name, strings.TrimSpace(description), clean)
+	return s.repo.SaveChecklistTemplate(ctx, actorID, replaces, name, strings.TrimSpace(description), clean)
 }
 
 func (s *Service) DeactivateChecklistTemplate(ctx context.Context, id uuid.UUID) error {

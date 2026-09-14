@@ -522,6 +522,7 @@ func (h *Handler) AdminGetChecklistTemplate(w http.ResponseWriter, r *http.Reque
 // @Failure  404 {object} errorResponse "not_found — заменяемой версии нет или она уже погашена"
 // @Router   /admin/checklist_templates [post]
 func (h *Handler) AdminSaveChecklistTemplate(w http.ResponseWriter, r *http.Request) {
+	actor, _ := auth.UserIDFrom(r.Context())
 	var req saveTemplateReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
@@ -536,7 +537,7 @@ func (h *Handler) AdminSaveChecklistTemplate(w http.ResponseWriter, r *http.Requ
 		}
 		replaces = parsed
 	}
-	out, err := h.svc.SaveChecklistTemplate(r.Context(), replaces, req.Name, req.Description, req.Items)
+	out, err := h.svc.SaveChecklistTemplate(r.Context(), actor, replaces, req.Name, req.Description, req.Items)
 	if err != nil {
 		writeErr(w, err)
 		return

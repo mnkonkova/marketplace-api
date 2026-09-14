@@ -138,7 +138,7 @@ VALUES ($1, 'x', 'specialist', TRUE, FALSE) RETURNING id`,
 	repo := admin.NewRepo(pool)
 
 	// Approve
-	if err := repo.SetApproved(ctx, mgrID, true); err != nil {
+	if err := repo.SetApproved(ctx, mgrID, true, uuid.Nil); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	var approved bool
@@ -148,7 +148,7 @@ VALUES ($1, 'x', 'specialist', TRUE, FALSE) RETURNING id`,
 	}
 
 	// Revoke
-	if err := repo.SetApproved(ctx, mgrID, false); err != nil {
+	if err := repo.SetApproved(ctx, mgrID, false, uuid.Nil); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	_ = pool.QueryRow(ctx, `SELECT is_approved FROM users WHERE id=$1`, mgrID).Scan(&approved)
@@ -171,7 +171,7 @@ VALUES ($1, 'x', 'client', TRUE) RETURNING id`,
 	defer pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, clientID)
 
 	repo := admin.NewRepo(pool)
-	err := repo.SetApproved(ctx, clientID, true)
+	err := repo.SetApproved(ctx, clientID, true, uuid.Nil)
 	if !errors.Is(err, admin.ErrNotManager) {
 		t.Errorf("want ErrNotManager, got %v", err)
 	}
