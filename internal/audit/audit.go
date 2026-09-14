@@ -27,6 +27,8 @@ const (
 	ObjectProject   = "project"
 	ObjectTerms     = "terms_version"
 	ObjectChecklist = "checklist_template"
+	// ObjectRatingScale — версия справочника порогов оценок.
+	ObjectRatingScale = "rating_scale"
 )
 
 // Действия. Список закрытый: фронт по нему рисует человеческие названия,
@@ -46,6 +48,10 @@ const (
 
 	ActionTermsPublish     = "terms.publish"
 	ActionChecklistPublish = "checklist.publish"
+	// ActionRatingScalePublish — выпущена версия справочника порогов.
+	// Пороги решают, каким ролик назовут, поэтому след обязателен: иначе
+	// «почему в марте это был хит, а в апреле нет» не объяснить.
+	ActionRatingScalePublish = "rating_scale.publish"
 
 	ActionProjectCancel        = "project.cancel"
 	ActionProjectRestore       = "project.restore"

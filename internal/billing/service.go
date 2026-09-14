@@ -11,14 +11,24 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"marketpclce/internal/ratings"
 )
 
 // ErrInvalidInput — некорректные данные запроса.
 var ErrInvalidInput = errors.New("invalid input")
 
-type Service struct{ repo *Repo }
+type Service struct {
+	repo *Repo
+	// scales — справочник порогов оценок. Из него берётся «типичный
+	// ролик», когда считать не по чему: число версионируется вместе с
+	// остальными порогами, и константы в коде для него больше нет.
+	scales *ratings.Repo
+}
 
-func NewService(repo *Repo) *Service { return &Service{repo: repo} }
+func NewService(repo *Repo) *Service {
+	return &Service{repo: repo, scales: ratings.NewRepo(repo.db)}
+}
 
 // ---- доступ ----
 //
@@ -502,7 +512,19 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 	// «Типичный ролик» и обезличенный ориентир проекта. Лесенку выбора
 	// (своя история → проект → значение по умолчанию) целиком проходит
 	// репозиторий; порог обезличивания там же.
-	if out.Benchmark, err = s.repo.ProjectBenchmark(ctx, projectID, creatorID, now); err != nil {
+	//
+	// Значение по умолчанию берём из справочника порогов той версии, на
+	// которой стоит проект: в коде его больше нет, иначе правка числа
+	// молча переписала бы прошлое.
+	// ForProject заодно снимает копию действующей версии, если проект
+	// ещё не на шкале: первый вопрос об оценке и есть момент, когда он
+	// на неё встаёт.
+	scale, serr := s.scales.ForProject(ctx, projectID)
+	if serr != nil {
+		return out, serr
+	}
+	fallback := scale.TypicalVideoViews
+	if out.Benchmark, err = s.repo.ProjectBenchmark(ctx, projectID, creatorID, now, fallback); err != nil {
 		return out, err
 	}
 

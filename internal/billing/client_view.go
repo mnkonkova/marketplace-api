@@ -205,19 +205,24 @@ type ClientPeriod struct {
 	// CarryIn/CarryOut — перенос остатка ступени, его сторона. Пока нули.
 	CarryIn  int64 `json:"carry_in_client"`
 	CarryOut int64 `json:"carry_out_client"`
+	// RatingScaleVersion — какой версией справочника порогов оценён
+	// период. Пусто, пока период идёт: пороги замораживаются подытогом.
+	// Номер, а не id: человеку показывают «оценено по версии 3».
+	RatingScaleVersion *int `json:"rating_scale_version,omitempty"`
 }
 
 // clientPeriodView — период заказчика из общего периода проекта.
 func clientPeriodView(p ProjectPeriod) ClientPeriod {
 	return ClientPeriod{
-		Seq:            p.Seq,
-		StartsOn:       p.StartsOn,
-		EndsOn:         p.EndsOn,
-		Status:         p.Status,
-		SnapshotAsOf:   p.SnapshotAsOf,
-		SnapshotApprox: p.SnapshotApprox,
-		CarryIn:        p.CarryInClient,
-		CarryOut:       p.CarryOutClient,
+		Seq:                p.Seq,
+		StartsOn:           p.StartsOn,
+		EndsOn:             p.EndsOn,
+		Status:             p.Status,
+		SnapshotAsOf:       p.SnapshotAsOf,
+		SnapshotApprox:     p.SnapshotApprox,
+		CarryIn:            p.CarryInClient,
+		CarryOut:           p.CarryOutClient,
+		RatingScaleVersion: p.RatingScaleVersion,
 	}
 }
 
@@ -254,19 +259,23 @@ type CreatorPeriod struct {
 	// следующий. Пока нули — арифметику включат вместе с тарифом.
 	CarryIn  int64 `json:"carry_in_creator"`
 	CarryOut int64 `json:"carry_out_creator"`
+	// RatingScaleVersion — какой версией справочника порогов оценён
+	// период. Пусто, пока период идёт.
+	RatingScaleVersion *int `json:"rating_scale_version,omitempty"`
 }
 
 // creatorPeriodView — период креатора из общего периода проекта.
 func creatorPeriodView(p ProjectPeriod) CreatorPeriod {
 	return CreatorPeriod{
-		Seq:            p.Seq,
-		StartsOn:       p.StartsOn,
-		EndsOn:         p.EndsOn,
-		Status:         p.Status,
-		SnapshotAsOf:   p.SnapshotAsOf,
-		SnapshotApprox: p.SnapshotApprox,
-		CarryIn:        p.CarryInCreator,
-		CarryOut:       p.CarryOutCreator,
+		Seq:                p.Seq,
+		StartsOn:           p.StartsOn,
+		EndsOn:             p.EndsOn,
+		Status:             p.Status,
+		SnapshotAsOf:       p.SnapshotAsOf,
+		SnapshotApprox:     p.SnapshotApprox,
+		CarryIn:            p.CarryInCreator,
+		CarryOut:           p.CarryOutCreator,
+		RatingScaleVersion: p.RatingScaleVersion,
 	}
 }
 
@@ -377,21 +386,14 @@ const (
 	TypicalFromDefault = "default"
 )
 
-// DefaultTypicalVideoViews — сколько просмотров у «типичного ролика»,
-// когда считать не по чему.
+// Значение «типичного ролика» по умолчанию живёт не здесь: оно переехало
+// в версионируемый справочник порогов (internal/ratings, поле
+// typical_video_views первой версии). Там же его источник и дата —
+// аналитика владельца продукта по 253 роликам за июнь–сентябрь 2026.
 //
-// Источник числа: аналитика владельца продукта по 253 роликам за
-// июнь–сентябрь 2026, медиана ролика. Записано здесь намеренно — через
-// полгода никто не вспомнит, откуда оно, и трогать его будет страшно.
-//
-// Место одно на весь код специально: фронту лесенка выбора не отдаётся,
-// иначе в браузере заведётся вторая копия правила и своя константа, и
-// они разойдутся на первой правке.
-//
-// Когда появится версионируемый справочник порогов (он впереди, вместе
-// со ступенчатым тарифом), число переедет туда и станет настраиваемым —
-// переезжать должно отсюда, из одного места.
-const DefaultTypicalVideoViews int64 = 3000
+// Константы в коде тут больше нет намеренно: пороги должны
+// версионироваться вместе с остальными, иначе правка числа задним числом
+// молча меняет прошлые периоды.
 
 // ProjectBenchmark — обезличенный ориентир проекта.
 //

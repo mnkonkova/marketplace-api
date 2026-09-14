@@ -2074,6 +2074,116 @@
                 }
             }
         },
+        "/admin/rating_scales": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Версия не правится — выпускается следующая. У каждой видно,\nсколько проектов сняли с неё копию и сколько подытоженных\nпериодов ею оценены: это и означает, что версию нельзя\nсчитать черновиком.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-ratings"
+                ],
+                "summary": "Справочник порогов оценок: все версии (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.scalesResp"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Существующая версия не переписывается: на ней живут проекты\nи подытоженные периоды, и правка задним числом переписала бы\nто, что клиент уже видел. В ответе — разница с прежней\nверсией и сколько проектов на ней остались: за новой они не\nпоследуют, копия снимается один раз.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-ratings"
+                ],
+                "summary": "Выпустить версию справочника порогов (админ)",
+                "parameters": [
+                    {
+                        "description": "версия целиком",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.publishReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.PublishResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; invalid_input — границы не растут, доли не сходятся в 100%, нет площадки, у ориентира нет источника или даты",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/rating_scales/current": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-ratings"
+                ],
+                "summary": "Действующая версия справочника порогов (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.Scale"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — справочник пуст",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/search": {
             "get": {
                 "security": [
@@ -12027,6 +12137,10 @@
                 "ends_on": {
                     "type": "string"
                 },
+                "rating_scale_version": {
+                    "description": "RatingScaleVersion — какой версией справочника порогов оценён\nпериод. Пусто, пока период идёт: пороги замораживаются подытогом.\nНомер, а не id: человеку показывают «оценено по версии 3».",
+                    "type": "integer"
+                },
                 "seq": {
                     "description": "Seq — какой это период по счёту.",
                     "type": "integer"
@@ -12236,6 +12350,10 @@
                 },
                 "ends_on": {
                     "type": "string"
+                },
+                "rating_scale_version": {
+                    "description": "RatingScaleVersion — какой версией справочника порогов оценён\nпериод. Пусто, пока период идёт.",
+                    "type": "integer"
                 },
                 "seq": {
                     "description": "Seq — какой это период по счёту: первый, второй, третий.",
@@ -12619,6 +12737,14 @@
                 },
                 "project_id": {
                     "type": "string"
+                },
+                "rating_scale_id": {
+                    "description": "RatingScaleID — какой версией справочника порогов оценивался\nпериод. Проставляется при подытоге и больше не меняется: чем\nоценивали, тем и оценивали. nil у периода, который ещё идёт.",
+                    "type": "string"
+                },
+                "rating_scale_version": {
+                    "description": "RatingScaleVersion — её номер: человеку показывают «оценено по\nверсии 3», а не uuid.",
+                    "type": "integer"
                 },
                 "seq": {
                     "description": "Seq — какой это период по счёту: первый, второй, третий.",
@@ -17901,6 +18027,266 @@
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_publications.ChecklistTemplate"
+                    }
+                }
+            }
+        },
+        "internal_ratings.Levels": {
+            "type": "object",
+            "properties": {
+                "good_from": {
+                    "type": "integer"
+                },
+                "great_from": {
+                    "type": "integer"
+                },
+                "hit_from": {
+                    "type": "integer"
+                },
+                "medium_from": {
+                    "type": "integer"
+                },
+                "viral_from": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.MarketPrice": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "measured_on": {
+                    "description": "MeasuredOn — когда измеряли. Именно дата измерения, а не выпуска\nверсии: числа переносят из версии в версию, и дата должна\nпереезжать вместе с числом.",
+                    "type": "string"
+                },
+                "price_per_1000": {
+                    "description": "PricePer1000 — копейки.",
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.PlatformLevels": {
+            "type": "object",
+            "properties": {
+                "good_from": {
+                    "type": "integer"
+                },
+                "great_from": {
+                    "type": "integer"
+                },
+                "medium_from": {
+                    "type": "integer"
+                },
+                "platform": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.PublishResult": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "description": "Changes — разница с прежней действующей версией. Пусто у самой\nпервой: сравнивать не с чем.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.ScaleChange"
+                    }
+                },
+                "projects_on_previous": {
+                    "description": "ProjectsOnPrevious — сколько проектов остались на прежней версии.\nОни за новой не последуют: копия снимается один раз.",
+                    "type": "integer"
+                },
+                "scale": {
+                    "$ref": "#/definitions/internal_ratings.Scale"
+                }
+            }
+        },
+        "internal_ratings.Relative": {
+            "type": "object",
+            "properties": {
+                "mature_age_days": {
+                    "description": "MatureAgeDays — со скольких дней ролик считается зрелым.",
+                    "type": "integer"
+                },
+                "min_mature_videos": {
+                    "description": "MinMatureVideos — меньше какого числа зрелых роликов сравнивать\nбессмысленно: перцентиль по десяти роликам — это не перцентиль.",
+                    "type": "integer"
+                },
+                "window_days": {
+                    "description": "WindowDays — за какой период берём ролики для сравнения.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.Scale": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "is_current": {
+                    "description": "IsCurrent — эта версия сейчас действует. Действует всегда одна:\nсамая новая.",
+                    "type": "boolean"
+                },
+                "levels": {
+                    "$ref": "#/definitions/internal_ratings.Levels"
+                },
+                "market": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.MarketPrice"
+                    }
+                },
+                "note": {
+                    "type": "string"
+                },
+                "platform_levels": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.PlatformLevels"
+                    }
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "published_by": {
+                    "type": "string"
+                },
+                "relative": {
+                    "$ref": "#/definitions/internal_ratings.Relative"
+                },
+                "shares": {
+                    "$ref": "#/definitions/internal_ratings.Shares"
+                },
+                "typical_video_views": {
+                    "type": "integer"
+                },
+                "used_by_periods": {
+                    "type": "integer"
+                },
+                "used_by_projects": {
+                    "description": "UsedByProjects/UsedByPeriods — сколько проектов сняли с неё копию\nи сколько подытоженных периодов ею оценены. Показывает, что версию\nнельзя считать черновиком.",
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.ScaleChange": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "integer"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.Shares": {
+            "type": "object",
+            "properties": {
+                "bad_pct": {
+                    "type": "integer"
+                },
+                "good_pct": {
+                    "type": "integer"
+                },
+                "great_pct": {
+                    "description": "GreatPct — отличные и выше: хиты и виральные тоже сюда. Отдельной\nнормы у них нет — они слишком редки, чтобы ждать их долю.",
+                    "type": "integer"
+                },
+                "medium_pct": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.marketReq": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "measured_on": {
+                    "description": "MeasuredOn — ГГГГ-ММ-ДД. Дата измерения, а не выпуска версии:\nчисло могли перенести из прошлой версии как есть.",
+                    "type": "string"
+                },
+                "price_per_1000": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.publishReq": {
+            "type": "object",
+            "properties": {
+                "levels": {
+                    "$ref": "#/definitions/internal_ratings.Levels"
+                },
+                "market": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.marketReq"
+                    }
+                },
+                "note": {
+                    "type": "string"
+                },
+                "platform_levels": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.PlatformLevels"
+                    }
+                },
+                "relative": {
+                    "$ref": "#/definitions/internal_ratings.Relative"
+                },
+                "shares": {
+                    "$ref": "#/definitions/internal_ratings.Shares"
+                },
+                "typical_video_views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.scalesResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.Scale"
                     }
                 }
             }

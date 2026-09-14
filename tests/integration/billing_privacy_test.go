@@ -417,9 +417,11 @@ func TestCreatorBenchmarkHiddenBelowAnonymityThreshold(t *testing.T) {
 	if _, ok := bench["mature_videos"]; ok {
 		t.Errorf("ниже порога обезличивания состав проекта отдавать нельзя: %v", bench["mature_videos"])
 	}
-	if got := int64(num(t, bench, "typical_video_views")); got != billing.DefaultTypicalVideoViews {
-		t.Errorf("типичный ролик %d, ожидали значение по умолчанию %d",
-			got, billing.DefaultTypicalVideoViews)
+	// Значение по умолчанию берётся из действующей версии справочника
+	// порогов, а не из константы в коде.
+	fallback := currentTypicalVideoViews(t, pool)
+	if got := int64(num(t, bench, "typical_video_views")); got != fallback {
+		t.Errorf("типичный ролик %d, ожидали значение из справочника %d", got, fallback)
 	}
 	if got, _ := bench["typical_video_source"].(string); got != "default" {
 		t.Errorf("источник %q, ожидали default — своих роликов мало и проект мал", got)
@@ -573,4 +575,18 @@ func TestTypicalVideoPrefersOwnHistory(t *testing.T) {
 	if got := int64(num(t, bench, "project_median_views")); got == 100_000 {
 		t.Error("медиана проекта совпала с его собственной — тест не различит источники")
 	}
+}
+
+// currentTypicalVideoViews — «типичный ролик» действующей версии
+// справочника порогов. Читаем из базы, а не из константы: константы в
+// коде для него больше нет намеренно.
+func currentTypicalVideoViews(t *testing.T, pool *pgxpool.Pool) int64 {
+	t.Helper()
+	var views int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT typical_video_views FROM rating_scales ORDER BY version DESC LIMIT 1`).
+		Scan(&views); err != nil {
+		t.Fatalf("справочник порогов: %v", err)
+	}
+	return views
 }

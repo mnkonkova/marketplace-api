@@ -37,6 +37,7 @@ import (
 	"marketpclce/internal/projects"
 	"marketpclce/internal/publications"
 	"marketpclce/internal/ratelimit"
+	"marketpclce/internal/ratings"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
@@ -226,6 +227,7 @@ func main() {
 
 	// Деньги: условия, платежи заказчика и начисления креаторам.
 	billingHandler := billing.NewHandler(billing.NewService(billing.NewRepo(pool)))
+	ratingsHandler := ratings.NewHandler(ratings.NewService(ratings.NewRepo(pool)))
 
 	// Привязка к «Боту Работ». Если общий секрет или адрес вебхука не заданы,
 	// ручки просто нет: неработающая привязка хуже отсутствующей — человек
@@ -289,6 +291,7 @@ func main() {
 		Support:        support.NewHandler(support.NewService(pool)),
 		Partner:        partnerHandler,
 		Admin:          adminHandler,
+		Ratings:        ratingsHandler,
 		CORSOrigins:    cfg.CORSOrigins,
 		Limiter:        limiter,
 		ReadWindows: []ratelimit.Window{

@@ -11,6 +11,7 @@ import (
 
 	"marketpclce/internal/audit"
 	"marketpclce/internal/outbox"
+	"marketpclce/internal/ratings"
 )
 
 // Период проекта: месяц работы креаторов, отсчитанный от первой
@@ -94,6 +95,14 @@ type ProjectPeriod struct {
 	CarryOutClient  int64 `json:"carry_out_client"`
 	CarryInCreator  int64 `json:"carry_in_creator"`
 	CarryOutCreator int64 `json:"carry_out_creator"`
+
+	// RatingScaleID — какой версией справочника порогов оценивался
+	// период. Проставляется при подытоге и больше не меняется: чем
+	// оценивали, тем и оценивали. nil у периода, который ещё идёт.
+	RatingScaleID *uuid.UUID `json:"rating_scale_id,omitempty"`
+	// RatingScaleVersion — её номер: человеку показывают «оценено по
+	// версии 3», а не uuid.
+	RatingScaleVersion *int `json:"rating_scale_version,omitempty"`
 }
 
 // IsLocked — период подытожен.
@@ -114,13 +123,16 @@ func (p ProjectPeriod) LockDueAt(delay time.Duration) time.Time {
 
 const periodScanCols = `id, project_id, seq, starts_on, ends_on, prev_period_id,
        status, locked_at, locked_by, snapshot_as_of, snapshot_approx,
-       carry_in_client, carry_out_client, carry_in_creator, carry_out_creator`
+       carry_in_client, carry_out_client, carry_in_creator, carry_out_creator,
+       rating_scale_id,
+       (SELECT rs.version FROM rating_scales rs WHERE rs.id = rating_scale_id)`
 
 func scanPeriod(row pgx.Row) (ProjectPeriod, error) {
 	var p ProjectPeriod
 	err := row.Scan(&p.ID, &p.ProjectID, &p.Seq, &p.StartsOn, &p.EndsOn, &p.PrevPeriodID,
 		&p.Status, &p.LockedAt, &p.LockedBy, &p.SnapshotAsOf, &p.SnapshotApprox,
-		&p.CarryInClient, &p.CarryOutClient, &p.CarryInCreator, &p.CarryOutCreator)
+		&p.CarryInClient, &p.CarryOutClient, &p.CarryInCreator, &p.CarryOutCreator,
+		&p.RatingScaleID, &p.RatingScaleVersion)
 	return p, err
 }
 
@@ -323,6 +335,12 @@ SET status = $2, locked_at = $3, locked_by = $4,
     snapshot_as_of = $5::date, snapshot_approx = $6, updated_at = now()
 WHERE id = $1`, periodID, PeriodLocked, now, actor, asOf, approx); err != nil {
 		return ProjectPeriod{}, fmt.Errorf("mark period locked: %w", err)
+	}
+	// Пороги оценок замораживаются вместе с просмотрами и суммами:
+	// оценка — утверждение о прошлом, и выпуск новой шкалы не должен
+	// переписывать то, что клиент уже видел.
+	if err := ratings.StampPeriod(ctx, tx, periodID, p.ProjectID); err != nil {
+		return ProjectPeriod{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ProjectPeriod{}, fmt.Errorf("commit: %w", err)

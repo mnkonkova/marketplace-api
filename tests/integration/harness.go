@@ -25,6 +25,7 @@ import (
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
 	"marketpclce/internal/publications"
+	"marketpclce/internal/ratings"
 )
 
 // APIHarness — настоящий роутер приложения на тестовой БД.
@@ -81,6 +82,7 @@ func NewAPIHarness(t *testing.T, pool *pgxpool.Pool) *APIHarness {
 		Admin:          admin.NewHandler(adminSvc),
 		Productions:    productions.NewHandler(productions.NewService(productions.NewRepo(pool))),
 		Pipelines:      pipelines.NewHandler(pipelines.NewService(pipelines.NewRepo(pool))),
+		Ratings:        ratings.NewHandler(ratings.NewService(ratings.NewRepo(pool))),
 	})
 	return &APIHarness{Pool: pool, srv: srv, issuer: issuer}
 }

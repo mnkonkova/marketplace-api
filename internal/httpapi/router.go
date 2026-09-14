@@ -27,6 +27,7 @@ import (
 	"marketpclce/internal/projects"
 	"marketpclce/internal/publications"
 	"marketpclce/internal/ratelimit"
+	"marketpclce/internal/ratings"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
@@ -68,6 +69,9 @@ type Deps struct {
 	// секрет не задан: тогда ручки просто нет, а не есть неработающая.
 	Partner *partner.Handler
 	Admin   *admin.Handler
+	// Ratings — справочник порогов оценок. nil — админские ручки не
+	// маунтятся.
+	Ratings *ratings.Handler
 
 	CORSOrigins []string
 
@@ -570,6 +574,13 @@ func NewRouter(d Deps) http.Handler {
 				// сколько из этого получает сам креатор. Правится только
 				// выпуском новой версии — под старой стоит согласие
 				// клиентов, и переписывать её задним числом нельзя.
+				// Справочник порогов оценок: версионируется как прайс,
+				// правится только выпуском новой версии.
+				if d.Ratings != nil {
+					r.Get("/admin/rating_scales", d.Ratings.AdminListScales)
+					r.Get("/admin/rating_scales/current", d.Ratings.AdminCurrentScale)
+					r.Post("/admin/rating_scales", d.Ratings.AdminPublishScale)
+				}
 				if d.Billing != nil {
 					r.Get("/admin/terms", d.Billing.AdminListTerms)
 					r.Post("/admin/terms", d.Billing.AdminPublishTerms)

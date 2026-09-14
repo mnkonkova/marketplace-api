@@ -468,7 +468,8 @@ func (h *Handler) ClientOverviewHandler(w http.ResponseWriter, r *http.Request) 
 //
 //  1. своя история, если зрелых роликов хватает — самое точное;
 //  2. иначе медиана проекта, но только пока она остаётся агрегатом;
-//  3. иначе значение по умолчанию.
+//  3. иначе значение по умолчанию — из версионируемого справочника
+//     порогов, а не из константы в коде (fallbackViews).
 //
 // Фронту выбор не отдаётся намеренно: вторая копия правила в браузере
 // разойдётся с этой при первой же правке, и обещание «до ступени
@@ -478,7 +479,7 @@ func (h *Handler) ClientOverviewHandler(w http.ResponseWriter, r *http.Request) 
 // периода: пока он растёт, сравнивать его с отлежавшимися нечестно.
 // Возраст берём от фактической даты публикации, а где её нет — от сдачи
 // ссылки, как и везде.
-func (r *Repo) ProjectBenchmark(ctx context.Context, projectID, creatorID uuid.UUID, now time.Time) (*ProjectBenchmark, error) {
+func (r *Repo) ProjectBenchmark(ctx context.Context, projectID, creatorID uuid.UUID, now time.Time, fallbackViews int64) (*ProjectBenchmark, error) {
 	cutoff := now.Add(-matureVideoAge)
 
 	// Одна выкладка — один ролик: просмотры суммируются по площадкам, и
@@ -523,7 +524,7 @@ FROM mature`
 
 	out := &ProjectBenchmark{
 		MyMatureVideos:     myVideos,
-		TypicalVideoViews:  DefaultTypicalVideoViews,
+		TypicalVideoViews:  fallbackViews,
 		TypicalVideoSource: TypicalFromDefault,
 	}
 
@@ -555,7 +556,7 @@ FROM mature`
 	// Ноль как «типичный ролик» сломал бы любой расчёт «сколько
 	// осталось», поэтому в этом случае честнее значение по умолчанию.
 	if out.TypicalVideoViews <= 0 {
-		out.TypicalVideoViews = DefaultTypicalVideoViews
+		out.TypicalVideoViews = fallbackViews
 		out.TypicalVideoSource = TypicalFromDefault
 	}
 	return out, nil
