@@ -318,7 +318,7 @@ func TestCollapseWritesSummaryBeforeDeleting(t *testing.T) {
 	// нельзя — из него снимается срез месяца. Здесь это предусловие, а
 	// не предмет проверки (см. TestCollapseKeepsLockedSnapshot).
 	if _, err := billing.NewService(billing.NewRepo(pool)).
-		LockMonth(ctx, projectID, pubDay(0), nil, now); err != nil {
+		LockMonth(ctx, projectID, pubDay(0), nil, now, now); err != nil {
 		t.Fatalf("зафиксировать месяц: %v", err)
 	}
 

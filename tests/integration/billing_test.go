@@ -1066,7 +1066,7 @@ func TestRecalculateReplacesPreviewWithStoredRows(t *testing.T) {
 	}
 
 	// А вот фиксация месяца признак снимает.
-	if _, err := svc.LockMonth(ctx, pid, time.Now().UTC(), &creators[0], time.Now().UTC()); err != nil {
+	if _, err := svc.LockMonth(ctx, pid, time.Now().UTC(), &creators[0], time.Now().UTC(), time.Now().UTC()); err != nil {
 		t.Fatalf("фиксация месяца: %v", err)
 	}
 	locked, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())

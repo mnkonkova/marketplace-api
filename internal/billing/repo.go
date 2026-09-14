@@ -334,6 +334,10 @@ func (r *Repo) periodFactsLocked(ctx context.Context, projectID uuid.UUID, month
 	period := firstOfMonth(month)
 	rows, err := r.db.Query(ctx, `
 WITH pub AS (
+    -- SUM пропускает NULL, и «данных на отсечку не было» превращается в
+    -- ноль. Для денег это верно — платить не за что, — но само отличие
+    -- не теряется: в срезе у такой строки stat_date пуст, а месяц, где
+    -- числа были уничтожены, помечен приблизительным.
     SELECT sp.publication_id AS id, sp.creator_user_id, sp.status,
            COALESCE(SUM(sv.views), 0) AS views
     FROM project_month_publications sp

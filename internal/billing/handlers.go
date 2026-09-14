@@ -718,10 +718,10 @@ type monthLockResp struct {
 
 // ManagerLockMonth godoc
 // @Summary  Зафиксировать месяц (менеджер)
-// @Description Пересчитывает месяц в последний раз и сохраняет срез
-// @Description просмотров — по каждой выкладке и каждой площадке. После
-// @Description этого числа месяца не меняются, даже если просмотры
-// @Description продолжают расти. Идемпотентно: повторный вызов на уже
+// @Description Сохраняет срез просмотров — по каждой выкладке и каждой
+// @Description площадке, на сегодняшнюю отсечку — и пересчитывает месяц
+// @Description уже по нему. После этого числа месяца не меняются, даже
+// @Description если просмотры продолжают расти. Идемпотентно: повторный вызов на уже
 // @Description зафиксированном месяце ничего не меняет и не ошибка.
 // @Description Обычно месяц фиксируется сам через 14 дней после его
 // @Description конца; эта ручка — «зафиксировать сейчас».
@@ -744,7 +744,11 @@ func (h *Handler) ManagerLockMonth(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_month", "Месяц должен быть в формате ГГГГ-ММ.")
 		return
 	}
-	m, err := h.svc.LockMonth(r.Context(), projectID, month, &actor, time.Now().UTC())
+	// Ручная фиксация: отсечка сегодняшняя. Числа всё равно берутся из
+	// поденного ряда, а не последним снимком, — чтобы ручная и
+	// автоматическая дороги на одних данных давали одно и то же.
+	now := time.Now().UTC()
+	m, err := h.svc.LockMonth(r.Context(), projectID, month, &actor, now, now)
 	if err != nil {
 		writeErr(w, err)
 		return

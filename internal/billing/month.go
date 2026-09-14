@@ -58,6 +58,19 @@ type ProjectMonth struct {
 	LockedAt *time.Time `json:"locked_at,omitempty"`
 	// LockedBy — кто зафиксировал. nil = фоновая задача.
 	LockedBy *uuid.UUID `json:"locked_by,omitempty"`
+	// SnapshotAsOf — на какую дату сняты числа месяца. Это отсечка
+	// (конец месяца плюс две недели), а не момент фиксации: воркер мог
+	// опоздать, и числа всё равно должны быть теми, что были на отсечку.
+	SnapshotAsOf *time.Time `json:"snapshot_as_of,omitempty"`
+	// SnapshotApprox — числам не на что опереться: поденный ряд к моменту
+	// фиксации уже схлопнули, и восстановить просмотры на отсечку
+	// неоткуда.
+	//
+	// Не путать с «предварительно» (Accrual.IsPreview): то про месяц,
+	// который ещё идёт, это — про месяц, который зафиксирован, но
+	// опирается на пустоту. Могут стоять одновременно, и в интерфейсе их
+	// нельзя схлопывать в одну плашку.
+	SnapshotApprox bool `json:"snapshot_approx,omitempty"`
 }
 
 // IsLocked — месяц зафиксирован.
@@ -69,9 +82,10 @@ func (r *Repo) Month(ctx context.Context, projectID uuid.UUID, month time.Time) 
 	period := firstOfMonth(month)
 	out := ProjectMonth{ProjectID: projectID, PeriodMonth: period, Status: MonthOpen}
 	err := r.db.QueryRow(ctx, `
-SELECT status, locked_at, locked_by
+SELECT status, locked_at, locked_by, snapshot_as_of, snapshot_approx
 FROM project_months WHERE project_id = $1 AND period_month = $2`,
-		projectID, period).Scan(&out.Status, &out.LockedAt, &out.LockedBy)
+		projectID, period).Scan(&out.Status, &out.LockedAt, &out.LockedBy,
+		&out.SnapshotAsOf, &out.SnapshotApprox)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}
@@ -89,7 +103,7 @@ FROM project_months WHERE project_id = $1 AND period_month = $2`,
 //
 // Всё одной транзакцией: срез без отметки означал бы месяц, который
 // считается живым по данным, снятым неизвестно когда.
-func (r *Repo) LockMonth(ctx context.Context, projectID uuid.UUID, month time.Time, actor *uuid.UUID, now time.Time) (ProjectMonth, error) {
+func (r *Repo) LockMonth(ctx context.Context, projectID uuid.UUID, month time.Time, actor *uuid.UUID, asOf, now time.Time) (ProjectMonth, error) {
 	period := firstOfMonth(month)
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -118,14 +132,16 @@ WHERE project_id = $1 AND period_month = $2 FOR UPDATE`, projectID, period).Scan
 		return r.Month(ctx, projectID, period)
 	}
 
-	if err := snapshotMonth(ctx, tx, projectID, period); err != nil {
+	approx, err := snapshotMonth(ctx, tx, projectID, period, asOf)
+	if err != nil {
 		return ProjectMonth{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE project_months
-SET status = $3, locked_at = $4, locked_by = $5, updated_at = now()
+SET status = $3, locked_at = $4, locked_by = $5,
+    snapshot_as_of = $6::date, snapshot_approx = $7, updated_at = now()
 WHERE project_id = $1 AND period_month = $2`,
-		projectID, period, MonthLocked, now, actor); err != nil {
+		projectID, period, MonthLocked, now, actor, asOf, approx); err != nil {
 		return ProjectMonth{}, fmt.Errorf("mark month locked: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -135,12 +151,20 @@ WHERE project_id = $1 AND period_month = $2`,
 }
 
 // snapshotMonth — срез месяца: какие выкладки в нём считались и сколько
-// просмотров было у каждой площадки на этот момент.
+// просмотров было у каждой площадки НА ОТСЕЧКУ.
+//
+// Отсечка, а не «последний снимок»: поденный ряд накопительный, и
+// просмотры на любую дату достаются из него штатно — последняя строка,
+// не позже отсечки. Брать последний снимок значило бы запомнить
+// просмотры, набранные уже после неё, стоило воркеру опоздать на сутки.
 //
 // Границы месяца те же, что у расчёта начислений (periodFacts): выкладка
 // принадлежит месяцу по due_date, отменённые не в счёт. Иначе срез и
 // расчёт разошлись бы в составе.
-func snapshotMonth(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, period time.Time) error {
+//
+// Возвращает признак приблизительности: поденный ряд схлопнут, и
+// восстанавливать нечего.
+func snapshotMonth(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, period time.Time, asOf time.Time) (bool, error) {
 	to := period.AddDate(0, 1, 0)
 
 	// Пересобираем срез с нуля: на случай расфиксации и повторной
@@ -148,12 +172,12 @@ func snapshotMonth(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, period t
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM project_month_views WHERE project_id = $1 AND period_month = $2`,
 		projectID, period); err != nil {
-		return fmt.Errorf("clear views snapshot: %w", err)
+		return false, fmt.Errorf("clear views snapshot: %w", err)
 	}
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM project_month_publications WHERE project_id = $1 AND period_month = $2`,
 		projectID, period); err != nil {
-		return fmt.Errorf("clear publications snapshot: %w", err)
+		return false, fmt.Errorf("clear publications snapshot: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -164,31 +188,51 @@ FROM project_publications p
 WHERE p.project_id = $1
   AND p.due_date >= $2 AND p.due_date < $3
   AND p.status <> 'cancelled'`, projectID, period, to); err != nil {
-		return fmt.Errorf("snapshot publications: %w", err)
+		return false, fmt.Errorf("snapshot publications: %w", err)
 	}
 
-	// Просмотры накопительные, поэтому берём ПОСЛЕДНИЙ снимок каждой
-	// ссылки, а не сумму по дням: сумма завысила бы в разы.
+	// Просмотры накопительные: берём последнюю строку ряда, не позже
+	// отсечки, а не сумму по дням (сумма завысила бы в разы) и не
+	// последнюю вообще (она может быть уже после отсечки).
+	//
+	// Строки на отсечку нет — пишем NULL, а не сегодняшнее число.
+	// Пустое честнее завышенного: ноль неотличим от честного нуля
+	// просмотров, а «данных не было» — это другое.
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_month_views
-    (project_id, period_month, publication_id, platform, link_id, views, likes, comments, published_at)
+    (project_id, period_month, publication_id, platform, link_id,
+     views, likes, comments, stat_date, published_at)
 SELECT $1, $2, p.id, l.platform, l.id,
-       COALESCE(v.views, 0), v.likes, v.comments, l.published_at
+       v.views, v.likes, v.comments, v.stat_date, l.published_at
 FROM project_publications p
 JOIN publication_links l ON l.publication_id = p.id
 LEFT JOIN LATERAL (
-    SELECT views, likes, comments
+    SELECT views, likes, comments, stat_date
     FROM video_stat_daily d
-    WHERE d.link_id = l.id
+    WHERE d.link_id = l.id AND d.stat_date <= $4::date
     ORDER BY d.stat_date DESC
     LIMIT 1
 ) v ON TRUE
 WHERE p.project_id = $1
   AND p.due_date >= $2 AND p.due_date < $3
-  AND p.status <> 'cancelled'`, projectID, period, to); err != nil {
-		return fmt.Errorf("snapshot views: %w", err)
+  AND p.status <> 'cancelled'`, projectID, period, to, asOf); err != nil {
+		return false, fmt.Errorf("snapshot views: %w", err)
 	}
-	return nil
+
+	// Приблизительный срез — это когда числа не просто отсутствуют, а
+	// УНИЧТОЖЕНЫ: поденный ряд проекта схлопнут (есть итоговый снимок), и
+	// на отсечку не нашлось ничего. Просто «ещё не собрали» — не
+	// приблизительность, а честное отсутствие данных.
+	var approx bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM project_stat_summary s WHERE s.project_id = $1)
+   AND EXISTS (
+       SELECT 1 FROM project_month_views v
+       WHERE v.project_id = $1 AND v.period_month = $2 AND v.stat_date IS NULL
+   )`, projectID, period).Scan(&approx); err != nil {
+		return false, fmt.Errorf("detect approximate snapshot: %w", err)
+	}
+	return approx, nil
 }
 
 // UnlockMonth — вернуть месяц в работу.
@@ -305,16 +349,23 @@ func (s *Service) Month(ctx context.Context, projectID uuid.UUID, month time.Tim
 	return s.repo.Month(ctx, projectID, month)
 }
 
-// LockMonth — зафиксировать месяц: пересчитать в последний раз и снять
-// срез просмотров.
+// LockMonth — зафиксировать месяц: снять срез просмотров на отсечку и
+// пересчитать суммы уже по нему.
 //
-// Пересчёт перед фиксацией обязателен: иначе зафиксируется месяц с
-// суммами, посчитанными неизвестно когда, рядом со свежим срезом
-// просмотров. Утверждённые и выплаченные строки пересчёт по-прежнему не
-// трогает — SaveAccrual их пропускает.
+// Порядок именно такой. Пересчёт идёт ПОСЛЕ фиксации, потому что после
+// неё monthFacts читает числа из среза: так сохранённые суммы и срез
+// заведомо об одном и том же. Пересчитай до — и суммы посчитались бы по
+// живым просмотрам, то есть по числам, которых на отсечку не было.
+//
+// Утверждённые и выплаченные строки пересчёт по-прежнему не трогает —
+// SaveAccrual их пропускает.
+//
+// asOf — отсечка: конец месяца плюс отсрочка у фоновой фиксации,
+// сегодняшний день у ручной. now — когда фиксируем на самом деле; эти
+// два времени расходятся ровно тогда, когда воркер опоздал.
 //
 // actor nil = фоновая задача.
-func (s *Service) LockMonth(ctx context.Context, projectID uuid.UUID, month time.Time, actor *uuid.UUID, now time.Time) (ProjectMonth, error) {
+func (s *Service) LockMonth(ctx context.Context, projectID uuid.UUID, month time.Time, actor *uuid.UUID, asOf, now time.Time) (ProjectMonth, error) {
 	current, err := s.repo.Month(ctx, projectID, month)
 	if err != nil {
 		return ProjectMonth{}, err
@@ -324,10 +375,21 @@ func (s *Service) LockMonth(ctx context.Context, projectID uuid.UUID, month time
 		// приходят к одному месяцу вдвоём.
 		return current, nil
 	}
-	if _, err := s.Recalculate(ctx, projectID, month); err != nil {
+	m, err := s.repo.LockMonth(ctx, projectID, month, actor, asOf, now)
+	if err != nil {
 		return ProjectMonth{}, err
 	}
-	return s.repo.LockMonth(ctx, projectID, month, actor, now)
+	if m.SnapshotApprox {
+		// Опереться не на что: ряд схлопнут, срез пуст. Пересчитать
+		// сейчас — значит переписать сохранённые суммы нулями, то есть
+		// потерять последнее, что от месяца осталось. Оставляем как есть
+		// и честно помечаем месяц приблизительным.
+		return m, nil
+	}
+	if _, err := s.Recalculate(ctx, projectID, month); err != nil {
+		return m, err
+	}
+	return m, nil
 }
 
 // UnlockMonth — вернуть месяц в работу (только админ, со следом в журнале).
@@ -349,7 +411,10 @@ func (s *Service) LockDueMonths(ctx context.Context, now time.Time, delay time.D
 		return 0, 0, err
 	}
 	for _, m := range due {
-		if _, lerr := s.LockMonth(ctx, m.ProjectID, m.PeriodMonth, nil, now); lerr != nil {
+		// Отсечка считается от самого месяца, а не от «сейчас»: опоздание
+		// воркера не должно менять числа, которые месяц запомнит.
+		asOf := m.PeriodMonth.AddDate(0, 1, 0).Add(delay)
+		if _, lerr := s.LockMonth(ctx, m.ProjectID, m.PeriodMonth, nil, asOf, now); lerr != nil {
 			failed++
 			continue
 		}

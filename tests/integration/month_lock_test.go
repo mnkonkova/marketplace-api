@@ -48,7 +48,7 @@ func TestLockedMonthDoesNotChange(t *testing.T) {
 		t.Fatalf("просмотры до фиксации %d, ожидали 500000", before.Totals.Views)
 	}
 
-	locked, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC())
+	locked, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC(), time.Now().UTC())
 	if err != nil {
 		t.Fatalf("фиксация: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestPreviewFlagFollowsMonthState(t *testing.T) {
 	assertAllPreview(t, out.Accruals, true, "пересчитано, но месяц не зафиксирован")
 
 	// Зафиксировали — теперь числа окончательные.
-	if _, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC()); err != nil {
+	if _, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC(), time.Now().UTC()); err != nil {
 		t.Fatalf("фиксация: %v", err)
 	}
 	out, err = svc.ProjectBilling(ctx, pid, month)
@@ -210,12 +210,12 @@ func TestLockMonthIsIdempotent(t *testing.T) {
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "idem01", 400_000, true)
 	month := time.Now().UTC()
 
-	first, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC())
+	first, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC(), time.Now().UTC())
 	if err != nil {
 		t.Fatalf("первая фиксация: %v", err)
 	}
 	bumpViews(t, pool, pid, 7_000_000)
-	second, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC().Add(time.Hour))
+	second, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC(), time.Now().UTC().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("повторная фиксация: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestCollapseKeepsLockedSnapshot(t *testing.T) {
 		t.Fatal("ежедневный ряд удалён до фиксации месяца")
 	}
 
-	if _, err := bsvc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC()); err != nil {
+	if _, err := bsvc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC(), time.Now().UTC()); err != nil {
 		t.Fatalf("фиксация: %v", err)
 	}
 	before := totalViews(t, bsvc, pid, month)
@@ -295,7 +295,7 @@ func TestUnlockMonthIsAdminOnlyAndLogged(t *testing.T) {
 	}
 	seedPublicationViews(t, pid, creators[0], pubDay(0), "unlk01", 800_000, true)
 	month := time.Now().UTC()
-	if _, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC()); err != nil {
+	if _, err := svc.LockMonth(ctx, pid, month, &creators[0], time.Now().UTC(), time.Now().UTC()); err != nil {
 		t.Fatalf("фиксация: %v", err)
 	}
 
@@ -426,4 +426,245 @@ func snapshotRows(t *testing.T, pool *pgxpool.Pool, pid uuid.UUID) int {
 func firstOfThisMonth() time.Time {
 	now := time.Now().UTC()
 	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+// Срез снимается НА ОТСЕЧКУ, а не «на сейчас».
+//
+// Поденный ряд накопительный, поэтому просмотры на любую дату достаются
+// из него штатно. Брать последний снимок значило бы запомнить просмотры,
+// набранные уже после отсечки: воркер простоял сутки — и месяц врёт.
+func TestSnapshotTakesViewsAtCutoff(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	lastMonth := firstOfThisMonth().AddDate(0, -1, 0)
+	seedPublicationViews(t, pid, creators[0], lastMonth.AddDate(0, 0, 3), "cut01", 0, true)
+
+	monthEnd := lastMonth.AddDate(0, 1, 0)
+	cutoff := monthEnd.AddDate(0, 0, 14)
+	// Ряд по дням: до отсечки 100 000, после — 900 000. Правильный ответ
+	// один — тот, что был на отсечку.
+	resetDailyViews(t, pool, pid)
+	seedDailyViews(t, pool, pid, cutoff.AddDate(0, 0, -4), 100_000)
+	seedDailyViews(t, pool, pid, cutoff.AddDate(0, 0, 6), 900_000)
+
+	if _, err := svc.LockMonth(ctx, pid, lastMonth, &creators[0], cutoff, time.Now().UTC()); err != nil {
+		t.Fatalf("фиксация: %v", err)
+	}
+	if got := totalViews(t, svc, pid, lastMonth); got != 100_000 {
+		t.Errorf("в срез попало %d просмотров, ожидали 100000 — значение на отсечку", got)
+	}
+	m, err := svc.Month(ctx, pid, lastMonth)
+	if err != nil {
+		t.Fatalf("состояние месяца: %v", err)
+	}
+	if m.SnapshotAsOf == nil || !sameDay(*m.SnapshotAsOf, cutoff) {
+		t.Errorf("отсечка в ответе %v, ожидали %v", m.SnapshotAsOf, cutoff)
+	}
+	if m.SnapshotApprox {
+		t.Error("срез снят с живого ряда — приблизительным он быть не может")
+	}
+}
+
+// Строки на отсечку нет вовсе — в срезе пусто, а не сегодняшнее число.
+//
+// Ролик сдали позже, сбор не успел: пустое честнее завышенного. Ноль тут
+// неотличим от честного нуля просмотров, поэтому в срезе пусто и видно,
+// что данных не было.
+func TestSnapshotLeavesGapWhenNoDataAtCutoff(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	lastMonth := firstOfThisMonth().AddDate(0, -1, 0)
+	seedPublicationViews(t, pid, creators[0], lastMonth.AddDate(0, 0, 3), "gap01", 0, true)
+
+	cutoff := lastMonth.AddDate(0, 1, 14)
+	// Весь ряд — уже после отсечки.
+	resetDailyViews(t, pool, pid)
+	seedDailyViews(t, pool, pid, cutoff.AddDate(0, 0, 3), 750_000)
+
+	if _, err := svc.LockMonth(ctx, pid, lastMonth, &creators[0], cutoff, time.Now().UTC()); err != nil {
+		t.Fatalf("фиксация: %v", err)
+	}
+	if got := totalViews(t, svc, pid, lastMonth); got != 0 {
+		t.Errorf("в срез подтянулись просмотры после отсечки: %d", got)
+	}
+	var withData, total int
+	if err := pool.QueryRow(ctx, `
+SELECT COUNT(*) FILTER (WHERE stat_date IS NOT NULL), COUNT(*)
+FROM project_month_views WHERE project_id = $1`, pid).Scan(&withData, &total); err != nil {
+		t.Fatalf("срез: %v", err)
+	}
+	if total == 0 {
+		t.Fatal("срез пуст — площадки в него не попали вовсе")
+	}
+	if withData != 0 {
+		t.Errorf("строк с данными %d, ожидали ноль: на отсечку ряда не было", withData)
+	}
+	// Данных не было — но это не «приблизительно»: ничего не уничтожали.
+	m, err := svc.Month(ctx, pid, lastMonth)
+	if err != nil {
+		t.Fatalf("состояние месяца: %v", err)
+	}
+	if m.SnapshotApprox {
+		t.Error("отсутствие данных помечено приблизительностью — это разные вещи")
+	}
+}
+
+// Ряд уже схлопнут: месяц всё равно фиксируется, но срез помечен
+// приблизительным — и этот признак не путается с «предварительно».
+func TestCollapsedSeriesLocksApproximate(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	lastMonth := firstOfThisMonth().AddDate(0, -1, 0)
+	seedPublicationViews(t, pid, creators[0], lastMonth.AddDate(0, 0, 3), "apx01", 650_000, true)
+
+	// Схлопываем ряд руками, как это сделал бы чистильщик у проекта,
+	// закрытого давно: итоговый снимок есть, подённых строк нет.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO project_stat_summary (project_id, views, likes, comments, videos_count, as_of, collapsed_at)
+VALUES ($1, 650000, 0, 0, 1, CURRENT_DATE, now())
+ON CONFLICT (project_id) DO NOTHING`, pid); err != nil {
+		t.Fatalf("итоговый снимок: %v", err)
+	}
+	resetDailyViews(t, pool, pid)
+
+	cutoff := lastMonth.AddDate(0, 1, 14)
+	m, err := svc.LockMonth(ctx, pid, lastMonth, nil, cutoff, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("фиксация: %v", err)
+	}
+	if !m.IsLocked() {
+		t.Fatal("месяц не зафиксировался — открытым навсегда он остаться не должен")
+	}
+	if !m.SnapshotApprox {
+		t.Error("срез снят с пустоты, а приблизительным не помечен")
+	}
+
+	// Два признака — про разное, и стоят одновременно: месяц
+	// зафиксирован приблизительно, а строки начислений так и не
+	// посчитаны, поэтому предварительные.
+	out, err := svc.ProjectBilling(ctx, pid, lastMonth)
+	if err != nil {
+		t.Fatalf("биллинг: %v", err)
+	}
+	if !out.Month.SnapshotApprox {
+		t.Error("приблизительность не доехала до ответа")
+	}
+	assertAllPreview(t, out.Accruals, true, "месяц приблизителен, строки не посчитаны")
+}
+
+// Ручная и автоматическая фиксация на одних данных дают одно и то же.
+//
+// Обе берут числа из поденного ряда на отсечку. Если бы автоматическая
+// считала «на сейчас», после простоя воркера она получила бы другое
+// число — здесь это видно прямо: после отсечки ряд вырос.
+func TestManualAndAutoLockAgree(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	h := newAPIHarness(t, pool)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+	admin, cleanupAdmin := h.NewUser(t, userOpts{Kind: "client", IsAdmin: true})
+	defer cleanupAdmin()
+	defer func() {
+		_, _ = pool.Exec(ctx,
+			`DELETE FROM admin_audit_log WHERE object_type = 'project' AND object_id = $1`, pid.String())
+	}()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	lastMonth := firstOfThisMonth().AddDate(0, -1, 0)
+	seedPublicationViews(t, pid, creators[0], lastMonth.AddDate(0, 0, 3), "same01", 0, true)
+
+	cutoff := lastMonth.AddDate(0, 1, 14)
+	resetDailyViews(t, pool, pid)
+	seedDailyViews(t, pool, pid, cutoff.AddDate(0, 0, -2), 300_000)
+	seedDailyViews(t, pool, pid, cutoff.AddDate(0, 0, 5), 2_500_000)
+
+	// Руками, отсечка та же.
+	if _, err := svc.LockMonth(ctx, pid, lastMonth, &creators[0], cutoff, time.Now().UTC()); err != nil {
+		t.Fatalf("ручная фиксация: %v", err)
+	}
+	manual := totalViews(t, svc, pid, lastMonth)
+	if manual != 300_000 {
+		t.Fatalf("ручная фиксация взяла %d, ожидали 300000", manual)
+	}
+
+	// Расфиксируем и закрываем месяц фоновой задачей, опоздавшей на
+	// одиннадцать дней.
+	if err := svc.UnlockMonth(ctx, pid, lastMonth, admin, "сверка"); err != nil {
+		t.Fatalf("расфиксация: %v", err)
+	}
+	late := cutoff.AddDate(0, 0, 11)
+	if locked, failed, err := svc.LockDueMonths(ctx, late, billing.DefaultMonthLockDelay); err != nil {
+		t.Fatalf("фоновая фиксация: %v", err)
+	} else if locked == 0 || failed > 0 {
+		t.Fatalf("фоновая фиксация: закрыто %d, сбоев %d", locked, failed)
+	}
+	auto := totalViews(t, svc, pid, lastMonth)
+	if auto != manual {
+		t.Errorf("фоновая фиксация дала %d, ручная — %d: опоздание воркера изменило числа",
+			auto, manual)
+	}
+}
+
+// resetDailyViews — очистить поденный ряд проекта.
+func resetDailyViews(t *testing.T, pool *pgxpool.Pool, pid uuid.UUID) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+DELETE FROM video_stat_daily
+WHERE link_id IN (
+    SELECT l.id FROM publication_links l
+    JOIN project_publications p ON p.id = l.publication_id
+    WHERE p.project_id = $1
+)`, pid); err != nil {
+		t.Fatalf("очистить ряд: %v", err)
+	}
+}
+
+// seedDailyViews — строка ряда за конкретный день на одной площадке
+// проекта. Одной достаточно: порог считается по ролику целиком, суммой
+// по площадкам.
+func seedDailyViews(t *testing.T, pool *pgxpool.Pool, pid uuid.UUID, day time.Time, views int64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO video_stat_daily (link_id, stat_date, views, likes, comments, collected_at)
+SELECT l.id, $2::date, $3, 0, 0, $2::timestamptz
+FROM publication_links l
+JOIN project_publications p ON p.id = l.publication_id
+WHERE p.project_id = $1
+ORDER BY l.platform
+LIMIT 1
+ON CONFLICT (link_id, stat_date) DO UPDATE SET views = EXCLUDED.views`,
+		pid, day, views); err != nil {
+		t.Fatalf("строка ряда за %s: %v", day.Format("2006-01-02"), err)
+	}
+}
+
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.UTC().Date()
+	by, bm, bd := b.UTC().Date()
+	return ay == by && am == bm && ad == bd
 }
