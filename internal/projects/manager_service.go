@@ -38,11 +38,10 @@ func (s *Service) ListAssignedTo(ctx context.Context, managerID uuid.UUID) ([]Pr
 func (s *Service) ListAll(ctx context.Context, p AdminListParams) (AdminListResult, error) {
 	projects, total, err := s.repo.ListAll(ctx, p)
 	if err != nil {
-		// repo отдаёт обычную ошибку на невалидные sort/offset — заворачиваем
-		// в ErrInvalidInput, чтобы хендлер ответил 400, а не 500.
-		if strings.HasPrefix(err.Error(), "invalid ") {
-			return AdminListResult{}, fmt.Errorf("%w: %s", ErrInvalidInput, err.Error())
-		}
+		// Отказы по параметрам repo помечает ErrInvalidInput сам — здесь
+		// достаточно пропустить ошибку наверх. Раньше на её месте стоял
+		// разбор текста по префиксу "invalid ", и первая же правка
+		// формулировки молча превращала 400 в 500.
 		return AdminListResult{}, err
 	}
 	views, err := s.enrichManagerViews(ctx, projects)

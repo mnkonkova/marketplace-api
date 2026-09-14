@@ -125,12 +125,12 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 	// туда приходят либо ошибкой фронта, либо нагрузить. Тот же порог,
 	// что у /admin/users.
 	if p.Offset > 10000 {
-		return nil, 0, fmt.Errorf("invalid offset: max 10000 (используйте поиск/фильтры)")
+		return nil, 0, fmt.Errorf("%w: слишком большой сдвиг: максимум 10000 — сузьте выборку поиском и фильтрами", ErrInvalidInput)
 	}
 	order, ok := adminSortOrder[p.Sort]
 	if p.Sort != "" && !ok {
-		return nil, 0, fmt.Errorf("invalid sort %q: допустимые значения — %s",
-			p.Sort, allowedSortsHint)
+		return nil, 0, fmt.Errorf("%w: неизвестная сортировка %q: допустимые значения — %s",
+			ErrInvalidInput, p.Sort, allowedSortsHint)
 	}
 	if !ok {
 		// Без параметра — прежний порядок ручки. Таблица в админке просит
@@ -148,8 +148,8 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 		conds = append(conds, "p.status IN "+unfinishedStatusesSQL)
 	case p.Status != "":
 		if !isKnownProjectStatus(ProjectStatus(p.Status)) {
-			return nil, 0, fmt.Errorf("invalid status %q: допустимые значения — %s",
-				p.Status, allowedStatusesHint)
+			return nil, 0, fmt.Errorf("%w: неизвестный статус %q: допустимые значения — %s",
+				ErrInvalidInput, p.Status, allowedStatusesHint)
 		}
 		args = append(args, p.Status)
 		conds = append(conds, fmt.Sprintf("p.status = $%d", len(args)))
@@ -163,8 +163,8 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 		switch ProjectKind(p.Kind) {
 		case KindCreatorsTurnkey, KindProductionTurnkey, KindGeneral:
 		default:
-			return nil, 0, fmt.Errorf("invalid kind %q: допустимые значения — %s",
-				p.Kind, allowedKindsHint)
+			return nil, 0, fmt.Errorf("%w: неизвестная ветка %q: допустимые значения — %s",
+				ErrInvalidInput, p.Kind, allowedKindsHint)
 		}
 		args = append(args, p.Kind)
 		conds = append(conds, fmt.Sprintf("p.kind = $%d", len(args)))
