@@ -15,7 +15,7 @@ N8N_WEBHOOK_TOKEN=<секрет>
 
 ```json
 {
-  "event_id":     "<aggregate_id>/<event_type>",
+  "event_id":     "<id строки outbox, число строкой>",
   "aggregate":    "project",
   "aggregate_id": "<project uuid>",
   "event_type":   "project.step_transitioned",
@@ -55,7 +55,15 @@ UI или CLI.
 
 ## Идемпотентность
 
-`event_id` уникален в пределах outbox-таблицы (`aggregate_id/event_type`
-+ внутренний sequence id). На стороне n8n настройте Workflow Settings →
-Caller policy = `Reject duplicates by event_id` (либо вручную в Data
-Store).
+`event_id` — это id строки outbox, уникальный по таблице.
+
+**Дедупа сейчас нет ни с одной стороны, и это не теория.** Воркер берёт
+запись в аренду, отправляет HTTP вне транзакции и лишь затем помечает
+результат: падение или SIGTERM между отправкой и пометкой возвращает
+запись в работу через 10 минут, и событие уходит вторым разом. На нашей
+стороне это сознательно не лечится — дедуп делегирован n8n. Но в
+экспортированных workflow (`deploy/n8n/workflows/*.json`) `event_id` не
+используется нигде, то есть делегировали в пустоту.
+
+Чтобы гарантия появилась: Workflow Settings → Caller policy =
+`Reject duplicates by event_id` (либо вручную через Data Store).

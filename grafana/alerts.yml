@@ -317,9 +317,9 @@ groups:
 
       - alert: N8nWebhookFailureRate
         expr: |
-          sum(rate(outbox_handler_errors_total{aggregate=~"project|user|support"}[10m]))
+          sum(rate(outbox_handler_errors_total{aggregate=~"project|email|support|moderation"}[10m]))
           /
-          (sum(rate(outbox_handler_processed_total{aggregate=~"project|user|support"}[10m])) > 0)
+          (sum(rate(outbox_handler_success_total{aggregate=~"project|email|support|moderation"}[10m])) > 0)
           > 0.1
         for: 10m
         labels: { severity: warn, team: backend }
