@@ -102,6 +102,11 @@ func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
 // @Description q — ILIKE по названию проекта и по клиенту (имя в профиле,
 // @Description имя на проекте у клиента без аккаунта, почта), мин 2 символа.
 // @Description manager — uuid ответственного либо "none" (без ответственного).
+// @Description status — точный статус проекта либо unfinished: «в работе»,
+// @Description то есть draft, active, on_hold и dispute разом. Именно это
+// @Description значение даёт тот же набор, что nav_counts.projects_active в
+// @Description сводке; пустой status отдаёт всё, кроме отменённых, то есть
+// @Description вместе с завершёнными.
 // @Description include_test=true показывает проекты, помеченные как тестовые
 // @Description (по умолчанию скрыты). kind — вид проекта. sort: updated_asc |
 // @Description updated_desc | created_asc | created_desc, default updated_desc.
@@ -112,7 +117,7 @@ func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
 // @Produce  json
 // @Security BearerAuth
 // @Param    q            query string false "часть названия проекта или имени клиента, мин 2 симв"
-// @Param    status       query string false "точный статус проекта; пусто = всё кроме cancelled"
+// @Param    status       query string false "точный статус проекта | unfinished (в работе: draft, active, on_hold, dispute); пусто = всё кроме cancelled, включая завершённые"
 // @Param    manager      query string false "uuid менеджера | none"
 // @Param    include_test query bool   false "показать тестовые проекты, default false"
 // @Param    kind         query string false "creators_turnkey | production_turnkey | general"

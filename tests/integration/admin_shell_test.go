@@ -749,6 +749,104 @@ ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name`,
 	}
 }
 
+// status=unfinished — «в работе»: ровно те четыре статуса, что считает
+// цифра в меню. Ради этого значение и добавлено: список по клику должен
+// показывать столько же строк, сколько обещал счётчик.
+func TestAdminProjectsUnfinishedMatchesNavCount(t *testing.T) {
+	pool := integration.Pool(t)
+	s := newAdminShell(t, pool)
+	ctx := context.Background()
+
+	marker := "r2unf" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	client := s.user(t, userOpts{Kind: "client"})
+
+	// По проекту на каждый статус, включая те, что в «в работе» не входят.
+	byStatus := map[string]uuid.UUID{}
+	for _, st := range []string{"draft", "active", "on_hold", "dispute", "done", "cancelled"} {
+		id := s.project(t, projects.StartProjectInput{
+			ClientUserID: &client, Title: marker + " " + st,
+		})
+		// Статус выставляем всем, включая draft: StartProject сам решает,
+		// с какого статуса начать проект, и полагаться на это здесь
+		// значило бы проверять его, а не фильтр.
+		if _, err := pool.Exec(ctx,
+			`UPDATE projects SET status = $2::project_status WHERE id = $1`, id, st); err != nil {
+			t.Fatalf("выставить статус %s: %v", st, err)
+		}
+		byStatus[st] = id
+	}
+
+	_, body := s.get(t, "/api/v1/admin/projects?status=unfinished&q="+marker+"&limit=100")
+	got := map[string]bool{}
+	for _, raw := range list(t, body, "items") {
+		m, _ := raw.(map[string]any)
+		st, _ := m["status"].(string)
+		got[st] = true
+	}
+	for _, st := range []string{"draft", "active", "on_hold", "dispute"} {
+		if !got[st] {
+			t.Errorf("status=unfinished не отдал %q", st)
+		}
+	}
+	for _, st := range []string{"done", "cancelled"} {
+		if got[st] {
+			t.Errorf("status=unfinished отдал %q — этот проект уже не в работе", st)
+		}
+	}
+	if n := num(t, body, "total"); n != 4 {
+		t.Errorf("total при status=unfinished %d, ожидали 4", n)
+	}
+
+	// Главное: список и счётчик считают одно и то же. Сверяем приростом —
+	// в общей базе есть чужие проекты.
+	beforeCount := navCounts(t, s)["projects_active"]
+	s.project(t, projects.StartProjectInput{
+		ClientUserID: &client, Title: marker + " ещё в работе",
+	})
+	_, body = s.get(t, "/api/v1/admin/projects?status=unfinished&limit=1")
+	afterList := num(t, body, "total")
+	afterCount := navCounts(t, s)["projects_active"]
+	if afterCount != beforeCount+1 {
+		t.Fatalf("счётчик меню: было %d, стало %d", beforeCount, afterCount)
+	}
+	if afterList != afterCount {
+		t.Errorf("в списке %d проектов в работе, а в меню %d — числа обязаны сходиться",
+			afterList, afterCount)
+	}
+
+	// Пустой status не изменился: отдаёт завершённые, прячет отменённые.
+	_, body = s.get(t, "/api/v1/admin/projects?q="+marker+"&limit=100")
+	got = map[string]bool{}
+	for _, raw := range list(t, body, "items") {
+		m, _ := raw.(map[string]any)
+		st, _ := m["status"].(string)
+		got[st] = true
+	}
+	if !got["done"] {
+		t.Error("пустой status перестал отдавать завершённые — сломали существующие вызовы")
+	}
+	if got["cancelled"] {
+		t.Error("пустой status начал отдавать отменённые")
+	}
+
+	// Точное значение работает как работало.
+	_, body = s.get(t, "/api/v1/admin/projects?status=done&q="+marker)
+	if n := num(t, body, "total"); n != 1 {
+		t.Errorf("status=done отдал %d проектов, ожидали 1", n)
+	}
+	_, body = s.get(t, "/api/v1/admin/projects?status=cancelled&q="+marker)
+	if n := num(t, body, "total"); n != 1 {
+		t.Errorf("status=cancelled отдал %d проектов, ожидали 1", n)
+	}
+
+	// Незнакомое значение ведёт себя как раньше: enum его не принимает.
+	// Поведение не улучшаем — фронт на него не завязан, а менять его
+	// заодно с добавлением unfinished значило бы менять две вещи сразу.
+	if code, _ := s.get(t, "/api/v1/admin/projects?status=nonsense"); code != http.StatusInternalServerError {
+		t.Errorf("незнакомый статус: код %d, раньше был 500", code)
+	}
+}
+
 // Список проектов сузился по виду, а прогресс читается числом: «62%» не
 // отвечает на вопрос, сколько роликов осталось выложить.
 func TestAdminProjectsKindFilterAndProgressNumbers(t *testing.T) {

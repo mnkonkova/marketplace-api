@@ -1330,7 +1330,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Поиск, фильтры, сортировка и пагинация считаются на сервере.\nq — ILIKE по названию проекта и по клиенту (имя в профиле,\nимя на проекте у клиента без аккаунта, почта), мин 2 символа.\nmanager — uuid ответственного либо \"none\" (без ответственного).\ninclude_test=true показывает проекты, помеченные как тестовые\n(по умолчанию скрыты). kind — вид проекта. sort: updated_asc |\nupdated_desc | created_asc | created_desc, default updated_desc.\nУ каждой карточки прогресс ещё и числом: progress_done /\nprogress_total, единица в progress_unit (publications у\nкреаторов, steps у продакшна).",
+                "description": "Поиск, фильтры, сортировка и пагинация считаются на сервере.\nq — ILIKE по названию проекта и по клиенту (имя в профиле,\nимя на проекте у клиента без аккаунта, почта), мин 2 символа.\nmanager — uuid ответственного либо \"none\" (без ответственного).\nstatus — точный статус проекта либо unfinished: «в работе»,\nто есть draft, active, on_hold и dispute разом. Именно это\nзначение даёт тот же набор, что nav_counts.projects_active в\nсводке; пустой status отдаёт всё, кроме отменённых, то есть\nвместе с завершёнными.\ninclude_test=true показывает проекты, помеченные как тестовые\n(по умолчанию скрыты). kind — вид проекта. sort: updated_asc |\nupdated_desc | created_asc | created_desc, default updated_desc.\nУ каждой карточки прогресс ещё и числом: progress_done /\nprogress_total, единица в progress_unit (publications у\nкреаторов, steps у продакшна).",
                 "produces": [
                     "application/json"
                 ],
@@ -1347,7 +1347,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "точный статус проекта; пусто = всё кроме cancelled",
+                        "description": "точный статус проекта | unfinished (в работе: draft, active, on_hold, dispute); пусто = всё кроме cancelled, включая завершённые",
                         "name": "status",
                         "in": "query"
                     },

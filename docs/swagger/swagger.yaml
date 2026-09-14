@@ -6295,6 +6295,11 @@ paths:
         q — ILIKE по названию проекта и по клиенту (имя в профиле,
         имя на проекте у клиента без аккаунта, почта), мин 2 символа.
         manager — uuid ответственного либо "none" (без ответственного).
+        status — точный статус проекта либо unfinished: «в работе»,
+        то есть draft, active, on_hold и dispute разом. Именно это
+        значение даёт тот же набор, что nav_counts.projects_active в
+        сводке; пустой status отдаёт всё, кроме отменённых, то есть
+        вместе с завершёнными.
         include_test=true показывает проекты, помеченные как тестовые
         (по умолчанию скрыты). kind — вид проекта. sort: updated_asc |
         updated_desc | created_asc | created_desc, default updated_desc.
@@ -6306,7 +6311,8 @@ paths:
         in: query
         name: q
         type: string
-      - description: точный статус проекта; пусто = всё кроме cancelled
+      - description: 'точный статус проекта | unfinished (в работе: draft, active,
+          on_hold, dispute); пусто = всё кроме cancelled, включая завершённые'
         in: query
         name: status
         type: string

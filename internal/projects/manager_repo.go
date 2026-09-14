@@ -58,7 +58,7 @@ SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
 WHERE assigned_to_user_id = $1
-  AND status IN ('draft','active','on_hold','dispute')
+  AND status IN `+unfinishedStatusesSQL+`
 ORDER BY updated_at DESC
 LIMIT 500`, managerID)
 	if err != nil {
@@ -141,10 +141,16 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 	args := []any{}
 	conds := []string{}
 
-	if p.Status != "" {
+	switch {
+	case p.Status == AdminStatusUnfinished:
+		// Единственное неточное значение. Остальные по-прежнему идут в
+		// запрос как есть и приводятся к enum'у — незнакомое значение
+		// ломается ровно так же, как ломалось раньше.
+		conds = append(conds, "p.status IN "+unfinishedStatusesSQL)
+	case p.Status != "":
 		args = append(args, p.Status)
 		conds = append(conds, fmt.Sprintf("p.status = $%d", len(args)))
-	} else {
+	default:
 		conds = append(conds, "p.status <> 'cancelled'")
 	}
 	if !p.IncludeTest {
