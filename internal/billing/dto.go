@@ -247,8 +247,10 @@ type PeriodTotals struct {
 // CreatorEarnings — «мой заработок» у креатора: по каким условиям и
 // сколько вышло. Чужих цифр здесь нет.
 type CreatorEarnings struct {
-	Terms Terms `json:"terms"`
+	// Terms — его сторона тарифа. Клиентской цены здесь нет: см.
+	// SideTerms в client_view.go.
+	Terms SideTerms `json:"terms"`
 	// Accruals — мои начисления по всем месяцам проекта, свежие первыми.
-	Accruals []Accrual `json:"accruals"`
-	UTM      *UTMLink  `json:"utm,omitempty"`
+	Accruals []CreatorAccrual `json:"accruals"`
+	UTM      *UTMLink         `json:"utm,omitempty"`
 }

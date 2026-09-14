@@ -818,15 +818,179 @@ definitions:
     - AccrualDraft
     - AccrualApproved
     - AccrualPaid
+  internal_billing.ClientAccrual:
+    properties:
+      approved_at:
+        type: string
+      calculated_at:
+        type: string
+      click_bonus:
+        type: integer
+      clicks:
+        type: integer
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      deduction:
+        type: integer
+      id:
+        type: string
+      paid_at:
+        type: string
+      period_month:
+        type: string
+      priority:
+        description: |-
+          Priority — каким по приоритету человек попал в подборку. Поля
+          нет, если проект заведён руками, а не вырос из заказа.
+        type: integer
+        x-omitempty: true
+      project_id:
+        type: string
+      salary:
+        type: integer
+      status:
+        allOf:
+        - $ref: '#/definitions/internal_billing.AccrualStatus'
+        description: |-
+          Status/ApprovedAt/PaidAt — в каком состоянии расчёт за месяц.
+          Сумм в них нет, а заказчику видно, посчитан месяц или ещё нет.
+        enum:
+        - draft
+        - approved
+        - paid
+      total:
+        description: Total — счёт заказчику за этого человека.
+        type: integer
+      videos_delivered:
+        type: integer
+      videos_planned:
+        description: |-
+          VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько
+          закрыто; разница объясняет вычет.
+        type: integer
+      views_base:
+        type: integer
+      views_bonus:
+        type: integer
+      views_over:
+        type: integer
+      views_total:
+        type: integer
+    type: object
+  internal_billing.ClientBillingView:
+    properties:
+      accruals:
+        description: Accruals — за запрошенный месяц. Пусто, пока не считали.
+        items:
+          $ref: '#/definitions/internal_billing.ClientAccrual'
+        type: array
+      payments:
+        items:
+          $ref: '#/definitions/internal_billing.Payment'
+        type: array
+      period_month:
+        description: PeriodMonth — за какой месяц отданы начисления.
+        type: string
+      terms:
+        $ref: '#/definitions/internal_billing.SideTerms'
+      totals:
+        $ref: '#/definitions/internal_billing.ClientPeriodTotals'
+    type: object
+  internal_billing.ClientPeriodTotals:
+    properties:
+      click_bonus:
+        type: integer
+      cost_per_1000:
+        description: |-
+          CostPer1000 — во сколько обошлась тысяча просмотров. nil, пока
+          просмотров нет — делить не на что.
+        type: integer
+      deductions:
+        type: integer
+      salaries:
+        type: integer
+      total:
+        description: Total — сколько выставлено заказчику за месяц.
+        type: integer
+      videos:
+        type: integer
+      videos_delivered:
+        type: integer
+      views:
+        type: integer
+      views_bonus:
+        type: integer
+    type: object
+  internal_billing.CreatorAccrual:
+    properties:
+      approved_at:
+        type: string
+      calculated_at:
+        description: CalculatedAt — когда посчитано.
+        type: string
+      click_bonus:
+        type: integer
+      clicks:
+        type: integer
+      creator_user_id:
+        description: |-
+          CreatorUserID — он сам. Не тайна и не лишнее: строки приходят по
+          месяцам, и фронту нужно, чем их метить.
+        type: string
+      deduction:
+        type: integer
+      id:
+        type: string
+      paid_at:
+        type: string
+      period_month:
+        type: string
+      project_id:
+        type: string
+      salary:
+        description: Salary/Deduction — оклад и вычет за недосданное, по его ставкам.
+        type: integer
+      status:
+        allOf:
+        - $ref: '#/definitions/internal_billing.AccrualStatus'
+        enum:
+        - draft
+        - approved
+        - paid
+      total:
+        description: Total — сколько он получит за месяц.
+        type: integer
+      videos_delivered:
+        type: integer
+      videos_planned:
+        description: |-
+          VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько
+          он закрыл: из них и растёт вычет.
+        type: integer
+      views_base:
+        type: integer
+      views_bonus:
+        type: integer
+      views_over:
+        type: integer
+      views_total:
+        type: integer
+    type: object
   internal_billing.CreatorEarnings:
     properties:
       accruals:
         description: Accruals — мои начисления по всем месяцам проекта, свежие первыми.
         items:
-          $ref: '#/definitions/internal_billing.Accrual'
+          $ref: '#/definitions/internal_billing.CreatorAccrual'
         type: array
       terms:
-        $ref: '#/definitions/internal_billing.Terms'
+        allOf:
+        - $ref: '#/definitions/internal_billing.SideTerms'
+        description: |-
+          Terms — его сторона тарифа. Клиентской цены здесь нет: см.
+          SideTerms в client_view.go.
       utm:
         $ref: '#/definitions/internal_billing.UTMLink'
     type: object
@@ -876,10 +1040,14 @@ definitions:
         type: integer
       terms:
         allOf:
-        - $ref: '#/definitions/internal_billing.Terms'
+        - $ref: '#/definitions/internal_billing.SideTerms'
         description: |-
           Terms — версия правил, с которой клиент согласился при создании
           заказа. Не действующая на сегодня: цену ему называли по той.
+
+          Сторона клиента, а не полный тариф: смета — клиентская ручка, а
+          LatestTerms (смета до заказа) читает и креаторские ставки. С
+          общим типом они уезжали заказчику вместе с ценой.
       total:
         description: Total — оклады плюс прогноз бонуса.
         type: integer
@@ -1012,6 +1180,36 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.UTMLink'
         type: array
+    type: object
+  internal_billing.SideTerms:
+    properties:
+      bonus_views_threshold:
+        type: integer
+      click_bonus_rate:
+        type: integer
+        x-nullable: true
+      click_bonus_rate_over:
+        type: integer
+        x-nullable: true
+      click_bonus_threshold:
+        type: integer
+      project_id:
+        type: string
+      rate_per_1000_views:
+        type: integer
+      rate_per_1000_views_over:
+        type: integer
+      salary_per_month:
+        type: integer
+      terms_version_id:
+        description: TermsVersionID — с какой версии прайса сняты числа.
+        type: string
+      updated_at:
+        type: string
+      videos_first_month:
+        type: integer
+      videos_next_months:
+        type: integer
     type: object
   internal_billing.Terms:
     properties:
@@ -11630,6 +11828,9 @@ paths:
         роликов сдал и во сколько это обошлось. Заказчик за эту
         команду платит, поэтому строки начислений — его счёт.
         UTM-метки ему не отдаются: это инструмент менеджера.
+        Выплат креаторам, маржи площадки и креаторской стороны
+        тарифа в ответе нет — ответ собирается отдельным типом,
+        а не чисткой менеджерской структуры.
       parameters:
       - description: project id
         in: path
@@ -11646,7 +11847,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_billing.ProjectBilling'
+            $ref: '#/definitions/internal_billing.ClientBillingView'
         "400":
           description: bad_id; bad_month — месяц не в формате ГГГГ-ММ
           schema:

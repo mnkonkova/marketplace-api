@@ -397,20 +397,34 @@ func totals(items []Accrual) PeriodTotals {
 // «Маша · 1 ролик · 65 000 просмотров · 60 000 + 5 850» — его счёт, а не
 // чужая зарплата. Скрыто от него другое — UTM-метки: они рабочий
 // инструмент менеджера.
-func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, month time.Time) (ProjectBilling, error) {
-	var out ProjectBilling
-	var err error
-	out.PeriodMonth = firstOfMonth(month)
-	if out.Terms, err = s.repo.Terms(ctx, projectID); err != nil {
+//
+// Собирается в собственный тип, а не в общий ProjectBilling. Раньше
+// ручка отдавала менеджерскую структуру целиком, и заказчику уезжали
+// выплаты креаторам, маржа площадки и креаторская сторона тарифа —
+// фронт их просто не рисовал. Вёрстка не граница доступа: вкладки
+// «Сеть» в браузере достаточно, чтобы всё это прочитать.
+func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, month time.Time) (ClientBillingView, error) {
+	out := ClientBillingView{PeriodMonth: firstOfMonth(month)}
+	terms, err := s.repo.Terms(ctx, projectID)
+	if err != nil {
 		return out, err
 	}
+	out.Terms = terms.ClientTerms()
 	if out.Payments, err = s.repo.Payments(ctx, projectID); err != nil {
 		return out, err
 	}
-	if out.Accruals, err = s.accrualsOrPreview(ctx, projectID, out.PeriodMonth, out.Terms); err != nil {
+	accruals, err := s.accrualsOrPreview(ctx, projectID, out.PeriodMonth, terms)
+	if err != nil {
 		return out, err
 	}
-	out.Totals = totals(out.Accruals)
+	out.Accruals = make([]ClientAccrual, 0, len(accruals))
+	for _, a := range accruals {
+		out.Accruals = append(out.Accruals, clientAccrual(a))
+	}
+	// Итог считаем по тем же строкам, что и менеджеру, и только потом
+	// отбрасываем наши деньги: два экрана не должны складывать
+	// по-разному.
+	out.Totals = clientTotals(totals(accruals))
 	return out, nil
 }
 
@@ -425,21 +439,18 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 	// Креатору показываем ЕГО сторону тарифа. Что за него платит клиент —
 	// не его дело и коммерческая тайна платформы; до этой правки он видел
 	// именно цену клиента и считал её своим заработком.
-	out.Terms = terms.CreatorSide()
-	out.Terms.CreatorSalaryPerMonth = nil
-	out.Terms.CreatorRatePer1000Views = nil
-	out.Terms.CreatorRatePer1000ViewsOver = nil
+	out.Terms = terms.CreatorTerms()
 
-	if out.Accruals, err = s.repo.Accruals(ctx, projectID, nil, &creatorID); err != nil {
+	accruals, err := s.repo.Accruals(ctx, projectID, nil, &creatorID)
+	if err != nil {
 		return out, err
 	}
-	// Клиентские числа из строк вычищаем по той же причине: в ответе
-	// креатору остаётся только то, что он получает.
-	for i := range out.Accruals {
-		a := &out.Accruals[i]
-		a.Salary, a.Deduction = a.PayoutSalary, a.PayoutDeduction
-		a.ViewsBonus, a.ClickBonus = a.PayoutViewsBonus, a.PayoutClickBonus
-		a.Total = a.PayoutTotal
+	// Клиентских чисел в ответе нет ни под каким именем: раньше они
+	// затирались его значениями, и достаточно было забыть затереть
+	// очередное новое поле.
+	out.Accruals = make([]CreatorAccrual, 0, len(accruals))
+	for _, a := range accruals {
+		out.Accruals = append(out.Accruals, creatorAccrual(a))
 	}
 	links, err := s.repo.UTM(ctx, projectID, &creatorID)
 	if err != nil {

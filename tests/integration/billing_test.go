@@ -373,9 +373,10 @@ func TestBillingVisibility(t *testing.T) {
 	if client.Totals.Total == 0 {
 		t.Errorf("итог «к оплате» не посчитан: %+v", client.Totals)
 	}
-	if len(client.UTM) != 0 {
-		t.Errorf("заказчику отдали UTM-метки: %+v", client.UTM)
-	}
+	// UTM-меток в клиентском ответе нет уже на уровне типа: поля в
+	// ClientBillingView не существует, и проверять тут больше нечего.
+	// Что именно уезжает по сети — см. TestClientBillingHidesOurMoney:
+	// проверка по сырому JSON, а не по структуре Go.
 
 	// Менеджер видит обе строки.
 	all, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
@@ -792,15 +793,33 @@ func TestCreatorSeesOwnPayoutNotClientPrice(t *testing.T) {
 	if earn.Terms.SalaryPerMonth != creatorSalary {
 		t.Errorf("креатору показан оклад клиента: %d", earn.Terms.SalaryPerMonth)
 	}
-	if earn.Terms.CreatorSalaryPerMonth != nil {
-		t.Errorf("вторая сторона тарифа креатору не отдаётся: %v", earn.Terms.CreatorSalaryPerMonth)
-	}
+	// Второй стороны тарифа в ответе нет уже на уровне типа: у SideTerms
+	// креаторских полей не существует. Что уезжает по сети — проверяет
+	// TestCreatorEarningsHideClientPrice по сырому JSON.
 	if len(earn.Accruals) != 1 {
 		t.Fatalf("начислений: %d", len(earn.Accruals))
 	}
 	a := earn.Accruals[0]
-	if a.Salary != creatorSalary || a.Total != a.PayoutTotal {
+	if a.Salary != creatorSalary {
 		t.Errorf("в строке креатора должны стоять его числа: %+v", a)
+	}
+	// Цена клиента за тот же месяц заведомо другая — убеждаемся, что в
+	// итог креатора она не просочилась.
+	all, err := svc.ProjectBilling(ctx, pid, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("project billing: %v", err)
+	}
+	for _, m := range all.Accruals {
+		if m.CreatorUserID != creators[0] {
+			continue
+		}
+		if a.Total != m.PayoutTotal {
+			t.Errorf("креатору показан не его итог: %d вместо %d", a.Total, m.PayoutTotal)
+		}
+		if a.Total == m.Total {
+			t.Errorf("итог креатора совпал со счётом клиента (%d) — числа не разошлись, "+
+				"тест ничего не проверяет", m.Total)
+		}
 	}
 }
 

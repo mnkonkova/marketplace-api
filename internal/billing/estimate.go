@@ -34,7 +34,11 @@ type CreatorForecast struct {
 type OrderEstimate struct {
 	// Terms — версия правил, с которой клиент согласился при создании
 	// заказа. Не действующая на сегодня: цену ему называли по той.
-	Terms Terms `json:"terms"`
+	//
+	// Сторона клиента, а не полный тариф: смета — клиентская ручка, а
+	// LatestTerms (смета до заказа) читает и креаторские ставки. С
+	// общим типом они уезжали заказчику вместе с ценой.
+	Terms SideTerms `json:"terms"`
 	// Creators/Videos — из самого заказа.
 	Creators int `json:"creators"`
 	Videos   int `json:"videos"`
@@ -207,7 +211,7 @@ func (s *Service) EstimateDraft(ctx context.Context, needed, videos int, creator
 // assemble — общая сборка сметы для обоих путей.
 func assemble(terms Terms, needed, videos int, forecast []CreatorForecast) OrderEstimate {
 	e := OrderEstimate{
-		Terms:    terms,
+		Terms:    terms.ClientTerms(),
 		Creators: needed,
 		Videos:   videos,
 		Salaries: int64(needed) * terms.SalaryPerMonth,

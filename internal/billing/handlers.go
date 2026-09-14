@@ -451,12 +451,15 @@ func (h *Handler) ManagerSaveUTM(w http.ResponseWriter, r *http.Request) {
 // @Description роликов сдал и во сколько это обошлось. Заказчик за эту
 // @Description команду платит, поэтому строки начислений — его счёт.
 // @Description UTM-метки ему не отдаются: это инструмент менеджера.
+// @Description Выплат креаторам, маржи площадки и креаторской стороны
+// @Description тарифа в ответе нет — ответ собирается отдельным типом,
+// @Description а не чисткой менеджерской структуры.
 // @Tags     client-billing
 // @Produce  json
 // @Security BearerAuth
 // @Param    id    path  string true  "project id"
 // @Param    month query string false "ГГГГ-ММ, по умолчанию текущий"
-// @Success  200 {object} ProjectBilling
+// @Success  200 {object} ClientBillingView
 // @Failure  400 {object} errorResponse "bad_id; bad_month — месяц не в формате ГГГГ-ММ"
 // @Failure  401 {object} errorResponse "no_user — сессия истекла"
 // @Failure  404 {object} errorResponse "not_found — проект не найден или он не ваш"

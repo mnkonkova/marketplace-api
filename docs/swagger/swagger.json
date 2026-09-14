@@ -9253,7 +9253,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Что подписано, что оплачено и состав месяца: кто сколько\nроликов сдал и во сколько это обошлось. Заказчик за эту\nкоманду платит, поэтому строки начислений — его счёт.\nUTM-метки ему не отдаются: это инструмент менеджера.",
+                "description": "Что подписано, что оплачено и состав месяца: кто сколько\nроликов сдал и во сколько это обошлось. Заказчик за эту\nкоманду платит, поэтому строки начислений — его счёт.\nUTM-метки ему не отдаются: это инструмент менеджера.\nВыплат креаторам, маржи площадки и креаторской стороны\nтарифа в ответе нет — ответ собирается отдельным типом,\nа не чисткой менеджерской структуры.",
                 "produces": [
                     "application/json"
                 ],
@@ -9280,7 +9280,7 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_billing.ProjectBilling"
+                            "$ref": "#/definitions/internal_billing.ClientBillingView"
                         }
                     },
                     "400": {
@@ -11728,6 +11728,226 @@
                 "AccrualPaid"
             ]
         },
+        "internal_billing.ClientAccrual": {
+            "type": "object",
+            "properties": {
+                "approved_at": {
+                    "type": "string"
+                },
+                "calculated_at": {
+                    "type": "string"
+                },
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "clicks": {
+                    "type": "integer"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "deduction": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "period_month": {
+                    "type": "string"
+                },
+                "priority": {
+                    "description": "Priority — каким по приоритету человек попал в подборку. Поля\nнет, если проект заведён руками, а не вырос из заказа.",
+                    "type": "integer",
+                    "x-omitempty": true
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "salary": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "Status/ApprovedAt/PaidAt — в каком состоянии расчёт за месяц.\nСумм в них нет, а заказчику видно, посчитан месяц или ещё нет.",
+                    "enum": [
+                        "draft",
+                        "approved",
+                        "paid"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.AccrualStatus"
+                        }
+                    ]
+                },
+                "total": {
+                    "description": "Total — счёт заказчику за этого человека.",
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "videos_planned": {
+                    "description": "VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько\nзакрыто; разница объясняет вычет.",
+                    "type": "integer"
+                },
+                "views_base": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                },
+                "views_over": {
+                    "type": "integer"
+                },
+                "views_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.ClientBillingView": {
+            "type": "object",
+            "properties": {
+                "accruals": {
+                    "description": "Accruals — за запрошенный месяц. Пусто, пока не считали.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.ClientAccrual"
+                    }
+                },
+                "payments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.Payment"
+                    }
+                },
+                "period_month": {
+                    "description": "PeriodMonth — за какой месяц отданы начисления.",
+                    "type": "string"
+                },
+                "terms": {
+                    "$ref": "#/definitions/internal_billing.SideTerms"
+                },
+                "totals": {
+                    "$ref": "#/definitions/internal_billing.ClientPeriodTotals"
+                }
+            }
+        },
+        "internal_billing.ClientPeriodTotals": {
+            "type": "object",
+            "properties": {
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "cost_per_1000": {
+                    "description": "CostPer1000 — во сколько обошлась тысяча просмотров. nil, пока\nпросмотров нет — делить не на что.",
+                    "type": "integer"
+                },
+                "deductions": {
+                    "type": "integer"
+                },
+                "salaries": {
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total — сколько выставлено заказчику за месяц.",
+                    "type": "integer"
+                },
+                "videos": {
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.CreatorAccrual": {
+            "type": "object",
+            "properties": {
+                "approved_at": {
+                    "type": "string"
+                },
+                "calculated_at": {
+                    "description": "CalculatedAt — когда посчитано.",
+                    "type": "string"
+                },
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "clicks": {
+                    "type": "integer"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — он сам. Не тайна и не лишнее: строки приходят по\nмесяцам, и фронту нужно, чем их метить.",
+                    "type": "string"
+                },
+                "deduction": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "period_month": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "salary": {
+                    "description": "Salary/Deduction — оклад и вычет за недосданное, по его ставкам.",
+                    "type": "integer"
+                },
+                "status": {
+                    "enum": [
+                        "draft",
+                        "approved",
+                        "paid"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.AccrualStatus"
+                        }
+                    ]
+                },
+                "total": {
+                    "description": "Total — сколько он получит за месяц.",
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "videos_planned": {
+                    "description": "VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько\nон закрыл: из них и растёт вычет.",
+                    "type": "integer"
+                },
+                "views_base": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                },
+                "views_over": {
+                    "type": "integer"
+                },
+                "views_total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_billing.CreatorEarnings": {
             "type": "object",
             "properties": {
@@ -11735,11 +11955,16 @@
                     "description": "Accruals — мои начисления по всем месяцам проекта, свежие первыми.",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_billing.Accrual"
+                        "$ref": "#/definitions/internal_billing.CreatorAccrual"
                     }
                 },
                 "terms": {
-                    "$ref": "#/definitions/internal_billing.Terms"
+                    "description": "Terms — его сторона тарифа. Клиентской цены здесь нет: см.\nSideTerms в client_view.go.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.SideTerms"
+                        }
+                    ]
                 },
                 "utm": {
                     "$ref": "#/definitions/internal_billing.UTMLink"
@@ -11796,10 +12021,10 @@
                     "type": "integer"
                 },
                 "terms": {
-                    "description": "Terms — версия правил, с которой клиент согласился при создании\nзаказа. Не действующая на сегодня: цену ему называли по той.",
+                    "description": "Terms — версия правил, с которой клиент согласился при создании\nзаказа. Не действующая на сегодня: цену ему называли по той.\n\nСторона клиента, а не полный тариф: смета — клиентская ручка, а\nLatestTerms (смета до заказа) читает и креаторские ставки. С\nобщим типом они уезжали заказчику вместе с ценой.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/internal_billing.Terms"
+                            "$ref": "#/definitions/internal_billing.SideTerms"
                         }
                     ]
                 },
@@ -11971,6 +12196,50 @@
                     "items": {
                         "$ref": "#/definitions/internal_billing.UTMLink"
                     }
+                }
+            }
+        },
+        "internal_billing.SideTerms": {
+            "type": "object",
+            "properties": {
+                "bonus_views_threshold": {
+                    "type": "integer"
+                },
+                "click_bonus_rate": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "type": "integer"
+                },
+                "terms_version_id": {
+                    "description": "TermsVersionID — с какой версии прайса сняты числа.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "videos_first_month": {
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
                 }
             }
         },

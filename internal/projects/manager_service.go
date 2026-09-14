@@ -61,12 +61,25 @@ func (s *Service) ListAll(ctx context.Context, p AdminListParams) (AdminListResu
 
 // ListBySpecialist — проекты специалиста (read-only вкладка кабинета).
 // Enrich тот же что и у менеджера — display_status/progress/current_*.
+//
+// data-sec D4: вьюха собрана для менеджера, и notes в ней — внутренние
+// заметки. Карточка проекта их специалисту уже не отдавала
+// (redactForSpecialist), а список — отдавал: та же утечка, просто на
+// другом экране. Чистим здесь, чтобы решение не зависело от того, какую
+// ручку дёрнули.
 func (s *Service) ListBySpecialist(ctx context.Context, specialistID uuid.UUID) ([]ProjectManagerView, error) {
 	projects, err := s.repo.ListBySpecialist(ctx, specialistID)
 	if err != nil {
 		return nil, err
 	}
-	return s.enrichManagerViews(ctx, projects)
+	views, err := s.enrichManagerViews(ctx, projects)
+	if err != nil {
+		return nil, err
+	}
+	for i := range views {
+		views[i].Notes = ""
+	}
+	return views, nil
 }
 
 func (s *Service) enrichManagerViews(ctx context.Context, projects []Project) ([]ProjectManagerView, error) {
