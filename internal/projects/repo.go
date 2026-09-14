@@ -431,9 +431,14 @@ FROM projects WHERE id = $1`
 }
 
 // ListForClient — проекты клиента, отсортированные по дате создания.
-// cancelled скрываем: у них 30-дневная retention до физического удаления
-// (см. cleanup.go), в кабинете клиента им делать нечего — только засоряют
-// «Мои проекты». Симметрично админскому ListAll по умолчанию.
+// cancelled скрываем: отменённому проекту в кабинете клиента делать
+// нечего, он только засоряет «Мои проекты». Симметрично админскому
+// ListAll по умолчанию.
+//
+// LIMIT 500, как у канбана менеджера и списка специалиста. Раньше выдачу
+// ограничивал чистильщик: завершённые проекты удалялись через неделю, и
+// длиннее десятка список не вырастал. Чистильщика больше нет, завершённые
+// копятся, и единственной границей осталась эта.
 func (r *Repo) ListForClient(ctx context.Context, clientID uuid.UUID) ([]Project, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
@@ -443,7 +448,8 @@ SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
        COALESCE(notes,''), started_at, completed_at, created_at, updated_at
 FROM projects
 WHERE client_user_id = $1 AND status <> 'cancelled'
-ORDER BY created_at DESC`, clientID)
+ORDER BY created_at DESC
+LIMIT 500`, clientID)
 	if err != nil {
 		return nil, fmt.Errorf("list client projects: %w", err)
 	}

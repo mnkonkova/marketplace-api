@@ -1487,7 +1487,7 @@ const docTemplate = `{
                 "tags": [
                     "admin-projects"
                 ],
-                "summary": "Удалить проект (soft-delete, физически чистится через 30д)",
+                "summary": "Отменить проект (soft-delete, обратимо через /restore)",
                 "parameters": [
                     {
                         "type": "string",

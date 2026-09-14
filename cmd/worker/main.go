@@ -359,11 +359,6 @@ func main() {
 	} else {
 		logger.Warn("stats collection disabled: INSTACURL_URL or INSTACURL_API_KEY not set")
 	}
-	// CRM v5: периодическая чистка done (через ProjectRetention) и cancelled
-	// (через ProjectCancelledRetention) проектов.
-	go runOldProjectsCleanupTicker(rootCtx, projectsSvc,
-		cfg.ProjectRetention, cfg.ProjectCancelledRetention, cfg.ProjectCleanupInterval, logger)
-
 	// S3 orphan sweep: presigned uploads/удалённые портфолио оставляют
 	// «осиротевшие» объекты в bucket'е. Раз в S3SweepInterval листим
 	// portfolio/ и images/, удаляем не-referenced + старше S3OrphanMinAge.
@@ -435,37 +430,6 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("worker bye")
-}
-
-// runOldProjectsCleanupTicker — периодически удаляет done-проекты старше
-// doneRetention и cancelled-проекты старше cancelledRetention.
-func runOldProjectsCleanupTicker(ctx context.Context, svc *projects.Service, doneRetention, cancelledRetention, interval time.Duration, logger *slog.Logger) {
-	if interval <= 0 || (doneRetention <= 0 && cancelledRetention <= 0) {
-		return
-	}
-	if n, err := svc.RunOldProjectsCleanup(ctx, doneRetention, cancelledRetention); err != nil {
-		logger.Warn("old projects cleanup initial run failed", "err", err)
-	} else if n > 0 {
-		logger.Info("old projects cleaned up", "count", n)
-	}
-
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			n, err := svc.RunOldProjectsCleanup(ctx, doneRetention, cancelledRetention)
-			if err != nil {
-				logger.Warn("old projects cleanup failed", "err", err)
-				continue
-			}
-			if n > 0 {
-				logger.Info("old projects cleaned up", "count", n)
-			}
-		}
-	}
 }
 
 // transcodeNoOpHandler — заглушка для portfolio.video_uploaded когда

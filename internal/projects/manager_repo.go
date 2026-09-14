@@ -110,9 +110,9 @@ var adminSortOrder = map[string]string{
 // фронт фильтровал их у себя. С ростом числа проектов это тупик — браузер
 // тянет всё ради одного поискового слова.
 //
-// По умолчанию прячем cancelled — у них своя retention 30 дней до
-// физического удаления, в админке они только засоряют список. Чтобы
-// посмотреть их — явно указать Status='cancelled'.
+// По умолчанию прячем cancelled — в админке они только засоряют список.
+// Чтобы посмотреть их (и вернуть нужный) — явно указать
+// Status='cancelled': строка отменённого проекта живёт вечно.
 func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, error) {
 	if p.Limit <= 0 || p.Limit > 1000 {
 		p.Limit = 20
@@ -336,8 +336,10 @@ VALUES ($1, NULL, $2, 'human', $3, $4)`,
 var ErrNoProposedSpecialist = errors.New("no proposed specialist on project")
 
 // CancelProject — soft-delete: status='cancelled'. Из админского списка
-// сразу исчезает (ListAll фильтрует), но запись физически удалится только
-// через retention (по умолчанию 30 дней, см. CleanupOldCompletedProjects).
+// сразу исчезает (ListAll фильтрует), но строка остаётся навсегда:
+// отмена — единственная необратимая операция в CRM, и обратимой её
+// делает RestoreProject, которому нужна и сама запись, и событие
+// отмены с прежним статусом.
 // Идемпотентно: если проект уже cancelled — возвращаем nil.
 func (r *Repo) CancelProject(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})

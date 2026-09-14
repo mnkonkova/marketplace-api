@@ -331,8 +331,8 @@ func (s *Service) RejectProposedSpecialist(ctx context.Context, projectID, actor
 	return s.repo.RejectProposedSpecialist(ctx, projectID, actorID, reason)
 }
 
-// CancelProject — админская «удалить проект»: soft-delete с retention 30д
-// до физического удаления (см. CleanupOldCompletedProjects в воркере).
+// CancelProject — админская «удалить проект»: status='cancelled', без
+// удаления строки. Обратима ручкой возврата (см. RestoreProject).
 func (s *Service) CancelProject(ctx context.Context, projectID, actorID uuid.UUID, reason string) error {
 	return s.repo.CancelProject(ctx, projectID, actorID, reason)
 }

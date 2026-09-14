@@ -6354,7 +6354,7 @@ paths:
             $ref: '#/definitions/internal_projects.errorResponse'
       security:
       - BearerAuth: []
-      summary: Удалить проект (soft-delete, физически чистится через 30д)
+      summary: Отменить проект (soft-delete, обратимо через /restore)
       tags:
       - admin-projects
     get:

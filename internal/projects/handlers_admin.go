@@ -38,7 +38,7 @@ type cancelReq struct {
 }
 
 // AdminCancelProject godoc
-// @Summary  Удалить проект (soft-delete, физически чистится через 30д)
+// @Summary  Отменить проект (soft-delete, обратимо через /restore)
 // @Tags     admin-projects
 // @Accept   json
 // @Produce  json
