@@ -108,8 +108,20 @@ func (r *Repo) ClientFeed(ctx context.Context, projectID uuid.UUID, limit int) (
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	// Дата в ленте — ФАКТИЧЕСКАЯ дата выхода, а не момент, когда креатор
+	// прислал ссылку. Это разные события: ролик мог выйти 31 июля, а
+	// ссылка приехать через неделю — и лента подписывала бы весь месяц
+	// работы одним днём.
+	//
+	// Где источник даты выхода не отдал, честно падаем на момент сдачи:
+	// это единственное, что мы про ролик знаем. То же правило определяет
+	// принадлежность периоду (billing.publishedInPeriodSQL) — на одном
+	// экране не должно быть двух разных «когда это вышло».
+	//
+	// Сортировка по той же величине, что и показ: иначе список поедет
+	// относительно подписей.
 	const q = `
-SELECT p.id, p.creator_user_id, p.title, MIN(l.submitted_at),
+SELECT p.id, p.creator_user_id, p.title, MIN(COALESCE(l.published_at, l.submitted_at)),
        array_agg(l.platform ORDER BY l.platform),
        array_agg(l.url_canonical ORDER BY l.platform),
        COALESCE(SUM(cur.views), 0), COALESCE(SUM(cur.likes), 0),
@@ -123,7 +135,7 @@ LEFT JOIN LATERAL (
 ) cur ON TRUE
 WHERE p.project_id = $1 AND p.status <> 'cancelled'
 GROUP BY p.id, p.creator_user_id, p.title
-ORDER BY MIN(l.submitted_at) DESC
+ORDER BY MIN(COALESCE(l.published_at, l.submitted_at)) DESC
 LIMIT $2`
 	rows, err := r.db.Query(ctx, q, projectID, limit)
 	if err != nil {

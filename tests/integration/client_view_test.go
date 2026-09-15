@@ -254,3 +254,77 @@ func TestThresholdNotifiedOnlyOnce(t *testing.T) {
 		t.Errorf("уведомление ушло второй раз (%d) — клиент получит его каждый день", st.ThresholdNotified)
 	}
 }
+
+// «Вышел» в ленте — это дата ВЫХОДА, а не момент, когда креатор прислал
+// ссылку. События разные: ролик мог выйти 31 июля, а ссылка приехать
+// через неделю. Подписывать весь месяц работы одним днём нельзя — на
+// стенде именно так и выглядело.
+func TestClientFeedShowsPublishDateNotSubmitDate(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+
+	// Оба ролика СДАНЫ сегодня, а вышли в разные дни. Лента обязана
+	// показать выход, и порядок — по нему же.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	older := today.AddDate(0, 0, -30)
+	newer := today.AddDate(0, 0, -5)
+
+	first := publishOn(t, pool, projectID, creators[0], today, "fdt01", 100)
+	second := publishOn(t, pool, projectID, creators[0], today, "fdt02", 100)
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links SET published_at = $2, submitted_at = $3
+WHERE publication_id = $1`, first, older, today); err != nil {
+		t.Fatalf("даты первого: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links SET published_at = $2, submitted_at = $3
+WHERE publication_id = $1`, second, newer, today); err != nil {
+		t.Fatalf("даты второго: %v", err)
+	}
+	// Третий: площадка даты выхода не отдала — остаётся момент сдачи.
+	noDate := publishOn(t, pool, projectID, creators[0], today, "fdt03", 100)
+	submitDay := today.AddDate(0, 0, -10)
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links SET published_at = NULL, submitted_at = $2
+WHERE publication_id = $1`, noDate, submitDay); err != nil {
+		t.Fatalf("даты третьего: %v", err)
+	}
+
+	feed, err := svc.ClientFeed(ctx, projectID, 50)
+	if err != nil {
+		t.Fatalf("ClientFeed: %v", err)
+	}
+	if len(feed) != 3 {
+		t.Fatalf("в ленте %d роликов, ожидалось 3", len(feed))
+	}
+
+	got := make(map[uuid.UUID]time.Time, 3)
+	for _, v := range feed {
+		got[v.PublicationID] = v.PublishedAt.UTC().Truncate(24 * time.Hour)
+	}
+	if !got[first].Equal(older) {
+		t.Errorf("первый ролик подписан %s, а вышел %s",
+			got[first].Format("2006-01-02"), older.Format("2006-01-02"))
+	}
+	if !got[second].Equal(newer) {
+		t.Errorf("второй ролик подписан %s, а вышел %s",
+			got[second].Format("2006-01-02"), newer.Format("2006-01-02"))
+	}
+	if !got[noDate].Equal(submitDay) {
+		t.Errorf("ролик без даты выхода подписан %s, ожидалась дата сдачи %s",
+			got[noDate].Format("2006-01-02"), submitDay.Format("2006-01-02"))
+	}
+
+	// Сортировка — по той же величине, что и показ: новые сверху.
+	wantOrder := []uuid.UUID{second, noDate, first}
+	for i, want := range wantOrder {
+		if feed[i].PublicationID != want {
+			t.Fatalf("порядок ленты поехал относительно подписей: на месте %d стоит %s",
+				i, feed[i].PublishedAt.Format("2006-01-02"))
+		}
+	}
+}
