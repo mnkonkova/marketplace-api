@@ -53,7 +53,13 @@ const (
 // Именно просмотры, не охват: охват площадки отдают отдельно и не везде,
 // и назвать одно другим значило бы пообещать то, чего мы не собираем.
 type OverviewViews struct {
+	// Total — за всё время по всем проектам заказчика. Не за окно
+	// дашборда: по этому же числу считается стоимость тысячи, и
+	// подменить его оконным значило бы тихо поменять смысл поля.
 	Total int64 `json:"total"`
+	// DeltaPct — прирост просмотров за окно против предыдущего окна
+	// такой же длины. Поля нет вовсе, если сравнивать не с чем.
+	DeltaPct *int `json:"delta_pct,omitempty"`
 	// ByPlatform — все пять площадок всегда, включая нулевые: пропавший
 	// столбик читается как сбой, а не как ноль.
 	ByPlatform map[string]int64 `json:"by_platform"`
@@ -118,6 +124,36 @@ type ClientOverview struct {
 	// Series — ряд для графика, последние 90 дней.
 	Series      []OverviewPoint `json:"series"`
 	GeneratedAt time.Time       `json:"generated_at"`
+
+	// ---- дашборд ----
+	//
+	// Окно скользящее, от сегодня назад: week=7, month=30, quarter=90
+	// дней. Итоги в блоках выше — за всё время, приросты — окно против
+	// предыдущего окна такой же длины (см. dashboard.go).
+
+	// Range — какое окно посчитано: week | month | quarter.
+	Range string `json:"range" enums:"week,month,quarter"`
+	// RangeLabel — подпись окна человеку: «17 авг. — 15 сент. 2026».
+	// Считается на сервере, чтобы в браузере не завелась вторая
+	// реализация русских сокращений месяцев.
+	RangeLabel string             `json:"range_label"`
+	Engagement OverviewEngagement `json:"engagement"`
+	ER         OverviewER         `json:"er"`
+	// Platforms — все пять площадок всегда, по убыванию просмотров.
+	Platforms []OverviewPlatform `json:"platforms"`
+	// TopVideos — три ролика с наибольшим приростом просмотров за окно.
+	TopVideos []OverviewTopVideo `json:"top_videos"`
+	// CollectedAt — когда последний раз собирали статистику по проектам
+	// этого заказчика. Подпись «данные на такое-то время» обязана быть
+	// правдой, поэтому nil, пока не собирали ни разу.
+	CollectedAt *time.Time `json:"collected_at,omitempty"`
+	// Market — во сколько раз рынок дороже нас. Блока нет вовсе, пока
+	// нет своей цены тысячи: делить не на что.
+	Market []OverviewMarket `json:"market,omitempty"`
+	// MarketScaleVersion — версия справочника порогов, из которой взяты
+	// ориентиры. Чтобы через полгода на вопрос «откуда цифры» был один и
+	// тот же ответ.
+	MarketScaleVersion int `json:"market_scale_version,omitempty"`
 }
 
 // costPer1000 — во сколько обходится тысяча просмотров. nil, если
@@ -173,31 +209,7 @@ LIMIT $2`, clientID, limit)
 // ровно в одну половину: выкладка принадлежит одному периоду.
 func (r *Repo) platformViews(ctx context.Context, clientID uuid.UUID) (map[uuid.UUID]map[string]int64, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT project_id, platform, SUM(views)::bigint FROM (
-    -- Подытоженные периоды: числа из среза.
-    SELECT pp.project_id, v.platform, COALESCE(v.views, 0) AS views
-    FROM project_period_views v
-    JOIN project_periods pp ON pp.id = v.period_id AND pp.status = 'locked'
-    JOIN projects p ON p.id = pp.project_id
-    WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'
-
-    UNION ALL
-
-    -- Всё, что ещё не подытожено: живые числа.
-    SELECT p.id, l.platform, COALESCE(cur.views, 0) AS views
-    FROM projects p
-    JOIN project_publications pub ON pub.project_id = p.id AND pub.status <> 'cancelled'
-    JOIN publication_links l ON l.publication_id = pub.id
-    LEFT JOIN LATERAL (
-        SELECT views FROM video_stat_daily d
-        WHERE d.link_id = l.id ORDER BY d.stat_date DESC LIMIT 1
-    ) cur ON TRUE
-    WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'
-      AND NOT EXISTS (
-          SELECT 1 FROM project_period_publications spp
-          JOIN project_periods pp2 ON pp2.id = spp.period_id AND pp2.status = 'locked'
-          WHERE spp.publication_id = pub.id
-      )
+SELECT project_id, platform, SUM(views)::bigint FROM (`+clientPlatformStatsSQL+`
 ) t
 GROUP BY project_id, platform`, clientID)
 	if err != nil {
@@ -221,6 +233,48 @@ GROUP BY project_id, platform`, clientID)
 	}
 	return out, rows.Err()
 }
+
+// clientPlatformStatsSQL — строки статистики по (проект, площадка) для
+// всех проектов заказчика. $1 — заказчик.
+//
+// Две половины, потому что источник разный и это принципиально:
+// подытоженный период отдаёт числа из среза (они заморожены), всё
+// остальное — живые, по последнему снимку каждой ссылки. Ролик попадает
+// ровно в одну половину: выкладка принадлежит одному периоду.
+//
+// Репосты отдаются как есть, вместе с NULL: ноль репостов и «площадка их
+// не отдаёт» — разные утверждения, и склеить их здесь значило бы
+// потерять звёздочку у вовлечённости.
+const clientPlatformStatsSQL = `
+    -- Подытоженные периоды: числа из среза.
+    SELECT pp.project_id, v.platform,
+           COALESCE(v.views, 0) AS views, COALESCE(v.likes, 0) AS likes,
+           COALESCE(v.comments, 0) AS comments, v.shares
+    FROM project_period_views v
+    JOIN project_periods pp ON pp.id = v.period_id AND pp.status = 'locked'
+    JOIN projects p ON p.id = pp.project_id
+    WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'
+
+    UNION ALL
+
+    -- Всё, что ещё не подытожено: живые числа.
+    SELECT p.id, l.platform,
+           COALESCE(cur.views, 0), COALESCE(cur.likes, 0),
+           COALESCE(cur.comments, 0), cur.shares
+    FROM projects p
+    JOIN project_publications pub ON pub.project_id = p.id AND pub.status <> 'cancelled'
+    JOIN publication_links l ON l.publication_id = pub.id
+    LEFT JOIN LATERAL (
+        SELECT views, likes, comments, shares FROM video_stat_daily d
+        WHERE d.link_id = l.id ORDER BY d.stat_date DESC LIMIT 1
+    ) cur ON TRUE
+    WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'
+      AND NOT EXISTS (
+          SELECT 1 FROM project_period_publications spp
+          JOIN project_periods pp2 ON pp2.id = spp.period_id AND pp2.status = 'locked'
+          WHERE spp.publication_id = pub.id
+      )
+`
 
 // paidByClient — сколько заказчик уже перевёл: подтверждённые платежи по
 // всем его проектам.
@@ -330,11 +384,20 @@ ORDER BY stat_date`, clientID, from)
 // разойтись с ней в числах нет. Переписать ту же арифметику ещё раз,
 // пачкой, значило бы завести третью копию денежных правил — за это мы
 // уже платили.
-func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, now time.Time) (ClientOverview, error) {
+func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng string, now time.Time) (ClientOverview, error) {
+	w, ok := newDashWindow(rng, now)
+	if !ok {
+		return ClientOverview{}, fmt.Errorf("%w: неизвестное окно %q, бывают: %v",
+			ErrInvalidInput, rng, RangeValues)
+	}
 	out := ClientOverview{
 		Projects:    []OverviewProject{},
 		Series:      []OverviewPoint{},
+		Platforms:   []OverviewPlatform{},
+		TopVideos:   []OverviewTopVideo{},
 		GeneratedAt: now,
+		Range:       w.Name,
+		RangeLabel:  w.Label,
 		Views:       OverviewViews{ByPlatform: map[string]int64{}},
 	}
 	// Все пять площадок всегда: пропавший столбик читается как сбой.
@@ -348,7 +411,9 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, now ti
 	}
 	out.ProjectsTotal = len(projects)
 	if len(projects) == 0 {
-		return out, nil
+		// Проектов нет — но окно, пять площадок и признак «сравнивать не
+		// с чем» отдать всё равно надо: экран рисуется по тем же ключам.
+		return out, s.fillDashboard(ctx, &out, clientID, w)
 	}
 
 	viewsByProject, err := s.repo.platformViews(ctx, clientID)
@@ -426,6 +491,13 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, now ti
 	// Средняя ставка по тарифам соврала бы: у проектов разные версии
 	// условий, и цена тысячи у них разная.
 	out.CostPer1000 = costPer1000(out.Money.Total, out.Views.Total)
+
+	if err := s.fillDashboard(ctx, &out, clientID, w); err != nil {
+		return out, err
+	}
+	if err := s.fillMarket(ctx, &out); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -441,10 +513,18 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, now ti
 // @Description snapshot_approx означает, что часть чисел подтянута:
 // @Description поденную статистику к моменту подытога уже удалили.
 // @Description Тестовые проекты не учитываются.
+// @Description
+// @Description Дашборд считается за СКОЛЬЗЯЩЕЕ окно от сегодня: week — 7 дней,
+// @Description month — 30, quarter — 90. Итоги (просмотры, взаимодействия, ER,
+// @Description площадки) — за всё время; приросты — окно против предыдущего
+// @Description окна такой же длины. Если сравнивать не с чем, поля прироста
+// @Description нет вовсе: ноль означал бы «не выросло».
 // @Tags     client-billing
 // @Produce  json
 // @Security BearerAuth
+// @Param    range query string false "окно дашборда: week | month | quarter (по умолчанию month)" Enums(week,month,quarter)
 // @Success  200 {object} ClientOverview
+// @Failure  400 {object} errorResponse "invalid_input — неизвестное окно"
 // @Failure  401 {object} errorResponse "no_user — сессия истекла"
 // @Router   /me/overview [get]
 func (h *Handler) ClientOverviewHandler(w http.ResponseWriter, r *http.Request) {
@@ -453,7 +533,13 @@ func (h *Handler) ClientOverviewHandler(w http.ResponseWriter, r *http.Request) 
 		writeNoUser(w)
 		return
 	}
-	out, err := h.svc.ClientOverview(r.Context(), uid, time.Now().UTC())
+	// Пустой параметр — месяц: дашборд открывают без вопросов, а
+	// незнакомое значение это уже опечатка, о которой надо сказать.
+	rng := r.URL.Query().Get("range")
+	if rng == "" {
+		rng = RangeMonth
+	}
+	out, err := h.svc.ClientOverview(r.Context(), uid, rng, time.Now().UTC())
 	if err != nil {
 		writeErr(w, err)
 		return

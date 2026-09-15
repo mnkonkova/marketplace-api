@@ -8463,7 +8463,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Кросс-проектный срез: просмотры по пяти площадкам и всего,\nсчёт по подытоженным периодам и по текущим, сколько уже\nпереведено, стоимость тысячи просмотров и разбивка по\nпроектам. Стоимость считается из фактических сумм и\nпросмотров, а не из ставки тарифа: у проектов бывают\nразные версии условий.\nПодытоженные периоды дают числа из среза, текущие — живые.\nsnapshot_approx означает, что часть чисел подтянута:\nподенную статистику к моменту подытога уже удалили.\nТестовые проекты не учитываются.",
+                "description": "Кросс-проектный срез: просмотры по пяти площадкам и всего,\nсчёт по подытоженным периодам и по текущим, сколько уже\nпереведено, стоимость тысячи просмотров и разбивка по\nпроектам. Стоимость считается из фактических сумм и\nпросмотров, а не из ставки тарифа: у проектов бывают\nразные версии условий.\nПодытоженные периоды дают числа из среза, текущие — живые.\nsnapshot_approx означает, что часть чисел подтянута:\nподенную статистику к моменту подытога уже удалили.\nТестовые проекты не учитываются.\n\nДашборд считается за СКОЛЬЗЯЩЕЕ окно от сегодня: week — 7 дней,\nmonth — 30, quarter — 90. Итоги (просмотры, взаимодействия, ER,\nплощадки) — за всё время; приросты — окно против предыдущего\nокна такой же длины. Если сравнивать не с чем, поля прироста\nнет вовсе: ноль означал бы «не выросло».",
                 "produces": [
                     "application/json"
                 ],
@@ -8471,11 +8471,30 @@ const docTemplate = `{
                     "client-billing"
                 ],
                 "summary": "Сводка по всем моим проектам (заказчик)",
+                "parameters": [
+                    {
+                        "enum": [
+                            "week",
+                            "month",
+                            "quarter"
+                        ],
+                        "type": "string",
+                        "description": "окно дашборда: week | month | quarter (по умолчанию month)",
+                        "name": "range",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.ClientOverview"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input — неизвестное окно",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
                         }
                     },
                     "401": {
@@ -12164,15 +12183,43 @@ const docTemplate = `{
         "internal_billing.ClientOverview": {
             "type": "object",
             "properties": {
+                "collected_at": {
+                    "description": "CollectedAt — когда последний раз собирали статистику по проектам\nэтого заказчика. Подпись «данные на такое-то время» обязана быть\nправдой, поэтому nil, пока не собирали ни разу.",
+                    "type": "string"
+                },
                 "cost_per_1000": {
                     "description": "CostPer1000 — стоимость тысячи просмотров по всем проектам, в\nкопейках. Считается из ФАКТИЧЕСКИХ сумм и фактических просмотров,\nа не из ставки тарифа: у разных проектов разные версии условий, и\nсредняя ставка соврала бы. nil, пока просмотров нет.",
                     "type": "integer"
                 },
+                "engagement": {
+                    "$ref": "#/definitions/internal_billing.OverviewEngagement"
+                },
+                "er": {
+                    "$ref": "#/definitions/internal_billing.OverviewER"
+                },
                 "generated_at": {
                     "type": "string"
                 },
+                "market": {
+                    "description": "Market — во сколько раз рынок дороже нас. Блока нет вовсе, пока\nнет своей цены тысячи: делить не на что.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewMarket"
+                    }
+                },
+                "market_scale_version": {
+                    "description": "MarketScaleVersion — версия справочника порогов, из которой взяты\nориентиры. Чтобы через полгода на вопрос «откуда цифры» был один и\nтот же ответ.",
+                    "type": "integer"
+                },
                 "money": {
                     "$ref": "#/definitions/internal_billing.OverviewMoney"
+                },
+                "platforms": {
+                    "description": "Platforms — все пять площадок всегда, по убыванию просмотров.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewPlatform"
+                    }
                 },
                 "projects": {
                     "type": "array",
@@ -12182,6 +12229,19 @@ const docTemplate = `{
                 },
                 "projects_total": {
                     "type": "integer"
+                },
+                "range": {
+                    "description": "Range — какое окно посчитано: week | month | quarter.",
+                    "type": "string",
+                    "enum": [
+                        "week",
+                        "month",
+                        "quarter"
+                    ]
+                },
+                "range_label": {
+                    "description": "RangeLabel — подпись окна человеку: «17 авг. — 15 сент. 2026».\nСчитается на сервере, чтобы в браузере не завелась вторая\nреализация русских сокращений месяцев.",
+                    "type": "string"
                 },
                 "series": {
                     "description": "Series — ряд для графика, последние 90 дней.",
@@ -12193,6 +12253,13 @@ const docTemplate = `{
                 "snapshot_approx": {
                     "description": "SnapshotApprox — хотя бы у одного подытоженного периода числа\nподтянуты: поденную статистику к моменту подытога уже удалили.\nСводка, часть чисел которой приблизительна, обязана сказать об\nэтом, а не выглядеть точной.",
                     "type": "boolean"
+                },
+                "top_videos": {
+                    "description": "TopVideos — три ролика с наибольшим приростом просмотров за окно.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewTopVideo"
+                    }
                 },
                 "views": {
                     "$ref": "#/definitions/internal_billing.OverviewViews"
@@ -12536,6 +12603,67 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_billing.OverviewER": {
+            "type": "object",
+            "properties": {
+                "delta_pp": {
+                    "description": "DeltaPP — насколько изменилась вовлечённость окна против\nпредыдущего, в ПУНКТАХ, а не процентах: «было 4,7 — стало 4,4»\nпонятнее, чем «упало на 6%».",
+                    "type": "number"
+                },
+                "percent": {
+                    "type": "number"
+                },
+                "without_shares": {
+                    "description": "WithoutShares — хотя бы одна площадка не отдаёт репосты, и они в\nрасчёт не вошли. Ноль репостов и «мы их не знаем» — разные\nутверждения; на экране это звёздочка.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_billing.OverviewEngagement": {
+            "type": "object",
+            "properties": {
+                "comments": {
+                    "type": "integer"
+                },
+                "comments_delta_pct": {
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total — за всё время, как и остальные итоги сводки.",
+                    "type": "integer"
+                },
+                "total_delta_pct": {
+                    "description": "TotalDeltaPct — прирост за окно против предыдущего окна. Поля нет\nвовсе, если сравнивать не с чем.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewMarket": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "measured_on": {
+                    "type": "string"
+                },
+                "price_per_1000": {
+                    "description": "PricePer1000 — цена тысячи у ориентира, копейки.",
+                    "type": "integer"
+                },
+                "source": {
+                    "description": "Source/MeasuredOn — откуда число и когда измерено. Обязательны:\nцифра рынка без источника и даты через год начнёт врать, и\nзаметить это будет нечем.",
+                    "type": "string"
+                },
+                "times_cheaper": {
+                    "description": "TimesCheaper — во сколько раз ориентир дороже нашей фактической\nцены тысячи. Считается на сервере из cost_per_1000: второй расчёт\nв браузере разошёлся бы с первым.",
+                    "type": "number"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_billing.OverviewMoney": {
             "type": "object",
             "properties": {
@@ -12553,6 +12681,39 @@ const docTemplate = `{
                 },
                 "total": {
                     "description": "Total — Locked + Current, «сколько всего стоит работа на сегодня».",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewPlatform": {
+            "type": "object",
+            "properties": {
+                "delta_pct": {
+                    "description": "DeltaPct — прирост просмотров за окно против предыдущего окна.",
+                    "type": "integer"
+                },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость площадки. nil, пока просмотров нет.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "series": {
+                    "description": "Series — прирост по дням внутри окна. Дни без сбора пропущены, а\nне отданы нулём: ноль нарисовал бы провал там, где просто не\nприходил сборщик.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewPoint"
+                    }
+                },
+                "share_pct": {
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views — за всё время; доля считается от них же, поэтому доли пяти\nплощадок дают сто процентов (с точностью до округления).",
                     "type": "integer"
                 }
             }
@@ -12603,6 +12764,33 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_billing.OverviewTopVideo": {
+            "type": "object",
+            "properties": {
+                "platform": {
+                    "description": "Platform — площадка-лидер: та, что дала больше всех просмотров за\nокно. Ссылка — на неё же.",
+                    "type": "string"
+                },
+                "publication_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел, ГГГГ-ММ-ДД. Дата выхода, а не\nсдачи ссылки: см. publications.ClientFeed.",
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Title — название, которое дал креатор. Пустое отдаём как есть:\nподставлять «Без названия» — дело интерфейса, а не сервера.",
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "views": {
+                    "description": "Views — просмотры, набранные ЗА ОКНО. Показываем ту же величину,\nпо которой сортируем: иначе список едет относительно чисел.",
+                    "type": "integer"
+                }
+            }
+        },
         "internal_billing.OverviewViews": {
             "type": "object",
             "properties": {
@@ -12614,7 +12802,12 @@ const docTemplate = `{
                         "format": "int64"
                     }
                 },
+                "delta_pct": {
+                    "description": "DeltaPct — прирост просмотров за окно против предыдущего окна\nтакой же длины. Поля нет вовсе, если сравнивать не с чем.",
+                    "type": "integer"
+                },
                 "total": {
+                    "description": "Total — за всё время по всем проектам заказчика. Не за окно\nдашборда: по этому же числу считается стоимость тысячи, и\nподменить его оконным значило бы тихо поменять смысл поля.",
                     "type": "integer"
                 }
             }
