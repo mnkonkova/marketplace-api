@@ -984,6 +984,13 @@ definitions:
         type: array
       views:
         $ref: '#/definitions/internal_billing.OverviewViews'
+      window:
+        allOf:
+        - $ref: '#/definitions/internal_billing.OverviewWindow'
+        description: |-
+          Window — числа ЗА ОКНО: главный заголовок дашборда берётся отсюда.
+          Приросты живут только здесь, рядом с величинами, которые они
+          описывают.
     type: object
   internal_billing.ClientPeriod:
     properties:
@@ -1298,13 +1305,10 @@ definitions:
     type: object
   internal_billing.OverviewER:
     properties:
-      delta_pp:
-        description: |-
-          DeltaPP — насколько изменилась вовлечённость окна против
-          предыдущего, в ПУНКТАХ, а не процентах: «было 4,7 — стало 4,4»
-          понятнее, чем «упало на 6%».
-        type: number
       percent:
+        description: |-
+          Percent — за всё время. Изменение вовлечённости — в блоке window,
+          вместе с оконной вовлечённостью, которую оно и описывает.
         type: number
       without_shares:
         description: |-
@@ -1317,15 +1321,12 @@ definitions:
     properties:
       comments:
         type: integer
-      comments_delta_pct:
-        type: integer
       total:
-        description: Total — за всё время, как и остальные итоги сводки.
-        type: integer
-      total_delta_pct:
         description: |-
-          TotalDeltaPct — прирост за окно против предыдущего окна. Поля нет
-          вовсе, если сравнивать не с чем.
+          Total/Comments — за всё время, как и остальные итоги сводки.
+          Приростов здесь нет намеренно: прирост окна рядом с итогом за всё
+          время описывал бы не то число, возле которого стоит. Оконные
+          значения и их приросты — в блоке window.
         type: integer
     type: object
   internal_billing.OverviewMarket:
@@ -1396,6 +1397,14 @@ definitions:
         description: |-
           Views — за всё время; доля считается от них же, поэтому доли пяти
           площадок дают сто процентов (с точностью до округления).
+        type: integer
+      window_share_pct:
+        type: integer
+      window_views:
+        description: |-
+          WindowViews/WindowSharePct — то же за окно. Полоса состава на
+          дашборде рисуется по ним, чтобы сходиться с главным числом;
+          оконные доли дают сто процентов от оконной суммы.
         type: integer
     type: object
   internal_billing.OverviewPoint:
@@ -1471,16 +1480,44 @@ definitions:
           ByPlatform — все пять площадок всегда, включая нулевые: пропавший
           столбик читается как сбой, а не как ноль.
         type: object
-      delta_pct:
-        description: |-
-          DeltaPct — прирост просмотров за окно против предыдущего окна
-          такой же длины. Поля нет вовсе, если сравнивать не с чем.
-        type: integer
       total:
         description: |-
           Total — за всё время по всем проектам заказчика. Не за окно
           дашборда: по этому же числу считается стоимость тысячи, и
           подменить его оконным значило бы тихо поменять смысл поля.
+          Оконные просмотры лежат отдельно, в блоке window.
+        type: integer
+    type: object
+  internal_billing.OverviewWindow:
+    properties:
+      comments:
+        type: integer
+      comments_delta_pct:
+        type: integer
+      engagement:
+        description: Engagement — лайки + комментарии + репосты, набранные за окно.
+        type: integer
+      engagement_delta_pct:
+        type: integer
+      er_delta_pp:
+        description: |-
+          ERDeltaPP — изменение в ПУНКТАХ против предыдущего окна: «было
+          4,7 — стало 4,4» понятнее, чем «упало на 6%».
+        type: number
+      er_percent:
+        description: |-
+          ERPercent — вовлечённость окна: взаимодействия окна ÷ просмотры
+          окна. Ноль, пока просмотров в окне нет.
+        type: number
+      er_without_shares:
+        description: ERWithoutShares — в окне хотя бы одна площадка не отдала репосты.
+        type: boolean
+      views:
+        type: integer
+      views_delta_pct:
+        description: |-
+          ViewsDeltaPct — против предыдущего окна такой же длины. Поля нет
+          вовсе, если сравнивать не с чем: ноль означал бы «не выросло».
         type: integer
     type: object
   internal_billing.Payment:

@@ -117,29 +117,38 @@ func TestDashboardDeltaAgainstPreviousWindow(t *testing.T) {
 	if body["range_label"] == "" {
 		t.Error("подписи окна нет")
 	}
-	views := subMap(t, body, "views")
-	// Итог — за всё время, а не за окно: по нему считается стоимость
-	// тысячи, и подменять его оконным нельзя.
-	if got := num(t, views, "total"); got != 300_000 {
+	// Итог — за всё время: по нему считается стоимость тысячи, и
+	// подменять его оконным нельзя.
+	if got := num(t, subMap(t, body, "views"), "total"); got != 300_000 {
 		t.Errorf("просмотров всего %d, ожидалось 300 000", got)
 	}
-	delta, ok := optNum(views, "delta_pct")
+	if got := num(t, subMap(t, body, "engagement"), "total"); got != 4_000+400+150 {
+		t.Errorf("взаимодействий всего %d, ожидалось %d", got, 4_000+400+150)
+	}
+
+	// Заголовок дашборда и его прирост описывают ОДНУ величину — окно.
+	win := subMap(t, body, "window")
+	if got := num(t, win, "views"); got != 200_000 {
+		t.Errorf("просмотров за окно %d, ожидалось 200 000", got)
+	}
+	delta, ok := optNum(win, "views_delta_pct")
 	if !ok {
 		t.Fatal("прироста просмотров нет, а прошлое окно есть")
 	}
 	if delta != 100 {
 		t.Errorf("прирост %v%%, ожидалось 100 (200 000 против 100 000)", delta)
 	}
-
-	// Взаимодействия и комментарии — тем же правилом.
-	eng := subMap(t, body, "engagement")
-	if got := num(t, eng, "total"); got != 4_000+400+150 {
-		t.Errorf("взаимодействий %d, ожидалось %d", got, 4_000+400+150)
+	// Взаимодействия окна: прирост лайков, комментариев и репостов.
+	if got := num(t, win, "engagement"); got != (4_000-1_000)+(400-100)+(150-50) {
+		t.Errorf("взаимодействий за окно %d, ожидалось %d", got, 3_000+300+100)
 	}
-	if _, ok := optNum(eng, "total_delta_pct"); !ok {
+	if got := num(t, win, "comments"); got != 300 {
+		t.Errorf("комментариев за окно %d, ожидалось 300", got)
+	}
+	if _, ok := optNum(win, "engagement_delta_pct"); !ok {
 		t.Error("прироста взаимодействий нет, а прошлое окно есть")
 	}
-	if _, ok := optNum(eng, "comments_delta_pct"); !ok {
+	if _, ok := optNum(win, "comments_delta_pct"); !ok {
 		t.Error("прироста комментариев нет, а прошлое окно есть")
 	}
 
@@ -183,26 +192,30 @@ func TestDashboardWithoutPreviousWindowHasNoDelta(t *testing.T) {
 
 	body := dashboardBody(t, h, client, "month")
 
-	if _, ok := optNum(subMap(t, body, "views"), "delta_pct"); ok {
+	win := subMap(t, body, "window")
+	if _, ok := optNum(win, "views_delta_pct"); ok {
 		t.Error("прирост просмотров есть, хотя сравнивать не с чем")
 	}
-	eng := subMap(t, body, "engagement")
-	if _, ok := optNum(eng, "total_delta_pct"); ok {
+	if _, ok := optNum(win, "engagement_delta_pct"); ok {
 		t.Error("прирост взаимодействий есть, хотя сравнивать не с чем")
 	}
-	if _, ok := optNum(eng, "comments_delta_pct"); ok {
+	if _, ok := optNum(win, "comments_delta_pct"); ok {
 		t.Error("прирост комментариев есть, хотя сравнивать не с чем")
 	}
-	if _, ok := optNum(subMap(t, body, "er"), "delta_pp"); ok {
+	if _, ok := optNum(win, "er_delta_pp"); ok {
 		t.Error("изменение вовлечённости есть, хотя сравнивать не с чем")
 	}
 	if _, ok := optNum(platformRow(t, body, "tiktok"), "delta_pct"); ok {
 		t.Error("прирост площадки есть, хотя сравнивать не с чем")
 	}
 
-	// Зато звёздочка про репосты на месте: площадка их не отдала.
+	// Зато звёздочка про репосты на месте — и у окна, и за всё время:
+	// площадка их не отдала.
 	if er := subMap(t, body, "er"); er["without_shares"] != true {
 		t.Error("репостов нет, а признака without_shares тоже нет")
+	}
+	if win["er_without_shares"] != true {
+		t.Error("в окне репостов нет, а признака er_without_shares тоже нет")
 	}
 }
 
@@ -438,5 +451,65 @@ func TestDashboardMarketComparison(t *testing.T) {
 	}
 	if _, ok := none["market_scale_version"]; ok {
 		t.Error("версия справочника отдана без самого сравнения")
+	}
+}
+
+// Оконная сумма НЕ РАВНА общей, когда есть история старше окна.
+//
+// Тест стоит отдельно намеренно: заголовок дашборда берёт window.views, а
+// стоимость работы и цена тысячи — views.total за всё время. «Починить»
+// одно в другое очень легко, и на данных без истории подмена не видна.
+func TestDashboardWindowViewsDifferFromAllTime(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	pid, cleanup := overviewProject(t, pool, client, 6_000_000, 9_000, 0, "dsh8")
+	defer cleanup()
+
+	var pubID uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`SELECT id FROM project_publications WHERE project_id = $1 LIMIT 1`, pid).Scan(&pubID); err != nil {
+		t.Fatalf("выкладка: %v", err)
+	}
+	resetDailyViews(t, pool, pid)
+	// Миллион набран задолго до окна, и ещё двести тысяч — внутри.
+	dashDay(t, pool, pubID, "tiktok", daysAgo(120), 1_000_000, 0, 0, nil)
+	dashDay(t, pool, pubID, "tiktok", daysAgo(10), 1_200_000, 0, 0, nil)
+
+	body := dashboardBody(t, h, client, "month")
+
+	total := num(t, subMap(t, body, "views"), "total")
+	window := num(t, subMap(t, body, "window"), "views")
+	if total != 1_200_000 {
+		t.Errorf("просмотров всего %d, ожидалось 1 200 000", total)
+	}
+	if window != 200_000 {
+		t.Errorf("просмотров за окно %d, ожидалось 200 000", window)
+	}
+	if total == window {
+		t.Fatal("оконная сумма совпала с общей — одно «починили» в другое")
+	}
+
+	// У площадки — обе величины рядом, и оконные доли считаются от
+	// оконной суммы.
+	tt := platformRow(t, body, "tiktok")
+	if got := num(t, tt, "views"); int64(got) != int64(total) {
+		t.Errorf("просмотры площадки за всё время %d, ожидалось %d", got, total)
+	}
+	if got := num(t, tt, "window_views"); int64(got) != int64(window) {
+		t.Errorf("просмотры площадки за окно %d, ожидалось %d", got, window)
+	}
+	if got := num(t, tt, "window_share_pct"); got != 100 {
+		t.Errorf("оконная доля единственной площадки %d%%, ожидалось 100", got)
+	}
+	var sumWindowShare int
+	for _, raw := range list(t, body, "platforms") {
+		m, _ := raw.(map[string]any)
+		sumWindowShare += num(t, m, "window_share_pct")
+	}
+	if sumWindowShare < 98 || sumWindowShare > 102 {
+		t.Errorf("сумма оконных долей %d%%, ожидалось около ста", sumWindowShare)
 	}
 }

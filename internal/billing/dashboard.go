@@ -114,26 +114,53 @@ func deltaPct(cur, prev int64) *int {
 // Признак «репостов нет» живёт в соседнем блоке er: он один на оба
 // числа, потому что причина одна — площадка их не отдала.
 type OverviewEngagement struct {
-	// Total — за всё время, как и остальные итоги сводки.
-	Total int64 `json:"total"`
-	// TotalDeltaPct — прирост за окно против предыдущего окна. Поля нет
-	// вовсе, если сравнивать не с чем.
-	TotalDeltaPct    *int  `json:"total_delta_pct,omitempty"`
-	Comments         int64 `json:"comments"`
-	CommentsDeltaPct *int  `json:"comments_delta_pct,omitempty"`
+	// Total/Comments — за всё время, как и остальные итоги сводки.
+	// Приростов здесь нет намеренно: прирост окна рядом с итогом за всё
+	// время описывал бы не то число, возле которого стоит. Оконные
+	// значения и их приросты — в блоке window.
+	Total    int64 `json:"total"`
+	Comments int64 `json:"comments"`
 }
 
 // OverviewER — вовлечённость: (лайки + комментарии + репосты) ÷ просмотры.
 type OverviewER struct {
+	// Percent — за всё время. Изменение вовлечённости — в блоке window,
+	// вместе с оконной вовлечённостью, которую оно и описывает.
 	Percent float64 `json:"percent"`
-	// DeltaPP — насколько изменилась вовлечённость окна против
-	// предыдущего, в ПУНКТАХ, а не процентах: «было 4,7 — стало 4,4»
-	// понятнее, чем «упало на 6%».
-	DeltaPP *float64 `json:"delta_pp,omitempty"`
 	// WithoutShares — хотя бы одна площадка не отдаёт репосты, и они в
 	// расчёт не вошли. Ноль репостов и «мы их не знаем» — разные
 	// утверждения; на экране это звёздочка.
 	WithoutShares bool `json:"without_shares,omitempty"`
+}
+
+// OverviewWindow — числа ЗА ОКНО, своими именами.
+//
+// Отдельный блок, а не приросты рядом с общими итогами, по простой
+// причине: заголовок дашборда и подпись «+34% к прошлому месяцу»
+// обязаны описывать ОДНУ И ТУ ЖЕ величину. «3 млн просмотров, +34% к
+// прошлому месяцу» при итоге за всё время читается как «3 млн за
+// месяц» — экран врёт даже при верных числах.
+//
+// Поэтому: здесь всё оконное, а views.total, engagement и er выше —
+// за всё время, и приростов при них нет вовсе.
+type OverviewWindow struct {
+	Views int64 `json:"views"`
+	// ViewsDeltaPct — против предыдущего окна такой же длины. Поля нет
+	// вовсе, если сравнивать не с чем: ноль означал бы «не выросло».
+	ViewsDeltaPct *int `json:"views_delta_pct,omitempty"`
+	// Engagement — лайки + комментарии + репосты, набранные за окно.
+	Engagement         int64 `json:"engagement"`
+	EngagementDeltaPct *int  `json:"engagement_delta_pct,omitempty"`
+	Comments           int64 `json:"comments"`
+	CommentsDeltaPct   *int  `json:"comments_delta_pct,omitempty"`
+	// ERPercent — вовлечённость окна: взаимодействия окна ÷ просмотры
+	// окна. Ноль, пока просмотров в окне нет.
+	ERPercent float64 `json:"er_percent"`
+	// ERDeltaPP — изменение в ПУНКТАХ против предыдущего окна: «было
+	// 4,7 — стало 4,4» понятнее, чем «упало на 6%».
+	ERDeltaPP *float64 `json:"er_delta_pp,omitempty"`
+	// ERWithoutShares — в окне хотя бы одна площадка не отдала репосты.
+	ERWithoutShares bool `json:"er_without_shares,omitempty"`
 }
 
 // OverviewPlatform — площадка на дашборде.
@@ -143,6 +170,11 @@ type OverviewPlatform struct {
 	// площадок дают сто процентов (с точностью до округления).
 	Views    int64 `json:"views"`
 	SharePct int   `json:"share_pct"`
+	// WindowViews/WindowSharePct — то же за окно. Полоса состава на
+	// дашборде рисуется по ним, чтобы сходиться с главным числом;
+	// оконные доли дают сто процентов от оконной суммы.
+	WindowViews    int64 `json:"window_views"`
+	WindowSharePct int   `json:"window_share_pct"`
 	// ERPercent — вовлечённость площадки. nil, пока просмотров нет.
 	ERPercent       *float64 `json:"er_percent,omitempty"`
 	ERWithoutShares bool     `json:"er_without_shares,omitempty"`
@@ -194,12 +226,17 @@ type platformGain struct {
 	Views      int64
 	Engagement int64
 	Comments   int64
+	// SharesUnknown — хотя бы один снимок окна пришёл без репостов, и во
+	// взаимодействия они не вошли. Признак оконный, а не общий: за всё
+	// время площадка могла репосты отдавать, а в этом окне перестать.
+	SharesUnknown bool
 }
 
 func (g *platformGain) add(o platformGain) {
 	g.Views += o.Views
 	g.Engagement += o.Engagement
 	g.Comments += o.Comments
+	g.SharesUnknown = g.SharesUnknown || o.SharesUnknown
 }
 
 // dashGains — приросты текущего и предыдущего окна.
@@ -280,7 +317,8 @@ WITH mine AS (
            d.views    - COALESCE(LAG(d.views)    OVER w, 0) AS dviews,
            d.likes    - COALESCE(LAG(d.likes)    OVER w, 0) AS dlikes,
            d.comments - COALESCE(LAG(d.comments) OVER w, 0) AS dcomments,
-           COALESCE(d.shares, 0) - COALESCE(LAG(COALESCE(d.shares, 0)) OVER w, 0) AS dshares
+           COALESCE(d.shares, 0) - COALESCE(LAG(COALESCE(d.shares, 0)) OVER w, 0) AS dshares,
+           d.shares IS NOT NULL AS has_shares
     FROM video_stat_daily d
     JOIN mine m ON m.id = d.link_id
     WINDOW w AS (PARTITION BY d.link_id ORDER BY d.stat_date)
@@ -288,7 +326,8 @@ WITH mine AS (
 SELECT platform, stat_date,
        GREATEST(SUM(dviews), 0)::bigint,
        GREATEST(SUM(dlikes + dcomments + dshares), 0)::bigint,
-       GREATEST(SUM(dcomments), 0)::bigint
+       GREATEST(SUM(dcomments), 0)::bigint,
+       bool_and(has_shares)
 FROM daily
 WHERE stat_date BETWEEN $2::date AND $3::date
 GROUP BY platform, stat_date
@@ -303,9 +342,12 @@ ORDER BY stat_date`, clientID, w.PrevFrom, w.To)
 			day      time.Time
 			g        platformGain
 		)
-		if err := rows.Scan(&platform, &day, &g.Views, &g.Engagement, &g.Comments); err != nil {
+		var haveShares bool
+		if err := rows.Scan(&platform, &day, &g.Views, &g.Engagement, &g.Comments,
+			&haveShares); err != nil {
 			return out, fmt.Errorf("scan dashboard gains: %w", err)
 		}
+		g.SharesUnknown = !haveShares
 		if day.Before(w.From) {
 			cur := out.Prev[platform]
 			cur.add(g)
@@ -448,23 +490,36 @@ func (s *Service) fillDashboard(ctx context.Context, out *ClientOverview, client
 		}
 	}
 
-	out.Views.DeltaPct = deltaPct(gains.CurTotal.Views, gains.PrevTotal.Views)
+	// Итоги за всё время — без приростов: прирост при них описывал бы
+	// другую величину, чем само число.
 	out.Engagement = OverviewEngagement{
-		Total:            all.Likes + all.Comments + all.Shares,
-		TotalDeltaPct:    deltaPct(gains.CurTotal.Engagement, gains.PrevTotal.Engagement),
-		Comments:         all.Comments,
-		CommentsDeltaPct: deltaPct(gains.CurTotal.Comments, gains.PrevTotal.Comments),
+		Total:    all.Likes + all.Comments + all.Shares,
+		Comments: all.Comments,
 	}
 	out.ER = OverviewER{WithoutShares: !all.SharesKnown}
 	if er := erPercent(all.Likes+all.Comments+all.Shares, all.Views); er != nil {
 		out.ER.Percent = *er
 	}
-	// Изменение вовлечённости — в пунктах и по окнам: вовлечённость за
-	// всё время почти не двигается, и «стало 4,4» на дашборде про окно.
-	if cur, prev := erPercent(gains.CurTotal.Engagement, gains.CurTotal.Views),
-		erPercent(gains.PrevTotal.Engagement, gains.PrevTotal.Views); cur != nil && prev != nil {
-		d := math.Round((*cur-*prev)*10) / 10
-		out.ER.DeltaPP = &d
+
+	// Окно — своими именами, и прирост стоит рядом с той величиной,
+	// которую описывает.
+	out.Window = OverviewWindow{
+		Views:              gains.CurTotal.Views,
+		ViewsDeltaPct:      deltaPct(gains.CurTotal.Views, gains.PrevTotal.Views),
+		Engagement:         gains.CurTotal.Engagement,
+		EngagementDeltaPct: deltaPct(gains.CurTotal.Engagement, gains.PrevTotal.Engagement),
+		Comments:           gains.CurTotal.Comments,
+		CommentsDeltaPct:   deltaPct(gains.CurTotal.Comments, gains.PrevTotal.Comments),
+		ERWithoutShares:    gains.CurTotal.SharesUnknown,
+	}
+	curER, prevER := erPercent(gains.CurTotal.Engagement, gains.CurTotal.Views),
+		erPercent(gains.PrevTotal.Engagement, gains.PrevTotal.Views)
+	if curER != nil {
+		out.Window.ERPercent = *curER
+	}
+	if curER != nil && prevER != nil {
+		d := math.Round((*curER-*prevER)*10) / 10
+		out.Window.ERDeltaPP = &d
 	}
 
 	out.Platforms = make([]OverviewPlatform, 0, len(publications.AllPlatforms))
@@ -473,6 +528,7 @@ func (s *Service) fillDashboard(ctx context.Context, out *ClientOverview, client
 		row := OverviewPlatform{
 			Platform:        p,
 			Views:           st.Views,
+			WindowViews:     gains.Cur[p].Views,
 			ERWithoutShares: !st.SharesKnown && (st.Views > 0 || st.Likes > 0 || st.Comments > 0),
 			DeltaPct:        deltaPct(gains.Cur[p].Views, gains.Prev[p].Views),
 			Series:          gains.Series[p],
@@ -487,6 +543,12 @@ func (s *Service) fillDashboard(ctx context.Context, out *ClientOverview, client
 		row.ERPercent = erPercent(engagement, st.Views)
 		if all.Views > 0 {
 			row.SharePct = int(math.Round(float64(st.Views) / float64(all.Views) * 100))
+		}
+		// Оконная доля считается от ОКОННОЙ суммы: полоса состава стоит
+		// рядом с главным числом дашборда и обязана сходиться с ним.
+		if gains.CurTotal.Views > 0 {
+			row.WindowSharePct = int(math.Round(
+				float64(gains.Cur[p].Views) / float64(gains.CurTotal.Views) * 100))
 		}
 		out.Platforms = append(out.Platforms, row)
 	}

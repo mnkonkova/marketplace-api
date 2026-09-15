@@ -56,10 +56,8 @@ type OverviewViews struct {
 	// Total — за всё время по всем проектам заказчика. Не за окно
 	// дашборда: по этому же числу считается стоимость тысячи, и
 	// подменить его оконным значило бы тихо поменять смысл поля.
+	// Оконные просмотры лежат отдельно, в блоке window.
 	Total int64 `json:"total"`
-	// DeltaPct — прирост просмотров за окно против предыдущего окна
-	// такой же длины. Поля нет вовсе, если сравнивать не с чем.
-	DeltaPct *int `json:"delta_pct,omitempty"`
 	// ByPlatform — все пять площадок всегда, включая нулевые: пропавший
 	// столбик читается как сбой, а не как ноль.
 	ByPlatform map[string]int64 `json:"by_platform"`
@@ -136,7 +134,11 @@ type ClientOverview struct {
 	// RangeLabel — подпись окна человеку: «17 авг. — 15 сент. 2026».
 	// Считается на сервере, чтобы в браузере не завелась вторая
 	// реализация русских сокращений месяцев.
-	RangeLabel string             `json:"range_label"`
+	RangeLabel string `json:"range_label"`
+	// Window — числа ЗА ОКНО: главный заголовок дашборда берётся отсюда.
+	// Приросты живут только здесь, рядом с величинами, которые они
+	// описывают.
+	Window     OverviewWindow     `json:"window"`
 	Engagement OverviewEngagement `json:"engagement"`
 	ER         OverviewER         `json:"er"`
 	// Platforms — все пять площадок всегда, по убыванию просмотров.

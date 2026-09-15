@@ -12256,6 +12256,14 @@
                 },
                 "views": {
                     "$ref": "#/definitions/internal_billing.OverviewViews"
+                },
+                "window": {
+                    "description": "Window — числа ЗА ОКНО: главный заголовок дашборда берётся отсюда.\nПриросты живут только здесь, рядом с величинами, которые они\nописывают.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.OverviewWindow"
+                        }
+                    ]
                 }
             }
         },
@@ -12599,11 +12607,8 @@
         "internal_billing.OverviewER": {
             "type": "object",
             "properties": {
-                "delta_pp": {
-                    "description": "DeltaPP — насколько изменилась вовлечённость окна против\nпредыдущего, в ПУНКТАХ, а не процентах: «было 4,7 — стало 4,4»\nпонятнее, чем «упало на 6%».",
-                    "type": "number"
-                },
                 "percent": {
+                    "description": "Percent — за всё время. Изменение вовлечённости — в блоке window,\nвместе с оконной вовлечённостью, которую оно и описывает.",
                     "type": "number"
                 },
                 "without_shares": {
@@ -12618,15 +12623,8 @@
                 "comments": {
                     "type": "integer"
                 },
-                "comments_delta_pct": {
-                    "type": "integer"
-                },
                 "total": {
-                    "description": "Total — за всё время, как и остальные итоги сводки.",
-                    "type": "integer"
-                },
-                "total_delta_pct": {
-                    "description": "TotalDeltaPct — прирост за окно против предыдущего окна. Поля нет\nвовсе, если сравнивать не с чем.",
+                    "description": "Total/Comments — за всё время, как и остальные итоги сводки.\nПриростов здесь нет намеренно: прирост окна рядом с итогом за всё\nвремя описывал бы не то число, возле которого стоит. Оконные\nзначения и их приросты — в блоке window.",
                     "type": "integer"
                 }
             }
@@ -12707,6 +12705,13 @@
                 },
                 "views": {
                     "description": "Views — за всё время; доля считается от них же, поэтому доли пяти\nплощадок дают сто процентов (с точностью до округления).",
+                    "type": "integer"
+                },
+                "window_share_pct": {
+                    "type": "integer"
+                },
+                "window_views": {
+                    "description": "WindowViews/WindowSharePct — то же за окно. Полоса состава на\nдашборде рисуется по ним, чтобы сходиться с главным числом;\nоконные доли дают сто процентов от оконной суммы.",
                     "type": "integer"
                 }
             }
@@ -12795,12 +12800,45 @@
                         "format": "int64"
                     }
                 },
-                "delta_pct": {
-                    "description": "DeltaPct — прирост просмотров за окно против предыдущего окна\nтакой же длины. Поля нет вовсе, если сравнивать не с чем.",
+                "total": {
+                    "description": "Total — за всё время по всем проектам заказчика. Не за окно\nдашборда: по этому же числу считается стоимость тысячи, и\nподменить его оконным значило бы тихо поменять смысл поля.\nОконные просмотры лежат отдельно, в блоке window.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewWindow": {
+            "type": "object",
+            "properties": {
+                "comments": {
                     "type": "integer"
                 },
-                "total": {
-                    "description": "Total — за всё время по всем проектам заказчика. Не за окно\nдашборда: по этому же числу считается стоимость тысячи, и\nподменить его оконным значило бы тихо поменять смысл поля.",
+                "comments_delta_pct": {
+                    "type": "integer"
+                },
+                "engagement": {
+                    "description": "Engagement — лайки + комментарии + репосты, набранные за окно.",
+                    "type": "integer"
+                },
+                "engagement_delta_pct": {
+                    "type": "integer"
+                },
+                "er_delta_pp": {
+                    "description": "ERDeltaPP — изменение в ПУНКТАХ против предыдущего окна: «было\n4,7 — стало 4,4» понятнее, чем «упало на 6%».",
+                    "type": "number"
+                },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость окна: взаимодействия окна ÷ просмотры\nокна. Ноль, пока просмотров в окне нет.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — в окне хотя бы одна площадка не отдала репосты.",
+                    "type": "boolean"
+                },
+                "views": {
+                    "type": "integer"
+                },
+                "views_delta_pct": {
+                    "description": "ViewsDeltaPct — против предыдущего окна такой же длины. Поля нет\nвовсе, если сравнивать не с чем: ноль означал бы «не выросло».",
                     "type": "integer"
                 }
             }
