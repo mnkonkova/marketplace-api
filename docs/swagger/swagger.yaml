@@ -727,9 +727,29 @@ definitions:
         type: integer
       clicks:
         type: integer
+      creator_avatar_url:
+        description: |-
+          CreatorAvatarURL/CreatorUsername — чем подписан человек в составе
+          периода. Имени мало: в списке, за который заказчик платит, стоят
+          живые люди, и открыть страницу исполнителя он должен оттуда же, где
+          увидел строку. Пусто у того, кто аватар не поставил или ещё не
+          выбрал адрес, — тогда ссылка идёт по uuid, а вместо портрета
+          остаётся буква.
+        type: string
       creator_name:
         type: string
+      creator_profile_public:
+        description: |-
+          CreatorProfilePublic — открывается ли страница этого человека
+          снаружи. Публичная карточка специалиста живёт только при
+          is_published AND moderation_status='approved'; на всё остальное она
+          отвечает 404. Без этого признака экран не мог отличить человека, к
+          которому можно перейти, от человека, чья страница ещё на модерации,
+          и ставил ссылку всем одинаково — половина вела в «не найдено».
+        type: boolean
       creator_user_id:
+        type: string
+      creator_username:
         type: string
       deduction:
         description: 'Deduction — вычет за недосданное: недосданные ролики не оплачиваются.'
@@ -757,6 +777,8 @@ definitions:
           по его ставкам; при незаданной креаторской стороне тарифа совпадает
           со счётом. Раскладка своя, потому что объяснять «почему вышло
           столько» креатору надо его числами, а не клиентскими.
+        type: integer
+      payout_subscriber_bonus:
         type: integer
       payout_total:
         type: integer
@@ -787,6 +809,16 @@ definitions:
         - draft
         - approved
         - paid
+      subscriber_bonus:
+        type: integer
+      subscribers:
+        description: |-
+          Subscribers/SubscriberBonus — KPI по подписчикам за период.
+          Подписчиков никто не собирает: число вписывает менеджер руками, как
+          переходы по UTM. Отдельной парой, а не внутри бонуса за просмотры:
+          начисление объясняет, почему вышла такая сумма, и слитые в одно
+          число просмотры с подписчиками этого больше не объясняют.
+        type: integer
       total:
         description: Total — счёт заказчику за этого креатора.
         type: integer
@@ -831,9 +863,29 @@ definitions:
         type: integer
       clicks:
         type: integer
+      creator_avatar_url:
+        description: |-
+          CreatorAvatarURL/CreatorUsername — портрет и адрес страницы
+          исполнителя. Заказчик платит за конкретных людей, и из состава
+          периода он должен уметь перейти к тому, кто ролики снимал: буква в
+          кружке на это не отвечает. Ставок креатора здесь по-прежнему нет —
+          это его сторона сделки, а не клиентская.
+        type: string
       creator_name:
         type: string
+      creator_profile_public:
+        description: |-
+          CreatorProfilePublic — есть ли по этому адресу открытая страница.
+          Публичная карточка специалиста живёт только при is_published AND
+          moderation_status='approved', на всё прочее отдаёт 404. Признак
+          нужен экрану, чтобы не ставить ссылку туда, где её некуда вести:
+          мёртвая ссылка в составе, за который заказчик платит, читается как
+          «человека у вас нет», а человек есть — просто его страница ещё на
+          модерации.
+        type: boolean
       creator_user_id:
+        type: string
+      creator_username:
         type: string
       deduction:
         type: integer
@@ -900,6 +952,19 @@ definitions:
           Period — какой период показан и в каком он состоянии. Заказчику
           это нужно по той же причине, что и менеджеру: пока период идёт,
           числа ещё изменятся, и счёт нельзя считать окончательным.
+      tariff:
+        allOf:
+        - $ref: '#/definitions/internal_billing.OverviewTariff'
+        description: |-
+          Tariff — из чего сложился этот счёт: первые просмотры каждого
+          ролика по стартовой ставке, всё сверх — по пониженной, плюс работа
+          команды. То же разложение, что в сводке, и тем же кодом.
+
+          nil, когда разложение не сошлось бы с итогом рядом: ступенчатая
+          версия условий, порога нет вовсе или в счёте есть слагаемое,
+          которого в лесенке не бывает. Лесенка, не делящаяся в стоящую
+          рядом цену тысячи, хуже отсутствующей — её проверяют
+          калькулятором. См. tariffLadder.result.
       terms:
         $ref: '#/definitions/internal_billing.SideTerms'
       totals:
@@ -977,6 +1042,12 @@ definitions:
           Сводка, часть чисел которой приблизительна, обязана сказать об
           этом, а не выглядеть точной.
         type: boolean
+      tariff:
+        allOf:
+        - $ref: '#/definitions/internal_billing.OverviewTariff'
+        description: |-
+          Tariff — разложение этой цены по ступеням тарифа. nil, когда
+          разложение не сошлось бы с итогом: см. OverviewTariff и tariffLadder.
       top_videos:
         description: TopVideos — три ролика с наибольшим приростом просмотров за окно.
         items:
@@ -1219,6 +1290,23 @@ definitions:
         description: Status — open (идёт, числа ещё изменятся) | locked (подытожен).
         type: string
     type: object
+  internal_billing.CreatorSubscribers:
+    properties:
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      period_start:
+        description: |-
+          PeriodStart — за какой период записано. Периоды катятся от первой
+          публикации проекта, а не по календарю.
+        type: string
+      subscribers:
+        description: Subscribers — сколько подписчиков прибавилось за период.
+        type: integer
+      updated_at:
+        type: string
+    type: object
   internal_billing.NextStepForecast:
     properties:
       carry_in_included:
@@ -1421,6 +1509,11 @@ definitions:
     type: object
   internal_billing.OverviewProject:
     properties:
+      completed_at:
+        description: |-
+          CompletedAt — когда проект закончили. Есть только у завершённого:
+          итог без даты нечем привязать к «что мы сделали в прошлом году».
+        type: string
       cost_per_1000:
         description: |-
           CostPer1000 — стоимость тысячи просмотров по этому проекту. nil,
@@ -1433,7 +1526,7 @@ definitions:
       project_id:
         type: string
       state:
-        description: State — running | not_started.
+        description: State — running | not_started | completed.
         type: string
       title:
         type: string
@@ -1441,6 +1534,44 @@ definitions:
         description: 'Total — счёт по проекту: подытоженные периоды плюс текущий.'
         type: integer
       views:
+        type: integer
+    type: object
+  internal_billing.OverviewTariff:
+    properties:
+      base_amount:
+        type: integer
+      fixed:
+        description: |-
+          Fixed — работа команды: оклады за вычетом недосдачи. Третья
+          строка лесенки, и без неё сумма не сходится с итогом.
+        type: integer
+      over_amount:
+        type: integer
+      rate_per_1000:
+        description: |-
+          RatePer1000 / RatePer1000Over — ставки за тысячу до порога и
+          сверх него, копейки.
+        type: integer
+      rate_per_1000_over:
+        type: integer
+      threshold_views:
+        description: |-
+          ThresholdViews — сколько просмотров КАЖДОГО ролика идёт по
+          стартовой ставке.
+        type: integer
+      total:
+        type: integer
+      views:
+        description: |-
+          Views / Total — что разложено: ровно те просмотры и ровно та
+          сумма, из которых посчитана цена тысячи рядом.
+        type: integer
+      views_base:
+        description: |-
+          ViewsBase / ViewsOver — сколько просмотров легло на каждую
+          ступень, и BaseAmount / OverAmount — во сколько это обошлось.
+        type: integer
+      views_over:
         type: integer
     type: object
   internal_billing.OverviewTopVideo:
@@ -1585,6 +1716,15 @@ definitions:
       payouts:
         type: integer
       salaries:
+        type: integer
+      subscriber_bonus:
+        description: |-
+          SubscriberBonus — KPI по подписчикам за период. Отдельной строкой, а
+          не внутри бонуса за просмотры: это разные величины, и «почему вышло
+          столько» по их сумме уже не разобрать.
+        type: integer
+      subscribers:
+        description: Subscribers — сколько подписчиков вписал менеджер за период.
         type: integer
       total:
         description: |-
@@ -1768,6 +1908,13 @@ definitions:
       status:
         type: string
     type: object
+  internal_billing.SideStep:
+    properties:
+      fee:
+        type: integer
+      from_views:
+        type: integer
+    type: object
   internal_billing.SideTerms:
     properties:
       bonus_views_threshold:
@@ -1788,6 +1935,25 @@ definitions:
         type: integer
       salary_per_month:
         type: integer
+      steps:
+        description: |-
+          Steps — лесенка ЭТОЙ стороны: пороги объёма периода и цена на
+          каждом, уже сведённая к её числам.
+
+          Непустая лесенка ОТМЕНЯЕТ salary_per_month и ставку за тысячу выше:
+          на ступенчатой версии условий они в расчёте не участвуют вовсе. Без
+          этого поля кабинет креатора показывал бы ему оклад, которого в его
+          тарифе нет, — а на самом деле это цена клиента, и назвать её его
+          заработком нельзя.
+        items:
+          $ref: '#/definitions/internal_billing.SideStep'
+        type: array
+      subscriber_rate:
+        description: |-
+          SubscriberRate — сколько стоит подписчик на этой стороне. Пусто —
+          KPI по подписчикам не считается.
+        type: integer
+        x-nullable: true
       terms_version_id:
         description: TermsVersionID — с какой версии прайса сняты числа.
         type: string
@@ -1859,6 +2025,12 @@ definitions:
       creator_step_fee_over:
         type: integer
         x-nullable: true
+      creator_subscriber_rate:
+        description: |-
+          CreatorSubscriberRate — сколько из этого получает креатор.
+          nil = столько же, сколько платит заказчик.
+        type: integer
+        x-nullable: true
       first_period_fee:
         description: |-
           FirstPeriodFee — фикс за первый период проекта: там оплачивается
@@ -1906,6 +2078,25 @@ definitions:
         description: |-
           StepViews — размер ступени в просмотрах. Раньше сто тысяч были
           константой в коде.
+        type: integer
+        x-nullable: true
+      steps:
+        description: |-
+          Steps — лесенка произвольной длины: пороги объёма и цена периода на
+          каждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они
+          остались ради версий, на которых стоят действующие проекты, и
+          смешивать два правила в одном расчёте нельзя.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
+      subscriber_rate:
+        description: |-
+          SubscriberRate — сколько платит заказчик за подписчика, набранного
+          за период, копейки. nil = KPI по подписчикам не считается.
+
+          Подписчиков никто не собирает: сборщика по ним нет, и выдумывать
+          его под ставку нельзя. Ставка объявляется здесь, а само число
+          вводит менеджер руками — как переходы по UTM.
         type: integer
         x-nullable: true
       terms_version_id:
@@ -2041,6 +2232,12 @@ definitions:
       creator_step_fee_over:
         type: integer
         x-nullable: true
+      creator_subscriber_rate:
+        description: |-
+          CreatorSubscriberRate — сколько из этого получает креатор.
+          nil = столько же, сколько платит заказчик.
+        type: integer
+        x-nullable: true
       first_period_fee:
         description: |-
           FirstPeriodFee — фикс за первый период проекта: там оплачивается
@@ -2104,6 +2301,25 @@ definitions:
           константой в коде.
         type: integer
         x-nullable: true
+      steps:
+        description: |-
+          Steps — лесенка произвольной длины: пороги объёма и цена периода на
+          каждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они
+          остались ради версий, на которых стоят действующие проекты, и
+          смешивать два правила в одном расчёте нельзя.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
+      subscriber_rate:
+        description: |-
+          SubscriberRate — сколько платит заказчик за подписчика, набранного
+          за период, копейки. nil = KPI по подписчикам не считается.
+
+          Подписчиков никто не собирает: сборщика по ним нет, и выдумывать
+          его под ставку нельзя. Ставка объявляется здесь, а само число
+          вводит менеджер руками — как переходы по UTM.
+        type: integer
+        x-nullable: true
       terms_version_id:
         description: TermsVersionID — с какой версии сняты числа. Только для истории.
         type: string
@@ -2122,6 +2338,23 @@ definitions:
           неё сумма оклада ни о чём не говорит.
         type: integer
       videos_next_months:
+        type: integer
+    type: object
+  internal_billing.TermsStep:
+    properties:
+      client_fee:
+        description: ClientFee — сколько стоит период заказчику на этой ступени, копейки.
+        type: integer
+      creator_fee:
+        description: |-
+          CreatorFee — оклад креатору на этой ступени, копейки. nil = как у
+          заказчика: то же правило, что у остальных креаторских полей.
+        type: integer
+        x-nullable: true
+      from_views:
+        description: |-
+          FromViews — с какого объёма просмотров периода действует ступень.
+          Нижняя обычно с нуля: это и есть голый оклад без KPI.
         type: integer
     type: object
   internal_billing.TermsVersion:
@@ -2193,6 +2426,12 @@ definitions:
       creator_step_fee_over:
         type: integer
         x-nullable: true
+      creator_subscriber_rate:
+        description: |-
+          CreatorSubscriberRate — сколько из этого получает креатор.
+          nil = столько же, сколько платит заказчик.
+        type: integer
+        x-nullable: true
       first_period_fee:
         description: |-
           FirstPeriodFee — фикс за первый период проекта: там оплачивается
@@ -2254,6 +2493,25 @@ definitions:
         description: |-
           StepViews — размер ступени в просмотрах. Раньше сто тысяч были
           константой в коде.
+        type: integer
+        x-nullable: true
+      steps:
+        description: |-
+          Steps — лесенка произвольной длины: пороги объёма и цена периода на
+          каждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они
+          остались ради версий, на которых стоят действующие проекты, и
+          смешивать два правила в одном расчёте нельзя.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
+      subscriber_rate:
+        description: |-
+          SubscriberRate — сколько платит заказчик за подписчика, набранного
+          за период, копейки. nil = KPI по подписчикам не считается.
+
+          Подписчиков никто не собирает: сборщика по ним нет, и выдумывать
+          его под ставку нельзя. Ставка объявляется здесь, а само число
+          вводит менеджер руками — как переходы по UTM.
         type: integer
         x-nullable: true
       terms_version_id:
@@ -2387,6 +2645,12 @@ definitions:
       creator_step_fee_over:
         type: integer
         x-nullable: true
+      creator_subscriber_rate:
+        description: |-
+          CreatorSubscriberRate — сколько из этого получает креатор.
+          null = «как у клиента».
+        type: integer
+        x-nullable: true
       first_period_fee:
         type: integer
         x-nullable: true
@@ -2423,11 +2687,48 @@ definitions:
           размера».
         type: integer
         x-nullable: true
+      steps:
+        description: |-
+          Steps — лесенка произвольной длины: порог объёма и цена периода на
+          нём. Приходит целиком и целиком же заменяет прежнюю: ступень
+          удаляют не реже, чем добавляют, и «обнови присланное» оставило бы
+          удалённую ступень жить в расчёте.
+
+          Непустая лесенка отменяет step_views и цену ступени выше: это
+          другое правило счёта, и смешивать их в одном периоде нельзя.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
+      subscriber_rate:
+        description: |-
+          SubscriberRate — сколько платит заказчик за подписчика за период.
+          null = KPI по подписчикам не считаем вовсе (в отличие от нуля,
+          который значил бы объявленную нулевую ставку). Само число
+          подписчиков вписывает менеджер: сборщика по ним нет.
+        type: integer
+        x-nullable: true
       videos_first_month:
         description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
         type: integer
       videos_next_months:
         type: integer
+    type: object
+  internal_billing.subscribersReq:
+    properties:
+      period:
+        description: |-
+          Period — номер периода проекта. 0 = текущий: менеджер вписывает
+          число по ходу периода, а не разыскивает его номер.
+        type: integer
+      subscribers:
+        type: integer
+    type: object
+  internal_billing.subscribersResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_billing.CreatorSubscribers'
+        type: array
     type: object
   internal_billing.termsReq:
     properties:
@@ -2473,6 +2774,12 @@ definitions:
       creator_step_fee_over:
         type: integer
         x-nullable: true
+      creator_subscriber_rate:
+        description: |-
+          CreatorSubscriberRate — сколько из этого получает креатор.
+          null = «как у клиента».
+        type: integer
+        x-nullable: true
       first_period_fee:
         type: integer
         x-nullable: true
@@ -2507,6 +2814,26 @@ definitions:
           ролик выше. null во всех этих полях = версия по старой модели;
           поэтому именно null, а не 0: ноль значил бы «ступень нулевого
           размера».
+        type: integer
+        x-nullable: true
+      steps:
+        description: |-
+          Steps — лесенка произвольной длины: порог объёма и цена периода на
+          нём. Приходит целиком и целиком же заменяет прежнюю: ступень
+          удаляют не реже, чем добавляют, и «обнови присланное» оставило бы
+          удалённую ступень жить в расчёте.
+
+          Непустая лесенка отменяет step_views и цену ступени выше: это
+          другое правило счёта, и смешивать их в одном периоде нельзя.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
+      subscriber_rate:
+        description: |-
+          SubscriberRate — сколько платит заказчик за подписчика за период.
+          null = KPI по подписчикам не считаем вовсе (в отличие от нуля,
+          который значил бы объявленную нулевую ставку). Само число
+          подписчиков вписывает менеджер: сборщика по ним нет.
         type: integer
         x-nullable: true
       videos_first_month:
@@ -5807,6 +6134,15 @@ definitions:
         type: array
       month:
         type: string
+      months:
+        description: |-
+          Months — месяцы (ГГГГ-ММ), в которых у проекта вообще есть
+          выкладки. Сетка показывает один месяц, и без этого списка пустой
+          месяц неотличим от «данные не доехали»: заказчик видел сентябрь с
+          одной точкой и не знал, что десять остальных выкладок в августе.
+        items:
+          type: string
+        type: array
     type: object
   internal_publications.cancelBatchReq:
     properties:
@@ -8666,6 +9002,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_auth.TokenPair'
+        "400":
+          description: invalid_input — в теле нет login или password
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
         "401":
           description: Unauthorized
           schema:
@@ -10105,6 +10445,55 @@ paths:
       summary: Убрать креатора из проекта (менеджер)
       tags:
       - manager-publications
+  /manager/projects/{id}/creators/{creator_id}/subscribers:
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Число вводится руками: сборщика подписчиков нет, а KPI по
+        ним в тарифе объявлен. Так же заведены переходы по UTM.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: creator id
+        in: path
+        name: creator_id
+        required: true
+        type: string
+      - description: подписчики
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_billing.subscribersReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.CreatorSubscribers'
+        "400":
+          description: bad_json; bad_id; invalid_input — отрицательное число
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден, ведёт другой менеджер или периодов
+            ещё нет
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вписать подписчиков за период (менеджер)
+      tags:
+      - manager-billing
   /manager/projects/{id}/creators/{creator_id}/utm:
     put:
       consumes:
@@ -10929,6 +11318,47 @@ paths:
       summary: Стартовать pending-шаг (менеджер)
       tags:
       - manager-projects
+  /manager/projects/{id}/subscribers:
+    get:
+      description: |-
+        Сколько подписчиков записано креаторам проекта за период.
+        Автоматического источника у этого числа нет: сборщика по
+        подписчикам в продукте не существует, и ставка в тарифе
+        объявляется под число, которое вписывает менеджер.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: номер периода проекта, по умолчанию текущий
+        in: query
+        name: period
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.subscribersResp'
+        "400":
+          description: bad_id; bad_period
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Подписчики за период (менеджер)
+      tags:
+      - manager-billing
   /manager/projects/inbox:
     get:
       produces:
@@ -13260,6 +13690,9 @@ paths:
         Что уже вышло и что запланировано, с отметкой креатора.
         Просрочек в календаре нет: выкладка с прошедшей датой без
         ссылок остаётся «запланированной».
+        В ответе рядом с днями идёт список months — месяцы, в которых у
+        проекта вообще есть выкладки. Календарь показывает один месяц, и
+        без этого списка пустой месяц неотличим от потерянных данных.
       parameters:
       - description: project id
         in: path

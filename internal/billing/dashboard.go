@@ -296,9 +296,19 @@ type platformStat struct {
 // сумм: у ссылок разные дни сбора, и вычитание сумм давало бы провалы
 // там, где часть ссылок в этот день просто не обходили.
 //
-// Окно LAG считается по всей истории ссылки, а отбор по датам — уже
-// после: иначе первый день окна остался бы без предшественника и весь
-// накопленный объём засчитался бы как прирост этого дня.
+// Предшественник у первого дня окна обязан быть, иначе весь накопленный
+// объём засчитается приростом этого дня — заказчик увидит всплеск на
+// ровном месте. Раньше ради этого окно LAG считалось по ВСЕЙ истории
+// ссылки, а отбор по датам стоял снаружи. Планировщик не может
+// протолкнуть предикат внутрь оконной функции, поэтому на двухстах
+// проектах через окно прогонялось триста тысяч строк, чтобы отдать
+// полторы сотни: 246 мс на один виджет, и растёт это вместе со ВСЕЙ
+// накопленной историей, а не с запрошенным окном.
+//
+// Теперь предшественник берётся адресно: для каждой ссылки — её
+// последний снимок строго перед окном, сколько бы дней назад он ни был.
+// Собирают не каждый день, поэтому «минус сутки» здесь мало: пропущенный
+// день вернул бы ту же неправду, только реже и незаметнее.
 func (r *Repo) dashboardGains(ctx context.Context, clientID uuid.UUID, w dashWindow) (dashGains, error) {
 	out := dashGains{
 		Cur:    map[string]platformGain{},
@@ -312,6 +322,14 @@ WITH mine AS (
     JOIN project_publications pub ON pub.project_id = p.id AND pub.status <> 'cancelled'
     JOIN publication_links l ON l.publication_id = pub.id
     WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'
+), before AS (
+    -- Последний снимок каждой ссылки ДО окна. Ровно одна строка на
+    -- ссылку: она и служит предшественником первого дня.
+    SELECT d.link_id, MAX(d.stat_date) AS prev_date
+    FROM video_stat_daily d
+    JOIN mine m ON m.id = d.link_id
+    WHERE d.stat_date < $2::date
+    GROUP BY d.link_id
 ), daily AS (
     SELECT m.platform, d.stat_date,
            d.views    - COALESCE(LAG(d.views)    OVER w, 0) AS dviews,
@@ -321,6 +339,9 @@ WITH mine AS (
            d.shares IS NOT NULL AS has_shares
     FROM video_stat_daily d
     JOIN mine m ON m.id = d.link_id
+    LEFT JOIN before b ON b.link_id = d.link_id
+    WHERE d.stat_date <= $3::date
+      AND d.stat_date >= COALESCE(b.prev_date, $2::date)
     WINDOW w AS (PARTITION BY d.link_id ORDER BY d.stat_date)
 )
 SELECT platform, stat_date,
@@ -434,13 +455,26 @@ LIMIT $4`, clientID, w.From, w.To, limit)
 // lastCollectedAt — когда последний раз собирали статистику по проектам
 // заказчика. На дашборде это подпись «данные на такое-то время», и она
 // обязана быть правдой: nil, пока не собирали ни разу.
+//
+// Сбор оставляет ДВЕ отметки, и раньше здесь читалась только одна —
+// publication_links.last_collected_at, журнал самого сборщика. Числа
+// же, которые видит заказчик, считаются по video_stat_daily, и туда
+// снимки попадают не только из сборщика (перелив истории, ручная
+// правка, наливка стенда). Получалось «первый сбор ещё не прошёл» под
+// тремя миллионами просмотров: цифры собраны, а отметка о сборе
+// потеряна по дороге.
+//
+// Поэтому ответ — самый свежий сбор среди обеих отметок. GREATEST здесь
+// именно за этим: он игнорирует NULL и отдаёт NULL, только если пусты
+// обе, — то есть «не собирали ни разу» осталось отличимым от «собирали».
 func (r *Repo) lastCollectedAt(ctx context.Context, clientID uuid.UUID) (*time.Time, error) {
 	var at *time.Time
 	if err := r.db.QueryRow(ctx, `
-SELECT MAX(l.last_collected_at)
+SELECT GREATEST(MAX(l.last_collected_at), MAX(d.collected_at))
 FROM publication_links l
 JOIN project_publications pub ON pub.id = l.publication_id AND pub.status <> 'cancelled'
 JOIN projects p ON p.id = pub.project_id
+LEFT JOIN video_stat_daily d ON d.link_id = l.id
 WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'`,
 		clientID).Scan(&at); err != nil {
 		return nil, fmt.Errorf("last collected at: %w", err)

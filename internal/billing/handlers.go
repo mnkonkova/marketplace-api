@@ -3,6 +3,7 @@ package billing
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -74,6 +75,24 @@ type termsReq struct {
 	CreatorBaseFee        *int64 `json:"creator_base_fee" extensions:"x-nullable"`
 	CreatorStepFee        *int64 `json:"creator_step_fee" extensions:"x-nullable"`
 	CreatorStepFeeOver    *int64 `json:"creator_step_fee_over" extensions:"x-nullable"`
+
+	// Steps — лесенка произвольной длины: порог объёма и цена периода на
+	// нём. Приходит целиком и целиком же заменяет прежнюю: ступень
+	// удаляют не реже, чем добавляют, и «обнови присланное» оставило бы
+	// удалённую ступень жить в расчёте.
+	//
+	// Непустая лесенка отменяет step_views и цену ступени выше: это
+	// другое правило счёта, и смешивать их в одном периоде нельзя.
+	Steps []TermsStep `json:"steps"`
+
+	// SubscriberRate — сколько платит заказчик за подписчика за период.
+	// null = KPI по подписчикам не считаем вовсе (в отличие от нуля,
+	// который значил бы объявленную нулевую ставку). Само число
+	// подписчиков вписывает менеджер: сборщика по ним нет.
+	SubscriberRate *int64 `json:"subscriber_rate" extensions:"x-nullable"`
+	// CreatorSubscriberRate — сколько из этого получает креатор.
+	// null = «как у клиента».
+	CreatorSubscriberRate *int64 `json:"creator_subscriber_rate" extensions:"x-nullable"`
 }
 
 // terms — запрос в условия. Одним местом на обе ручки (менеджер правит
@@ -108,6 +127,10 @@ func (req termsReq) terms() Terms {
 		CreatorBaseFee:        req.CreatorBaseFee,
 		CreatorStepFee:        req.CreatorStepFee,
 		CreatorStepFeeOver:    req.CreatorStepFeeOver,
+
+		Steps:                 req.Steps,
+		SubscriberRate:        req.SubscriberRate,
+		CreatorSubscriberRate: req.CreatorSubscriberRate,
 	}
 }
 
@@ -118,6 +141,18 @@ type paymentReq struct {
 
 type utmReq struct {
 	URL string `json:"url"`
+}
+
+// subscribersReq — сколько подписчиков прибавилось креатору за период.
+type subscribersReq struct {
+	Subscribers int64 `json:"subscribers"`
+	// Period — номер периода проекта. 0 = текущий: менеджер вписывает
+	// число по ходу периода, а не разыскивает его номер.
+	Period int `json:"period"`
+}
+
+type subscribersResp struct {
+	Items []CreatorSubscribers `json:"items"`
 }
 
 type accrualsResp struct {
@@ -150,6 +185,14 @@ func writeErr(w http.ResponseWriter, err error) {
 		httpx.WriteErrMsg(w, http.StatusConflict, "wrong_accrual_status",
 			"Сначала утвердите период, потом отмечайте выплату.")
 	default:
+		// Наружу — «internal» без подробностей, в лог — причина.
+		//
+		// Раньше она терялась здесь целиком: в логе оставалась строка
+		// доступа со статусом 500 и ни одной записи уровня ERROR. Причину
+		// приходилось добывать прямым запросом к базе, угадывая, что
+		// именно сломалось. Сообщение об ошибке — единственное, что
+		// отличает «иногда что-то падает» от починки.
+		slog.Error("billing: внутренняя ошибка", "err", err)
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	}
 }
@@ -502,6 +545,96 @@ func (h *Handler) ManagerSaveUTM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, l)
+}
+
+// ManagerSubscribers godoc
+// @Summary  Подписчики за период (менеджер)
+// @Description Сколько подписчиков записано креаторам проекта за период.
+// @Description Автоматического источника у этого числа нет: сборщика по
+// @Description подписчикам в продукте не существует, и ставка в тарифе
+// @Description объявляется под число, которое вписывает менеджер.
+// @Tags     manager-billing
+// @Produce  json
+// @Security BearerAuth
+// @Param    id     path  string true  "project id"
+// @Param    period query int    false "номер периода проекта, по умолчанию текущий"
+// @Success  200 {object} subscribersResp
+// @Failure  400 {object} errorResponse "bad_id; bad_period"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
+// @Router   /manager/projects/{id}/subscribers [get]
+func (h *Handler) ManagerSubscribers(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	seq, ok := periodParam(r)
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
+			"Номер периода должен быть целым числом.")
+		return
+	}
+	p, err := h.svc.Period(r.Context(), projectID, seq, time.Now())
+	if errors.Is(err, ErrNoPeriods) {
+		// Периодов нет — и подписчиков не к чему привязать. Пустой
+		// список честнее 404: проект есть, просто работа не началась.
+		httpx.WriteJSON(w, http.StatusOK, subscribersResp{Items: []CreatorSubscribers{}})
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	items, err := h.svc.Subscribers(r.Context(), projectID, p.StartsOn)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, subscribersResp{Items: items})
+}
+
+// ManagerSaveSubscribers godoc
+// @Summary  Вписать подписчиков за период (менеджер)
+// @Description Число вводится руками: сборщика подписчиков нет, а KPI по
+// @Description ним в тарифе объявлен. Так же заведены переходы по UTM.
+// @Tags     manager-billing
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id         path string true "project id"
+// @Param    creator_id path string true "creator id"
+// @Param    body       body subscribersReq true "подписчики"
+// @Success  200 {object} CreatorSubscribers
+// @Failure  400 {object} errorResponse "bad_json; bad_id; invalid_input — отрицательное число"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет"
+// @Router   /manager/projects/{id}/creators/{creator_id}/subscribers [put]
+func (h *Handler) ManagerSaveSubscribers(w http.ResponseWriter, r *http.Request) {
+	projectID, uid, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	creatorID, err := uuid.Parse(chi.URLParam(r, "creator_id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id креатора.")
+		return
+	}
+	var req subscribersReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	p, err := h.svc.Period(r.Context(), projectID, req.Period, time.Now())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	c, err := h.svc.SaveSubscribers(r.Context(), projectID, creatorID, p.StartsOn, req.Subscribers, uid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, c)
 }
 
 // ---- заказчик ----

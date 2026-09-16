@@ -1056,6 +1056,11 @@ type clientFeedResp struct {
 type calendarResp struct {
 	Month string        `json:"month"`
 	Days  []CalendarDay `json:"days"`
+	// Months — месяцы (ГГГГ-ММ), в которых у проекта вообще есть
+	// выкладки. Сетка показывает один месяц, и без этого списка пустой
+	// месяц неотличим от «данные не доехали»: заказчик видел сентябрь с
+	// одной точкой и не знал, что десять остальных выкладок в августе.
+	Months []string `json:"months"`
 }
 
 // assertClient — проект принадлежит этому заказчику. Отдельная проверка
@@ -1136,6 +1141,9 @@ func (h *Handler) ClientVideos(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param    id path string true "project id"
 // @Param    month query string false "месяц в виде ГГГГ-ММ, по умолчанию текущий"
+// @Description В ответе рядом с днями идёт список months — месяцы, в которых у
+// @Description проекта вообще есть выкладки. Календарь показывает один месяц, и
+// @Description без этого списка пустой месяц неотличим от потерянных данных.
 // @Success  200 {object} calendarResp
 // @Failure      400  {object}  errorResponse  "bad_id; bad_month — месяц не в формате ГГГГ-ММ"
 // @Failure      401  {object}  errorResponse  "no_user"
@@ -1161,8 +1169,13 @@ func (h *Handler) ClientCalendar(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	months, err := h.svc.CalendarMonths(r.Context(), projectID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	httpx.WriteJSON(w, http.StatusOK, calendarResp{
-		Month: month.Format("2006-01"), Days: days,
+		Month: month.Format("2006-01"), Days: days, Months: months,
 	})
 }
 

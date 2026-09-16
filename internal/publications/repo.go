@@ -195,6 +195,13 @@ RETURNING id, project_id, creator_user_id, due_date, draft_due_date, status,
 			rows.Close()
 			return BatchResult{}, fmt.Errorf("scan created publication: %w", err)
 		}
+		// Пустой список ссылок — это [], а не null: поле объявлено
+		// массивом, и nil-срез уходит в JSON как null, на котором
+		// потребитель, читающий links.length, падает. Ставим руками, а не
+		// зовём hydrate: ON CONFLICT DO NOTHING возвращает только что
+		// вставленные строки, а у них ни ссылок, ни просьб о переносе, ни
+		// статистики нет по определению — три запроса вернули бы пусто.
+		p.Links = []SubmittedLink{}
 		items = append(items, p)
 	}
 	rows.Close()
@@ -288,6 +295,12 @@ RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, stat
 	if err := tx.Commit(ctx); err != nil {
 		return Publication{}, fmt.Errorf("commit: %w", err)
 	}
+	// Ссылок у только что заведённой выкладки нет по определению, но в
+	// JSON должен уйти [], а не null (см. hydrate). Перечитывать строку
+	// через Get после COMMIT нельзя: выкладка уже создана, а ошибка
+	// чтения превратилась бы в 500 — креатор нажал бы «Добавить» второй
+	// раз и упёрся в 409 на дату, которой на экране не видел.
+	p.Links = []SubmittedLink{}
 	return p, nil
 }
 

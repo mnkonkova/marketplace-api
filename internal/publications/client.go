@@ -178,13 +178,32 @@ func (r *Repo) Calendar(ctx context.Context, projectID uuid.UUID, month time.Tim
 	from := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.UTC)
 	to := from.AddDate(0, 1, -1)
 
+	// День берём по ФАКТУ выхода, а плановую дату — только пока ролик не
+	// вышел.
+	//
+	// Раньше календарь всегда группировал по due_date, и вышедший ролик
+	// стоял в том дне, на который его ПЛАНИРОВАЛИ. На стенде это видно
+	// прямо: ролик вышел 15-го, календарь ставил его на 16-е — и спорил
+	// с лентой роликов на той же странице, где дата настоящая.
+	//
+	// Плановая дата и фактическая расходятся постоянно: выкладывают
+	// раньше или позже, ссылки сдают через день. Весь остальной продукт
+	// считает по факту выхода — от него отсчитываются периоды, ступени и
+	// деньги, — и календарь заказчика обязан говорить о том же дне, что
+	// и всё вокруг.
+	//
+	// MIN по площадкам: ролик «вышел» тогда, когда появился на первой из
+	// них.
 	const q = `
-SELECT p.due_date, p.id, p.creator_user_id, p.status::text
+SELECT COALESCE(MIN(l.published_at)::date, p.due_date) AS day,
+       p.id, p.creator_user_id, p.status::text
 FROM project_publications p
+LEFT JOIN publication_links l ON l.publication_id = p.id
 WHERE p.project_id = $1
   AND p.status <> 'cancelled'
-  AND p.due_date BETWEEN $2 AND $3
-ORDER BY p.due_date, p.created_at`
+GROUP BY p.id, p.due_date, p.creator_user_id, p.status, p.created_at
+HAVING COALESCE(MIN(l.published_at)::date, p.due_date) BETWEEN $2 AND $3
+ORDER BY day, p.created_at`
 	rows, err := r.db.Query(ctx, q, projectID, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("calendar: %w", err)
@@ -241,6 +260,57 @@ ORDER BY p.due_date, p.created_at`
 		}
 	}
 	return out, nil
+}
+
+// CalendarMonths — месяцы проекта, в которых что-то стоит или вышло.
+//
+// Зачем это вообще нужно. Календарь показывает ОДИН месяц, и открывался
+// он всегда на текущем. Выкладки при этом стоят там, где идёт период, —
+// а он катится от первой публикации и текущему месяцу не равен. У
+// проекта с одиннадцатью выкладками десять приходились на август, и
+// заказчик, открыв сентябрь, видел одну точку и пустую сетку: календарь
+// «не показывает выкладки». Ни в сетке, ни рядом ничто не намекало, что
+// смотреть надо на месяц назад, — а листать наугад по пустым месяцам
+// никто не станет.
+//
+// Отдаём список месяцев, а не «правильный месяц»: какой из них открыть и
+// что сказать про пустой — решает экран, и решает по-разному в разных
+// местах. Дело сервера — сказать, где вообще что-то есть.
+//
+// Отменённые не в счёт: их не видно и в самой сетке.
+func (r *Repo) CalendarMonths(ctx context.Context, projectID uuid.UUID) ([]string, error) {
+	// День считается ТЕМ ЖЕ выражением, что и в Calendar: по факту выхода,
+	// а по плановой дате — только пока ролик не вышел.
+	//
+	// Разойтись этим двум местам нельзя. Ролик, запланированный на 1
+	// октября и вышедший 30 сентября, положил бы в список октябрь, а
+	// точку поставил бы в сентябрь: полоса месяцев звала бы в октябрь, а
+	// там пусто — то есть ровно тот симптом, ради которого список и
+	// заведён, только заходящий с другой стороны.
+	rows, err := r.db.Query(ctx, `
+SELECT DISTINCT to_char(day, 'YYYY-MM')
+FROM (
+    SELECT COALESCE(MIN(l.published_at)::date, p.due_date) AS day
+    FROM project_publications p
+    LEFT JOIN publication_links l ON l.publication_id = p.id
+    WHERE p.project_id = $1 AND p.status <> 'cancelled'
+    GROUP BY p.id, p.due_date
+) d
+WHERE day IS NOT NULL
+ORDER BY 1`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("calendar months: %w", err)
+	}
+	defer rows.Close()
+	out := make([]string, 0, 12)
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, fmt.Errorf("scan calendar month: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // Prefs — настройки уведомлений. Если строки нет, возвращаются значения
@@ -338,6 +408,11 @@ func (s *Service) ClientFeed(ctx context.Context, projectID uuid.UUID, limit int
 
 func (s *Service) Calendar(ctx context.Context, projectID uuid.UUID, month time.Time) ([]CalendarDay, error) {
 	return s.repo.Calendar(ctx, projectID, month)
+}
+
+// CalendarMonths — в каких месяцах у проекта вообще есть выкладки.
+func (s *Service) CalendarMonths(ctx context.Context, projectID uuid.UUID) ([]string, error) {
+	return s.repo.CalendarMonths(ctx, projectID)
 }
 
 func (s *Service) Prefs(ctx context.Context, projectID, userID uuid.UUID) (NotificationPrefs, error) {

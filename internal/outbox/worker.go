@@ -38,6 +38,7 @@ type Worker struct {
 	maxAttempts     int
 	backoffCap      time.Duration
 	retention       time.Duration
+	deadRetention   time.Duration
 	cleanupInterval time.Duration
 	gaugeInterval   time.Duration
 	logger          *slog.Logger
@@ -57,9 +58,24 @@ type Config struct {
 	BackoffCap time.Duration
 
 	// Retention — сколько хранить успешно обработанные записи. Cleanup-горутина
-	// раз в CleanupInterval удаляет всё processed_at < now()-Retention (живых;
-	// dead-записи не трогаем). 0 → дефолт 7 дней.
+	// раз в CleanupInterval удаляет всё processed_at < now()-Retention.
+	// 0 → дефолт 7 дней.
 	Retention time.Duration
+
+	// DeadRetention — сколько хранить записи, уехавшие в DLQ.
+	//
+	// Срок отдельный и намного длиннее: dead-запись — это описание
+	// происшествия, и выбрасывать её через неделю значит терять его
+	// раньше, чем кто-нибудь заметит. Но верхняя граница нужна. Без неё
+	// таблица растёт бесконечно: на стенде с неотвечающим вебхуком за три
+	// с половиной месяца накопилось 1310 мёртвых записей при 219 живых —
+	// 84% таблицы. Раз в полминуты воркер считает по ней COUNT(*) для
+	// метрик, и на таком соотношении счётчик идёт сплошным перебором.
+	//
+	// Полгода: к этому сроку разбирать инцидент уже некому и незачем, а
+	// доставить событие давно поздно.
+	// 0 → дефолт 180 дней.
+	DeadRetention time.Duration
 
 	// CleanupInterval — период работы cleanup-горутины. 0 → дефолт 1 час.
 	CleanupInterval time.Duration
@@ -88,6 +104,9 @@ func NewWorker(db *pgxpool.Pool, logger *slog.Logger, handlers map[string]Handle
 	if c.Retention <= 0 {
 		c.Retention = 7 * 24 * time.Hour
 	}
+	if c.DeadRetention <= 0 {
+		c.DeadRetention = 180 * 24 * time.Hour
+	}
 	if c.CleanupInterval <= 0 {
 		c.CleanupInterval = time.Hour
 	}
@@ -103,6 +122,7 @@ func NewWorker(db *pgxpool.Pool, logger *slog.Logger, handlers map[string]Handle
 		maxAttempts:     c.MaxAttempts,
 		backoffCap:      c.BackoffCap,
 		retention:       c.Retention,
+		deadRetention:   c.DeadRetention,
 		cleanupInterval: c.CleanupInterval,
 		gaugeInterval:   c.GaugeInterval,
 		logger:          logger,
@@ -113,7 +133,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	w.logger.Info("outbox worker started",
 		"batch", w.batchSize, "poll", w.pollInterval,
 		"max_attempts", w.maxAttempts, "backoff_cap", w.backoffCap,
-		"retention", w.retention)
+		"retention", w.retention, "dead_retention", w.deadRetention)
 
 	// Sidecar-горутины: cleanup старых processed-записей и периодический
 	// refresh gauge'ей. Контекст один и тот же — оба остановятся вместе
@@ -161,13 +181,15 @@ type entry struct {
 const leaseDuration = 10 * time.Minute
 
 // tick: P3 — lease-and-release.
-//   Phase 1 (короткая tx): SELECT FOR UPDATE SKIP LOCKED + UPDATE
-//     next_attempt_at = now()+lease для этих id. COMMIT. Локов больше нет.
-//   Phase 2 (без tx): для каждого entry запускаем handler. HTTP-вызовы
-//     в n8n идут НЕ внутри PG-транзакции — autovacuum работает, bloat
-//     не растёт, idle-in-tx не маячит.
-//   Phase 3 (короткая tx): по результатам ставим processed_at /
-//     next_attempt_at(backoff) / dead_at.
+//
+//	Phase 1 (короткая tx): SELECT FOR UPDATE SKIP LOCKED + UPDATE
+//	  next_attempt_at = now()+lease для этих id. COMMIT. Локов больше нет.
+//	Phase 2 (без tx): для каждого entry запускаем handler. HTTP-вызовы
+//	  в n8n идут НЕ внутри PG-транзакции — autovacuum работает, bloat
+//	  не растёт, idle-in-tx не маячит.
+//	Phase 3 (короткая tx): по результатам ставим processed_at /
+//	  next_attempt_at(backoff) / dead_at.
+//
 // Если воркер крашится между phase 2 и phase 3, записи "leased" до
 // next_attempt_at в будущем — другой воркер подхватит их после истечения
 // аренды. n8n идемпотентен по EventID (см. R4), повторов не страшно.
@@ -352,14 +374,29 @@ func (w *Worker) runCleanup(ctx context.Context) {
 }
 
 func (w *Worker) cleanup(ctx context.Context) (int64, error) {
-	// Чистим только processed-записи живых событий старше retention. Dead
-	// не трогаем намеренно: их разбирают руками, потеря — потеря контекста
-	// инцидента.
+	// Два срока, потому что это два разных вида записей.
+	//
+	// Обработанная — след успешной доставки, неделя на разбор полётов и
+	// хватит. Мёртвая — описание происшествия, её разбирают руками, и
+	// неделя тут мало: выбросим раньше, чем кто-нибудь заметит.
+	//
+	// Но верхняя граница нужна и мёртвым. Раньше их не удаляли вовсе, и
+	// таблица росла без потолка: на стенде с неотвечающим вебхуком за три
+	// с половиной месяца — 1310 мёртвых записей при 219 живых, 84%
+	// таблицы. Захват записей на обработку от этого не страдает (идёт по
+	// индексу), а вот COUNT(*) для метрик раз в полминуты начинает
+	// перебирать таблицу целиком.
+	//
+	// Полгода по умолчанию: к этому сроку разбирать инцидент уже некому,
+	// а доставить событие давно поздно.
 	tag, err := w.db.Exec(ctx, `
 DELETE FROM outbox
-WHERE processed_at IS NOT NULL
-  AND processed_at < now() - make_interval(secs => $1)
-  AND dead_at IS NULL`, w.retention.Seconds())
+WHERE (processed_at IS NOT NULL
+       AND processed_at < now() - make_interval(secs => $1)
+       AND dead_at IS NULL)
+   OR (dead_at IS NOT NULL
+       AND dead_at < now() - make_interval(secs => $2))`,
+		w.retention.Seconds(), w.deadRetention.Seconds())
 	if err != nil {
 		return 0, err
 	}

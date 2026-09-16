@@ -117,6 +117,142 @@ func seedPartialPublication(t *testing.T, projectID, creator uuid.UUID, due time
 
 // ---- ТЕСТ: как считается начисление ----
 
+// Имя креатора видно и ДО пересчёта.
+//
+// Менеджер открывает «Начисления» и первым видит предварительный расчёт —
+// строки, посчитанные на лету, которых в базе ещё нет. Сохранённые
+// начисления подтягивают имя прямо в запросе, а расчёт приходит из
+// арифметики: в ней людей нет, только числа. На экране это выглядело как
+// потеря данных — строка есть, деньги есть, напротив них «Без имени».
+//
+// Сторожим обе половины: имя должно стоять и в предварительном расчёте, и
+// в сохранённом, и это должно быть ОДНО И ТО ЖЕ имя. Разойдись они — и
+// строка «переименуется» от нажатия кнопки «Пересчитать».
+func TestPreviewAccrualHasCreatorName(t *testing.T) {
+	pool := integration.Pool(t)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	ctx := context.Background()
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("terms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], pubDay(0), "nm01", 500_000, true)
+
+	// Предварительный расчёт: пересчёта ещё не было, строк в базе нет.
+	now := time.Now().UTC()
+	before, err := svc.ProjectBilling(ctx, pid, 1, now)
+	if err != nil {
+		t.Fatalf("сводка до пересчёта: %v", err)
+	}
+	preview := findAccrual(t, before.Accruals, creators[0])
+	if !preview.IsPreview {
+		t.Fatal("строка должна быть предварительной: пересчёта не было")
+	}
+	if preview.CreatorName == "" {
+		t.Error("в предварительном расчёте нет имени креатора — на экране это «Без имени» напротив настоящих сумм")
+	}
+
+	// И после пересчёта имя то же самое.
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
+		t.Fatalf("recalc: %v", err)
+	}
+	after, err := svc.ProjectBilling(ctx, pid, 1, now)
+	if err != nil {
+		t.Fatalf("сводка после пересчёта: %v", err)
+	}
+	saved := findAccrual(t, after.Accruals, creators[0])
+	if saved.CreatorName != preview.CreatorName {
+		t.Errorf("имя разъехалось: до пересчёта %q, после %q — строка «переименовалась» от нажатия кнопки",
+			preview.CreatorName, saved.CreatorName)
+	}
+}
+
+// findAccrual — строка нужного креатора или падение с внятным текстом.
+func findAccrual(t *testing.T, items []billing.Accrual, creator uuid.UUID) billing.Accrual {
+	t.Helper()
+	for _, a := range items {
+		if a.CreatorUserID == creator {
+			return a
+		}
+	}
+	t.Fatalf("начисления креатора %s нет среди %d строк", creator, len(items))
+	return billing.Accrual{}
+}
+
+// Креатор видит идущий период, а не «посчитаем потом».
+//
+// Сохранённая строка начисления появляется только после пересчёта: его
+// делает менеджер кнопкой либо воркер при подытоге, то есть через две
+// недели после конца периода. Пока период идёт, строки нет — и креатор
+// видел пустоту при том, что на том же экране стоят его просмотры и
+// взятые ступени. Просмотры измерены, тариф известен, ступени
+// посчитаны, а деньги показать отказывались.
+//
+// Сторожим три вещи сразу, потому что их легко разменять:
+// расчёт идущего периода приходит; он совпадает с тем, что даёт
+// настоящий пересчёт (иначе экран обещал бы одно, а платили бы другое);
+// и сохранённая строка расчётом на лету НЕ подменяется — по ней уже
+// могли утвердить и выплатить.
+func TestCreatorSeesCurrentPeriodBeforeRecalc(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("terms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], pubDay(0), "cur1", 500_000, true)
+
+	now := time.Now().UTC()
+	before, err := svc.CreatorEarnings(ctx, pid, creators[0], now)
+	if err != nil {
+		t.Fatalf("заработок до пересчёта: %v", err)
+	}
+	if before.Period == nil {
+		t.Fatal("периода нет, хотя ролик вышел")
+	}
+	cur := creatorRowFor(t, before, before.Period.StartsOn)
+	if cur.Total <= 0 {
+		t.Fatalf("за идущий период показано %d — креатор видит пустоту там, где всё посчитано", cur.Total)
+	}
+
+	// То же число, что даст настоящий пересчёт: расчёт для показа и
+	// расчёт для выплаты — один и тот же код, а не две формулы.
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
+		t.Fatalf("recalc: %v", err)
+	}
+	after, err := svc.CreatorEarnings(ctx, pid, creators[0], now)
+	if err != nil {
+		t.Fatalf("заработок после пересчёта: %v", err)
+	}
+	saved := creatorRowFor(t, after, before.Period.StartsOn)
+	if saved.Total != cur.Total {
+		t.Errorf("до пересчёта показали %d, после стало %d — экран обещал одно, а посчитали другое",
+			cur.Total, saved.Total)
+	}
+	if len(after.Accruals) != len(before.Accruals) {
+		t.Errorf("строк было %d, стало %d — расчёт на лету задвоился с сохранённым",
+			len(before.Accruals), len(after.Accruals))
+	}
+}
+
+// creatorRowFor — начисление за период, начавшийся в этот день.
+func creatorRowFor(t *testing.T, e billing.CreatorEarnings, start time.Time) billing.CreatorAccrual {
+	t.Helper()
+	for _, a := range e.Accruals {
+		if a.PeriodStart.Year() == start.Year() && a.PeriodStart.Month() == start.Month() &&
+			a.PeriodStart.Day() == start.Day() {
+			return a
+		}
+	}
+	t.Fatalf("начисления за период с %s нет среди %d строк", start.Format("2006-01-02"), len(e.Accruals))
+	return billing.CreatorAccrual{}
+}
+
 func TestAccrualArithmetic(t *testing.T) {
 	pool := integration.Pool(t)
 	pid, creators, cleanup := setupCreatorsProject(t, pool)
@@ -1257,5 +1393,81 @@ UPDATE terms_versions SET salary_per_month = 6000000, rate_per_1000_views = 9000
 	if draft.WithoutHistory != byOrder.WithoutHistory {
 		t.Errorf("людей без истории: до заказа %d, по заказу %d",
 			draft.WithoutHistory, byOrder.WithoutHistory)
+	}
+}
+
+// В составе периода у заказчика стоят живые люди, а не буквы в кружках.
+//
+// Заказчик платит за конкретных креаторов, и открыть страницу того, кто
+// снимал, он должен прямо отсюда. Значит, вместе с именем в строку
+// начисления обязаны приезжать портрет и адрес страницы.
+//
+// Отдельная тонкость — ПРЕДВАРИТЕЛЬНАЯ строка: она считается на лету, из
+// арифметики, в которой людей нет вовсе. Имя ей дописывает withNames, и
+// вместе с именем обязаны дописываться портрет и адрес — иначе до
+// первого «Пересчитать» в составе висели бы безымянные кружки без ссылок.
+func TestClientAccrualCarriesCreatorProfile(t *testing.T) {
+	pool := integration.Pool(t)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	ctx := context.Background()
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("terms: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO specialist_profiles (user_id, display_name, avatar_url, username)
+VALUES ($1, 'Анастасия Креатор', 'https://cdn.example/nastya.jpg', $2)
+ON CONFLICT (user_id) DO UPDATE
+SET display_name = EXCLUDED.display_name,
+    avatar_url   = EXCLUDED.avatar_url,
+    username     = EXCLUDED.username`,
+		creators[0], "nastya-"+uuid.NewString()[:8]); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], pubDay(0), "prof1", 1_100_000, true)
+
+	// В проекте два креатора, и порядок строк здесь не про эту проверку:
+	// ищем своего по id, а не по позиции.
+	mine := func(t *testing.T, rows []billing.ClientAccrual) billing.ClientAccrual {
+		t.Helper()
+		for _, a := range rows {
+			if a.CreatorUserID == creators[0] {
+				return a
+			}
+		}
+		t.Fatalf("строки нужного креатора нет вовсе: %+v", rows)
+		return billing.ClientAccrual{}
+	}
+
+	// До «Пересчитать»: строка посчитана на лету и людей в себе не несёт.
+	preview, err := svc.ClientBilling(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("client billing (preview): %v", err)
+	}
+	row := mine(t, preview.Accruals)
+	if row.CreatorAvatarURL != "https://cdn.example/nastya.jpg" {
+		t.Errorf("в предварительной строке нет портрета: %+v", row)
+	}
+	if row.CreatorUsername == "" {
+		t.Errorf("в предварительной строке нет адреса страницы: %+v", row)
+	}
+
+	// После сохранения: строка берётся запросом, профиль приезжает тем же
+	// выражением, что и имя.
+	if _, err := recalcCurrent(t, svc, pid); err != nil {
+		t.Fatalf("recalc: %v", err)
+	}
+	saved, err := svc.ClientBilling(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("client billing (saved): %v", err)
+	}
+	row = mine(t, saved.Accruals)
+	if row.CreatorAvatarURL != "https://cdn.example/nastya.jpg" {
+		t.Errorf("в сохранённой строке нет портрета: %+v", row)
+	}
+	if row.CreatorUsername == "" {
+		t.Errorf("в сохранённой строке нет адреса страницы: %+v", row)
 	}
 }

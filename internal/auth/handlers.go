@@ -96,6 +96,7 @@ type loginReq struct {
 // @Produce      json
 // @Param        body  body      loginReq  true  "credentials"
 // @Success      200   {object}  TokenPair
+// @Failure      400   {object}  errorResponse  "invalid_input — в теле нет login или password"
 // @Failure      401   {object}  errorResponse
 // @Failure      403   {object}  errorResponse
 // @Router       /auth/login [post]
@@ -103,6 +104,22 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var in loginReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
+		return
+	}
+	// Пустое поле — это «в запросе не то», а не «пароль не тот».
+	//
+	// Раньше и тот, и другой случай отвечали одинаково: bad_credentials.
+	// Клиент, который назвал поле `email` вместо `login`, получал «неверный
+	// логин или пароль» — и шёл искать проблему в паролях. Один раз это
+	// стоило четырёх переписанных вслепую хешей на общем стенде, прежде
+	// чем кто-то открыл DTO ручки.
+	//
+	// Защиту от перебора это не ослабляет: логина в запросе нет, значит и
+	// подсказать по нему нечего — мы не говорим, существует ли такой
+	// пользователь.
+	if strings.TrimSpace(in.Login) == "" || in.Password == "" {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input",
+			"Укажите login и password.")
 		return
 	}
 	pair, err := h.svc.Login(r.Context(), in.Login, in.Password)

@@ -147,11 +147,48 @@ func checkRates(t Terms) (Terms, error) {
 		return Terms{}, fmt.Errorf(
 			"%w: размер ступени не бывает нулевым — уберите поле, если тариф без ступеней", ErrInvalidInput)
 	}
-	if t.Stepped() {
+	if t.StepViews != nil && t.StepFee != nil {
 		if t.StepCapViews != nil && t.StepTier2From != nil &&
 			*t.StepCapViews > 0 && *t.StepTier2From > *t.StepCapViews {
 			return Terms{}, fmt.Errorf(
 				"%w: ступень дешевеет позже, чем тариф перестаёт её считать", ErrInvalidInput)
+		}
+	}
+
+	// Лесенка произвольной длины.
+	//
+	// Два порога с одним объёмом — не «уточнение», а неразрешимая
+	// неоднозначность: какую цену брать, решал бы порядок строк. То же
+	// самое проверяет уникальный индекс в базе, но отказ оттуда приходит
+	// кодом 23505, а человеку нужно предложение.
+	seen := make(map[int64]bool, len(t.Steps))
+	for _, st := range t.Steps {
+		if st.FromViews < 0 || st.ClientFee < 0 || (st.CreatorFee != nil && *st.CreatorFee < 0) {
+			return Terms{}, fmt.Errorf("%w: ступени тарифа не бывают отрицательными", ErrInvalidInput)
+		}
+		if seen[st.FromViews] {
+			return Terms{}, fmt.Errorf(
+				"%w: две ступени с одним порогом — непонятно, по какой считать", ErrInvalidInput)
+		}
+		seen[st.FromViews] = true
+		// Креатору нельзя обещать больше, чем берём с клиента: это не
+		// тариф, а убыток на каждом периоде, и почти всегда — опечатка.
+		if st.CreatorFee != nil && *st.CreatorFee > st.ClientFee {
+			return Terms{}, fmt.Errorf(
+				"%w: оклад креатора на ступени больше, чем платит заказчик", ErrInvalidInput)
+		}
+	}
+	if t.SubscriberRate != nil && *t.SubscriberRate < 0 {
+		return Terms{}, fmt.Errorf("%w: ставка за подписчика не бывает отрицательной", ErrInvalidInput)
+	}
+	if t.CreatorSubscriberRate != nil {
+		if *t.CreatorSubscriberRate < 0 {
+			return Terms{}, fmt.Errorf(
+				"%w: ставка за подписчика не бывает отрицательной", ErrInvalidInput)
+		}
+		if t.SubscriberRate != nil && *t.CreatorSubscriberRate > *t.SubscriberRate {
+			return Terms{}, fmt.Errorf(
+				"%w: креатору за подписчика больше, чем платит заказчик", ErrInvalidInput)
 		}
 	}
 	return t, nil
@@ -266,6 +303,11 @@ func (s *Service) steppedAccruals(
 	}
 	agg := aggregateFacts(facts)
 	total, left := calcPeriod(terms, agg, pc, projectID, p.StartsOn)
+	// Ступени — величина ПЕРИОДА и делятся между людьми по вкладу;
+	// подписчики — величина ЧЕЛОВЕКА: их вписывают каждому свои. Делить
+	// их по доле просмотров значило бы отдать часть чужого KPI тому, кто
+	// его не набирал.
+	clientLadder, creatorLadder := terms.ClientLadder(), terms.CreatorLadder()
 
 	rows := make([]Accrual, 0, len(facts))
 	if len(facts) == 0 {
@@ -295,7 +337,10 @@ func (s *Service) steppedAccruals(
 			ViewsBase:       f.ViewsBase,
 			ViewsOver:       f.ViewsOver,
 			Clicks:          f.Clicks,
+			Subscribers:     f.Subscribers,
 		}
+		a.SubscriberBonus = clientLadder.Subscribers(f.Subscribers)
+		a.PayoutSubscriberBonus = creatorLadder.Subscribers(f.Subscribers)
 		share := func(sum int64) int64 {
 			if agg.ViewsTotal <= 0 {
 				// Просмотров нет вовсе — делим поровну: фикс за период
@@ -306,10 +351,10 @@ func (s *Service) steppedAccruals(
 		}
 		a.Salary = share(total.Salary)
 		a.ViewsBonus = share(total.ViewsBonus)
-		a.Total = a.Salary + a.ViewsBonus
+		a.Total = a.Salary + a.ViewsBonus + a.SubscriberBonus
 		a.PayoutSalary = share(total.PayoutSalary)
 		a.PayoutViewsBonus = share(total.PayoutViewsBonus)
-		a.PayoutTotal = a.PayoutSalary + a.PayoutViewsBonus
+		a.PayoutTotal = a.PayoutSalary + a.PayoutViewsBonus + a.PayoutSubscriberBonus
 		givenClient.salary += a.Salary
 		givenClient.tail += a.ViewsBonus
 		givenCreator.salary += a.PayoutSalary
@@ -322,10 +367,12 @@ func (s *Service) steppedAccruals(
 	// хвост, которого столько не было.
 	rows[biggest].Salary += total.Salary - givenClient.salary
 	rows[biggest].ViewsBonus += total.ViewsBonus - givenClient.tail
-	rows[biggest].Total = rows[biggest].Salary + rows[biggest].ViewsBonus
+	rows[biggest].Total = rows[biggest].Salary + rows[biggest].ViewsBonus +
+		rows[biggest].SubscriberBonus
 	rows[biggest].PayoutSalary += total.PayoutSalary - givenCreator.salary
 	rows[biggest].PayoutViewsBonus += total.PayoutViewsBonus - givenCreator.tail
-	rows[biggest].PayoutTotal = rows[biggest].PayoutSalary + rows[biggest].PayoutViewsBonus
+	rows[biggest].PayoutTotal = rows[biggest].PayoutSalary + rows[biggest].PayoutViewsBonus +
+		rows[biggest].PayoutSubscriberBonus
 	return rows, left, nil
 }
 
@@ -342,6 +389,7 @@ func aggregateFacts(facts []creatorPeriod) creatorPeriod {
 		agg.ViewsBase += f.ViewsBase
 		agg.ViewsOver += f.ViewsOver
 		agg.Clicks += f.Clicks
+		agg.Subscribers += f.Subscribers
 	}
 	return agg
 }
@@ -402,18 +450,22 @@ func calcAccrual(t Terms, f creatorPeriod, projectID uuid.UUID, period time.Time
 		ViewsBase:       f.ViewsBase,
 		ViewsOver:       f.ViewsOver,
 		Clicks:          f.Clicks,
+		Subscribers:     f.Subscribers,
 	}
 
 	// Счёт заказчику и выплата креатору считаются ОДНИМ И ТЕМ ЖЕ
 	// правилом, просто по разным ставкам: у тарифа две стороны. Пока
 	// креаторская сторона не задана, стороны совпадают и маржи нет.
 	client := money(t, f)
-	a.Salary, a.Deduction, a.ViewsBonus, a.ClickBonus, a.Total =
-		client.salary, client.deduction, client.viewsBonus, client.clickBonus, client.total
+	a.Salary, a.Deduction, a.ViewsBonus, a.ClickBonus, a.SubscriberBonus, a.Total =
+		client.salary, client.deduction, client.viewsBonus, client.clickBonus,
+		client.subscriberBonus, client.total
 
 	creator := money(t.CreatorSide(), f)
-	a.PayoutSalary, a.PayoutDeduction, a.PayoutViewsBonus, a.PayoutClickBonus, a.PayoutTotal =
-		creator.salary, creator.deduction, creator.viewsBonus, creator.clickBonus, creator.total
+	a.PayoutSalary, a.PayoutDeduction, a.PayoutViewsBonus, a.PayoutClickBonus,
+		a.PayoutSubscriberBonus, a.PayoutTotal =
+		creator.salary, creator.deduction, creator.viewsBonus, creator.clickBonus,
+		creator.subscriberBonus, creator.total
 
 	return a
 }
@@ -436,6 +488,7 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 		ViewsBase:       f.ViewsBase,
 		ViewsOver:       f.ViewsOver,
 		Clicks:          f.Clicks,
+		Subscribers:     f.Subscribers,
 	}
 	var left periodLeftovers
 
@@ -482,9 +535,14 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 	}
 	clientFee, _ := client.Fee(pc.Seq, charged)
 	clientTail := client.Tail(f.ViewsOver)
+	// KPI по подписчикам стоит рядом со ступенями, а не внутри них:
+	// ступени считаются от просмотров, подписчики — своё число, и
+	// сложить их в один объём нельзя.
+	clientSubs := client.Subscribers(f.Subscribers)
 	a.Salary = clientFee
 	a.ViewsBonus = clientTail
-	a.Total = clientFee + clientTail
+	a.SubscriberBonus = clientSubs
+	a.Total = clientFee + clientTail + clientSubs
 
 	// Неполная ступень клиенту не выставляется и НЕ переносится: решение
 	// владельца продукта, зафиксировано намеренно — это не баг.
@@ -498,10 +556,16 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 	counted := stepPool + pc.CreatorCarryIn
 	creatorFee, steps := creator.Fee(pc.Seq, counted)
 	creatorTail := creator.Tail(f.ViewsOver)
+	creatorSubs := creator.Subscribers(f.Subscribers)
 	a.PayoutSalary = creatorFee
 	a.PayoutViewsBonus = creatorTail
-	a.PayoutTotal = creatorFee + creatorTail
-	if pc.Seq > 1 && creator.StepViews > 0 {
+	a.PayoutSubscriberBonus = creatorSubs
+	a.PayoutTotal = creatorFee + creatorTail + creatorSubs
+	// Перенос неполной ступени — правило ПРЕЖНЕЙ модели, где ступень была
+	// блоком в сто тысяч просмотров. У лесенки порогов неполной ступени
+	// не существует: есть цена периода на взятом пороге и всё. Перенести
+	// «остаток» там значило бы придумать величину, которой нет в тарифе.
+	if pc.Seq > 1 && !creator.HasSteps() && creator.StepViews > 0 {
 		paid := steps * creator.StepViews
 		if counted > paid {
 			left.CreatorCarryOut = counted - paid
@@ -512,7 +576,7 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 
 // amounts — раскладка одной стороны тарифа.
 type amounts struct {
-	salary, deduction, viewsBonus, clickBonus, total int64
+	salary, deduction, viewsBonus, clickBonus, subscriberBonus, total int64
 }
 
 // money — вся арифметика периода по одному набору ставок.
@@ -562,7 +626,15 @@ func money(t Terms, f creatorPeriod) amounts {
 		}
 	}
 
-	a.total = a.salary - a.deduction + a.viewsBonus + a.clickBonus
+	// Подписчики — третий KPI, и считается он умножением: ступеней по ним
+	// владелец продукта не называл. Число приходит не от сборщика, а от
+	// менеджера: сборщика подписчиков у нас нет, и выдумывать его под
+	// объявленную ставку нельзя.
+	if t.SubscriberKPIEnabled() {
+		a.subscriberBonus = f.Subscribers * *t.SubscriberRate
+	}
+
+	a.total = a.salary - a.deduction + a.viewsBonus + a.clickBonus + a.subscriberBonus
 	return a
 }
 
@@ -585,6 +657,28 @@ func (s *Service) MarkAccrualPaid(ctx context.Context, accrualID, actor uuid.UUI
 
 func (s *Service) UTM(ctx context.Context, projectID uuid.UUID, creatorID *uuid.UUID) ([]UTMLink, error) {
 	return s.repo.UTM(ctx, projectID, creatorID)
+}
+
+// Subscribers — сколько подписчиков записано креаторам за период.
+func (s *Service) Subscribers(
+	ctx context.Context, projectID uuid.UUID, periodStart time.Time,
+) ([]CreatorSubscribers, error) {
+	return s.repo.PeriodSubscribers(ctx, projectID, periodStart)
+}
+
+// SaveSubscribers — число подписчиков за период вписывает менеджер.
+//
+// Проверка ровно одна и ровно та, которую нельзя проверить в базе
+// осмысленно: отрицательных подписчиков не бывает. Верхней границы нет
+// намеренно — придумывать «разумный максимум» для чужого канала мы не
+// умеем, а упёршийся в него менеджер не сможет выставить правду.
+func (s *Service) SaveSubscribers(
+	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time, n int64, actor uuid.UUID,
+) (CreatorSubscribers, error) {
+	if n < 0 {
+		return CreatorSubscribers{}, fmt.Errorf("%w: подписчиков не бывает меньше нуля", ErrInvalidInput)
+	}
+	return s.repo.SaveSubscribers(ctx, projectID, creatorID, periodStart, n, actor)
 }
 
 // SaveUTM — метку ставит менеджер.
@@ -681,7 +775,7 @@ func (s *Service) accrualsOrPreview(
 		for i := range rows {
 			rows[i].IsPreview = true
 		}
-		return rows, nil
+		return s.withNames(ctx, rows)
 	}
 	out := make([]Accrual, 0, len(facts))
 	for _, f := range facts {
@@ -691,7 +785,49 @@ func (s *Service) accrualsOrPreview(
 		a.IsPreview = true
 		out = append(out, a)
 	}
-	return out, nil
+	return s.withNames(ctx, out)
+}
+
+// withNames — подставить имена в строки, посчитанные на лету.
+//
+// Сохранённые начисления берут имя тем же выражением прямо в запросе, а
+// предварительный расчёт приходит из арифметики: в ней людей нет, только
+// числа. Менеджер видит предварительный расчёт ПЕРВЫМ — до того, как
+// нажмёт «Пересчитать», — и до этой правки видел там «Без имени» напротив
+// настоящих сумм. Читается как потерянные данные, а не как «ещё не
+// посчитано».
+func (s *Service) withNames(ctx context.Context, rows []Accrual) ([]Accrual, error) {
+	if len(rows) == 0 {
+		return rows, nil
+	}
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, a := range rows {
+		ids = append(ids, a.CreatorUserID)
+	}
+	cards, err := s.repo.CreatorCards(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		card := cards[rows[i].CreatorUserID]
+		if rows[i].CreatorName == "" {
+			rows[i].CreatorName = card.Name
+		}
+		// Портрет и адрес страницы дописываем всегда: в отличие от имени,
+		// в предварительной строке их нет вовсе — она собрана из
+		// арифметики, а не из запроса с профилями.
+		if rows[i].CreatorAvatarURL == "" {
+			rows[i].CreatorAvatarURL = card.AvatarURL
+		}
+		if rows[i].CreatorUsername == "" {
+			rows[i].CreatorUsername = card.Username
+		}
+		// Признак публичности — всегда из карточки: в предварительной
+		// строке его нет вовсе, а false по умолчанию значил бы «страницы
+		// нет» у всех, кого ещё не пересчитывали.
+		rows[i].CreatorProfilePublic = card.Public
+	}
+	return rows, nil
 }
 
 // periodFacts — числа периода: живые, пока период идёт, и из среза,
@@ -717,6 +853,8 @@ func totals(items []Accrual) PeriodTotals {
 		t.Deductions += a.Deduction
 		t.ViewsBonus += a.ViewsBonus
 		t.ClickBonus += a.ClickBonus
+		t.SubscriberBonus += a.SubscriberBonus
+		t.Subscribers += a.Subscribers
 		t.Total += a.Total
 		t.Payouts += a.PayoutTotal
 		t.Views += a.ViewsTotal
@@ -771,6 +909,12 @@ func (s *Service) ClientBilling(ctx context.Context, projectID uuid.UUID, seq in
 	// отбрасываем наши деньги: два экрана не должны складывать
 	// по-разному.
 	out.Totals = clientTotals(totals(accruals))
+	// Лесенка — тем же накопителем, что и в сводке: одно правило «как
+	// раскладывается счёт» на оба экрана. Она появится, только если
+	// сойдётся с итогом и просмотрами, которые стоят рядом.
+	var ladder tariffLadder
+	ladder.add(terms, accruals)
+	out.Tariff = ladder.result(out.Totals.Total, out.Totals.Views)
 	return out, nil
 }
 
@@ -851,7 +995,78 @@ func (s *Service) CreatorEarnings(ctx context.Context, projectID, creatorID uuid
 		last := out.Periods[len(out.Periods)-1]
 		out.Period = &last
 	}
+
+	// Идущий период показываем расчётом по фактам, а не пустотой.
+	//
+	// Сохранённая строка начисления появляется только после пересчёта:
+	// его делает менеджер кнопкой либо воркер при подытоге — то есть
+	// через две недели после конца периода. Пока период идёт, строки
+	// нет, и креатор видел «посчитаем, когда по периоду пройдёт расчёт»
+	// — при том что прямо под этой фразой стоят его просмотры и взятые
+	// ступени. Просмотры измерены, тариф известен, ступени посчитаны, а
+	// деньги показать отказывались: человек читает это как «сколько тебе
+	// за это — скажем потом».
+	//
+	// Заказчику и менеджеру идущий период уже показывался расчётом на
+	// лету, и тем же кодом, что считает настоящую выплату. Креатор был
+	// единственным, кому не показывали то, что уже посчитано.
+	//
+	// Опасность «примет предварительное за обещанное» снимается не
+	// молчанием, а пометкой: строка приходит с IsPreview, и экран рядом
+	// с числом ставит «Предварительно».
+	if err := s.fillMissingAccruals(ctx, projectID, creatorID, terms, &out); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// fillMissingAccruals — дописать расчёт по периодам, где сохранённой
+// строки нет.
+//
+// Строк может не быть по двум разным причинам, и обе оставляли креатора
+// с пустотой там, где всё посчитано.
+//
+// Идущий период: сохранённая строка появляется только после пересчёта —
+// его делает менеджер кнопкой либо воркер при подытоге, то есть через
+// две недели после конца периода.
+//
+// Подытоженный период: пересчёт при подытоге мог не пройти — например,
+// период закрыли мимо сервиса. Период при этом заморожен, срез снят, и
+// посчитать по нему можно точно так же.
+//
+// Ничего не перезаписывает: сохранённая строка всегда главнее — по ней
+// уже могли утвердить и выплатить, и подменять её пересчётом на лету
+// значило бы показать одно, а заплатить другое.
+func (s *Service) fillMissingAccruals(
+	ctx context.Context, projectID, creatorID uuid.UUID, terms Terms, out *CreatorEarnings,
+) error {
+	have := make(map[string]bool, len(out.Accruals))
+	for _, a := range out.Accruals {
+		have[a.PeriodStart.Format("2006-01-02")] = true
+	}
+	for _, view := range out.Periods {
+		if have[view.StartsOn.Format("2006-01-02")] {
+			continue
+		}
+		period, err := s.repo.PeriodBySeq(ctx, projectID, view.Seq)
+		if err != nil {
+			if errors.Is(err, ErrNoPeriods) {
+				continue
+			}
+			return err
+		}
+		rows, err := s.accrualsOrPreview(ctx, projectID, period, terms)
+		if err != nil {
+			return err
+		}
+		for _, a := range rows {
+			if a.CreatorUserID == creatorID {
+				out.Accruals = append(out.Accruals, creatorAccrual(a))
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // nextStepForecast — сколько просмотров осталось до следующей ступени и
@@ -897,16 +1112,6 @@ func (s *Service) nextStepForecast(
 		return nil, nil
 	}
 
-	// Перенесённый остаток уже в счёте — значит и до ступени с ним ближе.
-	//
-	// Ступень берём из условий проекта, если тариф ступенчатый: число
-	// сто тысяч переехало из константы в версию условий. Константа
-	// остаётся запасным значением для проектов на старых версиях, где
-	// ступеней в тарифе нет вовсе, а полосу рисовать всё равно надо.
-	step := StepViews
-	if terms.Stepped() {
-		step = *terms.StepViews
-	}
 	// Считаем от того объёма, который вообще попадает в ступени. При
 	// ступенчатом тарифе это просмотры ДО порога на ролик: виральный
 	// хвост оплачивается отдельной ставкой и ступень не приближает —
@@ -916,8 +1121,41 @@ func (s *Service) nextStepForecast(
 	if terms.Stepped() {
 		pool = mine.ViewsBase
 	}
+	// Перенесённый остаток уже в счёте — значит и до ступени с ним ближе.
 	counted := pool + period.CarryInCreator
-	toGo := step - counted%step
+
+	// Сколько осталось до следующей ступени — и это ДВА разных правила,
+	// потому что ступени в двух моделях устроены по-разному.
+	//
+	// У лесенки порогов (terms_steps) ступени неравной высоты: 0, потом
+	// 300 000, потом миллион. «Остатка до полной ступени» там нет вовсе,
+	// есть расстояние до следующего порога, и делить с остатком нельзя.
+	//
+	// У прежней модели ступень — блок одинакового размера, и до неё
+	// ровно столько, сколько не хватает до круглого числа. Размер блока
+	// живёт в условиях проекта; константа остаётся запасным значением
+	// для версий, где ступеней в тарифе нет вовсе, а полосу рисовать всё
+	// равно надо.
+	var toGo, stepSize int64
+	if ladder := terms.CreatorLadder(); ladder.HasSteps() {
+		next, ok := ladder.NextFrom(counted)
+		if !ok {
+			// Верхняя ступень взята: тариф дальше не растёт, и прогноз
+			// «ещё немного — и прибавят» был бы неправдой.
+			return nil, nil
+		}
+		toGo = next - counted
+		// Высота ИМЕННО ЭТОЙ ступени, а не «размер ступени вообще»:
+		// полоса прогресса рисуется от взятого порога до следующего, и
+		// на неравных ступенях общего размера не существует.
+		stepSize = next - ladder.TakenFrom(counted)
+	} else {
+		stepSize = StepViews
+		if terms.StepViews != nil && *terms.StepViews > 0 {
+			stepSize = *terms.StepViews
+		}
+		toGo = stepSize - counted%stepSize
+	}
 
 	// Куда лягут будущие просмотры — в полную ставку или в пониженную,
 	// зависит от того, на каком ролике они наберутся. Раскладываем их в
@@ -974,7 +1212,7 @@ func (s *Service) nextStepForecast(
 		gain = 0
 	}
 	return &NextStepForecast{
-		StepViews:       step,
+		StepViews:       stepSize,
 		ViewsToGo:       toGo,
 		CarryInIncluded: period.CarryInCreator,
 		ForecastPayout:  gain,

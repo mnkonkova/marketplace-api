@@ -2,6 +2,9 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,6 +241,49 @@ func TestSelfAddedViewsCountTowardsMoney(t *testing.T) {
 	}
 	if a.ViewsBonus <= b.ViewsBonus {
 		t.Errorf("бонус за просмотры не вырос: %d → %d", b.ViewsBonus, a.ViewsBonus)
+	}
+}
+
+// Ответ на заведение выкладки — такой же, как у всех остальных ручек.
+//
+// Проверяется одно поле, и не от педантизма. links объявлены массивом, а
+// строка из INSERT приходит без них — nil-срез, который уходит в JSON как
+// null. Интерфейс подставляет ответ в список как есть, и первое же
+// обращение к links.length роняет отрисовку целиком: перестаёт работать
+// не добавление, а вся страница — и «показать ссылки», и «сдать ролик», и
+// само окно, которое человек только что закрыл. Выглядит это как четыре
+// разные поломки, поэтому сторожим здесь, на ответе, а не на экране.
+func TestSelfAddResponseHasLinksArray(t *testing.T) {
+	pool := integration.Pool(t)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	h := publications.NewHandler(publications.NewService(publications.NewRepo(pool)))
+	srv := mountSelfAdd(h, creators[0])
+	path := "/me/creator/projects/" + pid.String() + "/publications"
+
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(
+		`{"due_date":"`+pubDay(340).Format("2006-01-02")+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Смотрим на сырой JSON, а не на разобранную структуру: разбор в
+	// []SubmittedLink даёт пустой срез и для null, и для [] — то есть
+	// ровно ту разницу, из-за которой всё и падало, он и прячет.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("ответ не разобрался: %v", err)
+	}
+	links, ok := raw["links"]
+	if !ok {
+		t.Fatal("в ответе нет поля links")
+	}
+	if string(links) != "[]" {
+		t.Errorf("links = %s, ожидался пустой массив: null роняет отрисовку", links)
 	}
 }
 

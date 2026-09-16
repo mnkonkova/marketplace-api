@@ -59,6 +59,65 @@ func TestClientFeedShowsOnlyPublished(t *testing.T) {
 // Клиент не видит просрочек. Выкладка с прошедшей датой и без ссылок
 // остаётся для него «запланированной» — разбирается с отставанием
 // менеджер, а не заказчик с креатором напрямую.
+// Календарь ставит ролик в день, когда он ВЫШЕЛ, а не когда планировался.
+//
+// Плановая дата и фактическая расходятся постоянно: выкладывают раньше
+// или позже, ссылки сдают через день. Раньше календарь всегда
+// группировал по плановой, и вышедший ролик стоял не в своём дне —
+// причём на той же странице лента роликов показывала настоящую дату.
+// Два ответа на один вопрос рядом друг с другом.
+//
+// Это не косметика: от факта выхода отсчитываются периоды, ступени и
+// деньги. Календарь заказчика обязан говорить о том же дне, что и всё
+// остальное.
+func TestClientCalendarUsesPublishedDate(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	month := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	planned := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	actual := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{planned},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: res.Items[0].ID,
+		ActorUserID:   creators[0],
+		URLs:          []string{"https://vk.com/clip-1_777"},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+	// Дату выхода ставит сборщик — здесь кладём её сами: воспроизводить
+	// обход пяти площадок ради одного поля незачем.
+	if _, err := pool.Exec(ctx,
+		`UPDATE publication_links SET published_at = $2 WHERE publication_id = $1`,
+		res.Items[0].ID, actual); err != nil {
+		t.Fatalf("дата выхода: %v", err)
+	}
+
+	days, err := svc.Calendar(ctx, projectID, month)
+	if err != nil {
+		t.Fatalf("Calendar: %v", err)
+	}
+	if len(days) != 1 {
+		t.Fatalf("дней в календаре %d, ожидался 1", len(days))
+	}
+	if got := days[0].Date.Day(); got != 8 {
+		t.Errorf("ролик стоит на %d-м, а вышел 8-го (планировался на 10-е) — "+
+			"календарь спорит с лентой роликов на той же странице", got)
+	}
+}
+
 func TestClientCalendarHidesOverdue(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
@@ -326,5 +385,91 @@ WHERE publication_id = $1`, noDate, submitDay); err != nil {
 			t.Fatalf("порядок ленты поехал относительно подписей: на месте %d стоит %s",
 				i, feed[i].PublishedAt.Format("2006-01-02"))
 		}
+	}
+}
+
+// Календарь показывает ОДИН месяц, и открывался он всегда на текущем.
+// Период проекта катится от даты первой публикации и на календарный
+// месяц не ложится: выкладки регулярно оказывались в соседнем месяце, и
+// заказчик видел пустую сетку — то есть «календарь не показывает
+// выкладки». Чтобы экран мог открыть нужный месяц и назвать остальные,
+// сервер говорит, в каких месяцах у проекта вообще что-то есть.
+func TestCalendarMonthsListsEveryMonthWithPublications(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+
+	// Три месяца подряд, начиная с позапрошлого: ровно та картина, на
+	// которой ломался календарь.
+	first := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	second := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	third := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{first, second, third},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	months, err := svc.CalendarMonths(ctx, projectID)
+	if err != nil {
+		t.Fatalf("CalendarMonths: %v", err)
+	}
+	want := []string{"2026-07", "2026-08", "2026-09"}
+	if len(months) != len(want) {
+		t.Fatalf("месяцев %d (%v), ожидалось %d", len(months), months, len(want))
+	}
+	for i, m := range want {
+		if months[i] != m {
+			t.Fatalf("месяц %d = %q, ожидался %q (список обязан идти по возрастанию)", i, months[i], m)
+		}
+	}
+
+	// Вышедший ролик числится в месяце, в котором ВЫШЕЛ, а не в том, на
+	// который его планировали. Список месяцев обязан считать день тем же
+	// выражением, что и сама сетка: иначе полоса месяцев позовёт в
+	// октябрь, а точка будет стоять в сентябре — пустой месяц по клику
+	// из подсказки, которая ради этого и сделана.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO publication_links (publication_id, platform, url, url_canonical, published_at)
+VALUES ($1, 'tiktok', 'https://tiktok.com/x', 'https://tiktok.com/x', $2)`,
+		res.Items[2].ID, time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+	months, err = svc.CalendarMonths(ctx, projectID)
+	if err != nil {
+		t.Fatalf("CalendarMonths после выхода: %v", err)
+	}
+	for _, m := range months {
+		if m == "2026-09" {
+			t.Fatalf("месяц взят по плановой дате, а ролик вышел в августе: %v", months)
+		}
+	}
+
+	// Отменённая выкладка не видна и в самой сетке — значит, месяц, где
+	// осталась только она, не должен звать в себя из полосы месяцев.
+	if _, err := pool.Exec(ctx,
+		`UPDATE project_publications SET status = 'cancelled' WHERE id = $1`,
+		res.Items[0].ID); err != nil {
+		t.Fatalf("cancel publication: %v", err)
+	}
+	months, err = svc.CalendarMonths(ctx, projectID)
+	if err != nil {
+		t.Fatalf("CalendarMonths после отмены: %v", err)
+	}
+	for _, m := range months {
+		if m == "2026-07" {
+			t.Fatalf("месяц с одной отменённой выкладкой остался в списке: %v", months)
+		}
+	}
+	// Остался август: и вторая выкладка по плану, и третья по факту выхода.
+	if len(months) != 1 || months[0] != "2026-08" {
+		t.Fatalf("месяцы %v, ожидался только 2026-08", months)
 	}
 }

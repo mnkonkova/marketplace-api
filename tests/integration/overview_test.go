@@ -260,3 +260,118 @@ RETURNING id`, client).Scan(&pid); err != nil {
 	}
 	return pid, func() { _, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, pid) }
 }
+
+// ---- тарифная лесенка ----
+//
+// Главный коммерческий аргумент кабинета: первые просмотры КАЖДОГО
+// ролика идут по стартовой ставке, всё сверх — по пониженной, и отсюда
+// берётся цена тысячи. До этого на экране стоял только результат
+// формулы, а сама формула не приезжала ни в одном ответе.
+//
+// Лесенка обязана СХОДИТЬСЯ с числами, которые стоят рядом с ней: её
+// проверяют калькулятором первым же заходом. Поэтому сервер отдаёт её
+// только тогда, когда сумма ступеней равна счёту, а просмотры ступеней —
+// тем просмотрам, из которых посчитана цена тысячи.
+
+// ladderProject — проект на условиях стенда: 90 ₽ за тысячу до миллиона
+// НА РОЛИК, 9 ₽ сверх, фикс 60 000 ₽ за период.
+func ladderProject(t *testing.T, pool *pgxpool.Pool, client uuid.UUID,
+	views int64, marker string) (uuid.UUID, func()) {
+
+	t.Helper()
+	ctx := context.Background()
+
+	var pid uuid.UUID
+	if err := pool.QueryRow(ctx, `
+INSERT INTO projects (client_user_id, kind, title, source, status)
+VALUES ($1, 'creators_turnkey', $2, 'manual', 'active')
+RETURNING id`, client, "Лесенка "+marker).Scan(&pid); err != nil {
+		t.Fatalf("проект: %v", err)
+	}
+	creator, cleanupCreator := newAPIHarness(t, pool).NewUser(t, userOpts{Kind: "specialist"})
+	if err := publications.NewRepo(pool).AddCreator(ctx, pid, creator, creator); err != nil {
+		t.Fatalf("креатор в проект: %v", err)
+	}
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, billing.Terms{
+		ProjectID:            pid,
+		SalaryPerMonth:       60_000 * 100,
+		RatePer1000Views:     90 * 100,
+		BonusViewsThreshold:  1_000_000,
+		RatePer1000ViewsOver: 9 * 100,
+	}, creator); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	seedPublicationViews(t, pid, creator, nextDue(), marker, views, true)
+
+	return pid, func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM outbox WHERE aggregate = 'project' AND aggregate_id = $1`, pid.String())
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, pid)
+		cleanupCreator()
+	}
+}
+
+func TestOverviewTariffLadderAddsUpToCostPer1000(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	// Три миллиона на один ролик: миллион по стартовой ставке, два — по
+	// пониженной. Ровно случай со стенда.
+	_, cleanup := ladderProject(t, pool, client, 3_000_000, "ldr1")
+	defer cleanup()
+
+	body := dashboardBody(t, h, client, "month")
+
+	raw, ok := body["tariff"].(map[string]any)
+	if !ok {
+		t.Fatalf("лесенки нет в ответе, а разложение сходится: %v", body["cost_per_1000"])
+	}
+	// Контрольные точки коммерческого предложения — те самые числа,
+	// которые стоят на экране заказчика.
+	for key, want := range map[string]int{
+		"threshold_views":    1_000_000,
+		"rate_per_1000":      9_000,
+		"rate_per_1000_over": 900,
+		"views_base":         1_000_000,
+		"views_over":         2_000_000,
+		"base_amount":        90_000 * 100,
+		"over_amount":        18_000 * 100,
+		"fixed":              60_000 * 100,
+		"total":              168_000 * 100,
+		"views":              3_000_000,
+	} {
+		if got := num(t, raw, key); got != want {
+			t.Errorf("%s = %d, ожидалось %d", key, got, want)
+		}
+	}
+	// И главное: лесенка делится в ту цену тысячи, что стоит рядом.
+	if got := num(t, body, "cost_per_1000"); got != 56*100 {
+		t.Errorf("цена тысячи %d, ожидалось %d", got, 56*100)
+	}
+}
+
+// Подытоженный период оставляет часть счёта ЗА лесенкой: его начислений
+// уже нет, есть только сумма среза. Показать лесенку рядом с целым
+// счётом значило бы поставить на экран деление, которое не сходится, —
+// а его проверяют калькулятором.
+func TestOverviewTariffHiddenWhenProjectsDisagree(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	_, cleanupA := ladderProject(t, pool, client, 3_000_000, "ldr2")
+	defer cleanupA()
+	// Второй проект на ДРУГИХ ставках: строка «первый миллион по 90 ₽»
+	// была бы неправдой для половины счёта, а сложить две лесенки в одну
+	// нельзя — читатель решит, что порог общий.
+	_, cleanupB := overviewProject(t, pool, client, 3_000_000, 3_000, 1_000_000, "ldr3")
+	defer cleanupB()
+
+	body := dashboardBody(t, h, client, "month")
+	if _, ok := body["tariff"]; ok {
+		t.Errorf("лесенка есть, хотя у проектов разные ставки: %v", body["tariff"])
+	}
+}

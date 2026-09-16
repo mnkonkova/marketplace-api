@@ -221,6 +221,7 @@ func main() {
 			MaxAttempts:     cfg.OutboxMaxAttempts,
 			BackoffCap:      cfg.OutboxBackoffCap,
 			Retention:       cfg.OutboxRetention,
+			DeadRetention:   cfg.OutboxDeadRetention,
 			CleanupInterval: cfg.OutboxCleanupInterval,
 		})
 

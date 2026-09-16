@@ -129,11 +129,14 @@ type Config struct {
 
 	// Outbox-воркер. MaxAttempts/BackoffCap определяют поведение ретраев и
 	// порог для DLQ (dead_at). Retention/CleanupInterval — TTL на обработанные
-	// записи (dead-записи cleanup не трогает). WorkerMetricsAddr — отдельный
+	// записи, OutboxDeadRetention — отдельный, намного больший срок на
+	// мёртвые: они описывают происшествие и разбираются руками, но без
+	// верхней границы таблица растёт бесконечно. WorkerMetricsAddr — отдельный
 	// HTTP-listener у воркера для /metrics (alloy скрейпит worker:9090/metrics).
 	OutboxMaxAttempts     int           `env:"OUTBOX_MAX_ATTEMPTS" envDefault:"10"`
 	OutboxBackoffCap      time.Duration `env:"OUTBOX_BACKOFF_CAP" envDefault:"10m"`
 	OutboxRetention       time.Duration `env:"OUTBOX_RETENTION" envDefault:"168h"`
+	OutboxDeadRetention   time.Duration `env:"OUTBOX_DEAD_RETENTION" envDefault:"4320h"`
 	OutboxCleanupInterval time.Duration `env:"OUTBOX_CLEANUP_INTERVAL" envDefault:"1h"`
 	WorkerMetricsAddr     string        `env:"WORKER_METRICS_ADDR" envDefault:":9090"`
 

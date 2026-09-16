@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,6 +50,7 @@ SELECT terms_version_id, salary_per_month, videos_first_month, videos_next_month
        step_views, first_period_fee, base_fee, step_fee,
        step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
        creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
+       subscriber_rate, creator_subscriber_rate,
        updated_at
 FROM project_billing WHERE project_id = $1`, projectID).
 		Scan(&t.TermsVersionID, &t.SalaryPerMonth, &t.VideosFirstMonth, &t.VideosNextMonths,
@@ -59,12 +61,18 @@ FROM project_billing WHERE project_id = $1`, projectID).
 			&t.StepViews, &t.FirstPeriodFee, &t.BaseFee, &t.StepFee,
 			&t.StepTier2From, &t.StepFeeOver, &t.StepCapViews, &t.GuaranteeViews,
 			&t.CreatorFirstPeriodFee, &t.CreatorBaseFee, &t.CreatorStepFee, &t.CreatorStepFeeOver,
+			&t.SubscriberRate, &t.CreatorSubscriberRate,
 			&t.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, nil
 	}
 	if err != nil {
 		return Terms{}, fmt.Errorf("load project billing: %w", err)
+	}
+	// Ступени — своим запросом: их произвольное число, и в строку
+	// project_billing они не влезают по устройству.
+	if t.Steps, err = loadSteps(ctx, r.db, stepsOwnerProject, projectID); err != nil {
+		return Terms{}, err
 	}
 	return t, nil
 }
@@ -82,9 +90,11 @@ INSERT INTO project_billing
    step_views, first_period_fee, base_fee, step_fee,
    step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
    creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
+   subscriber_rate, creator_subscriber_rate,
    updated_by, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
         $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
+        $28, $29,
         $15, now())
 ON CONFLICT (project_id) DO UPDATE SET
   terms_version_id = EXCLUDED.terms_version_id,
@@ -112,6 +122,8 @@ ON CONFLICT (project_id) DO UPDATE SET
   creator_base_fee = EXCLUDED.creator_base_fee,
   creator_step_fee = EXCLUDED.creator_step_fee,
   creator_step_fee_over = EXCLUDED.creator_step_fee_over,
+  subscriber_rate = EXCLUDED.subscriber_rate,
+  creator_subscriber_rate = EXCLUDED.creator_subscriber_rate,
   updated_by = EXCLUDED.updated_by,
   updated_at = now()
 RETURNING updated_at`,
@@ -124,8 +136,15 @@ RETURNING updated_at`,
 		t.StepViews, t.FirstPeriodFee, t.BaseFee, t.StepFee,
 		t.StepTier2From, t.StepFeeOver, t.StepCapViews, t.GuaranteeViews,
 		t.CreatorFirstPeriodFee, t.CreatorBaseFee, t.CreatorStepFee, t.CreatorStepFeeOver,
+		t.SubscriberRate, t.CreatorSubscriberRate,
 	).Scan(&t.UpdatedAt); err != nil {
 		return Terms{}, fmt.Errorf("save project billing: %w", err)
+	}
+	// Снимок ступеней переписывается целиком: ступень удаляют не реже,
+	// чем добавляют, и «обновить пришедшее» оставило бы удалённую жить в
+	// расчёте проекта.
+	if err := replaceSteps(ctx, r.db, stepsOwnerProject, t.ProjectID, t.Steps); err != nil {
+		return Terms{}, err
 	}
 	return t, nil
 }
@@ -140,7 +159,8 @@ SELECT id, salary_per_month, videos_first_month, videos_next_months,
        creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over,
        step_views, first_period_fee, base_fee, step_fee,
        step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
-       creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over
+       creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
+       subscriber_rate, creator_subscriber_rate
 FROM terms_versions ORDER BY version DESC LIMIT 1`).
 		Scan(&t.TermsVersionID, &t.SalaryPerMonth, &t.VideosFirstMonth, &t.VideosNextMonths,
 			&t.RatePer1000Views, &t.BonusViewsThreshold, &t.RatePer1000ViewsOver,
@@ -148,12 +168,20 @@ FROM terms_versions ORDER BY version DESC LIMIT 1`).
 			&t.CreatorSalaryPerMonth, &t.CreatorRatePer1000Views, &t.CreatorRatePer1000ViewsOver,
 			&t.StepViews, &t.FirstPeriodFee, &t.BaseFee, &t.StepFee,
 			&t.StepTier2From, &t.StepFeeOver, &t.StepCapViews, &t.GuaranteeViews,
-			&t.CreatorFirstPeriodFee, &t.CreatorBaseFee, &t.CreatorStepFee, &t.CreatorStepFeeOver)
+			&t.CreatorFirstPeriodFee, &t.CreatorBaseFee, &t.CreatorStepFee, &t.CreatorStepFeeOver,
+			&t.SubscriberRate, &t.CreatorSubscriberRate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Terms{}, ErrNotFound
 	}
 	if err != nil {
 		return Terms{}, fmt.Errorf("load latest terms: %w", err)
+	}
+	// Ступени едут в снимок проекта вместе с остальными числами: иначе
+	// проект снял бы с прайса всё, кроме того, по чему и считается.
+	if t.TermsVersionID != nil {
+		if t.Steps, err = loadSteps(ctx, r.db, stepsOwnerVersion, *t.TermsVersionID); err != nil {
+			return Terms{}, err
+		}
 	}
 	return t, nil
 }
@@ -239,14 +267,72 @@ RETURNING id, project_id, kind::text, amount, status::text, note,
 
 // ---- начисления ----
 
+// CreatorCard — чем человек подписан в списке: имя, портрет и адрес его
+// страницы. Втроём, а не по отдельности: подпись и ссылка на неё — одно
+// решение экрана, и разнести их по двум запросам значит однажды показать
+// имя без ссылки или ссылку без имени.
+type CreatorCard struct {
+	Name      string
+	AvatarURL string
+	Username  string
+	// Public — открывается ли страница специалиста снаружи. Адрес у
+	// человека есть всегда, а страницы по нему может не быть: публичная
+	// карточка живёт только при is_published AND
+	// moderation_status='approved'. Ссылка на непубликованный профиль
+	// ведёт в 404, и решать это должен тот, кто про профиль знает, —
+	// сервер, а не экран.
+	Public bool
+}
+
+// profilePublicExpr — то же условие, что фильтрует публичную выдачу
+// специалистов (см. profiles.Repo.GetPublic). Одним выражением: две
+// копии однажды разойдутся, и ссылка начнёт врать ровно на тех
+// профилях, из-за которых её и заводили.
+const profilePublicExpr = `COALESCE(sp.is_published AND sp.moderation_status = 'approved', FALSE)`
+
+// CreatorCards — подписи по списку id, той же лесенкой имени, что и везде.
+//
+// Нужны предварительному расчёту. Сохранённые начисления берут их тем же
+// выражением прямо в запросе, а строки, посчитанные на лету, приходят из
+// арифметики — в ней людей нет, только числа. На экране это выглядело как
+// потерянные данные: строка есть, деньги есть, человека нет, «Без имени».
+func (r *Repo) CreatorCards(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]CreatorCard, error) {
+	out := make(map[uuid.UUID]CreatorCard, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT u.id, `+nameExpr+`, COALESCE(sp.avatar_url, ''), COALESCE(sp.username, ''),
+       `+profilePublicExpr+`
+FROM users u
+LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
+LEFT JOIN client_profiles cp     ON cp.user_id = u.id
+WHERE u.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("creator names: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var c CreatorCard
+		if err := rows.Scan(&id, &c.Name, &c.AvatarURL, &c.Username, &c.Public); err != nil {
+			return nil, fmt.Errorf("scan creator name: %w", err)
+		}
+		out[id] = c
+	}
+	return out, rows.Err()
+}
+
 func (r *Repo) Accruals(ctx context.Context, projectID uuid.UUID, periodStart *time.Time, creatorID *uuid.UUID) ([]Accrual, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT a.id, a.project_id, a.creator_user_id, `+nameExpr+`, a.period_start,
+SELECT a.id, a.project_id, a.creator_user_id, `+nameExpr+`,
+       COALESCE(sp.avatar_url, ''), COALESCE(sp.username, ''),
+       `+profilePublicExpr+`, a.period_start,
        a.salary, a.videos_planned, a.videos_delivered, a.deduction,
        a.views_total, a.views_base, a.views_over, a.views_bonus,
-       a.clicks, a.click_bonus, a.total,
+       a.clicks, a.click_bonus, a.subscribers, a.subscriber_bonus, a.total,
        a.payout_salary, a.payout_deduction, a.payout_views_bonus,
-       a.payout_click_bonus, a.payout_total, a.status::text,
+       a.payout_click_bonus, a.payout_subscriber_bonus, a.payout_total, a.status::text,
        -- Приоритет из подборки: «команда собрана по вашему приоритету».
        -- Есть только у проектов, выросших из заказа.
        COALESCE(oc.priority, 0),
@@ -270,11 +356,13 @@ ORDER BY a.period_start DESC, COALESCE(oc.priority, 999), 4`, projectID, periodS
 	for rows.Next() {
 		var a Accrual
 		if err := rows.Scan(&a.ID, &a.ProjectID, &a.CreatorUserID, &a.CreatorName,
+			&a.CreatorAvatarURL, &a.CreatorUsername, &a.CreatorProfilePublic,
 			&a.PeriodStart, &a.Salary, &a.VideosPlanned, &a.VideosDelivered,
 			&a.Deduction, &a.ViewsTotal, &a.ViewsBase, &a.ViewsOver, &a.ViewsBonus,
-			&a.Clicks, &a.ClickBonus, &a.Total,
+			&a.Clicks, &a.ClickBonus, &a.Subscribers, &a.SubscriberBonus, &a.Total,
 			&a.PayoutSalary, &a.PayoutDeduction, &a.PayoutViewsBonus,
-			&a.PayoutClickBonus, &a.PayoutTotal, &a.Status, &a.Priority,
+			&a.PayoutClickBonus, &a.PayoutSubscriberBonus, &a.PayoutTotal,
+			&a.Status, &a.Priority,
 			&a.ApprovedAt, &a.PaidAt, &a.CalculatedAt); err != nil {
 			return nil, fmt.Errorf("scan accrual: %w", err)
 		}
@@ -310,6 +398,10 @@ type creatorPeriod struct {
 	ViewsBase int64
 	ViewsOver int64
 	Clicks    int
+	// Subscribers — сколько подписчиков прибавилось за период. Вводит
+	// менеджер руками: сборщика подписчиков у нас нет, и выдумывать его
+	// под объявленную ставку нельзя — ровно как с переходами по UTM.
+	Subscribers int64
 }
 
 // periodFacts — что креаторы проекта наработали за месяц.
@@ -346,11 +438,15 @@ SELECT pc.creator_user_id,
        -- ролика получал бонус за миллион просмотров.
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $5)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $5, 0)), 0),
-       COALESCE(MAX(utm.clicks), 0)
+       COALESCE(MAX(utm.clicks), 0),
+       COALESCE(MAX(subs.subscribers), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
        ON utm.project_id = pc.project_id AND utm.creator_user_id = pc.creator_user_id
+LEFT JOIN creator_period_subscribers subs
+       ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
+      AND subs.period_start = $3
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
 GROUP BY pc.creator_user_id`, projectID, projectID, p.StartsOn, p.EndsOn, threshold)
 	if err != nil {
@@ -362,7 +458,7 @@ GROUP BY pc.creator_user_id`, projectID, projectID, p.StartsOn, p.EndsOn, thresh
 		var c creatorPeriod
 		if err := rows.Scan(&c.CreatorID, &c.Planned, &c.Delivered,
 			&c.PlannedAssigned, &c.DeliveredAssigned,
-			&c.ViewsTotal, &c.ViewsBase, &c.ViewsOver, &c.Clicks); err != nil {
+			&c.ViewsTotal, &c.ViewsBase, &c.ViewsOver, &c.Clicks, &c.Subscribers); err != nil {
 			return nil, fmt.Errorf("scan period facts: %w", err)
 		}
 		out = append(out, c)
@@ -405,13 +501,17 @@ SELECT pc.creator_user_id,
        COALESCE(SUM(pub.views), 0),
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $3)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $3, 0)), 0),
-       COALESCE(MAX(utm.clicks), 0)
+       COALESCE(MAX(utm.clicks), 0),
+       COALESCE(MAX(subs.subscribers), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
        ON utm.project_id = pc.project_id AND utm.creator_user_id = pc.creator_user_id
+LEFT JOIN creator_period_subscribers subs
+       ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
+      AND subs.period_start = $4
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
-GROUP BY pc.creator_user_id`, projectID, p.ID, threshold)
+GROUP BY pc.creator_user_id`, projectID, p.ID, threshold, p.StartsOn)
 	if err != nil {
 		return nil, fmt.Errorf("locked period facts: %w", err)
 	}
@@ -421,7 +521,7 @@ GROUP BY pc.creator_user_id`, projectID, p.ID, threshold)
 		var c creatorPeriod
 		if err := rows.Scan(&c.CreatorID, &c.Planned, &c.Delivered,
 			&c.PlannedAssigned, &c.DeliveredAssigned,
-			&c.ViewsTotal, &c.ViewsBase, &c.ViewsOver, &c.Clicks); err != nil {
+			&c.ViewsTotal, &c.ViewsBase, &c.ViewsOver, &c.Clicks, &c.Subscribers); err != nil {
 			return nil, fmt.Errorf("scan locked period facts: %w", err)
 		}
 		out = append(out, c)
@@ -436,29 +536,33 @@ func (r *Repo) SaveAccrual(ctx context.Context, a Accrual) error {
 INSERT INTO creator_accruals
   (project_id, creator_user_id, period_start, salary, videos_planned,
    videos_delivered, deduction, views_total, views_base, views_over, views_bonus,
-   clicks, click_bonus, total,
-   payout_salary, payout_deduction, payout_views_bonus, payout_click_bonus, payout_total,
+   clicks, click_bonus, subscribers, subscriber_bonus, total,
+   payout_salary, payout_deduction, payout_views_bonus, payout_click_bonus,
+   payout_subscriber_bonus, payout_total,
    calculated_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now())
 ON CONFLICT (project_id, creator_user_id, period_start) DO UPDATE SET
   salary = EXCLUDED.salary, videos_planned = EXCLUDED.videos_planned,
   videos_delivered = EXCLUDED.videos_delivered, deduction = EXCLUDED.deduction,
   views_total = EXCLUDED.views_total, views_base = EXCLUDED.views_base,
   views_over = EXCLUDED.views_over,
   views_bonus = EXCLUDED.views_bonus, clicks = EXCLUDED.clicks,
-  click_bonus = EXCLUDED.click_bonus, total = EXCLUDED.total,
+  click_bonus = EXCLUDED.click_bonus,
+  subscribers = EXCLUDED.subscribers, subscriber_bonus = EXCLUDED.subscriber_bonus,
+  total = EXCLUDED.total,
   payout_salary = EXCLUDED.payout_salary,
   payout_deduction = EXCLUDED.payout_deduction,
   payout_views_bonus = EXCLUDED.payout_views_bonus,
   payout_click_bonus = EXCLUDED.payout_click_bonus,
+  payout_subscriber_bonus = EXCLUDED.payout_subscriber_bonus,
   payout_total = EXCLUDED.payout_total,
   calculated_at = now()
 WHERE creator_accruals.status = 'draft'`,
 		a.ProjectID, a.CreatorUserID, a.PeriodStart, a.Salary, a.VideosPlanned,
 		a.VideosDelivered, a.Deduction, a.ViewsTotal, a.ViewsBase, a.ViewsOver,
-		a.ViewsBonus, a.Clicks, a.ClickBonus, a.Total,
+		a.ViewsBonus, a.Clicks, a.ClickBonus, a.Subscribers, a.SubscriberBonus, a.Total,
 		a.PayoutSalary, a.PayoutDeduction, a.PayoutViewsBonus,
-		a.PayoutClickBonus, a.PayoutTotal)
+		a.PayoutClickBonus, a.PayoutSubscriberBonus, a.PayoutTotal)
 	if err != nil {
 		return fmt.Errorf("save accrual: %w", err)
 	}
@@ -562,4 +666,118 @@ RETURNING url, clicks, updated_at`, projectID, creatorID, url, actor).
 // firstOfMonth — первое число, как в creator_availability и в CHECK таблицы.
 func firstOfMonth(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+// ---- ступени тарифа ----
+//
+// Ступени лежат строками, а не колонками: их число произвольно, и каждая
+// новая точка прайса колонками означала бы миграцию. Владелец у строки
+// один из двух — версия прайса или снимок проекта, — и поэтому запросы
+// параметризованы именем колонки владельца. Имя приходит из констант
+// ниже, а не снаружи: подстановка в SQL здесь безопасна ровно потому,
+// что подставлять чужое некуда.
+
+const (
+	stepsOwnerVersion = "terms_version_id"
+	stepsOwnerProject = "project_id"
+)
+
+// querier — то общее, что нужно ступеням от пула и от транзакции:
+// выпуск версии и снимок условий обязаны класть ступени в ту же
+// транзакцию, что и саму версию.
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func loadSteps(ctx context.Context, q querier, owner string, id uuid.UUID) ([]TermsStep, error) {
+	rows, err := q.Query(ctx,
+		`SELECT from_views, client_fee, creator_fee FROM terms_steps
+WHERE `+owner+` = $1 ORDER BY from_views`, id)
+	if err != nil {
+		return nil, fmt.Errorf("load terms steps: %w", err)
+	}
+	defer rows.Close()
+	out := make([]TermsStep, 0, 4)
+	for rows.Next() {
+		var s TermsStep
+		if err := rows.Scan(&s.FromViews, &s.ClientFee, &s.CreatorFee); err != nil {
+			return nil, fmt.Errorf("scan terms step: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// replaceSteps — переписать лесенку владельца целиком.
+//
+// Целиком, а не по одной строке: ступень удаляют не реже, чем добавляют,
+// и «обнови то, что пришло» оставило бы удалённую ступень жить в
+// расчёте. Для версии прайса это вставка в свежесозданную строку, для
+// снимка проекта — замена прежнего снимка.
+func replaceSteps(ctx context.Context, q querier, owner string, id uuid.UUID, steps []TermsStep) error {
+	if _, err := q.Exec(ctx, `DELETE FROM terms_steps WHERE `+owner+` = $1`, id); err != nil {
+		return fmt.Errorf("clear terms steps: %w", err)
+	}
+	for _, s := range steps {
+		if _, err := q.Exec(ctx,
+			`INSERT INTO terms_steps (`+owner+`, from_views, client_fee, creator_fee)
+VALUES ($1, $2, $3, $4)`, id, s.FromViews, s.ClientFee, s.CreatorFee); err != nil {
+			return fmt.Errorf("insert terms step: %w", err)
+		}
+	}
+	return nil
+}
+
+// ---- подписчики ----
+//
+// Подписчиков никто не собирает: сборщика по ним нет, и выдумывать его
+// под объявленную ставку нельзя. Число вписывает менеджер — ровно так же,
+// как заведены переходы по UTM. Держим по периоду: KPI считается за
+// период, и одно поле «сколько всего» пришлось бы каждый месяц
+// перезаписывать, теряя то, за что уже заплатили.
+
+// PeriodSubscribers — сколько подписчиков записано креатору за период.
+func (r *Repo) PeriodSubscribers(
+	ctx context.Context, projectID uuid.UUID, periodStart time.Time,
+) ([]CreatorSubscribers, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT s.creator_user_id, `+nameExpr+`, s.subscribers, s.updated_at
+FROM creator_period_subscribers s
+LEFT JOIN users u                ON u.id = s.creator_user_id
+LEFT JOIN specialist_profiles sp ON sp.user_id = s.creator_user_id
+LEFT JOIN client_profiles cp     ON cp.user_id = s.creator_user_id
+WHERE s.project_id = $1 AND s.period_start = $2
+ORDER BY 2`, projectID, periodStart)
+	if err != nil {
+		return nil, fmt.Errorf("list period subscribers: %w", err)
+	}
+	defer rows.Close()
+	out := make([]CreatorSubscribers, 0)
+	for rows.Next() {
+		var c CreatorSubscribers
+		if err := rows.Scan(&c.CreatorUserID, &c.CreatorName, &c.Subscribers, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan period subscribers: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// SaveSubscribers — записать число подписчиков за период.
+func (r *Repo) SaveSubscribers(
+	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time, n int64, actor uuid.UUID,
+) (CreatorSubscribers, error) {
+	c := CreatorSubscribers{CreatorUserID: creatorID, PeriodStart: periodStart}
+	if err := r.db.QueryRow(ctx, `
+INSERT INTO creator_period_subscribers
+  (project_id, creator_user_id, period_start, subscribers, updated_by)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (project_id, creator_user_id, period_start) DO UPDATE
+  SET subscribers = EXCLUDED.subscribers, updated_by = EXCLUDED.updated_by, updated_at = now()
+RETURNING subscribers, updated_at`, projectID, creatorID, periodStart, n, actor).
+		Scan(&c.Subscribers, &c.UpdatedAt); err != nil {
+		return CreatorSubscribers{}, fmt.Errorf("save period subscribers: %w", err)
+	}
+	return c, nil
 }

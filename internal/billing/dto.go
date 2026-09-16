@@ -12,6 +12,7 @@
 package billing
 
 import (
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -125,7 +126,41 @@ type Terms struct {
 	CreatorStepFee        *int64 `json:"creator_step_fee,omitempty" extensions:"x-nullable"`
 	CreatorStepFeeOver    *int64 `json:"creator_step_fee_over,omitempty" extensions:"x-nullable"`
 
+	// Steps — лесенка произвольной длины: пороги объёма и цена периода на
+	// каждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они
+	// остались ради версий, на которых стоят действующие проекты, и
+	// смешивать два правила в одном расчёте нельзя.
+	Steps []TermsStep `json:"steps,omitempty"`
+
+	// SubscriberRate — сколько платит заказчик за подписчика, набранного
+	// за период, копейки. nil = KPI по подписчикам не считается.
+	//
+	// Подписчиков никто не собирает: сборщика по ним нет, и выдумывать
+	// его под ставку нельзя. Ставка объявляется здесь, а само число
+	// вводит менеджер руками — как переходы по UTM.
+	SubscriberRate *int64 `json:"subscriber_rate,omitempty" extensions:"x-nullable"`
+	// CreatorSubscriberRate — сколько из этого получает креатор.
+	// nil = столько же, сколько платит заказчик.
+	CreatorSubscriberRate *int64 `json:"creator_subscriber_rate,omitempty" extensions:"x-nullable"`
+
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// TermsStep — одна ступень тарифа.
+//
+// Ступень — это порог ОБЪЁМА и цена ПЕРИОДА на нём, а не цена за каждые
+// сто тысяч просмотров: так звучит коммерческое предложение («оклад плюс
+// KPI на 300 000 просмотров»), и так его читает клиент. Набрал за период
+// столько-то — период стоит столько-то.
+type TermsStep struct {
+	// FromViews — с какого объёма просмотров периода действует ступень.
+	// Нижняя обычно с нуля: это и есть голый оклад без KPI.
+	FromViews int64 `json:"from_views"`
+	// ClientFee — сколько стоит период заказчику на этой ступени, копейки.
+	ClientFee int64 `json:"client_fee"`
+	// CreatorFee — оклад креатору на этой ступени, копейки. nil = как у
+	// заказчика: то же правило, что у остальных креаторских полей.
+	CreatorFee *int64 `json:"creator_fee,omitempty" extensions:"x-nullable"`
 }
 
 // Stepped — версия условий считается по ступеням.
@@ -135,6 +170,9 @@ type Terms struct {
 // Проверка в одном месте: разложи её по вызывающим — и однажды половина
 // кода посчитает версию ступенчатой, а половина нет.
 func (t Terms) Stepped() bool {
+	if len(t.Steps) > 0 {
+		return true
+	}
 	return t.StepViews != nil && *t.StepViews > 0 && t.StepFee != nil
 }
 
@@ -156,6 +194,70 @@ type StepLadder struct {
 	// сверх порога НА РОЛИК (Terms.BonusViewsThreshold). Хвост в ступени
 	// не идёт и оплачивается отдельно по этой пониженной ставке.
 	TailRate int64
+	// Steps — лесенка произвольной длины, уже сведённая к ЭТОЙ стороне:
+	// пороги объёма и цена периода на каждом, по возрастанию порога.
+	// Непустая отменяет StepViews/StepFee/Tier2From/StepFeeOver — это
+	// другое правило счёта, и смешивать их в одном периоде нельзя.
+	Steps []LadderStep
+	// SubscriberRate — сколько стоит один подписчик, набранный за период.
+	// Число подписчиков сборщиком не добывается: его вводит менеджер.
+	SubscriberRate int64
+}
+
+// LadderStep — ступень, сведённая к одной стороне сделки.
+type LadderStep struct {
+	FromViews int64
+	Fee       int64
+}
+
+// NextFrom — ближайшая ещё не взятая ступень.
+//
+// Нужна прогнозу «сколько осталось до следующей ступени». У лесенки
+// порогов «остатка до полной ступени» не существует — есть расстояние до
+// СЛЕДУЮЩЕГО порога, и считать его делением с остатком, как в прежней
+// модели, нельзя: ступени там неравной высоты.
+//
+// Верхняя ступень взята — ok=false: дальше тариф не растёт, и обещать
+// прибавку не за что.
+func (l StepLadder) NextFrom(views int64) (int64, bool) {
+	for _, s := range l.Steps {
+		if s.FromViews > views {
+			return s.FromViews, true
+		}
+	}
+	return 0, false
+}
+
+// TakenFrom — порог уже взятой ступени: с него начинается нынешняя.
+//
+// Ноль, пока не взята ни одна: до первого порога человек идёт от нуля.
+func (l StepLadder) TakenFrom(views int64) int64 {
+	taken := int64(0)
+	for _, s := range l.Steps {
+		if s.FromViews > views {
+			break
+		}
+		taken = s.FromViews
+	}
+	return taken
+}
+
+// HasSteps — тариф задан лесенкой порогов, а не парой «цена ступени до и
+// после». Проверка в одном месте: разложи её по вызывающим — и однажды
+// половина кода посчитает период по лесенке, а половина по прежним полям.
+func (l StepLadder) HasSteps() bool { return len(l.Steps) > 0 }
+
+// Subscribers — сколько стоит KPI по подписчикам за период.
+//
+// Умножение, а не лесенка: подписчики считаются поштучно, ступеней по
+// ним владелец продукта не называл, и выдумывать их незачем. Ноль — это
+// и «ставка не объявлена», и «подписчиков не прибавилось»: платить не за
+// что в обоих случаях.
+func (l StepLadder) Subscribers(n int64) int64 {
+	if n <= 0 || l.SubscriberRate <= 0 {
+		return 0
+	}
+	return n * l.SubscriberRate
 }
 
 // Tail — сколько стоит виральный хвост периода.
@@ -187,7 +289,44 @@ func (t Terms) ClientLadder() StepLadder {
 		StepFeeOver:    derefOr(t.StepFeeOver, 0),
 		CapViews:       derefOr(t.StepCapViews, 0),
 		TailRate:       t.RatePer1000ViewsOver,
+		Steps:          clientSteps(t.Steps),
+		SubscriberRate: derefOr(t.SubscriberRate, 0),
 	}
+}
+
+// clientSteps — лесенка клиентской стороны, отсортированная по порогу.
+// Сортируем здесь, а не полагаемся на порядок из базы или из формы:
+// расчёт ищет последнюю подходящую ступень, и перепутанный порядок
+// молча дал бы не ту цену.
+func clientSteps(steps []TermsStep) []LadderStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]LadderStep, len(steps))
+	for i, s := range steps {
+		out[i] = LadderStep{FromViews: s.FromViews, Fee: s.ClientFee}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FromViews < out[j].FromViews })
+	return out
+}
+
+// creatorSteps — та же лесенка ставками креатора. Пустая креаторская
+// цена означает «как у заказчика»: то же правило, что у остальных
+// креаторских полей тарифа.
+func creatorSteps(steps []TermsStep) []LadderStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]LadderStep, len(steps))
+	for i, s := range steps {
+		fee := s.ClientFee
+		if s.CreatorFee != nil {
+			fee = *s.CreatorFee
+		}
+		out[i] = LadderStep{FromViews: s.FromViews, Fee: fee}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FromViews < out[j].FromViews })
+	return out
 }
 
 // CreatorLadder — ступени креаторской стороны. Незаполненное число
@@ -214,6 +353,10 @@ func (t Terms) CreatorLadder() StepLadder {
 		l.StepFeeOver = *t.CreatorStepFeeOver
 	}
 	l.TailRate = t.creatorTailRate(l.StepViews, l.StepFee)
+	l.Steps = creatorSteps(t.Steps)
+	if t.CreatorSubscriberRate != nil {
+		l.SubscriberRate = *t.CreatorSubscriberRate
+	}
 	return l
 }
 
@@ -255,6 +398,16 @@ func (t Terms) creatorTailRate(stepViews, creatorStepFee int64) int64 {
 // полторы. Что делать с остатком, решает вызывающий: у клиента он
 // сгорает, у креатора переносится.
 func (l StepLadder) Fee(seq int, views int64) (fee int64, steps int64) {
+	if seq <= 1 && l.FirstPeriodFee > 0 {
+		return l.FirstPeriodFee, 0
+	}
+	// Лесенка произвольной длины: цена периода — у последней ступени,
+	// порог которой взят. Остатка здесь нет вовсе, поэтому и ступеней
+	// возвращаем ноль: перенос неполной ступени — правило прежней
+	// модели, и к порогам объёма оно не относится.
+	if l.HasSteps() {
+		return l.stepFee(views), 0
+	}
 	if seq <= 1 {
 		return l.FirstPeriodFee, 0
 	}
@@ -284,6 +437,27 @@ func (l StepLadder) Fee(seq int, views int64) (fee int64, steps int64) {
 	return fee, steps
 }
 
+// stepFee — цена периода по лесенке порогов.
+//
+// Берётся ПОСЛЕДНЯЯ ступень, порог которой набран. Не сумма ступеней:
+// «оклад плюс KPI на 300 000» означает одну цену за период, а не оклад
+// плюс ещё по цене за каждый пройденный порог.
+//
+// Не дотянул до нижнего порога — не платим ничего: нижнюю ступень с
+// нулевым порогом владелец продукта заводит сам, и это и есть голый
+// оклад. Подставлять её за него значит выдумать цену, которой он не
+// называл.
+func (l StepLadder) stepFee(views int64) int64 {
+	fee := int64(0)
+	for _, s := range l.Steps {
+		if views < s.FromViews {
+			break
+		}
+		fee = s.Fee
+	}
+	return fee
+}
+
 func derefOr(v *int64, def int64) int64 {
 	if v == nil {
 		return def
@@ -303,7 +477,33 @@ func (t Terms) CreatorSide() Terms {
 		c.RatePer1000Views = *t.CreatorRatePer1000Views
 	}
 	c.RatePer1000ViewsOver = t.creatorTailRate(derefOr(t.StepViews, 0), derefOr(t.CreatorStepFee, 0))
+	if t.CreatorSubscriberRate != nil {
+		c.SubscriberRate = t.CreatorSubscriberRate
+	}
+	// Лесенку тоже сводим к его стороне: после CreatorSide в Steps должна
+	// лежать ЕГО цена под тем же именем поля — иначе всякий, кто возьмёт
+	// у сведённого тарифа лесенку, получит цену клиента и назовёт её
+	// заработком креатора. Пустая креаторская цена по-прежнему значит
+	// «как у клиента», и подстановка делается здесь один раз.
+	if len(t.Steps) > 0 {
+		steps := make([]TermsStep, len(t.Steps))
+		for i, st := range t.Steps {
+			fee := st.ClientFee
+			if st.CreatorFee != nil {
+				fee = *st.CreatorFee
+			}
+			steps[i] = TermsStep{FromViews: st.FromViews, ClientFee: fee}
+		}
+		c.Steps = steps
+	}
 	return c
+}
+
+// SubscriberKPIEnabled — считается ли KPI по подписчикам. Ставка не
+// объявлена — числа подписчиков не спрашиваем и строки не рисуем: поле
+// «впишите подписчиков», за которое никто не платит, только сбивает.
+func (t Terms) SubscriberKPIEnabled() bool {
+	return t.SubscriberRate != nil && *t.SubscriberRate > 0
 }
 
 // HasMargin — стороны тарифа различаются, то есть платформа что-то
@@ -338,6 +538,21 @@ type Accrual struct {
 	ProjectID     uuid.UUID `json:"project_id"`
 	CreatorUserID uuid.UUID `json:"creator_user_id"`
 	CreatorName   string    `json:"creator_name,omitempty"`
+	// CreatorAvatarURL/CreatorUsername — чем подписан человек в составе
+	// периода. Имени мало: в списке, за который заказчик платит, стоят
+	// живые люди, и открыть страницу исполнителя он должен оттуда же, где
+	// увидел строку. Пусто у того, кто аватар не поставил или ещё не
+	// выбрал адрес, — тогда ссылка идёт по uuid, а вместо портрета
+	// остаётся буква.
+	CreatorAvatarURL string `json:"creator_avatar_url,omitempty"`
+	CreatorUsername  string `json:"creator_username,omitempty"`
+	// CreatorProfilePublic — открывается ли страница этого человека
+	// снаружи. Публичная карточка специалиста живёт только при
+	// is_published AND moderation_status='approved'; на всё остальное она
+	// отвечает 404. Без этого признака экран не мог отличить человека, к
+	// которому можно перейти, от человека, чья страница ещё на модерации,
+	// и ставил ссылку всем одинаково — половина вела в «не найдено».
+	CreatorProfilePublic bool `json:"creator_profile_public"`
 	// PeriodStart — начало периода, которому принадлежит начисление.
 	// Периоды катятся от первой публикации проекта, а не по календарю,
 	// поэтому это не первое число месяца (см. billing.ProjectPeriod).
@@ -359,6 +574,13 @@ type Accrual struct {
 	ViewsBonus int64 `json:"views_bonus"`
 	Clicks     int   `json:"clicks"`
 	ClickBonus int64 `json:"click_bonus"`
+	// Subscribers/SubscriberBonus — KPI по подписчикам за период.
+	// Подписчиков никто не собирает: число вписывает менеджер руками, как
+	// переходы по UTM. Отдельной парой, а не внутри бонуса за просмотры:
+	// начисление объясняет, почему вышла такая сумма, и слитые в одно
+	// число просмотры с подписчиками этого больше не объясняют.
+	Subscribers     int64 `json:"subscribers"`
+	SubscriberBonus int64 `json:"subscriber_bonus"`
 	// Total — счёт заказчику за этого креатора.
 	Total int64 `json:"total"`
 
@@ -366,11 +588,12 @@ type Accrual struct {
 	// по его ставкам; при незаданной креаторской стороне тарифа совпадает
 	// со счётом. Раскладка своя, потому что объяснять «почему вышло
 	// столько» креатору надо его числами, а не клиентскими.
-	PayoutSalary     int64 `json:"payout_salary"`
-	PayoutDeduction  int64 `json:"payout_deduction"`
-	PayoutViewsBonus int64 `json:"payout_views_bonus"`
-	PayoutClickBonus int64 `json:"payout_click_bonus"`
-	PayoutTotal      int64 `json:"payout_total"`
+	PayoutSalary          int64 `json:"payout_salary"`
+	PayoutDeduction       int64 `json:"payout_deduction"`
+	PayoutViewsBonus      int64 `json:"payout_views_bonus"`
+	PayoutClickBonus      int64 `json:"payout_click_bonus"`
+	PayoutSubscriberBonus int64 `json:"payout_subscriber_bonus"`
+	PayoutTotal           int64 `json:"payout_total"`
 
 	Status AccrualStatus `json:"status" enums:"draft,approved,paid"`
 	// Priority — каким по приоритету человек попал в подборку. Поля нет
@@ -398,6 +621,23 @@ type UTMLink struct {
 	// выключен, число справочное.
 	Clicks    int       `json:"clicks"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CreatorSubscribers — подписчики креатора за период.
+//
+// Отдельный тип, а не поле в UTMLink: переходы и подписчики приходят из
+// разных мест и живут по разным правилам. Общее у них только одно —
+// автоматического источника нет ни у тех, ни у других, и число вписывает
+// менеджер руками.
+type CreatorSubscribers struct {
+	CreatorUserID uuid.UUID `json:"creator_user_id"`
+	CreatorName   string    `json:"creator_name,omitempty"`
+	// PeriodStart — за какой период записано. Периоды катятся от первой
+	// публикации проекта, а не по календарю.
+	PeriodStart time.Time `json:"period_start"`
+	// Subscribers — сколько подписчиков прибавилось за период.
+	Subscribers int64     `json:"subscribers"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ProjectBilling — всё про деньги проекта одним ответом: по частям это
@@ -428,6 +668,12 @@ type PeriodTotals struct {
 	Deductions int64 `json:"deductions"`
 	ViewsBonus int64 `json:"views_bonus"`
 	ClickBonus int64 `json:"click_bonus"`
+	// SubscriberBonus — KPI по подписчикам за период. Отдельной строкой, а
+	// не внутри бонуса за просмотры: это разные величины, и «почему вышло
+	// столько» по их сумме уже не разобрать.
+	SubscriberBonus int64 `json:"subscriber_bonus"`
+	// Subscribers — сколько подписчиков вписал менеджер за период.
+	Subscribers int64 `json:"subscribers"`
 	// Total — сколько выставлено заказчику; Payouts — сколько должны
 	// креаторам; Margin — разница, то есть что остаётся платформе.
 	// При незаданной креаторской стороне тарифа Payouts равен Total, а

@@ -302,3 +302,126 @@ func TestSteppedIsOptIn(t *testing.T) {
 		t.Fatal("ступенчатая версия не распознана")
 	}
 }
+
+// ---- лесенка в сводке заказчика ----
+//
+// Тарифная лесенка — главный коммерческий аргумент кабинета: «первый
+// миллион по 90 ₽, всё сверх — по 9 ₽, отсюда и 56 ₽». Её проверяют
+// калькулятором, поэтому проверяем и мы: в копейках и до рубля.
+
+// ladderTerms — условия стенда: 90 ₽ до миллиона на ролик, 9 ₽ сверх,
+// оклад 60 000 ₽ за месяц.
+func ladderTerms() Terms {
+	return Terms{
+		SalaryPerMonth:       60_000 * rub,
+		RatePer1000Views:     90 * rub,
+		BonusViewsThreshold:  1_000_000,
+		RatePer1000ViewsOver: 9 * rub,
+	}
+}
+
+// ladderAccrual — строка начисления с уже разложенными ступенями: так их
+// и отдаёт SQL (LEAST/GREATEST по каждому ролику).
+func ladderAccrual(base, over int64, t Terms) Accrual {
+	a := Accrual{
+		Salary:     t.SalaryPerMonth,
+		ViewsBase:  base,
+		ViewsOver:  over,
+		ViewsTotal: base + over,
+	}
+	a.ViewsBonus = base/1000*t.RatePer1000Views + over/1000*t.RatePer1000ViewsOver
+	a.Total = a.Salary + a.ViewsBonus
+	return a
+}
+
+func TestTariffLadderMatchesTheBill(t *testing.T) {
+	terms := ladderTerms()
+	a := ladderAccrual(1_000_000, 2_000_000, terms)
+
+	var l tariffLadder
+	l.add(terms, []Accrual{a})
+	got := l.result(a.Total, a.ViewsTotal)
+	if got == nil {
+		t.Fatalf("лесенка должна сойтись: total=%d views=%d", a.Total, a.ViewsTotal)
+	}
+	// Контрольные точки коммерческого предложения — те самые числа,
+	// которые стоят на экране заказчика.
+	if got.BaseAmount != 90_000*rub {
+		t.Errorf("первый миллион: %d, ждали %d", got.BaseAmount, 90_000*rub)
+	}
+	if got.OverAmount != 18_000*rub {
+		t.Errorf("сверх миллиона: %d, ждали %d", got.OverAmount, 18_000*rub)
+	}
+	if got.Fixed != 60_000*rub {
+		t.Errorf("работа команды: %d, ждали %d", got.Fixed, 60_000*rub)
+	}
+	if got.Total != 168_000*rub {
+		t.Errorf("итог: %d, ждали %d", got.Total, 168_000*rub)
+	}
+	// И главное: лесенка обязана делиться в цену тысячи, которая стоит
+	// рядом с ней на экране.
+	if cp := costPer1000(got.Total, got.Views); cp == nil || *cp != 56*rub {
+		t.Errorf("цена тысячи из лесенки: %v, ждали %d", cp, 56*rub)
+	}
+}
+
+func TestTariffLadderHiddenWhenItWouldNotAddUp(t *testing.T) {
+	terms := ladderTerms()
+	a := ladderAccrual(1_000_000, 2_000_000, terms)
+
+	cases := []struct {
+		name         string
+		build        func(l *tariffLadder)
+		money, views int64
+	}{{
+		// Подытоженный период: его начислений уже нет, в сводке от него
+		// только сумма среза. Лесенка покрыла бы часть счёта, а стояла бы
+		// рядом с целым — и не сошлась бы.
+		name:  "часть счёта осталась за лесенкой",
+		build: func(l *tariffLadder) { l.add(terms, []Accrual{a}) },
+		money: a.Total + 50_000*rub, views: a.ViewsTotal,
+	}, {
+		name:  "часть просмотров осталась за лесенкой",
+		build: func(l *tariffLadder) { l.add(terms, []Accrual{a}) },
+		money: a.Total, views: a.ViewsTotal + 500_000,
+	}, {
+		// У двух проектов разные ставки: одной лесенкой их не описать, а
+		// строка «первый миллион по 90 ₽» была бы неправдой для второго.
+		name: "у проектов разные ставки",
+		build: func(l *tariffLadder) {
+			other := terms
+			other.RatePer1000Views = 70 * rub
+			l.add(terms, []Accrual{a})
+			l.add(other, []Accrual{ladderAccrual(1_000_000, 0, other)})
+		},
+		money: a.Total, views: a.ViewsTotal,
+	}, {
+		// Ступенчатая версия условий считается по другим полям — ни
+		// оклада, ни ставки за тысячу в её расчёте нет.
+		name:  "ступенчатая версия условий",
+		build: func(l *tariffLadder) { l.add(steppedTerms(), []Accrual{a}) },
+		money: a.Total, views: a.ViewsTotal,
+	}, {
+		// В счёте есть строка, которой в лесенке нет вовсе (бонус за
+		// переходы). Показать лесенку значило бы показать счёт, в котором
+		// не хватает слагаемого.
+		name: "в счёте есть слагаемое мимо лесенки",
+		build: func(l *tariffLadder) {
+			withClicks := a
+			withClicks.ClickBonus = 5_000 * rub
+			withClicks.Total += withClicks.ClickBonus
+			l.add(terms, []Accrual{withClicks})
+		},
+		money: a.Total + 5_000*rub, views: a.ViewsTotal,
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var l tariffLadder
+			c.build(&l)
+			if got := l.result(c.money, c.views); got != nil {
+				t.Errorf("лесенку показывать нельзя, а она есть: %+v", got)
+			}
+		})
+	}
+}

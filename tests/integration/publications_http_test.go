@@ -280,3 +280,52 @@ func TestHTTPPreviewMatchesBatch(t *testing.T) {
 		t.Errorf("создано %v, а предпросмотр обещал %v", created, previewTotal)
 	}
 }
+
+// Пачка выкладок отдаётся с links: [] у каждой позиции.
+//
+// Проверка на сырой JSON, а не на разобранную структуру: разбор в
+// []SubmittedLink даёт пустой срез и для null, и для [] — то есть прячет
+// ровно ту разницу, которая ломает. Кабинет креатора читает links.length
+// и на null роняет отрисовку всего списка: человек видит не «пачка не
+// создалась», а пустой экран на проекте, где выкладки только что
+// проставили.
+func TestBatchResponseItemsHaveLinksArray(t *testing.T) {
+	pool := integration.Pool(t)
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	h := publications.NewHandler(publications.NewService(publications.NewRepo(pool)))
+	srv := mountPublications(h, creators[0])
+
+	body, _ := json.Marshal(map[string]any{
+		"creator_user_ids": []string{creators[0].String(), creators[1].String()},
+		"dates":            []string{pubDay(350).Format("2006-01-02"), pubDay(351).Format("2006-01-02")},
+	})
+	req := httptest.NewRequest(http.MethodPost,
+		"/manager/projects/"+projectID.String()+"/publications/batch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("код %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("ответ не разобрался: %v", err)
+	}
+	if len(resp.Items) != 4 {
+		t.Fatalf("в пачке %d выкладок, ожидалось 4", len(resp.Items))
+	}
+	for i, it := range resp.Items {
+		links, ok := it["links"]
+		if !ok {
+			t.Fatalf("items[%d]: в ответе нет поля links", i)
+		}
+		if string(links) != "[]" {
+			t.Errorf("items[%d].links = %s, ожидался пустой массив: null роняет отрисовку", i, links)
+		}
+	}
+}

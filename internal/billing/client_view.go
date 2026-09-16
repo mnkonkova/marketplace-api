@@ -41,12 +41,52 @@ type SideTerms struct {
 	ClickBonusRate       *int64     `json:"click_bonus_rate,omitempty" extensions:"x-nullable"`
 	ClickBonusThreshold  int        `json:"click_bonus_threshold"`
 	ClickBonusRateOver   *int64     `json:"click_bonus_rate_over,omitempty" extensions:"x-nullable"`
-	UpdatedAt            *time.Time `json:"updated_at,omitempty"`
+	// Steps — лесенка ЭТОЙ стороны: пороги объёма периода и цена на
+	// каждом, уже сведённая к её числам.
+	//
+	// Непустая лесенка ОТМЕНЯЕТ salary_per_month и ставку за тысячу выше:
+	// на ступенчатой версии условий они в расчёте не участвуют вовсе. Без
+	// этого поля кабинет креатора показывал бы ему оклад, которого в его
+	// тарифе нет, — а на самом деле это цена клиента, и назвать её его
+	// заработком нельзя.
+	Steps []SideStep `json:"steps,omitempty"`
+	// SubscriberRate — сколько стоит подписчик на этой стороне. Пусто —
+	// KPI по подписчикам не считается.
+	SubscriberRate *int64     `json:"subscriber_rate,omitempty" extensions:"x-nullable"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+}
+
+// SideStep — ступень одной стороны сделки: порог и цена на нём.
+//
+// Отдельный тип, а не TermsStep, ровно потому, что у TermsStep две цены
+// сразу — клиента и креатора. Здесь стороны уже разведены, и вторая цена
+// в ответе означала бы, что мы показываем креатору цену клиента: до
+// разведения сторон он именно её и считал своим заработком.
+type SideStep struct {
+	FromViews int64 `json:"from_views"`
+	Fee       int64 `json:"fee"`
 }
 
 // side — общая сборка: поля те же, отличаются только числа.
+//
+// Лесенку берём ИЗ КЛИЕНТСКОЙ стороны переданного тарифа: t сюда уже
+// приходит сведённым к нужной стороне (CreatorSide), и его Steps несут
+// её цены. Второй раз применять creatorSteps значило бы взять
+// креаторскую цену от креаторской — то есть один и тот же перевод
+// дважды.
 func side(t Terms) SideTerms {
+	steps := make([]SideStep, 0, len(t.Steps))
+	for _, st := range t.Steps {
+		steps = append(steps, SideStep{FromViews: st.FromViews, Fee: st.ClientFee})
+	}
+	if len(steps) == 0 {
+		// Пустой список и отсутствие списка на этом экране значат разное:
+		// «версия не ступенчатая» против «ступени есть, но пустые».
+		steps = nil
+	}
 	return SideTerms{
+		Steps:                steps,
+		SubscriberRate:       t.SubscriberRate,
 		ProjectID:            t.ProjectID,
 		TermsVersionID:       t.TermsVersionID,
 		SalaryPerMonth:       t.SalaryPerMonth,
@@ -82,8 +122,23 @@ type ClientAccrual struct {
 	ProjectID     uuid.UUID `json:"project_id"`
 	CreatorUserID uuid.UUID `json:"creator_user_id"`
 	CreatorName   string    `json:"creator_name,omitempty"`
-	PeriodStart   time.Time `json:"period_start"`
-	Salary        int64     `json:"salary"`
+	// CreatorAvatarURL/CreatorUsername — портрет и адрес страницы
+	// исполнителя. Заказчик платит за конкретных людей, и из состава
+	// периода он должен уметь перейти к тому, кто ролики снимал: буква в
+	// кружке на это не отвечает. Ставок креатора здесь по-прежнему нет —
+	// это его сторона сделки, а не клиентская.
+	CreatorAvatarURL string `json:"creator_avatar_url,omitempty"`
+	CreatorUsername  string `json:"creator_username,omitempty"`
+	// CreatorProfilePublic — есть ли по этому адресу открытая страница.
+	// Публичная карточка специалиста живёт только при is_published AND
+	// moderation_status='approved', на всё прочее отдаёт 404. Признак
+	// нужен экрану, чтобы не ставить ссылку туда, где её некуда вести:
+	// мёртвая ссылка в составе, за который заказчик платит, читается как
+	// «человека у вас нет», а человек есть — просто его страница ещё на
+	// модерации.
+	CreatorProfilePublic bool      `json:"creator_profile_public"`
+	PeriodStart          time.Time `json:"period_start"`
+	Salary               int64     `json:"salary"`
 	// VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько
 	// закрыто; разница объясняет вычет.
 	VideosPlanned   int   `json:"videos_planned"`
@@ -132,6 +187,16 @@ type ClientBillingView struct {
 	// Accruals — за запрошенный месяц. Пусто, пока не считали.
 	Accruals []ClientAccrual    `json:"accruals"`
 	Totals   ClientPeriodTotals `json:"totals"`
+	// Tariff — из чего сложился этот счёт: первые просмотры каждого
+	// ролика по стартовой ставке, всё сверх — по пониженной, плюс работа
+	// команды. То же разложение, что в сводке, и тем же кодом.
+	//
+	// nil, когда разложение не сошлось бы с итогом рядом: ступенчатая
+	// версия условий, порога нет вовсе или в счёте есть слагаемое,
+	// которого в лесенке не бывает. Лесенка, не делящаяся в стоящую
+	// рядом цену тысячи, хуже отсутствующей — её проверяют
+	// калькулятором. См. tariffLadder.result.
+	Tariff *OverviewTariff `json:"tariff,omitempty"`
 	// Period — какой период показан и в каком он состоянии. Заказчику
 	// это нужно по той же причине, что и менеджеру: пока период идёт,
 	// числа ещё изменятся, и счёт нельзя считать окончательным.
@@ -141,10 +206,15 @@ type ClientBillingView struct {
 // clientAccrual — строка начисления глазами заказчика.
 func clientAccrual(a Accrual) ClientAccrual {
 	return ClientAccrual{
-		ID:              a.ID,
-		ProjectID:       a.ProjectID,
-		CreatorUserID:   a.CreatorUserID,
-		CreatorName:     a.CreatorName,
+		ID:               a.ID,
+		ProjectID:        a.ProjectID,
+		CreatorUserID:    a.CreatorUserID,
+		CreatorName:      a.CreatorName,
+		CreatorAvatarURL: a.CreatorAvatarURL,
+		CreatorUsername:  a.CreatorUsername,
+
+		CreatorProfilePublic: a.CreatorProfilePublic,
+
 		PeriodStart:     a.PeriodStart,
 		Salary:          a.Salary,
 		VideosPlanned:   a.VideosPlanned,

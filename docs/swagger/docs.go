@@ -2833,6 +2833,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/internal_auth.TokenPair"
                         }
                     },
+                    "400": {
+                        "description": "invalid_input — в теле нет login или password",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
@@ -4976,6 +4982,77 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/creators/{creator_id}/subscribers": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Число вводится руками: сборщика подписчиков нет, а KPI по\nним в тарифе объявлен. Так же заведены переходы по UTM.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Вписать подписчиков за период (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "подписчики",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.subscribersReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.CreatorSubscribers"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — отрицательное число",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/creators/{creator_id}/utm": {
             "put": {
                 "security": [
@@ -6208,6 +6285,64 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/subscribers": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Сколько подписчиков записано креаторам проекта за период.\nАвтоматического источника у этого числа нет: сборщика по\nподписчикам в продукте не существует, и ставка в тарифе\nобъявляется под число, которое вписывает менеджер.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Подписчики за период (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.subscribersResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
                         }
                     }
                 }
@@ -9649,7 +9784,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Что уже вышло и что запланировано, с отметкой креатора.\nПросрочек в календаре нет: выкладка с прошедшей датой без\nссылок остаётся «запланированной».",
+                "description": "Что уже вышло и что запланировано, с отметкой креатора.\nПросрочек в календаре нет: выкладка с прошедшей датой без\nссылок остаётся «запланированной».\nВ ответе рядом с днями идёт список months — месяцы, в которых у\nпроекта вообще есть выкладки. Календарь показывает один месяц, и\nбез этого списка пустой месяц неотличим от потерянных данных.",
                 "produces": [
                     "application/json"
                 ],
@@ -11963,10 +12098,21 @@ const docTemplate = `{
                 "clicks": {
                     "type": "integer"
                 },
+                "creator_avatar_url": {
+                    "description": "CreatorAvatarURL/CreatorUsername — чем подписан человек в составе\nпериода. Имени мало: в списке, за который заказчик платит, стоят\nживые люди, и открыть страницу исполнителя он должен оттуда же, где\nувидел строку. Пусто у того, кто аватар не поставил или ещё не\nвыбрал адрес, — тогда ссылка идёт по uuid, а вместо портрета\nостаётся буква.",
+                    "type": "string"
+                },
                 "creator_name": {
                     "type": "string"
                 },
+                "creator_profile_public": {
+                    "description": "CreatorProfilePublic — открывается ли страница этого человека\nснаружи. Публичная карточка специалиста живёт только при\nis_published AND moderation_status='approved'; на всё остальное она\nотвечает 404. Без этого признака экран не мог отличить человека, к\nкоторому можно перейти, от человека, чья страница ещё на модерации,\nи ставил ссылку всем одинаково — половина вела в «не найдено».",
+                    "type": "boolean"
+                },
                 "creator_user_id": {
+                    "type": "string"
+                },
+                "creator_username": {
                     "type": "string"
                 },
                 "deduction": {
@@ -11992,6 +12138,9 @@ const docTemplate = `{
                 },
                 "payout_salary": {
                     "description": "Payout* — что получает сам креатор. Считается теми же правилами, но\nпо его ставкам; при незаданной креаторской стороне тарифа совпадает\nсо счётом. Раскладка своя, потому что объяснять «почему вышло\nстолько» креатору надо его числами, а не клиентскими.",
+                    "type": "integer"
+                },
+                "payout_subscriber_bonus": {
                     "type": "integer"
                 },
                 "payout_total": {
@@ -12026,6 +12175,13 @@ const docTemplate = `{
                             "$ref": "#/definitions/internal_billing.AccrualStatus"
                         }
                     ]
+                },
+                "subscriber_bonus": {
+                    "type": "integer"
+                },
+                "subscribers": {
+                    "description": "Subscribers/SubscriberBonus — KPI по подписчикам за период.\nПодписчиков никто не собирает: число вписывает менеджер руками, как\nпереходы по UTM. Отдельной парой, а не внутри бонуса за просмотры:\nначисление объясняет, почему вышла такая сумма, и слитые в одно\nчисло просмотры с подписчиками этого больше не объясняют.",
+                    "type": "integer"
                 },
                 "total": {
                     "description": "Total — счёт заказчику за этого креатора.",
@@ -12081,10 +12237,21 @@ const docTemplate = `{
                 "clicks": {
                     "type": "integer"
                 },
+                "creator_avatar_url": {
+                    "description": "CreatorAvatarURL/CreatorUsername — портрет и адрес страницы\nисполнителя. Заказчик платит за конкретных людей, и из состава\nпериода он должен уметь перейти к тому, кто ролики снимал: буква в\nкружке на это не отвечает. Ставок креатора здесь по-прежнему нет —\nэто его сторона сделки, а не клиентская.",
+                    "type": "string"
+                },
                 "creator_name": {
                     "type": "string"
                 },
+                "creator_profile_public": {
+                    "description": "CreatorProfilePublic — есть ли по этому адресу открытая страница.\nПубличная карточка специалиста живёт только при is_published AND\nmoderation_status='approved', на всё прочее отдаёт 404. Признак\nнужен экрану, чтобы не ставить ссылку туда, где её некуда вести:\nмёртвая ссылка в составе, за который заказчик платит, читается как\n«человека у вас нет», а человек есть — просто его страница ещё на\nмодерации.",
+                    "type": "boolean"
+                },
                 "creator_user_id": {
+                    "type": "string"
+                },
+                "creator_username": {
                     "type": "string"
                 },
                 "deduction": {
@@ -12172,6 +12339,14 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "tariff": {
+                    "description": "Tariff — из чего сложился этот счёт: первые просмотры каждого\nролика по стартовой ставке, всё сверх — по пониженной, плюс работа\nкоманды. То же разложение, что в сводке, и тем же кодом.\n\nnil, когда разложение не сошлось бы с итогом рядом: ступенчатая\nверсия условий, порога нет вовсе или в счёте есть слагаемое,\nкоторого в лесенке не бывает. Лесенка, не делящаяся в стоящую\nрядом цену тысячи, хуже отсутствующей — её проверяют\nкалькулятором. См. tariffLadder.result.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.OverviewTariff"
+                        }
+                    ]
+                },
                 "terms": {
                     "$ref": "#/definitions/internal_billing.SideTerms"
                 },
@@ -12253,6 +12428,14 @@ const docTemplate = `{
                 "snapshot_approx": {
                     "description": "SnapshotApprox — хотя бы у одного подытоженного периода числа\nподтянуты: поденную статистику к моменту подытога уже удалили.\nСводка, часть чисел которой приблизительна, обязана сказать об\nэтом, а не выглядеть точной.",
                     "type": "boolean"
+                },
+                "tariff": {
+                    "description": "Tariff — разложение этой цены по ступеням тарифа. nil, когда\nразложение не сошлось бы с итогом: см. OverviewTariff и tariffLadder.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.OverviewTariff"
+                        }
+                    ]
                 },
                 "top_videos": {
                     "description": "TopVideos — три ролика с наибольшим приростом просмотров за окно.",
@@ -12535,6 +12718,28 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_billing.CreatorSubscribers": {
+            "type": "object",
+            "properties": {
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "period_start": {
+                    "description": "PeriodStart — за какой период записано. Периоды катятся от первой\nпубликации проекта, а не по календарю.",
+                    "type": "string"
+                },
+                "subscribers": {
+                    "description": "Subscribers — сколько подписчиков прибавилось за период.",
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_billing.NextStepForecast": {
             "type": "object",
             "properties": {
@@ -12738,6 +12943,10 @@ const docTemplate = `{
         "internal_billing.OverviewProject": {
             "type": "object",
             "properties": {
+                "completed_at": {
+                    "description": "CompletedAt — когда проект закончили. Есть только у завершённого:\nитог без даты нечем привязать к «что мы сделали в прошлом году».",
+                    "type": "string"
+                },
                 "cost_per_1000": {
                     "description": "CostPer1000 — стоимость тысячи просмотров по этому проекту. nil,\nпока просмотров нет: делить не на что.",
                     "type": "integer"
@@ -12754,7 +12963,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "state": {
-                    "description": "State — running | not_started.",
+                    "description": "State — running | not_started | completed.",
                     "type": "string"
                 },
                 "title": {
@@ -12765,6 +12974,46 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewTariff": {
+            "type": "object",
+            "properties": {
+                "base_amount": {
+                    "type": "integer"
+                },
+                "fixed": {
+                    "description": "Fixed — работа команды: оклады за вычетом недосдачи. Третья\nстрока лесенки, и без неё сумма не сходится с итогом.",
+                    "type": "integer"
+                },
+                "over_amount": {
+                    "type": "integer"
+                },
+                "rate_per_1000": {
+                    "description": "RatePer1000 / RatePer1000Over — ставки за тысячу до порога и\nсверх него, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_over": {
+                    "type": "integer"
+                },
+                "threshold_views": {
+                    "description": "ThresholdViews — сколько просмотров КАЖДОГО ролика идёт по\nстартовой ставке.",
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views / Total — что разложено: ровно те просмотры и ровно та\nсумма, из которых посчитана цена тысячи рядом.",
+                    "type": "integer"
+                },
+                "views_base": {
+                    "description": "ViewsBase / ViewsOver — сколько просмотров легло на каждую\nступень, и BaseAmount / OverAmount — во сколько это обошлось.",
+                    "type": "integer"
+                },
+                "views_over": {
                     "type": "integer"
                 }
             }
@@ -12946,6 +13195,14 @@ const docTemplate = `{
                 "salaries": {
                     "type": "integer"
                 },
+                "subscriber_bonus": {
+                    "description": "SubscriberBonus — KPI по подписчикам за период. Отдельной строкой, а\nне внутри бонуса за просмотры: это разные величины, и «почему вышло\nстолько» по их сумме уже не разобрать.",
+                    "type": "integer"
+                },
+                "subscribers": {
+                    "description": "Subscribers — сколько подписчиков вписал менеджер за период.",
+                    "type": "integer"
+                },
                 "total": {
                     "description": "Total — сколько выставлено заказчику; Payouts — сколько должны\nкреаторам; Margin — разница, то есть что остаётся платформе.\nПри незаданной креаторской стороне тарифа Payouts равен Total, а\nMargin нулевой: платформа ничего не удерживает.",
                     "type": "integer"
@@ -13109,6 +13366,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_billing.SideStep": {
+            "type": "object",
+            "properties": {
+                "fee": {
+                    "type": "integer"
+                },
+                "from_views": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_billing.SideTerms": {
             "type": "object",
             "properties": {
@@ -13137,6 +13405,18 @@ const docTemplate = `{
                 },
                 "salary_per_month": {
                     "type": "integer"
+                },
+                "steps": {
+                    "description": "Steps — лесенка ЭТОЙ стороны: пороги объёма периода и цена на\nкаждом, уже сведённая к её числам.\n\nНепустая лесенка ОТМЕНЯЕТ salary_per_month и ставку за тысячу выше:\nна ступенчатой версии условий они в расчёте не участвуют вовсе. Без\nэтого поля кабинет креатора показывал бы ему оклад, которого в его\nтарифе нет, — а на самом деле это цена клиента, и назвать её его\nзаработком нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.SideStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько стоит подписчик на этой стороне. Пусто —\nKPI по подписчикам не считается.",
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "terms_version_id": {
                     "description": "TermsVersionID — с какой версии прайса сняты числа.",
@@ -13209,6 +13489,11 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "first_period_fee": {
                     "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
                     "type": "integer",
@@ -13256,6 +13541,18 @@ const docTemplate = `{
                 },
                 "step_views": {
                     "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: пороги объёма и цена периода на\nкаждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они\nостались ради версий, на которых стоят действующие проекты, и\nсмешивать два правила в одном расчёте нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика, набранного\nза период, копейки. nil = KPI по подписчикам не считается.\n\nПодписчиков никто не собирает: сборщика по ним нет, и выдумывать\nего под ставку нельзя. Ставка объявляется здесь, а само число\nвводит менеджер руками — как переходы по UTM.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -13390,6 +13687,11 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "first_period_fee": {
                     "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
                     "type": "integer",
@@ -13455,6 +13757,18 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: пороги объёма и цена периода на\nкаждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они\nостались ради версий, на которых стоят действующие проекты, и\nсмешивать два правила в одном расчёте нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика, набранного\nза период, копейки. nil = KPI по подписчикам не считается.\n\nПодписчиков никто не собирает: сборщика по ним нет, и выдумывать\nего под ставку нельзя. Ставка объявляется здесь, а само число\nвводит менеджер руками — как переходы по UTM.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "terms_version_id": {
                     "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
                     "type": "string"
@@ -13475,6 +13789,24 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsStep": {
+            "type": "object",
+            "properties": {
+                "client_fee": {
+                    "description": "ClientFee — сколько стоит период заказчику на этой ступени, копейки.",
+                    "type": "integer"
+                },
+                "creator_fee": {
+                    "description": "CreatorFee — оклад креатору на этой ступени, копейки. nil = как у\nзаказчика: то же правило, что у остальных креаторских полей.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "from_views": {
+                    "description": "FromViews — с какого объёма просмотров периода действует ступень.\nНижняя обычно с нуля: это и есть голый оклад без KPI.",
                     "type": "integer"
                 }
             }
@@ -13543,6 +13875,11 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "first_period_fee": {
                     "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
                     "type": "integer",
@@ -13605,6 +13942,18 @@ const docTemplate = `{
                 },
                 "step_views": {
                     "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: пороги объёма и цена периода на\nкаждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они\nостались ради версий, на которых стоят действующие проекты, и\nсмешивать два правила в одном расчёте нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика, набранного\nза период, копейки. nil = KPI по подписчикам не считается.\n\nПодписчиков никто не собирает: сборщика по ним нет, и выдумывать\nего под ставку нельзя. Ставка объявляется здесь, а само число\nвводит менеджер руками — как переходы по UTM.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -13780,6 +14129,11 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnull = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "first_period_fee": {
                     "type": "integer",
                     "x-nullable": true
@@ -13818,12 +14172,47 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: порог объёма и цена периода на\nнём. Приходит целиком и целиком же заменяет прежнюю: ступень\nудаляют не реже, чем добавляют, и «обнови присланное» оставило бы\nудалённую ступень жить в расчёте.\n\nНепустая лесенка отменяет step_views и цену ступени выше: это\nдругое правило счёта, и смешивать их в одном периоде нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика за период.\nnull = KPI по подписчикам не считаем вовсе (в отличие от нуля,\nкоторый значил бы объявленную нулевую ставку). Само число\nподписчиков вписывает менеджер: сборщика по ним нет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "videos_first_month": {
                     "description": "За какой объём назван оклад: «30 видео первый месяц, 60 со второго».",
                     "type": "integer"
                 },
                 "videos_next_months": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_billing.subscribersReq": {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "description": "Period — номер периода проекта. 0 = текущий: менеджер вписывает\nчисло по ходу периода, а не разыскивает его номер.",
+                    "type": "integer"
+                },
+                "subscribers": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.subscribersResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.CreatorSubscribers"
+                    }
                 }
             }
         },
@@ -13879,6 +14268,11 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnull = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "first_period_fee": {
                     "type": "integer",
                     "x-nullable": true
@@ -13914,6 +14308,18 @@ const docTemplate = `{
                 },
                 "step_views": {
                     "description": "---- ступенчатый тариф ----\n\nЗаполненный step_views означает, что версия считается ступенями, а\nоклад и ставка за тысячу в расчёт не идут — кроме вирального\nхвоста, который считается по rate_per_1000_views_over и порогу на\nролик выше. null во всех этих полях = версия по старой модели;\nпоэтому именно null, а не 0: ноль значил бы «ступень нулевого\nразмера».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: порог объёма и цена периода на\nнём. Приходит целиком и целиком же заменяет прежнюю: ступень\nудаляют не реже, чем добавляют, и «обнови присланное» оставило бы\nудалённую ступень жить в расчёте.\n\nНепустая лесенка отменяет step_views и цену ступени выше: это\nдругое правило счёта, и смешивать их в одном периоде нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика за период.\nnull = KPI по подписчикам не считаем вовсе (в отличие от нуля,\nкоторый значил бы объявленную нулевую ставку). Само число\nподписчиков вписывает менеджер: сборщика по ним нет.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -18387,6 +18793,13 @@ const docTemplate = `{
                 },
                 "month": {
                     "type": "string"
+                },
+                "months": {
+                    "description": "Months — месяцы (ГГГГ-ММ), в которых у проекта вообще есть\nвыкладки. Сетка показывает один месяц, и без этого списка пустой\nмесяц неотличим от «данные не доехали»: заказчик видел сентябрь с\nодной точкой и не знал, что десять остальных выкладок в августе.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

@@ -83,6 +83,49 @@ func platformRow(t *testing.T, body map[string]any, platform string) map[string]
 	return nil
 }
 
+// Предшественник окна может быть сколь угодно старым.
+//
+// Ряд поденной статистики накопительный: прирост дня — это разница со
+// ПРЕДЫДУЩИМ снимком той же ссылки, а не с началом окна. Собирают не
+// каждый день (площадка не ответила, сборщик не дошёл), поэтому
+// последний снимок перед окном бывает и месячной давности.
+//
+// Сторожим ровно этот случай, потому что он ломается от самой
+// соблазнительной оптимизации: ограничить окно LAG запрошенными датами.
+// Запрос тогда перестаёт видеть предшественника, и весь НАКОПЛЕННЫЙ
+// объём засчитывается приростом первого дня — заказчик видит
+// восьмикратный всплеск на ровном месте.
+func TestDashboardGainCountsFromSnapshotBeforeWindow(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	pid, cleanup := overviewProject(t, pool, client, 6_000_000, 9_000, 0, "dsh-lag")
+	defer cleanup()
+
+	var pubID uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`SELECT id FROM project_publications WHERE project_id = $1 LIMIT 1`, pid).Scan(&pubID); err != nil {
+		t.Fatalf("выкладка: %v", err)
+	}
+	resetDailyViews(t, pool, pid)
+
+	sh := func(v int64) *int64 { return &v }
+	// Последний снимок ДО окна — и он не нулевой: к этому дню ролик уже
+	// набрал полмиллиона. Семьдесят дней назад, то есть далеко за
+	// пределами месячного окна и его предшественника.
+	dashDay(t, pool, pubID, "tiktok", daysAgo(70), 500_000, 5_000, 500, sh(250))
+	// И один снимок внутри текущего окна: накопленным стало 800 000.
+	dashDay(t, pool, pubID, "tiktok", daysAgo(10), 800_000, 8_000, 800, sh(400))
+
+	win := subMap(t, dashboardBody(t, h, client, "month"), "window")
+	if got := num(t, win, "views"); got != 300_000 {
+		t.Errorf("прирост за окно %d, ожидалось 300 000 (800 000 минус 500 000, набранных до окна). "+
+			"Восемьсот тысяч здесь означают, что запрос перестал видеть снимок перед окном", got)
+	}
+}
+
 // Прирост считается против предыдущего окна той же длины.
 func TestDashboardDeltaAgainstPreviousWindow(t *testing.T) {
 	pool := integration.Pool(t)
@@ -511,5 +554,125 @@ func TestDashboardWindowViewsDifferFromAllTime(t *testing.T) {
 	}
 	if sumWindowShare < 98 || sumWindowShare > 102 {
 		t.Errorf("сумма оконных долей %d%%, ожидалось около ста", sumWindowShare)
+	}
+}
+
+// ---- «данные на такое-то время» ----
+
+// collectedAt — отметка последнего сбора из ответа дашборда.
+// Второе значение — была ли она вообще: пустая отметка это штатное
+// состояние («не собирали ни разу»), а не ошибка.
+func collectedAt(t *testing.T, body map[string]any) (time.Time, bool) {
+	t.Helper()
+	raw, ok := body["collected_at"]
+	if !ok || raw == nil {
+		return time.Time{}, false
+	}
+	s, ok := raw.(string)
+	if !ok {
+		t.Fatalf("collected_at пришёл не строкой: %T %v", raw, raw)
+	}
+	at, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("разобрать collected_at %q: %v", s, err)
+	}
+	return at, true
+}
+
+// Отметка о сборе равна самому свежему сбору, какой мы знаем.
+//
+// Сбор оставляет две отметки: журнал сборщика в publication_links и
+// собственно снимок в video_stat_daily. Дашборд читал только первую, а
+// числа считает по второй, — и заказчик видел «первый сбор ещё не
+// прошёл» под тремя миллионами просмотров. Строку эту прятать нельзя:
+// она отвечает на вопрос «этим числам сколько лет», и без неё вчерашний
+// миллион неотличим от миллиона месячной давности. Значит, она обязана
+// быть правдой.
+func TestDashboardCollectedAtIsFreshestCollection(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	pid, cleanup := overviewProject(t, pool, client, 6_000_000, 9_000, 0, "dsh9")
+	defer cleanup()
+
+	var pubID uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`SELECT id FROM project_publications WHERE project_id = $1 LIMIT 1`, pid).Scan(&pubID); err != nil {
+		t.Fatalf("выкладка: %v", err)
+	}
+	resetDailyViews(t, pool, pid)
+
+	// Снимки есть, а журнала сборщика нет вовсе: ровно то состояние, в
+	// котором строка и врала. Свежий снимок — трёхдневной давности.
+	dashDay(t, pool, pubID, "tiktok", daysAgo(10), 1_000_000, 0, 0, nil)
+	dashDay(t, pool, pubID, "tiktok", daysAgo(3), 3_000_000, 0, 0, nil)
+
+	body := dashboardBody(t, h, client, "month")
+	// Оба снимка внутри окна, опорного до него нет — в окно попадает весь
+	// набранный объём. Проверяем это до отметки: тест обязан стоять на
+	// том же состоянии, в котором дефект и видели, — цифры есть.
+	if got := num(t, subMap(t, body, "window"), "views"); got != 3_000_000 {
+		t.Fatalf("просмотров за окно %d, ожидалось 3 000 000: тест смотрит не на те данные", got)
+	}
+	at, ok := collectedAt(t, body)
+	if !ok {
+		t.Fatal("отметки о сборе нет, хотя статистика собрана: заказчик прочтёт «первый сбор ещё не прошёл» под собранными цифрами")
+	}
+	if want := daysAgo(3); !at.Equal(want) {
+		t.Errorf("отметка о сборе %s, ожидался самый свежий сбор %s",
+			at.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+
+	// Журнал сборщика свежее снимков — ответ переезжает на него: самый
+	// свежий сбор среди обеих отметок и есть ответ.
+	newer := time.Now().UTC().Truncate(time.Second)
+	if _, err := pool.Exec(context.Background(), `
+UPDATE publication_links SET last_collected_at = $2
+WHERE id IN (
+    SELECT l.id FROM publication_links l
+    JOIN project_publications p ON p.id = l.publication_id
+    WHERE p.project_id = $1
+    ORDER BY l.platform LIMIT 1
+)`, pid, newer); err != nil {
+		t.Fatalf("журнал сборщика: %v", err)
+	}
+	at, ok = collectedAt(t, dashboardBody(t, h, client, "month"))
+	if !ok {
+		t.Fatal("отметки о сборе нет, хотя сборщик отчитался")
+	}
+	if !at.Equal(newer) {
+		t.Errorf("отметка о сборе %s, ожидалась самая свежая %s",
+			at.Format(time.RFC3339), newer.Format(time.RFC3339))
+	}
+}
+
+// Не собирали ни разу — отметки нет, и это НЕ ошибка.
+//
+// Ссылки сданы, а статистики по ним ещё нет: между сдачей и первым
+// сбором проходит до суток. Сказать тут «данные на такое-то время»
+// было бы нечем, и подставлять вместо отметки «сейчас» нельзя — это
+// ровно та ложь, ради которой строка и заведена.
+func TestDashboardCollectedAtEmptyWithoutStats(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	pid, cleanup := overviewProject(t, pool, client, 6_000_000, 9_000, 0, "dsh10")
+	defer cleanup()
+	resetDailyViews(t, pool, pid)
+
+	body := dashboardBody(t, h, client, "month")
+	if _, ok := collectedAt(t, body); ok {
+		t.Error("отметка о сборе есть, хотя не собирали ни разу")
+	}
+	// И это штатное состояние: остальной дашборд на месте, а не 500.
+	if body["range"] != "month" {
+		t.Errorf("окно %v, ожидалось month: пустая отметка сломала ответ целиком", body["range"])
+	}
+	if len(list(t, body, "platforms")) != 5 {
+		t.Error("площадок не пять: пустая отметка сломала ответ целиком")
 	}
 }

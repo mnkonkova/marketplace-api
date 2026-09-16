@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -85,6 +86,7 @@ SELECT v.id, v.version, v.body, v.published_at,
        v.step_tier2_from, v.step_fee_over, v.step_cap_views, v.guarantee_views,
        v.creator_first_period_fee, v.creator_base_fee, v.creator_step_fee,
        v.creator_step_fee_over,
+       v.subscriber_rate, v.creator_subscriber_rate,
        v.version = (SELECT MAX(version) FROM terms_versions),
        (SELECT COUNT(*) FROM client_terms_consents c WHERE c.terms_version_id = v.id),
        (SELECT COUNT(*) FROM project_billing b WHERE b.terms_version_id = v.id)
@@ -107,13 +109,26 @@ ORDER BY v.version DESC`)
 			&v.StepTier2From, &v.StepFeeOver, &v.StepCapViews, &v.GuaranteeViews,
 			&v.CreatorFirstPeriodFee, &v.CreatorBaseFee, &v.CreatorStepFee,
 			&v.CreatorStepFeeOver,
+			&v.SubscriberRate, &v.CreatorSubscriberRate,
 			&v.IsCurrent, &v.ConsentedClients, &v.UsedByProjects); err != nil {
 			return nil, fmt.Errorf("scan terms version: %w", err)
 		}
-		v.Margin = v.Terms.PlatformMargin()
 		out = append(out, v)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Ступени — вторым проходом: курсор первого запроса ещё открыт, и
+	// вложенный запрос по тому же соединению его бы и занял.
+	for i := range out {
+		steps, err := loadSteps(ctx, r.db, stepsOwnerVersion, *out[i].TermsVersionID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Steps = steps
+		out[i].Margin = out[i].Terms.PlatformMargin()
+	}
+	return out, nil
 }
 
 // TermsChange — одно изменившееся число прайса.
@@ -171,10 +186,11 @@ INSERT INTO terms_versions
    creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over,
    step_views, first_period_fee, base_fee, step_fee,
    step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
-   creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over)
+   creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
+   subscriber_rate, creator_subscriber_rate)
 VALUES ((SELECT COALESCE(MAX(version), 0) + 1 FROM terms_versions),
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 RETURNING id, version, published_at`,
 		v.Body, v.SalaryPerMonth, v.VideosFirstMonth, v.VideosNextMonths,
 		v.RatePer1000Views, v.BonusViewsThreshold, v.RatePer1000ViewsOver,
@@ -182,10 +198,17 @@ RETURNING id, version, published_at`,
 		v.CreatorSalaryPerMonth, v.CreatorRatePer1000Views, v.CreatorRatePer1000ViewsOver,
 		v.StepViews, v.FirstPeriodFee, v.BaseFee, v.StepFee,
 		v.StepTier2From, v.StepFeeOver, v.StepCapViews, v.GuaranteeViews,
-		v.CreatorFirstPeriodFee, v.CreatorBaseFee, v.CreatorStepFee, v.CreatorStepFeeOver).
+		v.CreatorFirstPeriodFee, v.CreatorBaseFee, v.CreatorStepFee, v.CreatorStepFeeOver,
+		v.SubscriberRate, v.CreatorSubscriberRate).
 		Scan(&v.TermsVersionID, &v.Version, &v.PublishedAt)
 	if err != nil {
 		return TermsPublishResult{}, fmt.Errorf("publish terms version: %w", err)
+	}
+	// Ступени — в той же транзакции, что и сама версия: версия без своих
+	// ступеней посчиталась бы по прежней модели, и это увидели бы не
+	// сразу, а на первом счёте.
+	if err := replaceSteps(ctx, tx, stepsOwnerVersion, *v.TermsVersionID, v.Steps); err != nil {
+		return TermsPublishResult{}, err
 	}
 	v.IsCurrent = true
 	v.Margin = v.Terms.PlatformMargin()
@@ -229,7 +252,8 @@ SELECT id, version, body, published_at,
        creator_salary_per_month, creator_rate_per_1000_views, creator_rate_per_1000_views_over,
        step_views, first_period_fee, base_fee, step_fee,
        step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
-       creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over
+       creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
+       subscriber_rate, creator_subscriber_rate
 FROM terms_versions
 ORDER BY version DESC
 LIMIT 1`).Scan(&v.TermsVersionID, &v.Version, &v.Body, &v.PublishedAt,
@@ -239,12 +263,16 @@ LIMIT 1`).Scan(&v.TermsVersionID, &v.Version, &v.Body, &v.PublishedAt,
 		&v.CreatorSalaryPerMonth, &v.CreatorRatePer1000Views, &v.CreatorRatePer1000ViewsOver,
 		&v.StepViews, &v.FirstPeriodFee, &v.BaseFee, &v.StepFee,
 		&v.StepTier2From, &v.StepFeeOver, &v.StepCapViews, &v.GuaranteeViews,
-		&v.CreatorFirstPeriodFee, &v.CreatorBaseFee, &v.CreatorStepFee, &v.CreatorStepFeeOver)
+		&v.CreatorFirstPeriodFee, &v.CreatorBaseFee, &v.CreatorStepFee, &v.CreatorStepFeeOver,
+		&v.SubscriberRate, &v.CreatorSubscriberRate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TermsVersion{}, false, nil
 	}
 	if err != nil {
 		return TermsVersion{}, false, fmt.Errorf("current terms version: %w", err)
+	}
+	if v.Steps, err = loadSteps(ctx, tx, stepsOwnerVersion, *v.TermsVersionID); err != nil {
+		return TermsVersion{}, false, err
 	}
 	return v, true, nil
 }
@@ -302,6 +330,76 @@ func diffTerms(from, to Terms) []TermsChange {
 	add("creator_step_fee", "Креатору за ступень", from.CreatorStepFee, to.CreatorStepFee)
 	add("creator_step_fee_over", "Креатору за ступень сверх порога",
 		from.CreatorStepFeeOver, to.CreatorStepFeeOver)
+	add("subscriber_rate", "Ставка за подписчика", from.SubscriberRate, to.SubscriberRate)
+	add("creator_subscriber_rate", "Креатору за подписчика",
+		from.CreatorSubscriberRate, to.CreatorSubscriberRate)
+
+	// Ступени сравниваем по порогам, а не по индексу в списке: ступень
+	// вставляют в середину, и сравнение «первая с первой» показало бы
+	// изменившимся весь хвост лесенки.
+	out = append(out, diffSteps(from.Steps, to.Steps)...)
+	return out
+}
+
+// diffSteps — что изменилось в лесенке порогов.
+//
+// Порог — это имя ступени, поэтому и подпись строится от него: «Ступень
+// от 300 тыс.». Исчезнувшая ступень показывается переходом цены в
+// пустоту, появившаяся — из пустоты: у обоих случаев на экране разный
+// смысл, и «стало 0» вместо «ступени больше нет» соврало бы.
+func diffSteps(from, to []TermsStep) []TermsChange {
+	out := []TermsChange{}
+	byFrom := func(steps []TermsStep) map[int64]TermsStep {
+		m := make(map[int64]TermsStep, len(steps))
+		for _, s := range steps {
+			m[s.FromViews] = s
+		}
+		return m
+	}
+	a, b := byFrom(from), byFrom(to)
+	seen := map[int64]bool{}
+	thresholds := make([]int64, 0, len(a)+len(b))
+	for _, list := range [][]TermsStep{from, to} {
+		for _, s := range list {
+			if !seen[s.FromViews] {
+				seen[s.FromViews] = true
+				thresholds = append(thresholds, s.FromViews)
+			}
+		}
+	}
+	sort.Slice(thresholds, func(i, j int) bool { return thresholds[i] < thresholds[j] })
+	for _, th := range thresholds {
+		label := fmt.Sprintf("Ступень от %d просмотров", th)
+		var was, now *int64
+		if s, ok := a[th]; ok {
+			v := s.ClientFee
+			was = &v
+		}
+		if s, ok := b[th]; ok {
+			v := s.ClientFee
+			now = &v
+		}
+		if was == nil || now == nil || *was != *now {
+			out = append(out, TermsChange{
+				Field: fmt.Sprintf("step_%d", th), Label: label, From: was, To: now,
+			})
+		}
+		// Креаторская цена той же ступени — отдельной строкой: это другие
+		// деньги, и меняют их порознь.
+		var cwas, cnow *int64
+		if s, ok := a[th]; ok {
+			cwas = s.CreatorFee
+		}
+		if s, ok := b[th]; ok {
+			cnow = s.CreatorFee
+		}
+		if (cwas == nil) != (cnow == nil) || (cwas != nil && cnow != nil && *cwas != *cnow) {
+			out = append(out, TermsChange{
+				Field: fmt.Sprintf("step_%d_creator", th),
+				Label: label + " — креатору", From: cwas, To: cnow,
+			})
+		}
+	}
 	return out
 }
 
@@ -338,7 +436,9 @@ func (s *Service) PublishTermsVersion(ctx context.Context, v TermsVersion, actor
 	// То же правило для ступеней. Проверяется по лесенкам, а не по полям:
 	// незаполненная креаторская ступень означает «как у клиента», и
 	// сравнение пустого поля с числом ничего не значило бы.
-	if v.Terms.Stepped() {
+	// Прежняя двухступенчатая модель. У лесенки произвольной длины свои
+	// правила, и они уже проверены в checkRates — по каждой ступени.
+	if v.Terms.StepViews != nil && v.Terms.StepFee != nil {
 		cl, cr := v.Terms.ClientLadder(), v.Terms.CreatorLadder()
 		if cr.FirstPeriodFee > cl.FirstPeriodFee || cr.BaseFee > cl.BaseFee ||
 			cr.StepFee > cl.StepFee || cr.StepFeeOver > cl.StepFeeOver ||

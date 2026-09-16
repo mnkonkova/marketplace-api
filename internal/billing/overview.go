@@ -46,6 +46,14 @@ const (
 	// значит и периода. Нули у такого проекта означали бы «работаем и
 	// ничего не набрали», а это другое.
 	OverviewNotStarted = "not_started"
+	// OverviewCompleted — проект закончен (projects.status = 'done').
+	//
+	// Третье состояние, а не «running с флажком»: по нему заказчик
+	// отбирает строку в блок итогов, и вычислять завершённость по
+	// косвенным признакам — вроде «период закрыт и новый не начался» —
+	// значит завести в браузере вторую, расходящуюся версию правды.
+	// Состояние проекта знает сервер.
+	OverviewCompleted = "completed"
 )
 
 // OverviewViews — просмотры: всего и по площадкам.
@@ -81,8 +89,11 @@ type OverviewMoney struct {
 type OverviewProject struct {
 	ProjectID uuid.UUID `json:"project_id"`
 	Title     string    `json:"title"`
-	// State — running | not_started.
+	// State — running | not_started | completed.
 	State string `json:"state"`
+	// CompletedAt — когда проект закончили. Есть только у завершённого:
+	// итог без даты нечем привязать к «что мы сделали в прошлом году».
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	// Period — текущий период проекта. nil у не начавшегося.
 	Period *ClientPeriod `json:"period,omitempty"`
 	Views  int64         `json:"views"`
@@ -91,6 +102,47 @@ type OverviewProject struct {
 	// CostPer1000 — стоимость тысячи просмотров по этому проекту. nil,
 	// пока просмотров нет: делить не на что.
 	CostPer1000 *int64 `json:"cost_per_1000,omitempty"`
+}
+
+// OverviewTariff — почему тысяча стоит столько, сколько показано.
+//
+// На экране у заказчика стояло ТОЛЬКО «56 ₽ за тысячу» — результат
+// формулы без самой формулы. А коммерческий аргумент здесь именно в
+// формуле: первые просмотры каждого ролика идут по стартовой ставке,
+// всё, что ролик набрал сверх, — по пониженной, и чем дальше он
+// расходится, тем ниже выходит средняя цена тысячи. Без разложения это
+// читается как «повезло», хотя так устроен договор.
+//
+// Порог — НА РОЛИК, суммой по пяти площадкам (см. Terms.
+// BonusViewsThreshold и LEAST(views, порог) в periodFacts). Написать
+// «первый миллион просмотров проекта» значило бы описать чужое правило:
+// у пяти роликов по 400 000 сверхпорогового объёма нет вовсе.
+//
+// Блока нет вовсе, если разложение не сойдётся с показанным итогом —
+// см. tariffLadder.result. Лесенка, которая не делится в стоящую рядом
+// цену тысячи, хуже отсутствующей: её проверяют на калькуляторе первым
+// же заходом.
+type OverviewTariff struct {
+	// ThresholdViews — сколько просмотров КАЖДОГО ролика идёт по
+	// стартовой ставке.
+	ThresholdViews int64 `json:"threshold_views"`
+	// RatePer1000 / RatePer1000Over — ставки за тысячу до порога и
+	// сверх него, копейки.
+	RatePer1000     int64 `json:"rate_per_1000"`
+	RatePer1000Over int64 `json:"rate_per_1000_over"`
+	// ViewsBase / ViewsOver — сколько просмотров легло на каждую
+	// ступень, и BaseAmount / OverAmount — во сколько это обошлось.
+	ViewsBase  int64 `json:"views_base"`
+	ViewsOver  int64 `json:"views_over"`
+	BaseAmount int64 `json:"base_amount"`
+	OverAmount int64 `json:"over_amount"`
+	// Fixed — работа команды: оклады за вычетом недосдачи. Третья
+	// строка лесенки, и без неё сумма не сходится с итогом.
+	Fixed int64 `json:"fixed"`
+	// Views / Total — что разложено: ровно те просмотры и ровно та
+	// сумма, из которых посчитана цена тысячи рядом.
+	Views int64 `json:"views"`
+	Total int64 `json:"total"`
 }
 
 // OverviewPoint — точка графика.
@@ -114,6 +166,9 @@ type ClientOverview struct {
 	// а не из ставки тарифа: у разных проектов разные версии условий, и
 	// средняя ставка соврала бы. nil, пока просмотров нет.
 	CostPer1000 *int64 `json:"cost_per_1000,omitempty"`
+	// Tariff — разложение этой цены по ступеням тарифа. nil, когда
+	// разложение не сошлось бы с итогом: см. OverviewTariff и tariffLadder.
+	Tariff *OverviewTariff `json:"tariff,omitempty"`
 	// SnapshotApprox — хотя бы у одного подытоженного периода числа
 	// подтянуты: поденную статистику к моменту подытога уже удалили.
 	// Сводка, часть чисел которой приблизительна, обязана сказать об
@@ -158,6 +213,90 @@ type ClientOverview struct {
 	MarketScaleVersion int `json:"market_scale_version,omitempty"`
 }
 
+// tariffLadder — разложение счёта по ступеням, копится по ходу сводки.
+//
+// Складывает ровно то и ровно так, как это посчитал расчёт начислений:
+// ступени разложены по роликам ещё в SQL, а деление на тысячу целое и
+// идёт по КАЖДОЙ строке креатора отдельно (см. accrue). Сложить
+// просмотры и поделить один раз в конце — значит получить другое число,
+// и лесенка перестала бы сходиться со счётом на рубли.
+type tariffLadder struct {
+	// mixed — у проектов разные ставки или порог. Одной лесенкой такое
+	// не описать: строка «первый миллион по 90 ₽» была бы неправдой для
+	// половины проектов, а сложить две лесенки в одну нельзя — читатель
+	// решит, что порог общий.
+	mixed bool
+	set   bool
+
+	threshold, rate, rateOver     int64
+	viewsBase, viewsOver          int64
+	baseAmount, overAmount, fixed int64
+	total                         int64
+}
+
+func (l *tariffLadder) add(t Terms, accruals []Accrual) {
+	// Ступенчатая версия условий считается по другим правилам — там нет
+	// ни оклада, ни ставки за тысячу (см. Terms.Stepped). Показать её
+	// этой лесенкой значит показать поля, которые в расчёте не участвуют.
+	if t.Stepped() || t.BonusViewsThreshold <= 0 {
+		l.mixed = true
+		return
+	}
+	if !l.set {
+		l.set = true
+		l.threshold, l.rate, l.rateOver = t.BonusViewsThreshold, t.RatePer1000Views, t.RatePer1000ViewsOver
+	} else if l.threshold != t.BonusViewsThreshold || l.rate != t.RatePer1000Views ||
+		l.rateOver != t.RatePer1000ViewsOver {
+		l.mixed = true
+		return
+	}
+	for _, a := range accruals {
+		l.viewsBase += a.ViewsBase
+		l.viewsOver += a.ViewsOver
+		l.baseAmount += a.ViewsBase / 1000 * l.rate
+		l.overAmount += a.ViewsOver / 1000 * l.rateOver
+		l.fixed += a.Salary - a.Deduction
+		l.total += a.Total
+	}
+}
+
+// result — лесенка, если она сходится с тем, что показано рядом.
+//
+// Два условия, и оба про арифметику на экране. Разложение обязано
+// покрывать ВЕСЬ счёт (подытоженные периоды сюда не попадают: их
+// начислений уже нет, есть только сумма среза) и ВСЕ просмотры, из
+// которых посчитана цена тысячи. Иначе рядом встанут «168 000 ₽ ÷ 3 000
+// тысяч = 56 ₽» и лесенка на другие деньги — а её проверяют
+// калькулятором первым же заходом.
+//
+// Третье, неявное: сумма ступеней должна совпасть с итогом. Не совпадёт
+// она при бонусах, которых в лесенке нет вовсе (переходы, подписчики), —
+// и тогда лесенка молча исчезнет, а не покажет счёт, в котором не
+// хватает строки.
+func (l *tariffLadder) result(money, views int64) *OverviewTariff {
+	if !l.set || l.mixed || views <= 0 || money <= 0 {
+		return nil
+	}
+	if l.total != money || l.viewsBase+l.viewsOver != views {
+		return nil
+	}
+	if l.baseAmount+l.overAmount+l.fixed != l.total {
+		return nil
+	}
+	return &OverviewTariff{
+		ThresholdViews:  l.threshold,
+		RatePer1000:     l.rate,
+		RatePer1000Over: l.rateOver,
+		ViewsBase:       l.viewsBase,
+		ViewsOver:       l.viewsOver,
+		BaseAmount:      l.baseAmount,
+		OverAmount:      l.overAmount,
+		Fixed:           l.fixed,
+		Views:           l.viewsBase + l.viewsOver,
+		Total:           l.total,
+	}
+}
+
 // costPer1000 — во сколько обходится тысяча просмотров. nil, если
 // просмотров нет: ноль в знаменателе — это не «бесплатно», это «нечего
 // делить».
@@ -173,6 +312,11 @@ func costPer1000(total, views int64) *int64 {
 type overviewProject struct {
 	ID    uuid.UUID
 	Title string
+	// Done/CompletedAt — проект закончен. Берём из projects.status, а не
+	// выводим из периодов: закрытый период и законченный проект — разные
+	// вещи, и второе знает только сам проект.
+	Done        bool
+	CompletedAt *time.Time
 }
 
 // ClientProjects — проекты заказчика для сводки. Тестовые не в счёт:
@@ -182,7 +326,7 @@ func (r *Repo) ClientProjects(ctx context.Context, clientID uuid.UUID, limit int
 		limit = overviewProjectsLimit
 	}
 	rows, err := r.db.Query(ctx, `
-SELECT id, title
+SELECT id, title, status = 'done', completed_at
 FROM projects
 WHERE client_user_id = $1 AND is_test = FALSE AND status <> 'cancelled'
 ORDER BY created_at
@@ -194,7 +338,7 @@ LIMIT $2`, clientID, limit)
 	out := make([]overviewProject, 0, 8)
 	for rows.Next() {
 		var p overviewProject
-		if err := rows.Scan(&p.ID, &p.Title); err != nil {
+		if err := rows.Scan(&p.ID, &p.Title, &p.Done, &p.CompletedAt); err != nil {
 			return nil, fmt.Errorf("scan client project: %w", err)
 		}
 		out = append(out, p)
@@ -434,6 +578,7 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 		return out, err
 	}
 
+	var ladder tariffLadder
 	for _, pr := range projects {
 		row := OverviewProject{
 			ProjectID: pr.ID,
@@ -481,7 +626,17 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 				current := totals(accruals).Total
 				row.Total += current
 				out.Money.Current += current
+				ladder.add(terms, accruals)
 			}
+		}
+
+		// Законченный проект называется законченным, чем бы ни кончился
+		// его последний период: «идёт» у сданного проекта — прямая
+		// неправда, и по этому же признаку заказчик отбирает строки в
+		// итоги по сделанному.
+		if pr.Done {
+			row.State = OverviewCompleted
+			row.CompletedAt = pr.CompletedAt
 		}
 
 		row.CostPer1000 = costPer1000(row.Total, row.Views)
@@ -493,6 +648,7 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 	// Средняя ставка по тарифам соврала бы: у проектов разные версии
 	// условий, и цена тысячи у них разная.
 	out.CostPer1000 = costPer1000(out.Money.Total, out.Views.Total)
+	out.Tariff = ladder.result(out.Money.Total, out.Views.Total)
 
 	if err := s.fillDashboard(ctx, &out, clientID, w); err != nil {
 		return out, err
