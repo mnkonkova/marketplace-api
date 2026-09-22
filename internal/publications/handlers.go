@@ -278,6 +278,57 @@ type editLinkReq struct {
 	URL string `json:"url"`
 }
 
+type reviewReq struct {
+	// Marks — вердикты по пунктам целиком: что не прислали, того
+	// менеджер не отмечал.
+	Marks []ReviewMark `json:"marks"`
+	// Comment — замечание. Обязательно при decision=return.
+	Comment string `json:"comment"`
+	// Decision — пусто «сохранить ход проверки», return «вернуть»,
+	// accept «принять».
+	Decision string `json:"decision"`
+}
+
+// ManagerReview godoc
+// @Summary  Проверка ролика: вердикты по чек-листу и решение (менеджер)
+// @Description Менеджер отмечает по каждому пункту «да» или «нет» и выносит решение: вернуть с замечанием или принять. Принять нельзя, пока хоть один обязательный пункт сданных площадок не отмечен «да» — непроверенное считается непройденным. Пустое decision сохраняет ход проверки, не вынося решения: ролик смотрят частями. Новая сдача ссылок отменяет прежнее решение и стирает вердикты — они относились к другому ролику.
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    pub_id path string true "publication id"
+// @Param    body body reviewReq true "вердикты и решение"
+// @Success  200 {object} Publication
+// @Failure      400  {object}  errorResponse  "bad_json; bad_id; invalid_input — возврат без замечания или неизвестное решение; foreign_checklist_item"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — выкладка в чужом проекте"
+// @Failure      409  {object}  errorResponse  "publication_closed; nothing_to_review — ссылок нет"
+// @Failure      422  {object}  errorResponse  "review_blocked — обязательные пункты не пройдены"
+// @Router   /manager/publications/{pub_id}/review [post]
+func (h *Handler) ManagerReview(w http.ResponseWriter, r *http.Request) {
+	pubID, uid, ok := h.managerPublication(w, r)
+	if !ok {
+		return
+	}
+	var req reviewReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	got, err := h.svc.Review(r.Context(), ReviewInput{
+		PublicationID: pubID,
+		ManagerUserID: uid,
+		Marks:         req.Marks,
+		Comment:       req.Comment,
+		Decision:      req.Decision,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, got)
+}
+
 // ManagerEditLink godoc
 // @Summary  Исправить сданную ссылку (менеджер)
 // @Description Ссылку сдаёт креатор, и ошибается в ней тоже он. Менеджер правит адрес на месте; пустой url снимает ссылку с площадки, и выкладка снова становится неполной. Если ролик другой — ежедневные замеры этой ссылки удаляются, иначе история двух разных видео склеилась бы в одну линию.
@@ -902,6 +953,15 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrChecklistIncomplete):
 		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "checklist_incomplete",
 			"Отметьте обязательные пункты чеклиста: "+httpx.InvalidInputMessage(err))
+	case errors.Is(err, ErrReviewBlocked):
+		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "review_blocked",
+			"Принять нельзя, пока не пройдены обязательные пункты: "+httpx.InvalidInputMessage(err))
+	case errors.Is(err, ErrNothingToReview):
+		httpx.WriteErrMsg(w, http.StatusConflict, "nothing_to_review",
+			"По этой выкладке ещё нет ни одной ссылки — смотреть нечего.")
+	case errors.Is(err, ErrForeignChecklistItem):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "foreign_checklist_item",
+			"Пункт не из чек-листа этого проекта.")
 	case errors.Is(err, ErrCollapsedNoDetail):
 		httpx.WriteErrMsg(w, http.StatusGone, "collapsed_no_detail",
 			"Проект закрыт, подробная статистика по роликам больше не хранится — остались только итоги проекта.")

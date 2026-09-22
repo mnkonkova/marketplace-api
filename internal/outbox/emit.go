@@ -144,6 +144,15 @@ const (
 	// правил менеджер, и в истории проекта это разные строки.
 	EventPublicationLinkEdited = "project.publication_link_edited"
 
+	// EventPublicationReturned — менеджер вернул ролик креатору с
+	// замечанием. payload: {project_id, publication_id, comment,
+	// failed_items, decided_by}.
+	EventPublicationReturned = "project.publication_returned"
+
+	// EventPublicationAccepted — ролик принят. Тот же payload;
+	// failed_items у принятого пуст по определению.
+	EventPublicationAccepted = "project.publication_accepted"
+
 	// EventProjectPeriodClosed — период проекта подытожен: просмотры
 	// заморожены срезом, суммы посчитаны в последний раз. payload:
 	// {project_id, title, period_seq, starts_on, ends_on, videos, views,

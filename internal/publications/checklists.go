@@ -333,9 +333,13 @@ var ErrChecklistItemUsed = errors.New("checklist item already marked")
 // на нём внешним ключом с каскадом, и вместе с пунктом исчез бы след
 // того, что человек это проверял. Спорить потом будет нечем.
 func (r *Repo) DeleteChecklistItem(ctx context.Context, projectID, itemID uuid.UUID) error {
+	// Считаем обе стороны: и отметку креатора «я сделал», и вердикт
+	// менеджера «я проверил». Пункт, по которому кто-то из них уже
+	// высказался, — это след разговора, а не строка в списке.
 	var marks int
-	if err := r.db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM publication_checklist_marks WHERE item_id = $1`, itemID).
+	if err := r.db.QueryRow(ctx, `
+SELECT (SELECT COUNT(*) FROM publication_checklist_marks WHERE item_id = $1)
+     + (SELECT COUNT(*) FROM publication_review_marks WHERE item_id = $1)`, itemID).
 		Scan(&marks); err != nil {
 		return fmt.Errorf("count checklist marks: %w", err)
 	}

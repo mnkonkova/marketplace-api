@@ -471,6 +471,58 @@ WHERE publication_id = ANY($1) AND status = 'pending'`, ids)
 		return err
 	}
 
+	// Проверка ролика: решение менеджера и вердикты по пунктам. Едет
+	// вместе с выкладкой, потому что спрашивают о ней там же, где
+	// смотрят список: «что с моим роликом» — это один экран, а не
+	// отдельный заход.
+	reviewRows, err := r.db.Query(ctx, `
+SELECT v.publication_id, v.status, v.comment, v.round, v.decided_by, v.decided_at,
+       COALESCE(u.display_name, '')
+FROM publication_reviews v
+LEFT JOIN users u ON u.id = v.decided_by
+WHERE v.publication_id = ANY($1)`, ids)
+	if err != nil {
+		return fmt.Errorf("list reviews: %w", err)
+	}
+	defer reviewRows.Close()
+	for reviewRows.Next() {
+		var pubID uuid.UUID
+		var rv PublicationReview
+		if err := reviewRows.Scan(&pubID, &rv.Status, &rv.Comment, &rv.Round,
+			&rv.DecidedBy, &rv.DecidedAt, &rv.DecidedByName); err != nil {
+			return fmt.Errorf("scan review: %w", err)
+		}
+		rv.Marks = []ReviewMark{}
+		if p := byID[pubID]; p != nil {
+			v := rv
+			p.Review = &v
+		}
+	}
+	if err := reviewRows.Err(); err != nil {
+		return err
+	}
+
+	markRows, err := r.db.Query(ctx, `
+SELECT publication_id, item_id, passed FROM publication_review_marks
+WHERE publication_id = ANY($1)`, ids)
+	if err != nil {
+		return fmt.Errorf("list review marks: %w", err)
+	}
+	defer markRows.Close()
+	for markRows.Next() {
+		var pubID uuid.UUID
+		var m ReviewMark
+		if err := markRows.Scan(&pubID, &m.ItemID, &m.Passed); err != nil {
+			return fmt.Errorf("scan review mark: %w", err)
+		}
+		if p := byID[pubID]; p != nil && p.Review != nil {
+			p.Review.Marks = append(p.Review.Marks, m)
+		}
+	}
+	if err := markRows.Err(); err != nil {
+		return err
+	}
+
 	// Цифры по выкладке — сумма последних снимков её площадок. Один
 	// запрос на пачку: LATERAL берёт свежую строку статистики по каждой
 	// ссылке, снаружи всё складывается по выкладке.
@@ -634,6 +686,11 @@ WHERE id = $1`, in.PublicationID, newStatus, in.Title); err != nil {
 		return Publication{}, fmt.Errorf("update status: %w", err)
 	}
 
+	// Ролик пересдали — прежнее решение по нему больше не про него.
+	if err := reopenReview(ctx, tx, in.PublicationID); err != nil {
+		return Publication{}, err
+	}
+
 	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, projectID.String(),
 		outbox.EventPublicationSubmitted, map[string]any{
 			"project_id":     projectID,
@@ -711,6 +768,10 @@ RETURNING id`
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM video_stat_daily WHERE link_id = $1`, linkID); err != nil {
 			return Publication{}, fmt.Errorf("reset stats: %w", err)
+		}
+		// Ссылка ведёт на другой ролик — значит, проверяли не его.
+		if err := reopenReview(ctx, tx, in.PublicationID); err != nil {
+			return Publication{}, err
 		}
 	}
 
@@ -1071,59 +1132,82 @@ FROM project_checklist_items WHERE project_id = $1 ORDER BY sort_order`, project
 // assertChecklist — обязательные пункты, относящиеся к сдаваемым площадкам,
 // должны быть отмечены. Проверка здесь, а не на фронте: иначе её обходят
 // прямым запросом к API.
+//
+// Это же правило действует и при проверке ролика менеджером (review.go):
+// список «что спрашивать» там ровно тот же, поэтому обе стороны считают
+// его одной функцией — requiredChecklistFor. Две копии правила разошлись
+// бы на первом же пункте с площадкой, и тогда креатору и менеджеру
+// показывали бы разные требования к одному ролику.
 func assertChecklist(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, platforms []string, checked []uuid.UUID) error {
-	rows, err := tx.Query(ctx, `
-SELECT id, text, platform FROM project_checklist_items
-WHERE project_id = $1 AND is_required = TRUE`, projectID)
+	items, err := checklistItemsTx(ctx, tx, projectID)
 	if err != nil {
-		return fmt.Errorf("list required checklist items: %w", err)
-	}
-	defer rows.Close()
-
-	type item struct {
-		id       uuid.UUID
-		text     string
-		platform *string
-	}
-	required := make([]item, 0, 8)
-	for rows.Next() {
-		var it item
-		if err := rows.Scan(&it.id, &it.text, &it.platform); err != nil {
-			return fmt.Errorf("scan required item: %w", err)
-		}
-		required = append(required, it)
-	}
-	if err := rows.Err(); err != nil {
 		return err
 	}
-	if len(required) == 0 {
-		return nil
-	}
-
-	submitting := make(map[string]bool, len(platforms))
+	set := make(map[string]bool, len(platforms))
 	for _, p := range platforms {
-		submitting[p] = true
+		set[p] = true
 	}
 	isChecked := make(map[uuid.UUID]bool, len(checked))
 	for _, id := range checked {
 		isChecked[id] = true
 	}
-
-	missing := make([]string, 0, 2)
-	for _, it := range required {
-		// Пункт для площадки, которую сейчас не сдают, не требуем: креатор
-		// вправе дослать остальные площадки позже.
-		if it.platform != nil && !submitting[*it.platform] {
-			continue
-		}
-		if !isChecked[it.id] {
-			missing = append(missing, it.text)
-		}
-	}
-	if len(missing) > 0 {
+	if missing := missingChecklistTexts(requiredChecklistFor(items, set), isChecked); len(missing) > 0 {
 		return fmt.Errorf("%w: %v", ErrChecklistIncomplete, missing)
 	}
 	return nil
+}
+
+// checklistItemsTx — снимок чек-листа проекта внутри транзакции. Тот же
+// запрос, что в ProjectChecklist, но по tx: обе стороны чек-листа
+// читают его под блокировкой выкладки.
+func checklistItemsTx(ctx context.Context, tx pgx.Tx, projectID uuid.UUID) ([]ChecklistItem, error) {
+	rows, err := tx.Query(ctx, `
+SELECT id, project_id, text, platform, is_required, sort_order, added_for_project
+FROM project_checklist_items WHERE project_id = $1 ORDER BY sort_order`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list checklist: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ChecklistItem, 0, 8)
+	for rows.Next() {
+		var c ChecklistItem
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Text, &c.Platform, &c.IsRequired,
+			&c.SortOrder, &c.AddedForProject); err != nil {
+			return nil, fmt.Errorf("scan checklist item: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// requiredChecklistFor — какие пункты спрашивают у ролика, вышедшего на
+// этих площадках. Пункт площадки, которой в ролике нет, не требуют: у
+// креатора это право дослать остальные позже, у менеджера — требование,
+// которое невозможно выполнить.
+func requiredChecklistFor(items []ChecklistItem, platforms map[string]bool) []ChecklistItem {
+	out := make([]ChecklistItem, 0, len(items))
+	for _, it := range items {
+		if !it.IsRequired {
+			continue
+		}
+		if it.Platform != nil && !platforms[*it.Platform] {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// missingChecklistTexts — незакрытые пункты словами. Пункт без отметки
+// и пункт с «нет» здесь одинаковы: оба не пройдены.
+func missingChecklistTexts(required []ChecklistItem, ok map[uuid.UUID]bool) []string {
+	missing := make([]string, 0, 2)
+	for _, it := range required {
+		if !ok[it.ID] {
+			missing = append(missing, it.Text)
+		}
+	}
+	return missing
 }
 
 // assertCreatorsProject — выкладки бывают только у creators_turnkey.

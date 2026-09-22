@@ -95,6 +95,11 @@ type Publication struct {
 	// PendingDateRequest — непринятая просьба о переносе. Пока она есть,
 	// выкладка не считается просроченной и пинги по ней не идут.
 	PendingDateRequest *DateRequest `json:"pending_date_request,omitempty"`
+
+	// Review — проверка ролика менеджером. nil означает «не смотрели», и
+	// это не то же самое, что «принято» или «замечаний нет»: статус
+	// выкладки говорит про ссылки, а проверка — про содержание ролика.
+	Review *PublicationReview `json:"review,omitempty"`
 }
 
 // SubmittedLink — сданная ссылка на одну площадку.

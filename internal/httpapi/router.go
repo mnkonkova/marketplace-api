@@ -420,6 +420,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/manager/projects/{id}/publications/cancel_batch", d.Publications.ManagerCancelBatch)
 					r.Post("/manager/publications/{pub_id}/close", d.Publications.ManagerClosePublication)
 					r.Put("/manager/publications/{pub_id}/links/{platform}", d.Publications.ManagerEditLink)
+					r.Post("/manager/publications/{pub_id}/review", d.Publications.ManagerReview)
 					r.Get("/manager/projects/{id}/accounts", d.Publications.ManagerAccounts)
 					r.Post("/manager/projects/{id}/accounts", d.Publications.ManagerAddAccount)
 					r.Put("/manager/projects/{id}/accounts/{account_id}", d.Publications.ManagerUpdateAccount)

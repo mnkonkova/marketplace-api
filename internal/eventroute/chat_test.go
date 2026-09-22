@@ -63,6 +63,11 @@ var dynamicEmitSites = map[string][]string{
 		"project.publication_manual",
 		"project.manager_digest",
 	},
+	"internal/publications/review.go": {
+		// event = accepted | returned, выбирается по решению менеджера.
+		"project.publication_accepted",
+		"project.publication_returned",
+	},
 	"internal/orders/repo.go": {
 		// event = accepted | declined, выбирается по ответу креатора.
 		"order.invitation_accepted",
