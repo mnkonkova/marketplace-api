@@ -155,6 +155,11 @@ type ChecklistItem struct {
 	Platform   *string   `json:"platform,omitempty"`
 	IsRequired bool      `json:"is_required"`
 	SortOrder  int       `json:"sort_order"`
+	// AddedForProject — пункт завёл менеджер под этот проект, а не
+	// скопирован из библиотеки. Обновление шаблона такие пункты не
+	// трогает, и на экране они отличаются: иначе менеджер не знает, что
+	// уцелеет при обновлении версии.
+	AddedForProject bool `json:"added_for_project"`
 }
 
 // AppliesTo — пункт относится к этой площадке. Общий пункт (Platform == nil)

@@ -445,6 +445,11 @@ func NewRouter(d Deps) http.Handler {
 					// Чеклист: снимок проекта и библиотека, из которой его берут.
 					r.Get("/manager/projects/{id}/checklist", d.Publications.ManagerChecklist)
 					r.Post("/manager/projects/{id}/checklist", d.Publications.ManagerSnapshotChecklist)
+					// Пункт под конкретный проект: снимок можно дополнять,
+					// правило снимка — про то, что правка библиотеки не
+					// доезжает до идущих проектов, а не про запрет уточнять.
+					r.Post("/manager/projects/{id}/checklist/items", d.Publications.ManagerAddChecklistItem)
+					r.Delete("/manager/projects/{id}/checklist/items/{itemId}", d.Publications.ManagerDeleteChecklistItem)
 					r.Get("/manager/checklist_templates", d.Publications.ManagerChecklistTemplates)
 					// Переключатели проекта: этап черновика и показ
 					// статистики заказчику. Оба меняют работу, а не вид.

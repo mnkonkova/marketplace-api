@@ -57,8 +57,13 @@ func NewAPIHarness(t *testing.T, pool *pgxpool.Pool) *APIHarness {
 	issuer := auth.NewTokenIssuer("harness-secret", 15*time.Minute, 7*24*time.Hour)
 	authRepo := auth.NewRepo(pool)
 
-	projectsSvc := projects.NewService(projects.NewRepo(pool))
 	pubSvc := publications.NewService(publications.NewRepo(pool))
+	// Чек-лист подключается новому проекту сам — ровно как в cmd/api.
+	// Собрать стенд иначе, чем боевой, значит проверять другое
+	// приложение: автоподключение просто не сработало бы, и тест был бы
+	// зелёным на выключенной функции.
+	projectsSvc := projects.NewService(projects.NewRepo(pool)).
+		WithChecklistAttacher(pubSvc)
 	ordersSvc := orders.NewService(orders.NewRepo(pool))
 
 	// Админские ручки поднимаем здесь же: половина правил CRM живёт
