@@ -138,6 +138,12 @@ const (
 	// EventPublicationClosed — менеджер закрыл неполную выкладку руками.
 	EventPublicationClosed = "project.publication_closed"
 
+	// EventPublicationLinkEdited — менеджер исправил сданную ссылку.
+	// payload: {project_id, publication_id, platform, url, stats_reset}.
+	// Отдельное событие, а не publication_submitted: сдал креатор, а
+	// правил менеджер, и в истории проекта это разные строки.
+	EventPublicationLinkEdited = "project.publication_link_edited"
+
 	// EventProjectPeriodClosed — период проекта подытожен: просмотры
 	// заморожены срезом, суммы посчитаны в последний раз. payload:
 	// {project_id, title, period_seq, starts_on, ends_on, videos, views,

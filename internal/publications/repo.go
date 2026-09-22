@@ -655,6 +655,177 @@ WHERE id = $1`, in.PublicationID, newStatus, in.Title); err != nil {
 // CloseManually — менеджер закрывает неполную выкладку. Причина обязательна:
 // это исключение из правила «закрыто на пяти ссылках», и у исключения должен
 // быть автор и объяснение.
+
+// ---- правка ссылки менеджером ----
+
+// ManagerEditLink — заменить ссылку площадки на новую.
+//
+// Старые замеры удаляются вместе со ссылкой, если это ДРУГОЙ ролик: ряд
+// video_stat_daily привязан к link_id, и оставить его — значит склеить
+// историю двух разных видео в одну линию. Та же ссылка, поправленная
+// косметически (мобильный домен, рекламный хвост), даёт тот же
+// url_canonical — тогда замеры остаются на месте.
+func (r *Repo) ManagerEditLink(ctx context.Context, in ManagerEditLinkInput, l Link) (Publication, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Publication{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	projectID, err := lockPublicationForEdit(ctx, tx, in.PublicationID)
+	if err != nil {
+		return Publication{}, err
+	}
+
+	// Тот же ролик или другой — решает канонический адрес: он и есть то,
+	// по чему ходит сборщик.
+	var prevCanonical string
+	err = tx.QueryRow(ctx, `
+SELECT url_canonical FROM publication_links
+WHERE publication_id = $1 AND platform = $2`, in.PublicationID, in.Platform).Scan(&prevCanonical)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Publication{}, fmt.Errorf("read link: %w", err)
+	}
+	statsReset := prevCanonical != "" && prevCanonical != l.Canonical
+
+	const upsert = `
+INSERT INTO publication_links
+    (publication_id, platform, url, url_canonical, external_media_id,
+     submitted_at, collect_interval_days, next_collect_at)
+VALUES ($1, $2, $3, $4, NULLIF($5, ''), now(), 1, now())
+ON CONFLICT (publication_id, platform) DO UPDATE
+SET url = EXCLUDED.url,
+    url_canonical = EXCLUDED.url_canonical,
+    external_media_id = EXCLUDED.external_media_id,
+    submitted_at = now(),
+    collect_interval_days = 1,
+    next_collect_at = now()
+RETURNING id`
+	var linkID uuid.UUID
+	if err := tx.QueryRow(ctx, upsert,
+		in.PublicationID, in.Platform, l.Raw, l.Canonical, l.MediaID).Scan(&linkID); err != nil {
+		return Publication{}, fmt.Errorf("upsert link %s: %w", in.Platform, err)
+	}
+
+	if statsReset {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM video_stat_daily WHERE link_id = $1`, linkID); err != nil {
+			return Publication{}, fmt.Errorf("reset stats: %w", err)
+		}
+	}
+
+	if err := refreshPublicationStatus(ctx, tx, in.PublicationID); err != nil {
+		return Publication{}, err
+	}
+
+	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, projectID.String(),
+		outbox.EventPublicationLinkEdited, map[string]any{
+			"project_id":     projectID,
+			"publication_id": in.PublicationID,
+			"platform":       in.Platform,
+			"url":            l.Raw,
+			"edited_by":      in.ManagerUserID,
+			"stats_reset":    statsReset,
+		}); err != nil {
+		return Publication{}, fmt.Errorf("emit publication_link_edited: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Publication{}, fmt.Errorf("commit: %w", err)
+	}
+	return r.Get(ctx, in.PublicationID)
+}
+
+// ManagerRemoveLink — снять ссылку с площадки.
+//
+// Выкладка возвращается в «неполную»: закрытой по ошибочной ссылке она
+// оставаться не может, иначе счёт заказчику включает ролик, которого нет.
+func (r *Repo) ManagerRemoveLink(ctx context.Context, in ManagerEditLinkInput) (Publication, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Publication{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	projectID, err := lockPublicationForEdit(ctx, tx, in.PublicationID)
+	if err != nil {
+		return Publication{}, err
+	}
+
+	tag, err := tx.Exec(ctx,
+		`DELETE FROM publication_links WHERE publication_id = $1 AND platform = $2`,
+		in.PublicationID, in.Platform)
+	if err != nil {
+		return Publication{}, fmt.Errorf("delete link: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Publication{}, ErrNotFound
+	}
+
+	if err := refreshPublicationStatus(ctx, tx, in.PublicationID); err != nil {
+		return Publication{}, err
+	}
+
+	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, projectID.String(),
+		outbox.EventPublicationLinkEdited, map[string]any{
+			"project_id":     projectID,
+			"publication_id": in.PublicationID,
+			"platform":       in.Platform,
+			"url":            "",
+			"edited_by":      in.ManagerUserID,
+			"stats_reset":    true,
+		}); err != nil {
+		return Publication{}, fmt.Errorf("emit publication_link_edited: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Publication{}, fmt.Errorf("commit: %w", err)
+	}
+	return r.Get(ctx, in.PublicationID)
+}
+
+// lockPublicationForEdit — общий пролог правки: блокирует выкладку и не
+// даёт трогать отменённую и закрытую руками.
+func lockPublicationForEdit(ctx context.Context, tx pgx.Tx, pubID uuid.UUID) (uuid.UUID, error) {
+	var projectID uuid.UUID
+	var status Status
+	err := tx.QueryRow(ctx, `
+SELECT project_id, status FROM project_publications WHERE id = $1 FOR UPDATE`,
+		pubID).Scan(&projectID, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("lock publication: %w", err)
+	}
+	if status == StatusCancelled || status == StatusClosedManually {
+		return uuid.Nil, ErrPublicationClosed
+	}
+	return projectID, nil
+}
+
+// refreshPublicationStatus — пересчитать статус по числу сданных ссылок.
+// Пять из пяти — done, меньше — partial, ни одной — planned: выкладка,
+// с которой сняли последнюю ссылку, снова ждёт сдачи.
+func refreshPublicationStatus(ctx context.Context, tx pgx.Tx, pubID uuid.UUID) error {
+	var have int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM publication_links WHERE publication_id = $1`, pubID).Scan(&have); err != nil {
+		return fmt.Errorf("count links: %w", err)
+	}
+	status := StatusPlanned
+	switch {
+	case have >= len(AllPlatforms):
+		status = StatusDone
+	case have > 0:
+		status = StatusPartial
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE project_publications SET status = $2, updated_at = now() WHERE id = $1`,
+		pubID, status); err != nil {
+		return fmt.Errorf("update status: %w", err)
+	}
+	return nil
+}
+
 func (r *Repo) CloseManually(ctx context.Context, in CloseManuallyInput) (Publication, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

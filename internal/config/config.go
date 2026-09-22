@@ -33,6 +33,12 @@ type Config struct {
 	RedisPassword string `env:"REDIS_PASSWORD"`
 	RedisDB       int    `env:"REDIS_DB" envDefault:"0"`
 
+	// ACCOUNTS_SECRET_KEY — ключ шифрования паролей от аккаунтов бренда
+	// (base64, 32 байта). Пусто — пароли не хранятся вовсе, ручки
+	// отвечают 501. В базе ключа нет намеренно: иначе шифрование не
+	// отличается от хранения текстом.
+	AccountsSecretKey string `env:"ACCOUNTS_SECRET_KEY"`
+
 	S3Endpoint  string `env:"S3_ENDPOINT" envDefault:"http://localhost:9000"`
 	S3AccessKey string `env:"S3_ACCESS_KEY"`
 	S3SecretKey string `env:"S3_SECRET_KEY"`

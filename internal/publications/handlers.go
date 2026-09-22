@@ -273,6 +273,50 @@ type closeReq struct {
 	Reason string `json:"reason"`
 }
 
+type editLinkReq struct {
+	// URL — новый адрес ролика. Пусто — снять ссылку с площадки.
+	URL string `json:"url"`
+}
+
+// ManagerEditLink godoc
+// @Summary  Исправить сданную ссылку (менеджер)
+// @Description Ссылку сдаёт креатор, и ошибается в ней тоже он. Менеджер правит адрес на месте; пустой url снимает ссылку с площадки, и выкладка снова становится неполной. Если ролик другой — ежедневные замеры этой ссылки удаляются, иначе история двух разных видео склеилась бы в одну линию.
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    pub_id path string true "publication id"
+// @Param    platform path string true "площадка: tiktok|instagram|youtube|vk|likee"
+// @Param    body body editLinkReq true "новый адрес"
+// @Success  200 {object} Publication
+// @Failure      400  {object}  errorResponse  "bad_json; bad_id; invalid_input — неизвестная площадка, нераспознанная ссылка или ссылка другой площадки"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — выкладка в чужом проекте либо ссылки на этой площадке нет"
+// @Failure      409  {object}  errorResponse  "publication_closed — выкладка отменена или закрыта руками"
+// @Router   /manager/publications/{pub_id}/links/{platform} [put]
+func (h *Handler) ManagerEditLink(w http.ResponseWriter, r *http.Request) {
+	pubID, uid, ok := h.managerPublication(w, r)
+	if !ok {
+		return
+	}
+	var req editLinkReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	got, err := h.svc.ManagerEditLink(r.Context(), ManagerEditLinkInput{
+		PublicationID: pubID,
+		ManagerUserID: uid,
+		Platform:      chi.URLParam(r, "platform"),
+		URL:           req.URL,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, got)
+}
+
 // ManagerClosePublication godoc
 // @Summary  Закрыть неполную выкладку вручную (менеджер)
 // @Description Исключение из правила «закрыто на пяти ссылках». Причина обязательна.

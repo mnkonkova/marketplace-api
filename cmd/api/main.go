@@ -219,8 +219,21 @@ func main() {
 	projectsHandler := projects.NewHandler(projectsSvc)
 
 	// Выкладки креаторов на проектной странице (проекты creators_turnkey).
+	//
+	// Ключ шифрования паролей от аккаунтов бренда читаем здесь же. Кривой
+	// ключ — это ошибка конфигурации, и стартовать с ней нельзя: пароли
+	// молча легли бы мимо шифрования. Пустой ключ — законный режим «без
+	// паролей», ручки доступов отвечают 501.
+	accountSecrets, err := publications.NewSecrets(cfg.AccountsSecretKey)
+	if err != nil {
+		logger.Error("accounts secret key", "err", err)
+		os.Exit(1)
+	}
+	if !accountSecrets.Enabled() {
+		logger.Warn("ACCOUNTS_SECRET_KEY пуст: пароли от аккаунтов бренда не хранятся")
+	}
 	publicationsHandler := publications.NewHandler(
-		publications.NewService(publications.NewRepo(pool)))
+		publications.NewService(publications.NewRepo(pool)).WithSecrets(accountSecrets))
 
 	// Самостоятельный подбор креаторов клиентом.
 	ordersHandler := orders.NewHandler(orders.NewService(orders.NewRepo(pool)))

@@ -51,9 +51,9 @@ type Publication struct {
 	// для отчётности: самодобавленные не участвуют в знаменателе
 	// недосдачи — иначе кнопка «добрать до ступени» уменьшала бы оклад
 	// тому, кто её нажал.
-	SelfAdded bool `json:"self_added,omitempty" extensions:"x-omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	SelfAdded bool      `json:"self_added,omitempty" extensions:"x-omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	Links []SubmittedLink `json:"links"`
 
@@ -197,6 +197,20 @@ type SubmitLinksInput struct {
 	// CheckedItemIDs — отмеченные пункты чеклиста. Обязательные пункты,
 	// которых здесь нет, блокируют сдачу.
 	CheckedItemIDs []uuid.UUID
+}
+
+// ManagerEditLinkInput — менеджер правит сданную ссылку.
+//
+// Площадка берётся из самой ссылки, а не из пути: вставили адрес другой
+// площадки — это другая строка, и менять её под видом правки нельзя.
+// Слот, который правим, передаётся отдельно и должен совпасть.
+type ManagerEditLinkInput struct {
+	PublicationID uuid.UUID
+	ManagerUserID uuid.UUID
+	// Platform — какую из пяти ссылок правим.
+	Platform string
+	// URL — новый адрес. Пусто — снять ссылку с площадки.
+	URL string
 }
 
 // CloseManuallyInput — менеджер закрывает неполную выкладку.

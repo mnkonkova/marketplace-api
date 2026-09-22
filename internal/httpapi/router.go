@@ -316,6 +316,10 @@ func NewRouter(d Deps) http.Handler {
 				// это выкладки, и зависят они от d.Publications.
 				r.Get("/me/projects/{id}/report", d.Publications.ClientReport)
 				r.Get("/me/projects/{id}/videos", d.Publications.ClientVideos)
+				// Доступы к аккаунтам бренда: заполняет менеджер, читает
+				// заказчик. Пароль — отдельной ручкой, по явному запросу.
+				r.Get("/me/projects/{id}/accounts", d.Publications.ClientAccounts)
+				r.Get("/me/projects/{id}/accounts/{account_id}/secret", d.Publications.ClientAccountSecret)
 				r.Get("/me/projects/{id}/calendar", d.Publications.ClientCalendar)
 				r.Get("/me/projects/{id}/notifications", d.Publications.ClientGetPrefs)
 				r.Put("/me/projects/{id}/notifications", d.Publications.ClientSavePrefs)
@@ -415,6 +419,12 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/manager/projects/{id}/publications/batch", d.Publications.ManagerCreateBatch)
 					r.Post("/manager/projects/{id}/publications/cancel_batch", d.Publications.ManagerCancelBatch)
 					r.Post("/manager/publications/{pub_id}/close", d.Publications.ManagerClosePublication)
+					r.Put("/manager/publications/{pub_id}/links/{platform}", d.Publications.ManagerEditLink)
+					r.Get("/manager/projects/{id}/accounts", d.Publications.ManagerAccounts)
+					r.Post("/manager/projects/{id}/accounts", d.Publications.ManagerAddAccount)
+					r.Put("/manager/projects/{id}/accounts/{account_id}", d.Publications.ManagerUpdateAccount)
+					r.Delete("/manager/projects/{id}/accounts/{account_id}", d.Publications.ManagerRemoveAccount)
+					r.Get("/manager/projects/{id}/accounts/{account_id}/secret", d.Publications.ManagerAccountSecret)
 					r.Post("/manager/publications/{pub_id}/remind", d.Publications.ManagerRemindNow)
 					r.Get("/manager/projects/{id}/report", d.Publications.ManagerReport)
 					r.Get("/manager/projects/{id}/report.csv", d.Publications.ManagerReportCSV)

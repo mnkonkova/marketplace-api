@@ -89,6 +89,10 @@ var chatRouting = map[string]Delivery{
 	"project.publications_created":  CRMOnly,
 	"project.publication_submitted": CRMOnly,
 	"project.publication_closed":    CRMOnly,
+	// Правка ссылки менеджером — CRMOnly: это внутренняя починка
+	// данных, а не повод отвечать человеком. В карточке выкладки она
+	// видна, в истории проекта записана.
+	"project.publication_link_edited": CRMOnly,
 	// Напоминания креатору лично: «сегодня срок» и «вышло не везде» —
 	// его дело, чат менеджеров они бы только засыпали.
 	"project.publication_due_today":  CRMOnly,

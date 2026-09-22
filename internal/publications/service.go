@@ -39,9 +39,24 @@ type Service struct {
 	// тогда RunCollection честно возвращает ошибку, а не тихо ничего
 	// не делает.
 	collector Collector
+	// secrets — шифрование паролей от аккаунтов бренда. Пустой (ключа в
+	// окружении нет) — логины и ссылки работают, пароли не заводятся.
+	secrets *Secrets
 }
 
-func NewService(repo *Repo) *Service { return &Service{repo: repo} }
+func NewService(repo *Repo) *Service {
+	return &Service{repo: repo, secrets: &Secrets{}}
+}
+
+// WithSecrets — включить хранение паролей. Ключ приходит из конфига, в
+// базе его нет намеренно.
+func (s *Service) WithSecrets(sec *Secrets) *Service {
+	s.secrets = sec
+	return s
+}
+
+// SecretsEnabled — можно ли заводить пароли.
+func (s *Service) SecretsEnabled() bool { return s.secrets.Enabled() }
 
 // CreateBatchByScheme — простановка дат по быстрой схеме. Это основной путь
 // менеджера: выбрал креаторов, выбрал «вторник-четверг» и границы месяца.
@@ -151,6 +166,38 @@ func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publica
 	}
 	in.CheckedItemIDs = dedupeIDs(in.CheckedItemIDs)
 	return s.repo.SubmitLinks(ctx, in, parsed)
+}
+
+// ManagerEditLink — менеджер правит сданную ссылку.
+//
+// Зачем вообще: ссылку сдаёт креатор, и ошибается в ней тоже он —
+// вставил адрес чужого ролика, мобильный домен с обрезанным id, ссылку
+// на профиль вместо видео. До сих пор исправить это мог только он сам:
+// менеджер видел, что цифры не собираются, и писал в чат. Теперь
+// правит на месте, и правка — именная (см. событие в outbox).
+//
+// Пустой URL снимает ссылку с площадки: выкладка возвращается в
+// «неполную», а не остаётся закрытой по ошибочной ссылке.
+func (s *Service) ManagerEditLink(ctx context.Context, in ManagerEditLinkInput) (Publication, error) {
+	in.Platform = strings.ToLower(strings.TrimSpace(in.Platform))
+	if !IsKnownPlatform(in.Platform) {
+		return Publication{}, fmt.Errorf("%w: неизвестная площадка %q", ErrInvalidInput, in.Platform)
+	}
+	in.URL = strings.TrimSpace(in.URL)
+	if in.URL == "" {
+		return s.repo.ManagerRemoveLink(ctx, in)
+	}
+	l, err := ParseLink(in.URL)
+	if err != nil {
+		return Publication{}, fmt.Errorf("%q: %w", in.URL, err)
+	}
+	// Ссылка другой площадки в этот слот не ложится: у выкладки по одной
+	// ссылке на площадку, и «исправление» подменило бы не ту строку.
+	if l.Platform != in.Platform {
+		return Publication{}, fmt.Errorf("%w: ссылка ведёт на %s, а правим %s",
+			ErrInvalidInput, l.Platform, in.Platform)
+	}
+	return s.repo.ManagerEditLink(ctx, in, l)
 }
 
 // CloseManually — менеджер закрывает неполную выкладку. Причина обязательна.
