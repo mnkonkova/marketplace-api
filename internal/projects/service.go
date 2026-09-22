@@ -32,6 +32,7 @@ type Service struct {
 	repo                    *Repo
 	reviewDeadlineDuration  time.Duration
 	defaultPipelineProvider DefaultPipelineProvider
+	checklistAttacher       ChecklistAttacher
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -105,7 +106,20 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 			return uuid.Nil, err
 		}
 	}
-	return s.repo.StartProject(ctx, in)
+	id, err := s.repo.StartProject(ctx, in)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	// Чек-лист подключается сам. Менеджер заводит проект и уходит
+	// собирать команду; вспоминают о чек-листе в момент первой сдачи —
+	// то есть когда креатор уже снял ролик по своим представлениям.
+	// Кто актор: тот, на кого проект назначен, иначе — никто.
+	var actor uuid.UUID
+	if in.AssignedToUserID != nil {
+		actor = *in.AssignedToUserID
+	}
+	s.attachChecklist(ctx, id, actor, in.Kind)
+	return id, nil
 }
 
 // ---- Клиентские чтения ----

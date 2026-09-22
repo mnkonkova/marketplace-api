@@ -414,6 +414,83 @@ func (h *Handler) ManagerSnapshotChecklist(w http.ResponseWriter, r *http.Reques
 	httpx.WriteJSON(w, http.StatusOK, snapshotResp{Copied: n})
 }
 
+// ---- пункт чек-листа под конкретный проект ----
+
+type checklistItemReq struct {
+	Text string `json:"text"`
+	// Platform пустой = пункт общий для всех площадок.
+	Platform   string `json:"platform"`
+	IsRequired bool   `json:"is_required"`
+}
+
+// ManagerAddChecklistItem godoc
+// @Summary  Добавить пункт в чек-лист проекта (менеджер)
+// @Description Пункт живёт только в этом проекте: в библиотеку не попадает.
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Param    body body checklistItemReq true "пункт"
+// @Success  201 {object} ChecklistItem
+// @Failure      400  {object}  errorResponse  "bad_json; invalid_input — пустой или слишком длинный текст"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — проект не найден или чужой"
+// @Router   /manager/projects/{id}/checklist/items [post]
+func (h *Handler) ManagerAddChecklistItem(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	var req checklistItemReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	it, err := h.svc.AddChecklistItem(r.Context(), projectID, req.Text, req.Platform, req.IsRequired)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, it)
+}
+
+// ManagerDeleteChecklistItem godoc
+// @Summary  Убрать пункт из чек-листа проекта (менеджер)
+// @Description Пункт, по которому уже отчитывались, не удаляется: вместе с ним исчез бы след проверки.
+// @Tags     manager-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Param    itemId path string true "checklist item id"
+// @Success  204
+// @Failure      400  {object}  errorResponse  "bad_id"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — проект или пункт не найден"
+// @Failure      409  {object}  errorResponse  "item_used — по пункту уже отчитывались"
+// @Router   /manager/projects/{id}/checklist/items/{itemId} [delete]
+func (h *Handler) ManagerDeleteChecklistItem(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	itemID, err := pathUUID(r, "itemId")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id пункта.")
+		return
+	}
+	switch err := h.svc.DeleteChecklistItem(r.Context(), projectID, itemID); {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrChecklistItemUsed):
+		// 409, а не 400: запрос правильный, состояние мира — нет.
+		httpx.WriteErrMsg(w, http.StatusConflict, "item_used",
+			"По этому пункту уже отчитывались — удалить его нельзя, иначе исчезнет след проверки.")
+	default:
+		writeErr(w, err)
+	}
+}
+
 type decideReq struct {
 	Approve bool `json:"approve"`
 }

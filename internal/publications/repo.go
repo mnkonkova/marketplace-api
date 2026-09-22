@@ -797,8 +797,12 @@ func (r *Repo) SnapshotChecklist(ctx context.Context, projectID, templateID, act
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Сносим ТОЛЬКО библиотечный снимок. Пункты, заведённые менеджером
+	// под этот проект, не часть шаблона и обновление версии переживают:
+	// иначе он обновляет v3 до v4 и молча теряет свои уточнения.
 	if _, err := tx.Exec(ctx,
-		`DELETE FROM project_checklist_items WHERE project_id = $1`, projectID); err != nil {
+		`DELETE FROM project_checklist_items WHERE project_id = $1 AND NOT added_for_project`,
+		projectID); err != nil {
 		return 0, fmt.Errorf("clear checklist snapshot: %w", err)
 	}
 
@@ -818,7 +822,11 @@ ORDER BY i.sort_order`, projectID, templateID)
 	if _, err := tx.Exec(ctx, `
 INSERT INTO project_checklist_snapshot
     (project_id, template_id, template_name, template_version, connected_by, connected_at)
-SELECT $1, t.id, t.name, t.version, $3, now()
+-- Подключить чек-лист может не человек, а создание проекта: тогда
+-- «кто подключил» — NULL, а не нулевой UUID. Нулевой не проходит
+-- внешним ключом, и вся вставка откатывалась молча: проект заводился
+-- без чек-листа, и выглядело это как «автоподключение не работает».
+SELECT $1, t.id, t.name, t.version, NULLIF($3, '00000000-0000-0000-0000-000000000000'::uuid), now()
 FROM checklist_templates t WHERE t.id = $2
 ON CONFLICT (project_id) DO UPDATE SET
   template_id = EXCLUDED.template_id,
@@ -869,7 +877,7 @@ WHERE s.project_id = $1`, projectID).
 // ProjectChecklist — снимок чеклиста проекта.
 func (r *Repo) ProjectChecklist(ctx context.Context, projectID uuid.UUID) ([]ChecklistItem, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT id, project_id, text, platform, is_required, sort_order
+SELECT id, project_id, text, platform, is_required, sort_order, added_for_project
 FROM project_checklist_items WHERE project_id = $1 ORDER BY sort_order`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list checklist: %w", err)
@@ -878,7 +886,8 @@ FROM project_checklist_items WHERE project_id = $1 ORDER BY sort_order`, project
 	out := make([]ChecklistItem, 0, 8)
 	for rows.Next() {
 		var c ChecklistItem
-		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Text, &c.Platform, &c.IsRequired, &c.SortOrder); err != nil {
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Text, &c.Platform, &c.IsRequired,
+			&c.SortOrder, &c.AddedForProject); err != nil {
 			return nil, fmt.Errorf("scan checklist item: %w", err)
 		}
 		out = append(out, c)

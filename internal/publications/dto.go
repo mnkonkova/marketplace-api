@@ -51,9 +51,9 @@ type Publication struct {
 	// для отчётности: самодобавленные не участвуют в знаменателе
 	// недосдачи — иначе кнопка «добрать до ступени» уменьшала бы оклад
 	// тому, кто её нажал.
-	SelfAdded bool `json:"self_added,omitempty" extensions:"x-omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	SelfAdded bool      `json:"self_added,omitempty" extensions:"x-omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	Links []SubmittedLink `json:"links"`
 
@@ -155,6 +155,11 @@ type ChecklistItem struct {
 	Platform   *string   `json:"platform,omitempty"`
 	IsRequired bool      `json:"is_required"`
 	SortOrder  int       `json:"sort_order"`
+	// AddedForProject — пункт завёл менеджер под этот проект, а не
+	// скопирован из библиотеки. Обновление шаблона такие пункты не
+	// трогает, и на экране они отличаются: иначе менеджер не знает, что
+	// уцелеет при обновлении версии.
+	AddedForProject bool `json:"added_for_project"`
 }
 
 // AppliesTo — пункт относится к этой площадке. Общий пункт (Platform == nil)

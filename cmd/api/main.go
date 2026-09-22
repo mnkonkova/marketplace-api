@@ -213,14 +213,20 @@ func main() {
 	pipelinesHandler := pipelines.NewHandler(pipelinesSvc)
 
 	projectsRepo := projects.NewRepo(pool)
-	projectsSvc := projects.NewService(projectsRepo).
-		WithReviewDeadline(cfg.ReviewDeadline).
-		WithDefaultPipeline(pipelinesSvc)
-	projectsHandler := projects.NewHandler(projectsSvc)
 
 	// Выкладки креаторов на проектной странице (проекты creators_turnkey).
-	publicationsHandler := publications.NewHandler(
-		publications.NewService(publications.NewRepo(pool)))
+	// Заводится РАНЬШЕ проектов: из него же проекты берут действующий
+	// чек-лист при создании.
+	publicationsSvc := publications.NewService(publications.NewRepo(pool))
+	publicationsHandler := publications.NewHandler(publicationsSvc)
+
+	projectsSvc := projects.NewService(projectsRepo).
+		WithReviewDeadline(cfg.ReviewDeadline).
+		WithDefaultPipeline(pipelinesSvc).
+		// Новый проект с креаторами получает чек-лист сам. Без этого о
+		// нём вспоминали в момент первой сдачи — когда ролик уже снят.
+		WithChecklistAttacher(publicationsSvc)
+	projectsHandler := projects.NewHandler(projectsSvc)
 
 	// Самостоятельный подбор креаторов клиентом.
 	ordersHandler := orders.NewHandler(orders.NewService(orders.NewRepo(pool)))

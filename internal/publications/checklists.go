@@ -2,6 +2,7 @@ package publications
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -231,4 +232,138 @@ func (s *Service) SaveChecklistTemplate(
 
 func (s *Service) DeactivateChecklistTemplate(ctx context.Context, id uuid.UUID) error {
 	return s.repo.DeactivateChecklistTemplate(ctx, id)
+}
+
+// ---- подключение чек-листа новому проекту ----
+//
+// «Действующий чек-лист» определён однозначно ровно тогда, когда
+// действующий шаблон ОДИН. Уникальный индекс в базе держит одно активное
+// имя, но имён может быть несколько — «UGC для маркетплейса» и
+// «Продакшн», — и какой из них подставить новому проекту, не знает
+// никто, кроме человека.
+//
+// Поэтому при неоднозначности НЕ ВЫБИРАЕМ. Пустой чек-лист менеджер
+// увидит и подключит нужный сам; подставленный наугад он не увидит — и
+// креатор получит требования от чужого проекта.
+
+// ActiveChecklistTemplateID — единственный действующий шаблон библиотеки.
+// uuid.Nil, когда шаблонов нет или их больше одного.
+func (r *Repo) ActiveChecklistTemplateID(ctx context.Context) (uuid.UUID, error) {
+	// LIMIT 2, а не 1: по одной строке не отличить «единственный» от
+	// «первый попавшийся», а разница здесь и есть всё правило.
+	rows, err := r.db.Query(ctx, `
+SELECT id FROM checklist_templates
+WHERE is_active
+  AND EXISTS (SELECT 1 FROM checklist_template_items i WHERE i.template_id = checklist_templates.id)
+LIMIT 2`)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("active checklist template: %w", err)
+	}
+	defer rows.Close()
+	var found []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return uuid.Nil, fmt.Errorf("scan active template: %w", err)
+		}
+		found = append(found, id)
+	}
+	if err := rows.Err(); err != nil {
+		return uuid.Nil, err
+	}
+	if len(found) != 1 {
+		return uuid.Nil, nil
+	}
+	return found[0], nil
+}
+
+// AttachActiveChecklist — подключить новому проекту действующий чек-лист.
+// Реализует projects.ChecklistAttacher.
+//
+// Возвращает число скопированных пунктов; ноль означает «подключать было
+// нечего», и это не ошибка.
+func (s *Service) AttachActiveChecklist(ctx context.Context, projectID, actor uuid.UUID) (int, error) {
+	templateID, err := s.repo.ActiveChecklistTemplateID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if templateID == uuid.Nil {
+		return 0, nil
+	}
+	return s.repo.SnapshotChecklist(ctx, projectID, templateID, actor)
+}
+
+// ---- пункт, заведённый под конкретный проект ----
+//
+// Снимок — копия проекта, и дополнять её можно: правило снимка о том,
+// что ПРАВКА БИБЛИОТЕКИ не доезжает до идущих проектов, а не о том, что
+// проект нельзя уточнить. «Шрифт титров — Onest Bold» касается одного
+// бренда, и класть его в общую библиотеку неверно.
+//
+// Такой пункт отличается от скопированного пустым source_item_id — это
+// поле и заводилось как «откуда взялось».
+
+// AddChecklistItem — добавить пункт в чек-лист проекта.
+func (r *Repo) AddChecklistItem(ctx context.Context, projectID uuid.UUID, text, platform string, required bool) (ChecklistItem, error) {
+	var it ChecklistItem
+	// Порядок — в конец списка. Вставлять в середину незачем: пункты
+	// проверяют все до одного, а не по порядку важности.
+	err := r.db.QueryRow(ctx, `
+INSERT INTO project_checklist_items
+    (project_id, source_item_id, text, platform, is_required, sort_order, added_for_project)
+VALUES ($1, NULL, $2, NULLIF($3, ''), $4,
+        COALESCE((SELECT MAX(sort_order) + 1 FROM project_checklist_items WHERE project_id = $1), 1),
+        TRUE)
+RETURNING id, project_id, text, platform, is_required, sort_order, added_for_project`,
+		projectID, text, platform, required).
+		Scan(&it.ID, &it.ProjectID, &it.Text, &it.Platform, &it.IsRequired, &it.SortOrder,
+			&it.AddedForProject)
+	if err != nil {
+		return ChecklistItem{}, fmt.Errorf("add checklist item: %w", err)
+	}
+	return it, nil
+}
+
+// ErrChecklistItemUsed — по пункту уже отчитывались.
+var ErrChecklistItemUsed = errors.New("checklist item already marked")
+
+// DeleteChecklistItem — убрать пункт из чек-листа проекта.
+//
+// Пункт, по которому креатор уже отчитывался, не удаляем: отметки висят
+// на нём внешним ключом с каскадом, и вместе с пунктом исчез бы след
+// того, что человек это проверял. Спорить потом будет нечем.
+func (r *Repo) DeleteChecklistItem(ctx context.Context, projectID, itemID uuid.UUID) error {
+	var marks int
+	if err := r.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM publication_checklist_marks WHERE item_id = $1`, itemID).
+		Scan(&marks); err != nil {
+		return fmt.Errorf("count checklist marks: %w", err)
+	}
+	if marks > 0 {
+		return ErrChecklistItemUsed
+	}
+	tag, err := r.db.Exec(ctx,
+		`DELETE FROM project_checklist_items WHERE id = $1 AND project_id = $2`, itemID, projectID)
+	if err != nil {
+		return fmt.Errorf("delete checklist item: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Service) AddChecklistItem(ctx context.Context, projectID uuid.UUID, text, platform string, required bool) (ChecklistItem, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ChecklistItem{}, fmt.Errorf("%w: текст пункта пустой", ErrInvalidInput)
+	}
+	if utf8.RuneCountInString(text) > 300 {
+		return ChecklistItem{}, fmt.Errorf("%w: пункт длиннее 300 символов", ErrInvalidInput)
+	}
+	return s.repo.AddChecklistItem(ctx, projectID, text, platform, required)
+}
+
+func (s *Service) DeleteChecklistItem(ctx context.Context, projectID, itemID uuid.UUID) error {
+	return s.repo.DeleteChecklistItem(ctx, projectID, itemID)
 }
