@@ -1,0 +1,357 @@
+# План: два телеграм-бота и мини-апп
+
+Собрано 24 сентября 2026 по разбору обоих репозиториев и решениям
+владельца продукта. Пути и имена проверены по коду.
+
+Статус: **план**, кроме клиентских уведомлений — они уже сделаны (см.
+«Что уже сделано»).
+
+---
+
+## Откуда стартуем
+
+**Бота у нас нет вообще.** В Go ни строчки Telegram:
+
+- `internal/partner` — это односторонний вызов в «Бот Работ»
+  (HMAC-подпись `X-Signature`, привязка по коду). Ни вебхуков, ни
+  отправки, ни chat_id. Переменных `PARTNER_SECRET` и
+  `BOTRABOT_WEBHOOK_URL` нет даже в `.env.example`.
+- Все «личные» уведомления (`CRMOnly` в `internal/eventroute/chat.go`)
+  честно считаются, дедуплицируются в `notification_log`, уезжают в n8n
+  — и попадают в `default: return []`, потому что
+  `deploy/n8n/workflows/crmTgEventsV1.json` умеет писать только в один
+  захардкоженный чат менеджеров (`chat_id -1003414312576`, тема 22).
+  Сегодня ни креатор, ни заказчик не получают ничего.
+- Таблица `bot_links(user_id, chat_id, linked_at)` заведена в
+  `migrations/00032_project_page.sql:343` и **не используется ни одной
+  строкой Go-кода**.
+
+Что, наоборот, готово:
+
+- `notifications.WebhookDispatcher` (`internal/notifications/webhook.go`)
+  — универсальный POST-диспетчер с ретраями;
+- `eventroute.Deps` уже держит три независимых диспетчера (`CRM`,
+  `Email`, `Support`) — бот станет четвёртым;
+- `auth.LoginWithYandex` + таблица `user_identities` — готовый шаблон
+  «войти-или-зарегистрировать через внешний аккаунт»;
+- в `chatRouting` уже расставлены комментарии «это разговор с креатором
+  в его боте» — замысел двух адресатов зафиксирован, механизма нет.
+
+---
+
+## Архитектура (решение владельца)
+
+**Бот — отдельный сервис на Railway.** Он сам ходит в
+`api.telegram.org` и сам принимает вебхук Telegram. У нас — источник
+истины (привязки), проверка `initData` и отбор получателей.
+
+Это снимает два риска целиком: переписывать Cloudflare Worker
+(захардкожен на один токен и `sendMessage`) не нужно, и вебхук Telegram
+до нашего VDS доходить не обязан.
+
+**Мы → бот.** Четвёртый диспетчер: `BOT_WEBHOOK_URL`,
+`BOT_WEBHOOK_TOKEN`, `BOT_WEBHOOK_SECRET`. Тело — существующий
+`notifications.Payload` (`event_id`, `aggregate`, `aggregate_id`,
+`event_type`, `data`, `app_base_url`, `occurred_at`), плюс
+`X-Signature` (HMAC-SHA256, функция `sign` из `internal/partner`).
+
+Контракт кодов ответа — уже реализован в `Send`, менять не надо, но боту
+его надо сообщить:
+
+| Ответ бота | Что делает outbox |
+|---|---|
+| `2xx` | принято |
+| `408`, `429`, `5xx` | ретрай с backoff (`OUTBOX_MAX_ATTEMPTS`=10) |
+| любой другой `4xx` | `outbox.ErrPermanent` → DLQ, ретраев нет |
+
+**«Человек не подключён» — это `200`, но никогда не `500`.** Пятисотка
+превращает нормальную ситуацию в десять ретраев. Дедупликация на стороне
+бота — по `event_id`.
+
+**Бот → мы.** Группа `/api/v1/bot/*`, авторизация общим секретом
+`BOT_SHARED_SECRET` в `Authorization: Bearer`, сравнение `hmac.Equal` по
+образцу `partner.Service.CheckSecret`. Отдельный rate-limit scope
+`"bot"`, **не** в `expensiveScopes` (fail-closed там = потерянные
+привязки).
+
+**Токены ботов держим и у себя.** Проверка `initData` — чистая
+криптография; гонять её через Railway значит уронить вход в мини-апп
+вместе с ним.
+
+---
+
+## Что уже сделано
+
+**Клиентские уведомления** (`internal/publications/client_notify.go`,
+коммит «уведомления заказчику по его же выключателям»):
+
+- из четырёх галочек заказчика работала одна;
+  `on_new_video`, `on_date_shift`, `on_weekly_digest` сохранялись и не
+  делали ничего — событий под них не существовало. Теперь есть:
+  `client_new_video`, `client_date_shift`, `client_weekly_digest`;
+- `project.client_views_threshold` эмитился, но его не было в
+  `chatRouting` — уходил в вебхук и терялся в ветке «неизвестное».
+  Добавлен туда и в `dynamicEmitSites`.
+
+Доставка включится вместе с ботом заказчика: события маршрутизированы и
+дедуплицированы.
+
+---
+
+## Миграция `00065_telegram_bots.sql`
+
+```sql
+-- Привязка человека к боту. Ботов два: у исполнителя и у заказчика
+-- разные разговоры, и одна строка не может обслуживать оба.
+--
+-- Одна таблица с колонкой `bot`, а не две: доставка — это один запрос
+-- «чат этого человека в этом боте»; с двумя таблицами он превращается в
+-- два и в ветку if на каждом вызове.
+--
+-- Заменяет bot_links из 00032: та заводилась под одного бота и не
+-- использовалась ни одной строкой кода.
+CREATE TABLE telegram_links (
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    bot         TEXT NOT NULL CHECK (bot IN ('creator', 'client')),
+    tg_user_id  BIGINT NOT NULL,   -- id Telegram давно за 32 бита
+    tg_chat_id  BIGINT NOT NULL,   -- в личке совпадает, но это свойство, не правило
+    tg_username TEXT NOT NULL DEFAULT '',
+    linked_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Бот заблокирован пользователем. Строку не удаляем: удаление
+    -- выглядит как «никогда не подключал», и мы бы звали его заново.
+    blocked_at  TIMESTAMPTZ,
+    PRIMARY KEY (bot, tg_user_id),
+    UNIQUE (bot, user_id)
+);
+CREATE INDEX telegram_links_user_idx
+    ON telegram_links(user_id, bot) WHERE blocked_at IS NULL;
+
+DROP TABLE IF EXISTS bot_links;
+
+-- Одноразовый код привязки из кабинета. Хранится хешем, как инвайты и
+-- ссылки входа: дамп базы не должен давать привязать чужой аккаунт.
+CREATE TABLE telegram_link_codes (
+    code_hash  TEXT PRIMARY KEY,
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    bot        TEXT NOT NULL CHECK (bot IN ('creator', 'client')),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at    TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Человек из Telegram не приносит ни почты, ни телефона. Старое
+-- правило «email ИЛИ phone» не про почту — оно про то, что человека
+-- должно быть чем опознать. Telegram опознаёт не хуже.
+ALTER TABLE users ADD COLUMN telegram_user_id BIGINT UNIQUE;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_check;
+ALTER TABLE users ADD CONSTRAINT users_contact_present
+    CHECK (email IS NOT NULL OR phone IS NOT NULL OR telegram_user_id IS NOT NULL);
+```
+
+`user_identities` не расширяем и не заменяем: там «кто человек»
+(`provider = 'telegram'`, `provider_id = tg_user_id`), и это
+переиспользует `FindByIdentity`/`LinkIdentity` без правок.
+`telegram_links` отвечает только за доставку. Потолок 30 сообщений в
+сутки считается по существующей `notification_log` — второй счётчик
+разошёлся бы с ней на первом перезапуске.
+
+---
+
+## Ручки
+
+**Вход (группа с `RateLimit(d.Limiter, "auth", d.AuthWindows)`):**
+
+- `POST /api/v1/auth/telegram/miniapp` — `{bot, init_data}`, где
+  `init_data` **сырая строка** `Telegram.WebApp.initData`: любая
+  пересборка на клиенте ломает подпись. Ответ — `registerResp{user_id,
+  tokens, is_new, kind}` плюс `role`, чтобы мини-апп выбрал экран одним
+  запросом.
+- `POST /api/v1/auth/telegram/miniapp/login` — «войти паролем изнутри
+  мини-аппа и сразу привязать»: `{bot, init_data, login, password}`.
+- Login Widget (`POST /auth/telegram`) **в MVP не делаем**: он не даёт
+  `chat_id` и ни одной задачи доставки не решает. `VerifyLoginWidget`
+  в пакете оставляем — ручку добавить недолго.
+
+Коды: `400 invalid_input`, `401 telegram_bad_signature`, `401
+telegram_expired`, `401 bad_credentials`, `409 telegram_taken`, `501
+telegram_disabled`, `429 rate_limited`, `503 rate_limit_unavailable`.
+
+**Кабинет (под авторизацией):** `GET /me/telegram` (список привязок +
+`available` по ботам), `POST /me/telegram/link-code` (→ `https://t.me/
+<bot>?start=<code>`, TTL 15 минут), `DELETE /me/telegram/link?bot=`.
+
+**Бот → мы (`/api/v1/bot/*`, общий секрет):**
+
+- `POST /bot/link` — `{bot, code, tg_user_id, tg_chat_id, tg_username}`;
+  гасит код, пишет привязку, `LinkIdentity`, `users.telegram_user_id`.
+  `404 code_unknown`, `410 code_expired|code_used`, `409 telegram_taken`.
+- `GET /bot/users/by-telegram/{tg_user_id}?bot=` — «кто это»;
+  `404 not_linked`.
+- `POST /bot/blocked` — `{bot, tg_user_id}` → `blocked_at = now()` и
+  событие `bot.blocked` в чат менеджеров.
+- `POST /bot/orders/{order_id}/respond` — ответ креатора на заявку;
+  тонкая обёртка над `Orders.CreatorRespond`, своей логики нет.
+- `POST /bot/contact` — телефон из `request_contact`. Пишем
+  `users.phone`, только если пусто; `users.phone` **UNIQUE**, поэтому
+  вставка через `WHERE NOT EXISTS` плюс разбор `auth.isUniqueViolation`;
+  `409 phone_taken` — и бот говорит об этом человеку, а не повторяет
+  кнопку.
+
+---
+
+## Решения владельца
+
+| Вопрос | Решение |
+|---|---|
+| Пользователь без почты | Заводим. Публикация профиля и отправка заявки перестают требовать подтверждённую почту |
+| Отметка «почта подтверждена» | Ставим, **только если почты нет вовсе**. Есть, но не подтверждена — не ставим: Telegram владения ящиком не доказывает (в отличие от Яндекса) |
+| Креатор написал боту заказчиков | Поднимаем до `kind='both'`, вниз не опускаем никогда |
+| Мини-апп менеджеру | Да, но **канбан исключён**: ведём на креаторские экраны |
+| Бот заблокирован | Пишем менеджерам в общий чат (`bot.blocked`) |
+| Существующие телеграмы из профилей | Не переносим: там юзернейм, `chat_id` из него не получить. Ждём `/start` |
+| Рассылка-приглашение «подключите бота» | Не делаем. Вместо баннера — **кнопка в проектах**, когда привязки нет |
+| Аватар из Telegram | **Копируем в S3** (ссылка CDN живёт около суток), отложенно через outbox |
+| Контакты | Заполняем сразу, только пустые поля |
+| Первый вход из бота | Развилка «у меня уже есть аккаунт / я новый». Молча новый аккаунт не заводим |
+
+### Почта: что именно менять
+
+`auth.Service.CheckActiveVerified` (`internal/auth/service.go:466`) —
+один метод, два потребителя: `internal/profiles/service.go:348`
+(публикация профиля) и `internal/leads/service.go:107` (отправка
+заявки). Интерфейс объявлен дважды структурно (`profiles/service.go:34`,
+`leads/service.go:35`).
+
+Меняем только реализацию, смысл второго возвращаемого значения — с
+«почта подтверждена» на «опознан хотя бы одним каналом»:
+
+```
+!IsActive              → (false, false)
+verificationOff        → (true, true)
+EmailVerifiedAt != nil → (true, true)
+иначе                  → (true, есть живая привязка телеграма)
+```
+
+Новый `auth.Repo.HasTelegramLink`. Тексты отказов (`email_unverified`,
+`web/src/shared/api/api-error.ts`, `email-unverified.dialog.ts`) —
+переписать: теперь это «нет ни подтверждённой почты, ни подключённого
+бота».
+
+### `kind='both'`: где мины
+
+| Место | Понимает `both`? |
+|---|---|
+| `AuthSessionStore.roles` (фронт) | да |
+| `requireRole` / `hasRole` | да, через `roles()` |
+| `AuthSessionStore.role` | нет — `both` даёт `'client'`. Влияет на заголовки; поправить строкой |
+| **`auth.User.Role()`** (`internal/auth/repo.go:54`) | **нет** — `both` даёт `RoleClient`. Питает `RequireRoles`. Сегодня не стреляет (гварды только на `/manager/*` и `/admin/*`), но мина заложена — править вместе |
+| `internal/orders/repo.go:783` | да (`kind IN ('specialist','both')`) |
+| `internal/admin/summary.go:107` | сознательно не считает `both` ни в тех, ни в других — при массовом `both` цифры разойдутся |
+
+### Контакты из `initData`
+
+Приходит `{id, first_name, last_name, username, photo_url,
+language_code}`. Правило одно: **пишем только в пустое**
+(`COALESCE(NULLIF(поле,''), новое)`), всё — в той же транзакции, что
+создание пользователя.
+
+- `users.display_name` ← `first_name last_name`;
+- `client_profiles.display_name`, `client_profiles.telegram` ←
+  `@username` (это контакт для менеджера, а не канал доставки);
+- `specialist_profiles.display_name`, `social_links->>'telegram'` ←
+  `https://t.me/<username>`;
+- `specialist_profiles.username` — **не трогаем**: это наш публичный
+  хэндл в каталоге;
+- `language_code` — колонки нет и не нужно: интерфейс русский;
+- телефона в `initData` нет вовсе — только `request_contact` в боте.
+
+### Аватар
+
+Ссылку CDN не храним: `specialist_profiles.avatar_url` питает каталог,
+ленту и индексы OpenSearch, и протухшая ссылка испортит выдачу разом у
+всех.
+
+Импорт — отложенный: новый агрегат `outbox.AggregateAvatar = "avatar"`,
+тип `avatar.import_requested`, обработчик в `cmd/worker` рядом с
+транскодом. Строка в `chatRouting` **не нужна** (сканер фильтрует по
+агрегатам `project|moderation|support`), а строка в `eventroute.Handlers`
+**обязательна** — иначе воркер пометит событие обработанным и импорт
+потеряется молча.
+
+Правила скачивания: таймаут 10 с, `io.LimitReader` на 5 МБ
+(`imageMaxUploadBytes`), только jpeg/png/webp — и по заголовку, и по
+`http.DetectContentType`; allow-list хостов `t.me`, `*.telegram.org`;
+ключ `images/{user_id}/{uuid}.ext` (тот же, что у
+`CreateImageUploadURL`); запись `WHERE COALESCE(avatar_url,'') = ''`;
+если обновилось 0 строк — удалить залитый объект. Объект под `images/`
+переживёт `SweepOrphanMedia`, потому что `avatar_url` есть в
+`LoadReferencedMediaURLs`.
+
+### Привязка существующих аккаунтов
+
+1. **Из кабинета:** кнопка «Получать уведомления в Telegram» в проектах
+   → `POST /me/telegram/link-code` → ссылка + QR (`QRCode.toCanvas`, по
+   образцу `features/profile-share`) → `/start <код>` → `POST /bot/link`.
+2. **Из бота:** `/start` без кода → ссылка на мини-апп → развилка «есть
+   аккаунт / я новый» → пароль один раз → привязка без кодов.
+3. **Чего не делаем:** автоматический матч по
+   `client_profiles.telegram` и `social_links.telegram` — там юзернейм,
+   он меняется и может быть чужим.
+
+**Кнопка — в проектах, не баннером** (решение владельца): в карточке
+проекта креатора и в карточке проекта заказчика; в списках проектов её
+нет — там нет предмета уведомления. В мини-аппе её нет вовсе. Знает о
+привязке через `TelegramLinkStore` (один запрос на вкладку), гаснет
+сама, когда привязка появилась.
+
+**Слияние двух аккаунтов на одного человека:** `LinkIdentity` делает
+`ON CONFLICT DO NOTHING` и возвращает `nil` — то есть молча ничего не
+делает. Любая ручка привязки обязана сперва спросить `FindByIdentity` и
+ветвиться сама. Правило: занят другим пользователем → `409
+telegram_taken`, автоматического переноса нет, слияние — руками админа.
+
+---
+
+## Порядок работ
+
+1. **Миграция и конфиг.** `TELEGRAM_*_BOT_TOKEN`,
+   `TELEGRAM_*_BOT_USERNAME`, `TELEGRAM_INITDATA_TTL`, `BOT_WEBHOOK_*`,
+   `BOT_SHARED_SECRET`. Дописать `.env.example` и `.env.prod.example` —
+   там до сих пор нет и `PARTNER_SECRET`/`BOTRABOT_WEBHOOK_URL`.
+2. **`internal/telegram/verify.go`** + тесты. `secret =
+   HMAC_SHA256("WebAppData", botToken)`; хелпер, подписывающий тестовый
+   `initData` (по образцу `partner.SignForTest`).
+3. **`POST /auth/telegram/miniapp`** + `LoginWithTelegram` (три ветки +
+   `both`) + правка `User.Role()` + новый `CheckActiveVerified`.
+4. **Фронт `/tg`:** `telegram-web-app.js`, `shared/lib/telegram-webapp.ts`,
+   `pages/tg/tg-entry.page.ts`, маршрут **без guard**, ветка в
+   `auth.interceptor.ts` (`killSession` сейчас уводит на `/`).
+   Редирект: админ → `/admin`, креатор и менеджер →
+   `/me/creator/projects`, иначе `/me/projects`.
+   Проверка на стенде: `?dev_init_data=` только в dev-сборке; настоящий
+   Telegram `192.168.64.2:4200` не откроет — нужен туннель.
+5. **Группа `/api/v1/bot/*`** + коды привязки. Проверяется `curl`'ом до
+   появления бота.
+6. **Сервис на Railway:** два токена, вебхук, `/start`, `my_chat_member`.
+7. **Мы → бот:** подписанный диспетчер, `Deps.Bots`, `botRouting`,
+   резолв получателей, потолок 30/сутки, лог «recipients=N».
+8. **Кнопка привязки в проектах**, `bot.blocked` + ветка в n8n.
+9. **Клиентская ветка бота** — события уже есть (см. «Что уже сделано»).
+
+Отложить: `request_contact`, сдача ссылок из бота, отвязка и раздел
+«Уведомления» в кабинете, Login Widget.
+
+---
+
+## Открытые вопросы
+
+1. Один сервис на Railway на двух ботов или два (от этого зависит, одна
+   у нас переменная `BOT_WEBHOOK_URL` или две).
+2. Потолок 30 в сутки считается по `notification_log` и включает
+   отправленное не ботом. Общий потолок или отдельный счётчик бота?
+3. Кнопка «поделиться номером» — в первой версии или позже.
+4. Счётчики `/admin/summary` после массового появления `kind='both'`.
+5. Где живут секреты Railway и кто их ротирует: токены ботов теперь в
+   двух местах (у нас для `initData`, на Railway для API Telegram).
+6. Требование к логам бота: ни токенов, ни `BOT_SHARED_SECRET`, ни
+   сырого `init_data` (в нём `hash`) в логи не писать.
