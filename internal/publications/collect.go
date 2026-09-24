@@ -35,6 +35,25 @@ func CollectInterval(ageDays int) int {
 	}
 }
 
+// ParkedAt — признак «ссылка снята с обхода»: её next_collect_at.
+//
+// Ставит его подытог периода (billing.parkPeriodLinks) и схлопывание
+// закрытого проекта: числа заморожены срезом, записывать новые
+// просмотры некуда, и каждый обход — кредит поставщика впустую.
+//
+// Любая запись next_collect_at обязана этот признак уважать, иначе
+// ссылка воскресает НАВСЕГДА: подытог для её периода уже был и больше
+// не повторится, а значит снять её снова будет некому. Возвращает
+// ссылки в очередь только переоткрытие периода.
+const ParkedAt = "'infinity'::timestamptz"
+
+// keepParked оборачивает новое значение next_collect_at так, чтобы оно
+// не трогало уже снятую с обхода ссылку. col — как поле называется в
+// этом запросе (с алиасом таблицы или без).
+func keepParked(col, expr string) string {
+	return "CASE WHEN " + col + " = " + ParkedAt + " THEN " + col + " ELSE " + expr + " END"
+}
+
 // collectRetryDelay — на сколько отодвигается вся пачка, когда сервис
 // сбора недоступен целиком. Пятнадцать минут: достаточно, чтобы очередь
 // прокрутилась, и мало, чтобы не потерять день.
@@ -77,7 +96,7 @@ func (r *Repo) DueForCollection(ctx context.Context, now time.Time, limit int) (
 	if limit <= 0 {
 		limit = 50
 	}
-	const q = `
+	q := `
 WITH claimed AS (
     SELECT l.id
     FROM publication_links l
@@ -93,7 +112,7 @@ WITH claimed AS (
 ),
 taken AS (
     UPDATE publication_links l
-    SET next_collect_at = $1::timestamptz + $3::interval
+    SET next_collect_at = ` + keepParked("l.next_collect_at", "$1::timestamptz + $3::interval") + `
     FROM claimed c
     WHERE l.id = c.id
     RETURNING l.id, l.publication_id, l.platform, l.url_canonical, l.submitted_at
@@ -165,7 +184,7 @@ SET last_collected_at = $2::timestamptz,
     -- и выводит для параметра противоречивые типы — 42P08. А без
     -- make_interval пришлось бы писать ($3 || ' days'), где тот же
     -- параметр был бы и числом, и текстом.
-    next_collect_at = $2::timestamptz + make_interval(days => $3)
+    next_collect_at = `+keepParked("next_collect_at", "$2::timestamptz + make_interval(days => $3)")+`
 WHERE id = $1`, link.LinkID, now, interval, publishedAt); err != nil {
 		return fmt.Errorf("reschedule link: %w", err)
 	}
@@ -230,7 +249,7 @@ func (r *Repo) MarkFailed(ctx context.Context, link LinkToCollect, now time.Time
 	_, err := r.db.Exec(ctx, `
 UPDATE publication_links
 SET collect_interval_days = $2,
-    next_collect_at = $3::timestamptz + make_interval(days => $2)
+    next_collect_at = `+keepParked("next_collect_at", "$3::timestamptz + make_interval(days => $2)")+`
 WHERE id = $1`, link.LinkID, interval, now)
 	if err != nil {
 		return fmt.Errorf("reschedule failed link: %w", err)
@@ -366,7 +385,7 @@ WHERE link_id IN (
 	// Снимаем с обхода: собирать больше нечего.
 	if _, err := tx.Exec(ctx, `
 UPDATE publication_links
-SET next_collect_at = 'infinity'::timestamptz
+SET next_collect_at = `+ParkedAt+`
 WHERE publication_id IN (SELECT id FROM project_publications WHERE project_id = $1)`,
 		projectID); err != nil {
 		return fmt.Errorf("park links: %w", err)
@@ -475,6 +494,12 @@ type CollectStats struct {
 	NoData int `json:"no_data"`
 	// ThresholdNotified — скольким клиентам ушло «ролик перешагнул порог».
 	ThresholdNotified int `json:"threshold_notified"`
+	// Projects — проекты, по которым в этом проходе появились НОВЫЕ
+	// цифры. По ним надо пересчитать начисления открытого периода:
+	// просмотры и есть то, из чего они считаются, и пока пересчёта нет,
+	// сумма на экране менеджера отстаёт от собранного. Пусто, когда
+	// сохранять было нечего.
+	Projects []uuid.UUID `json:"-"`
 }
 
 // RunCollection — один проход: взять просроченные ссылки, сходить за
@@ -496,6 +521,13 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 	st.Considered = len(links)
 	if len(links) == 0 {
 		return st, nil
+	}
+	// Пачка заполнилась целиком — значит, очередь длиннее нашей
+	// пропускной способности. Считаем это отдельно: отставание ссылок
+	// (crm_links_stale) загорится только через сутки, когда цифры в
+	// отчёте уже протухнут.
+	if len(links) >= batchSize {
+		ObserveCollectSaturated()
 	}
 
 	// Один канонический адрес может принадлежать нескольким ссылкам: один
@@ -531,6 +563,9 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 	}
 
 	seen := make(map[uuid.UUID]bool, len(links))
+	// Проекты, которым цифры реально записали: пересчитывать нечего там,
+	// где сбор ничего не принёс.
+	touched := make(map[uuid.UUID]bool, len(links))
 	for _, res := range results {
 		matched, ok := byURL[res.URL]
 		if !ok {
@@ -565,6 +600,7 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 				ObserveCollect(link.Platform, "ok")
 			}
 			st.Saved++
+			touched[link.ProjectID] = true
 		}
 	}
 
@@ -594,6 +630,9 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 				return st, err
 			}
 		}
+	}
+	for id := range touched {
+		st.Projects = append(st.Projects, id)
 	}
 	return st, nil
 }
@@ -638,7 +677,7 @@ func (r *Repo) DeferLinks(ctx context.Context, links []LinkToCollect, until time
 		ids = append(ids, l.LinkID)
 	}
 	_, err := r.db.Exec(ctx,
-		`UPDATE publication_links SET next_collect_at = $2 WHERE id = ANY($1)`, ids, until)
+		`UPDATE publication_links SET next_collect_at = `+keepParked("next_collect_at", "$2")+` WHERE id = ANY($1)`, ids, until)
 	if err != nil {
 		return fmt.Errorf("defer links: %w", err)
 	}

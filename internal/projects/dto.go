@@ -188,8 +188,13 @@ type ProjectClientView struct {
 	// SpecialistPrimaryCategory — title основной категории исполнителя
 	// («Видеооператор», «Дизайнер»). Опознавательный знак карточки
 	// проекта когда у клиента их несколько.
-	SpecialistPrimaryCategory string               `json:"specialist_primary_category,omitempty"`
-	DisplayStatus             ProjectDisplayStatus `json:"display_status"`
+	SpecialistPrimaryCategory string `json:"specialist_primary_category,omitempty"`
+	// ManagerDisplayName — имя менеджера проекта. Заказчик пишет не «в
+	// поддержку», а конкретному человеку: у вкладки переписки в кабинете
+	// стоит его имя, и брать это имя больше неоткуда. Пусто, пока
+	// менеджер не назначен.
+	ManagerDisplayName string               `json:"manager_display_name,omitempty"`
+	DisplayStatus      ProjectDisplayStatus `json:"display_status"`
 	// Progress — взвешенный % выполнения по видимым клиенту шагам.
 	Progress float64 `json:"progress"`
 	// CurrentStep* — пришедший на «передовую» шаг (см. DeriveCurrentStep).

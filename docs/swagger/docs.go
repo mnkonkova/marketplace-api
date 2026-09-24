@@ -2250,6 +2250,43 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/tariff/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Строка — проект. Прайс площадки один на всех, а\nдоговариваются с каждым заказчиком отдельно: вопрос к этому\nразделу звучит не «какой у нас прайс», а «по каким условиям\nидёт вот этот проект и чем он отличается от соседнего».\nВидно и худшее состояние — проект без тарифа: он считается\nпо нулям, а экран денег показывает ровные нули, и выглядит\nэто как «ещё не начислили».",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-billing"
+                ],
+                "summary": "Тарифы всех проектов одной таблицей (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.tariffRegistryResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/team": {
             "get": {
                 "security": [
@@ -3818,6 +3855,317 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/accounts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Логины, ссылки и заметки. Пароли в списке не отдаются — только признак has_password.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Доступы к аккаунтам бренда (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Завести доступ к аккаунту бренда (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "доступ",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "too_many_accounts",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled — пароль прислали, а ключа шифрования нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/accounts/{account_id}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пароль не прислали — остаётся прежний: чтобы поправить логин, знать пароль не нужно. Прислали пустым — пароль стирается.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Править доступ (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "доступ",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш или доступа нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Удалить доступ (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/accounts/{account_id}/secret": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отдельная ручка: пароль не ездит в списке проекта, его запрашивают явно — и запрос видно в логах.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Показать пароль доступа (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.secretResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — доступа нет или пароль не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/accruals/recalc": {
             "post": {
                 "security": [
@@ -4573,6 +4921,132 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/checklist/items": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пункт живёт только в этом проекте: в библиотеку не попадает.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Добавить пункт в чек-лист проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "пункт",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.checklistItemReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ChecklistItem"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; invalid_input — пустой или слишком длинный текст",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/checklist/items/{itemId}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пункт, по которому уже отчитывались, не удаляется: вместе с ним исчез бы след проверки.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Убрать пункт из чек-листа проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "checklist item id",
+                        "name": "itemId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект или пункт не найден",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "item_used — по пункту уже отчитывались",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/claim": {
             "post": {
                 "security": [
@@ -4982,6 +5456,77 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/creators/{creator_id}/reminders": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Колокольчик в плане выкладок — напротив каждого креатора\nсвой. Сильнее настройки проекта: напоминание включают тому,\nкто забывает, а не всем восьмерым разом. «Завтра срок» —\nещё рабочее напоминание, в отличие от «сегодня срок».",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Напоминать креатору накануне срока (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator user id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "day_before",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.creatorRemindReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.CreatorReminderPref"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; bad_creator_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/creators/{creator_id}/subscribers": {
             "put": {
                 "security": [
@@ -5182,6 +5727,70 @@ const docTemplate = `{
                         "description": "not_found — проект не найден или ведёт другой менеджер",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/link-suggestions": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Точка входа для того, кто находит ролики на площадках: обхода\nаккаунтов, бота или менеджера, наткнувшегося на ролик руками.\nСама находка ничего не меняет — её подтверждает креатор.\nПовторная находка того же адреса не плодит карточку: обход\nидёт каждый день, а «не мой» не должен возвращаться завтра.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Положить найденный ролик (менеджер / обход аккаунтов)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "находка",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.addSuggestionReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.LinkSuggestion"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; unknown_platform",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
                         }
                     }
                 }
@@ -5701,6 +6310,74 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше состав и даты меняются поштучно.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Поставить одну выкладку на дату (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "кому и на когда",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.addPubReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_date — дата не в формате ГГГГ-ММ-ДД; invalid_input — дата в прошлом или дальше чем на год",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_project_kind; creator_not_in_project; day_taken — на этот день у креатора уже есть выкладка; period_locked",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
                         }
@@ -6408,6 +7085,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/publications/{pub_id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Не то же, что «закрыть неполную»: там ролик вышел не везде, здесь выкладки не будет вовсе. Сданное не снимается.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Снять запланированную выкладку (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "причина",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.closeReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — причина длиннее 300 символов",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_started — по выкладке уже сдавали ссылки",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/publications/{pub_id}/close": {
             "post": {
                 "security": [
@@ -6478,6 +7225,153 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/publications/{pub_id}/due_date": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только по плановой выкладке, по которой ещё не сдавали ссылки. Открытая просьба креатора о переносе закрывается этим же действием.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Перенести дату выкладки (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новая дата",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.dueDateReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_date; bad_id; invalid_input — дата в прошлом или дальше чем на год",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_started — по выкладке уже сдавали ссылки; day_taken; period_locked",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/links/{platform}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ссылку сдаёт креатор, и ошибается в ней тоже он. Менеджер правит адрес на месте; пустой url снимает ссылку с площадки, и выкладка снова становится неполной. Если ролик другой — ежедневные замеры этой ссылки удаляются, иначе история двух разных видео склеилась бы в одну линию.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Исправить сданную ссылку (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "площадка: tiktok|instagram|youtube|vk|likee",
+                        "name": "platform",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новый адрес",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.editLinkReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — неизвестная площадка, нераспознанная ссылка или ссылка другой площадки",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка в чужом проекте либо ссылки на этой площадке нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed — выкладка отменена или закрыта руками",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/publications/{pub_id}/remind": {
             "post": {
                 "security": [
@@ -6529,6 +7423,82 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "already_reminded — сегодня по этой выкладке напоминание уже отправляли",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/review": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Менеджер отмечает по каждому пункту «да» или «нет» и выносит решение: вернуть с замечанием или принять. Принять нельзя, пока хоть один обязательный пункт сданных площадок не отмечен «да» — непроверенное считается непройденным. Пустое decision сохраняет ход проверки, не вынося решения: ролик смотрят частями. Новая сдача ссылок отменяет прежнее решение и стирает вердикты — они относились к другому ролику.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Проверка ролика: вердикты по чек-листу и решение (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "вердикты и решение",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.reviewReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — возврат без замечания или неизвестное решение; foreign_checklist_item",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed; nothing_to_review — ссылок нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "review_blocked — обязательные пункты не пройдены",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
                         }
@@ -6887,6 +7857,327 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/accounts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Аккаунты ЭТОГО проекта, а не личная страница из профиля: под\nпроект креатор заводит отдельные, и ведёт их сам. Чужие и\nбрендовые доступы сюда не попадают — в них пароли заказчика.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Мои аккаунты в проекте (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — вы не в составе проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Владелец проставляется сам — завести строку от чужого имени нельзя.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Завести свой аккаунт в проекте (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "аккаунт",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — вы не в составе проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "too_many_accounts",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled — пароль прислали, а ключа шифрования нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/accounts/{account_id}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пароль не прислали — остаётся прежний; прислали пустым — стирается.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Править свой аккаунт (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "аккаунт",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — аккаунт не ваш или его нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Снять свой аккаунт с проекта (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "удалён"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — аккаунт не ваш или его нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/accounts/{account_id}/secret": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Свой пароль забывают так же, как все — он его и вписывал.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Показать пароль своего аккаунта (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.secretResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — аккаунт не ваш, его нет или пароль не записан",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
                         }
@@ -7531,6 +8822,244 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/creator/publications/{pub_id}/links/{platform}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ролик удаляют с площадки, аккаунт перевыкладывают, короткая\nссылка протухает — и новый адрес есть ровно у автора. Раньше\nон писал его в переписку, а переносил менеджер.\nСнять площадку креатор не может: пустой адрес означает «ролика\nне было», и это решение о работе, а не о ссылке.\nЕсли ролик другой — ежедневные замеры этой ссылки удаляются, а\nпроверка открывается заново: проверяли не его.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Переслать свою ссылку (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "площадка: tiktok|instagram|youtube|vk|likee",
+                        "name": "platform",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новый адрес",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.editLinkReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input; link_remove_denied — пустой адрес",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или заведена на другого креатора",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed; period_locked — период уже подытожен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/suggestions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Сервис находит ролик на аккаунте креатора раньше, чем тот\nуспевает вставить ссылку, — но ничего не привязывает сам:\nподтверждает человек. К какой выкладке предложить привязку,\nсчитается при чтении, поэтому перенос срока подсказку не ломает.\nНаходки по всем проектам сразу: карточка приходит от площадки,\nа не от проекта.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Найденные ролики, ждущие подтверждения (креатор)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.suggestionsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/suggestions/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отказ хранится, а не забывается: обход аккаунта идёт каждый\nдень, и удалённая находка вернулась бы завтра той же карточкой.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "«Не мой» — отклонить находку (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "suggestion id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "отклонено"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — находка не найдена или чужая",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "suggestion_decided — по находке уже ответили",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/suggestions/{id}/link": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Находка становится обычной сданной ссылкой: те же проверки\nчеклиста, то же закрытие выкладки при пятой площадке.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "«Да, мой» — привязать найденный ролик (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "suggestion id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "куда привязать",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.linkSuggestionReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — находка не найдена или чужая",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "suggestion_decided — по находке уже ответили",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "checklist_incomplete",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/general-projects": {
             "get": {
                 "security": [
@@ -8134,7 +9663,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Сумма для страницы подбора: клиент собирает состав, и она\nпересчитывается на каждое изменение. Оклады известны точно,\nбонус — прогноз по истории выбранных людей, разложенный по\nступеням тарифа. Кто без истории, тот в среднее не входит и\nпосчитан в without_history: считать новичка нулём значит\nзанизить смету ровно настолько, насколько подборка новая.\nhas_forecast=false означает «бонус неизвестен», а не «ноль».\nУсловия берутся действующие — те, с которыми клиент и\nсогласится при оформлении.",
+                "description": "Сумма для страницы подбора: клиент собирает состав, и она\nпересчитывается на каждое изменение. Оклады известны точно,\nбонус — прогноз по истории выбранных людей, разложенный по\nступеням тарифа. Кто без истории, тот в среднее не входит и\nпосчитан в without_history: считать новичка нулём значит\nзанизить смету ровно настолько, насколько подборка новая.\nhas_forecast=false означает «бонус неизвестен», а не «ноль».\nУсловия берутся действующие — те, с которыми клиент и\nсогласится при оформлении.\nОбязателен только needed: смету спрашивают и до того, как\nнабран состав и решён объём. Без них приходят точные\nоклады и has_forecast=false.",
                 "consumes": [
                     "application/json"
                 ],
@@ -8164,7 +9693,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "bad_json; invalid_input — пустой состав, больше 50 человек, ноль роликов или креаторов",
+                        "description": "bad_json; invalid_input — needed меньше единицы, отрицательный videos_count или больше 50 человек",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.errorResponse"
                         }
@@ -9714,6 +11243,116 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.clientListResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/accounts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Это аккаунты заказчика: он вправе видеть, где и под каким логином выходят его ролики. Пароли — отдельной ручкой.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Доступы к аккаунтам бренда (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/accounts/{account_id}/secret": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Показать пароль доступа (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.secretResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — доступа нет или пароль не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
                         }
                     }
                 }
@@ -11763,6 +13402,14 @@ const docTemplate = `{
                 "kind": {
                     "type": "string"
                 },
+                "median": {
+                    "description": "Median — сколько просмотров человек обычно даёт за ролик. Этим же\nпоиском менеджер подбирает креатора в проект, и выбирать по одной\nпочте — значит выбирать вслепую. nil у тех, кто роликов не сдавал\nили сдал слишком мало, чтобы медиана что-то значила.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/marketpclce_internal_publications.CreatorMedian"
+                        }
+                    ]
+                },
                 "phone": {
                     "type": "string"
                 },
@@ -13021,6 +14668,20 @@ const docTemplate = `{
         "internal_billing.OverviewTopVideo": {
             "type": "object",
             "properties": {
+                "creator_display_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID/CreatorDisplayName — кто снял. В «лучшем за окно»\nэто половина ответа: заказчик смотрит не только что выстрелило,\nно и с кем это повторить.",
+                    "type": "string"
+                },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость ролика за то же окно, по которому он\nсюда попал. Считается от прироста, а не от накопленных итогов:\nиначе старый ролик с большим хвостом выглядел бы вовлекающим на\nнеделе, когда его никто не трогал. nil, пока прироста просмотров\nнет — делить не на что.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "type": "boolean"
+                },
                 "platform": {
                     "description": "Platform — площадка-лидер: та, что дала больше всех просмотров за\nокно. Ссылка — на неё же.",
                     "type": "string"
@@ -13430,6 +15091,57 @@ const docTemplate = `{
                 },
                 "videos_next_months": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TariffRow": {
+            "type": "object",
+            "properties": {
+                "client_name": {
+                    "type": "string"
+                },
+                "guarantee_views": {
+                    "type": "integer"
+                },
+                "has_terms": {
+                    "description": "HasTerms — снимок условий заведён. false означает «проект\nсчитается по нулям», и это худшее из состояний: экран денег\nпоказывает ровные нули, и выглядит это как «ещё не начислили».",
+                    "type": "boolean"
+                },
+                "manager_name": {
+                    "type": "string"
+                },
+                "max_fee": {
+                    "type": "integer"
+                },
+                "min_fee": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth/RatePer1000Views — числа старой модели. Показываем\nих там, где ступеней нет: иначе строка выглядела бы пустой у\nпроекта, у которого тариф на самом деле задан.",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "stepped": {
+                    "description": "Stepped — тариф считается лесенкой. false при HasTerms=true\nозначает старую модель: оклад плюс ставка за тысячу.",
+                    "type": "boolean"
+                },
+                "steps_count": {
+                    "description": "StepsCount/MinFee/MaxFee — во что обходится период заказчику на\nнижней и верхней ступени. По ним видно вилку, не открывая проект.",
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },
@@ -14017,17 +15729,18 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "creator_ids": {
-                    "description": "CreatorIDs — кого выбрал клиент. Порядок здесь не важен: на сумму\nвлияет состав, а не приоритет.",
+                    "description": "CreatorIDs — кого выбрал клиент. Порядок здесь не важен: на сумму\nвлияет состав, а не приоритет. Пусто — состав ещё не набран, и\nпрогноз бонуса не считается.",
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
                 "needed": {
-                    "description": "Needed — сколько креаторов нужно; VideosCount — объём роликов.",
+                    "description": "Needed — сколько креаторов нужно. Единственное обязательное поле:\nбез него не посчитать даже оклады.",
                     "type": "integer"
                 },
                 "videos_count": {
+                    "description": "VideosCount — объём роликов. Ноль значит «ещё не знаю»: смету\nспрашивают и до того, как решили, сколько роликов в месяц.",
                     "type": "integer"
                 }
             }
@@ -14212,6 +15925,17 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_billing.CreatorSubscribers"
+                    }
+                }
+            }
+        },
+        "internal_billing.tariffRegistryResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TariffRow"
                     }
                 }
             }
@@ -16974,6 +18698,10 @@ const docTemplate = `{
                 "lead_recipient_specialist_id": {
                     "type": "string"
                 },
+                "manager_display_name": {
+                    "description": "ManagerDisplayName — имя менеджера проекта. Заказчик пишет не «в\nподдержку», а конкретному человеку: у вкладки переписки в кабинете\nстоит его имя, и брать это имя больше неоткуда. Пусто, пока\nменеджер не назначен.",
+                    "type": "string"
+                },
                 "notes": {
                     "type": "string"
                 },
@@ -17892,6 +19620,56 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.Account": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "creator_name": {
+                    "description": "CreatorName — подпись владельца. Считается в запросе, в таблице\nдоступов её нет.",
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — чей это аккаунт. Ролики выходят С АККАУНТОВ\nКРЕАТОРОВ, и список без владельца читается как чужая связка\nключей: пять строк, и неясно, с кого спрашивать, когда ссылка\nперестала отвечать. Пусто у настоящих брендовых доступов —\nпочты, рекламного кабинета, аккаунта самого бренда.",
+                    "type": "string"
+                },
+                "has_password": {
+                    "description": "HasPassword — пароль заведён. Само значение отдаётся отдельной\nручкой: пароль не должен ездить в каждом списке проекта.",
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "login": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.BatchResult": {
             "type": "object",
             "properties": {
@@ -17949,6 +19727,10 @@ const docTemplate = `{
         "internal_publications.ChecklistItem": {
             "type": "object",
             "properties": {
+                "added_for_project": {
+                    "description": "AddedForProject — пункт завёл менеджер под этот проект, а не\nскопирован из библиотеки. Обновление шаблона такие пункты не\nтрогает, и на экране они отличаются: иначе менеджер не знает, что\nуцелеет при обновлении версии.",
+                    "type": "boolean"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -18119,6 +19901,19 @@ const docTemplate = `{
                 "ClientStatusPlanned"
             ]
         },
+        "internal_publications.CreatorMedian": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "description": "Basis — сколько роликов легло в расчёт. Идёт вместе с числом:\n«медиана 190 тыс. по 12 роликам» и «по 3» — разной силы\nутверждения, и читателю нужно их различать.",
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views — медиана просмотров одного ролика.",
+                    "type": "integer"
+                }
+            }
+        },
         "internal_publications.CreatorProject": {
             "type": "object",
             "properties": {
@@ -18181,6 +19976,14 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "median": {
+                    "description": "Median — медиана просмотров КРЕАТОРА по всем его проектам. Из неё\nв кабинете считается «следующий ролик добавит примерно столько\nпросмотров» — то есть обещание, поэтому число обязано быть\nтипичным, а не средним. nil, пока мерить не на чем.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.CreatorMedian"
+                        }
+                    ]
+                },
                 "monthly_plan": {
                     "description": "MonthlyPlan — сколько роликов за месяц по договору. Из него\nсчитается «роликов 6 из 12» в шапке.",
                     "type": "integer"
@@ -18217,6 +20020,23 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.CreatorReminderPref": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "day_before": {
+                    "type": "boolean"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -18282,6 +20102,48 @@ const docTemplate = `{
                 },
                 "views": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_publications.LinkSuggestion": {
+            "type": "object",
+            "properties": {
+                "author_handle": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "suggested_due_date": {
+                    "type": "string"
+                },
+                "suggested_publication_id": {
+                    "description": "Suggested* — выкладка, к которой предлагаем привязать. Считается\nпри чтении, а не хранится: срок переносят, выкладку закрывают, и\nприбитая к находке ссылка протухла бы на первом же переносе.\nПусто — подходящей выкладки сейчас нет, и кнопка «Привязать»\nпоказывать некуда.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
                 }
             }
         },
@@ -18358,6 +20220,18 @@ const docTemplate = `{
                 },
                 "display_name": {
                     "type": "string"
+                },
+                "median": {
+                    "description": "Median — сколько просмотров этот человек обычно даёт за ролик.\nnil, пока измеренных роликов слишком мало: см. CreatorMedians.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.CreatorMedian"
+                        }
+                    ]
+                },
+                "remind_day_before": {
+                    "description": "RemindDayBefore — колокольчик в плане выкладок: писать ли этому\nчеловеку накануне срока. Разрешённое значение, а не сырая строка\nнастройки: если колокольчик не трогали, здесь стоит то, что\nдействует по проекту.",
+                    "type": "boolean"
                 },
                 "user_id": {
                     "type": "string"
@@ -18478,6 +20352,14 @@ const docTemplate = `{
                     "description": "PublishedAt — когда ролик вышел: самое раннее известное среди\nплощадок выкладки. Площадки выкладывают не одновременно, и «вышел»\n— это первая из них; на этой дате будет стоять возраст ролика и\nправило «зрелый» (14 дней).\n\nnil означает «не знаем»: ни одна площадка даты не отдала или ролик\nещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают\nи через неделю после выхода.",
                     "type": "string"
                 },
+                "review": {
+                    "description": "Review — проверка ролика менеджером. nil означает «не смотрели», и\nэто не то же самое, что «принято» или «замечаний нет»: статус\nвыкладки говорит про ссылки, а проверка — про содержание ролика.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.PublicationReview"
+                        }
+                    ]
+                },
                 "self_added": {
                     "description": "SelfAdded — выкладку завёл себе сам креатор, а не менеджер.\n\nМенеджеру это видно в списке и в карточке, чтобы он не искал в\nсвоих пачках ролик, которого туда не ставил. Считается признак не\nдля отчётности: самодобавленные не участвуют в знаменателе\nнедосдачи — иначе кнопка «добрать до ступени» уменьшала бы оклад\nтому, кто её нажал.",
                     "type": "boolean",
@@ -18507,9 +20389,45 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.PublicationReview": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "description": "Comment — замечание последнего решения. При возврате обязательно:\n«вернули молча» креатор всё равно придёт выяснять словами.",
+                    "type": "string"
+                },
+                "decided_at": {
+                    "type": "string"
+                },
+                "decided_by": {
+                    "type": "string"
+                },
+                "decided_by_name": {
+                    "type": "string"
+                },
+                "marks": {
+                    "description": "Marks — вердикты по пунктам; пункта без строки менеджер ещё не\nкасался.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ReviewMark"
+                    }
+                },
+                "round": {
+                    "description": "Round — какая это по счёту сдача. Больше единицы значит, что ролик\nуже возвращали.",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.ReminderPrefs": {
             "type": "object",
             "properties": {
+                "day_before": {
+                    "description": "DayBefore — креатору в бот НАКАНУНЕ срока. Единственный из видов,\nвыключенный по умолчанию: он появился позже остальных, и включать\nего молча всем — значит завтра утром написать каждому креатору\nкаждого проекта, никого не спросив. Колокольчик напротив креатора\nв плане выкладок сильнее этой настройки, см.\nCreatorReminderPref.",
+                    "type": "boolean"
+                },
                 "due_today": {
                     "description": "DueToday — креатору в бот утром в день выкладки.",
                     "type": "boolean"
@@ -18594,6 +20512,18 @@ const docTemplate = `{
                 },
                 "views": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_publications.ReviewMark": {
+            "type": "object",
+            "properties": {
+                "item_id": {
+                    "type": "string"
+                },
+                "passed": {
+                    "description": "Passed — «да» или «нет». Отсутствие строки означает третье\nсостояние — «ещё не смотрел», и оно не равно «нет».",
+                    "type": "boolean"
                 }
             }
         },
@@ -18725,6 +20655,63 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.accountReq": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "description": "CreatorUserID — чей это аккаунт. Пусто — брендовый доступ без\nвладельца (почта, рекламный кабинет).",
+                    "type": "string"
+                },
+                "login": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "password": {
+                    "description": "Password: поле не прислали — пароль не трогаем; прислали пустым —\nстираем.",
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.accountsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.Account"
+                    }
+                },
+                "secrets_enabled": {
+                    "description": "SecretsEnabled — можно ли заводить пароли. Выключено, когда в\nокружении нет ключа шифрования: логины и ссылки при этом работают,\nи интерфейсу надо это показать, а не молча прятать поле.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.addPubReq": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "draft_lead_days": {
+                    "type": "integer"
+                },
+                "due_date": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.addSelfReq": {
             "type": "object",
             "properties": {
@@ -18735,9 +20722,33 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.addSuggestionReq": {
+            "type": "object",
+            "properties": {
+                "author_handle": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел на площадке, RFC3339. Из неё\nподбирается выкладка, к которой предложить привязку.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.autopingReq": {
             "type": "object",
             "properties": {
+                "day_before": {
+                    "type": "boolean"
+                },
                 "due_today": {
                     "type": "boolean"
                 },
@@ -18819,6 +20830,21 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.checklistItemReq": {
+            "type": "object",
+            "properties": {
+                "is_required": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "description": "Platform пустой = пункт общий для всех площадок.",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.checklistResp": {
             "type": "object",
             "properties": {
@@ -18860,6 +20886,14 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.creatorRemindReq": {
+            "type": "object",
+            "properties": {
+                "day_before": {
+                    "type": "boolean"
+                }
+            }
+        },
         "internal_publications.creatorReq": {
             "type": "object",
             "properties": {
@@ -18887,6 +20921,23 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.dueDateReq": {
+            "type": "object",
+            "properties": {
+                "due_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.editLinkReq": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "description": "URL — новый адрес ролика. Пусто — снять ссылку с площадки.",
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.errorResponse": {
             "type": "object",
             "properties": {
@@ -18894,6 +20945,22 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.linkSuggestionReq": {
+            "type": "object",
+            "properties": {
+                "checked_item_ids": {
+                    "description": "CheckedItemIDs — пункты чеклиста: привязка идёт тем же путём, что\nи ссылка, вставленная руками, и проверяется так же.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "publication_id": {
+                    "description": "PublicationID — к какой выкладке привязать. Пусто — к той, что\nпредложил сервис.",
                     "type": "string"
                 }
             }
@@ -19003,6 +21070,26 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.reviewReq": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "description": "Comment — замечание. Обязательно при decision=return.",
+                    "type": "string"
+                },
+                "decision": {
+                    "description": "Decision — пусто «сохранить ход проверки», return «вернуть»,\naccept «принять».",
+                    "type": "string"
+                },
+                "marks": {
+                    "description": "Marks — вердикты по пунктам целиком: что не прислали, того\nменеджер не отмечал.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ReviewMark"
+                    }
+                }
+            }
+        },
         "internal_publications.saveTemplateReq": {
             "type": "object",
             "properties": {
@@ -19020,6 +21107,14 @@ const docTemplate = `{
                 },
                 "replaces": {
                     "description": "Replaces — id версии, которую заменяем. Пусто — новый шаблон.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.secretResp": {
+            "type": "object",
+            "properties": {
+                "password": {
                     "type": "string"
                 }
             }
@@ -19057,6 +21152,17 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_publications.suggestionsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.LinkSuggestion"
                     }
                 }
             }
@@ -20044,6 +22150,19 @@ const docTemplate = `{
                 },
                 "youtube": {
                     "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_publications.CreatorMedian": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "description": "Basis — сколько роликов легло в расчёт. Идёт вместе с числом:\n«медиана 190 тыс. по 12 роликам» и «по 3» — разной силы\nутверждения, и читателю нужно их различать.",
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views — медиана просмотров одного ролика.",
+                    "type": "integer"
                 }
             }
         },

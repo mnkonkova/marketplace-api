@@ -369,9 +369,24 @@ func (r *Repo) CancelProject(ctx context.Context, projectID, actorID uuid.UUID, 
 	if currentStatus == ProjectStatusCancelled {
 		return nil
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE projects SET status='cancelled', updated_at=now() WHERE id=$1`,
-		projectID); err != nil {
+	// Здесь же ставим срок, после которого проект перестают обходить.
+	//
+	// Отмена — единственное состояние, из которого проект с креаторами
+	// не возвращается сам, и до этой строки collection_stops_at не
+	// ставил никто: поле было объявлено, а в бою всегда оставалось
+	// NULL. Следствием ряд video_stat_daily не схлопывался никогда и
+	// рос без потолка — примерно три миллиона строк в год на семьдесят
+	// проектов. Срок — publications.CollectionRetention (28 дней):
+	// столько ещё дособираем, чтобы догнать последние ролики.
+	//
+	// RestoreProject снимает его обратно: восстановленный проект снова
+	// обходится.
+	if _, err := tx.Exec(ctx, `
+UPDATE projects
+SET status = 'cancelled',
+    collection_stops_at = COALESCE(collection_stops_at, now() + interval '28 days'),
+    updated_at = now()
+WHERE id = $1`, projectID); err != nil {
 		return fmt.Errorf("cancel: %w", err)
 	}
 	// from_status/to_status — step_status enum, project_status туда не лезет
@@ -1160,6 +1175,10 @@ SELECT u.id,
        COALESCE(
          NULLIF(sp.display_name, ''),
          NULLIF(cp.display_name, ''),
+         -- Имя из users: у менеджера и админа нет ни карточки
+         -- специалиста, ни карточки клиента, и до этой строки они
+         -- подписывались огрызком почты.
+         NULLIF(u.display_name, ''),
          split_part(u.email, '@', 1),
          ''
        ) AS display_name,

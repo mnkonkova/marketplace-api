@@ -94,7 +94,7 @@ func sumTotal(items []billing.Accrual) (client, creator int64) {
 // гарантию и оплачивается как гарантия, оставляя долг В ПРОСМОТРАХ;
 // третий этот долг гасит, и клиенту выставляется меньше ступеней, чем
 // он набрал.
-func TestSteppedGuaranteeDebtRollsToNextPeriod(t *testing.T) {
+func TestSteppedPeriodsDoNotCarry(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
 	pid, creators, cleanup := setupCreatorsProject(t, pool)
@@ -116,6 +116,9 @@ func TestSteppedGuaranteeDebtRollsToNextPeriod(t *testing.T) {
 
 	now := first.AddDate(0, 3, 0)
 
+	// Гарантия и перенос выключены (сентябрь 2026): каждый период стоит
+	// столько, сколько набрал, и ничего не передаёт дальше. Долг не
+	// записывается вовсе — ни на входе, ни на выходе.
 	want := []struct {
 		seq       int
 		total     int64
@@ -124,8 +127,8 @@ func TestSteppedGuaranteeDebtRollsToNextPeriod(t *testing.T) {
 		aboutWhat string
 	}{
 		{1, 65_000 * rubles, 0, 0, "первый период — фикс за запуск"},
-		{2, 78_000 * rubles, 0, 100_000, "недобор гарантии оплачен как гарантия"},
-		{3, 78_000 * rubles, 100_000, 0, "долг погашен просмотрами следующего периода"},
+		{2, 72_000 * rubles, 0, 0, "200 000 просмотров — две ступени по факту"},
+		{3, 84_000 * rubles, 0, 0, "400 000 просмотров — четыре ступени, долга нет"},
 	}
 	for _, c := range want {
 		p, err := svc.Period(ctx, pid, c.seq, now)

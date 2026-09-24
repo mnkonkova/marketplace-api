@@ -74,5 +74,70 @@ func (s *Service) CreatorProjects(ctx context.Context, creatorID uuid.UUID) ([]C
 }
 
 func (s *Service) ProjectCreators(ctx context.Context, projectID uuid.UUID) ([]Person, error) {
-	return s.repo.ListProjectCreators(ctx, projectID)
+	items, err := s.repo.ListProjectCreators(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	items, err = s.withMedians(ctx, items)
+	if err != nil {
+		return nil, err
+	}
+	return s.withBells(ctx, projectID, items)
+}
+
+// withBells — проставить состояние колокольчика «напомнить накануне».
+//
+// Колокольчик рисуется напротив каждого креатора, значит у каждого
+// должно быть ЗНАЧЕНИЕ, а не «настройки нет». Того, кому его не
+// трогали, показываем по настройке проекта — ровно так же, как решает
+// рассылка.
+func (s *Service) withBells(ctx context.Context, projectID uuid.UUID, items []Person) ([]Person, error) {
+	if len(items) == 0 {
+		return items, nil
+	}
+	prefs, err := s.repo.ReminderPrefs(ctx, projectID)
+	if err != nil {
+		return items, nil
+	}
+	byCreator, err := s.repo.CreatorReminderPrefs(ctx, projectID)
+	if err != nil {
+		return items, nil
+	}
+	for i := range items {
+		if on, ok := byCreator[items[i].UserID]; ok {
+			items[i].RemindDayBefore = on
+			continue
+		}
+		items[i].RemindDayBefore = prefs.DayBefore
+	}
+	return items, nil
+}
+
+// withMedians — дописать к людям «сколько обычно даёт за ролик».
+//
+// Отдельным запросом, а не в общем SQL состава: медиана считается по
+// ВСЕМ проектам человека, а состав — по одному, и сшивать это в один
+// запрос значит объяснять в нём две разные выборки сразу.
+//
+// Ошибку медиан не поднимаем: состав проекта без подписи открывается,
+// состав, не открывшийся из-за подписи, — нет.
+func (s *Service) withMedians(ctx context.Context, items []Person) ([]Person, error) {
+	if len(items) == 0 {
+		return items, nil
+	}
+	ids := make([]uuid.UUID, 0, len(items))
+	for _, p := range items {
+		ids = append(ids, p.UserID)
+	}
+	medians, err := s.repo.CreatorMedians(ctx, ids)
+	if err != nil {
+		return items, nil
+	}
+	for i := range items {
+		if m, ok := medians[items[i].UserID]; ok {
+			v := m
+			items[i].Median = &v
+		}
+	}
+	return items, nil
 }

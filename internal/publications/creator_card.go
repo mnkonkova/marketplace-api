@@ -36,6 +36,11 @@ type CreatorProjectCard struct {
 	// Platforms — пять площадок, на которые идёт ролик. Отдаём списком,
 	// чтобы фронт не держал свою копию порядка колонок.
 	Platforms []string `json:"platforms"`
+	// Median — медиана просмотров КРЕАТОРА по всем его проектам. Из неё
+	// в кабинете считается «следующий ролик добавит примерно столько
+	// просмотров» — то есть обещание, поэтому число обязано быть
+	// типичным, а не средним. nil, пока мерить не на чем.
+	Median *CreatorMedian `json:"median,omitempty"`
 }
 
 // CreatorProjectCard — карточка одного проекта. Доступ проверяется тем же
@@ -94,5 +99,17 @@ WHERE project_id = $1 AND creator_user_id = $2`, projectID, creatorID).
 }
 
 func (s *Service) CreatorProjectCard(ctx context.Context, projectID, creatorID uuid.UUID) (CreatorProjectCard, error) {
-	return s.repo.CreatorProjectCard(ctx, projectID, creatorID)
+	card, err := s.repo.CreatorProjectCard(ctx, projectID, creatorID)
+	if err != nil {
+		return card, err
+	}
+	// best-effort: карточка без медианы открывается, карточка, не
+	// открывшаяся из-за медианы, — нет.
+	if medians, err := s.repo.CreatorMedians(ctx, []uuid.UUID{creatorID}); err == nil {
+		if m, ok := medians[creatorID]; ok {
+			v := m
+			card.Median = &v
+		}
+	}
+	return card, nil
 }

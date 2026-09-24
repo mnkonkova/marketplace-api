@@ -531,7 +531,22 @@ GROUP BY pc.creator_user_id`, projectID, p.ID, threshold, p.StartsOn)
 
 // SaveAccrual — записать пересчитанное. Утверждённое и выплаченное не
 // трогаем: цифра, по которой уже перевели деньги, задним числом не меняется.
-func (r *Repo) SaveAccrual(ctx context.Context, a Accrual) error {
+// SaveAccrual — записать строку начисления.
+//
+// fromSnapshot говорит, откуда взяты числа: из среза подытоженного
+// периода или из живых просмотров. Это не справка для логов, а условие
+// записи.
+//
+// Подытог и сбор статистики — два разных тикера одного воркера, и оба
+// стартуют сразу при запуске процесса. Пересчёт после сбора читает
+// период открытым, считает по живым просмотрам и пишет; между чтением и
+// записью подытог успевает закоммититься — и живые числа затирают уже
+// замороженные. Начисления только что подытоженного периода ещё
+// `draft`, так что проверка статуса самой строки от этого не спасает.
+//
+// Поэтому живые числа не записываются, если период к этому моменту стал
+// подытоженным. Числа из среза записываются всегда: их и пишет подытог.
+func (r *Repo) SaveAccrual(ctx context.Context, a Accrual, fromSnapshot bool) error {
 	tag, err := r.db.Exec(ctx, `
 INSERT INTO creator_accruals
   (project_id, creator_user_id, period_start, salary, videos_planned,
@@ -540,7 +555,15 @@ INSERT INTO creator_accruals
    payout_salary, payout_deduction, payout_views_bonus, payout_click_bonus,
    payout_subscriber_bonus, payout_total,
    calculated_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now())
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22, now()
+-- Та же защита, что и в DO UPDATE ниже: живыми числами в подытоженный
+-- период не пишем. Без неё строка креатора, добавленного в состав уже
+-- ПОСЛЕ подытога, ложилась бы в замороженный период по сегодняшним
+-- просмотрам — вставке-то переписывать нечего, и условие UPDATE её не
+-- касается.
+WHERE $23 OR NOT EXISTS (
+    SELECT 1 FROM project_periods pp
+    WHERE pp.project_id = $1 AND pp.starts_on = $3 AND pp.status = 'locked')
 ON CONFLICT (project_id, creator_user_id, period_start) DO UPDATE SET
   salary = EXCLUDED.salary, videos_planned = EXCLUDED.videos_planned,
   videos_delivered = EXCLUDED.videos_delivered, deduction = EXCLUDED.deduction,
@@ -557,12 +580,17 @@ ON CONFLICT (project_id, creator_user_id, period_start) DO UPDATE SET
   payout_subscriber_bonus = EXCLUDED.payout_subscriber_bonus,
   payout_total = EXCLUDED.payout_total,
   calculated_at = now()
-WHERE creator_accruals.status = 'draft'`,
+WHERE creator_accruals.status = 'draft'
+  AND ($23 OR NOT EXISTS (
+      SELECT 1 FROM project_periods pp
+      WHERE pp.project_id = creator_accruals.project_id
+        AND pp.starts_on = creator_accruals.period_start
+        AND pp.status = 'locked'))`,
 		a.ProjectID, a.CreatorUserID, a.PeriodStart, a.Salary, a.VideosPlanned,
 		a.VideosDelivered, a.Deduction, a.ViewsTotal, a.ViewsBase, a.ViewsOver,
 		a.ViewsBonus, a.Clicks, a.ClickBonus, a.Subscribers, a.SubscriberBonus, a.Total,
 		a.PayoutSalary, a.PayoutDeduction, a.PayoutViewsBonus,
-		a.PayoutClickBonus, a.PayoutSubscriberBonus, a.PayoutTotal)
+		a.PayoutClickBonus, a.PayoutSubscriberBonus, a.PayoutTotal, fromSnapshot)
 	if err != nil {
 		return fmt.Errorf("save accrual: %w", err)
 	}

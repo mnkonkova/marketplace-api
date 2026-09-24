@@ -1471,3 +1471,225 @@ SET display_name = EXCLUDED.display_name,
 		t.Errorf("в сохранённой строке нет адреса страницы: %+v", row)
 	}
 }
+
+// Смету спрашивают раньше, чем набран состав.
+//
+// Ползунок «сколько будет стоить следующий месяц» знает только число
+// людей, экран каталога — людей, но не объём роликов. Отказ на такой
+// вопрос означает пустое место там, где сервер может ответить точно:
+// оклады считаются из числа людей и ставки. Чего не знаем — о том
+// говорим прямо: has_forecast=false, а не бонус, равный нулю.
+func TestDraftEstimateWithoutRosterAndVolume(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	_, creators, cleanupOrders := setupOrderWorld(t, pool)
+	defer cleanupOrders()
+
+	if _, err := pool.Exec(ctx, `
+UPDATE terms_versions SET salary_per_month = 6000000, rate_per_1000_views = 9000,
+       bonus_views_threshold = 1000000, rate_per_1000_views_over = 900`); err != nil {
+		t.Fatalf("terms: %v", err)
+	}
+	svc := billing.NewService(billing.NewRepo(pool))
+
+	// Ни состава, ни объёма — только «нужно пятеро».
+	bare, err := svc.EstimateDraft(ctx, 5, 0, nil)
+	if err != nil {
+		t.Fatalf("смета без состава: %v", err)
+	}
+	if bare.Salaries != 5*6_000_000 {
+		t.Errorf("оклады %d, ожидалось 30 000 ₽ × 5", bare.Salaries)
+	}
+	if bare.Total != bare.Salaries {
+		t.Errorf("итог %d, а известны только оклады %d", bare.Total, bare.Salaries)
+	}
+	if bare.HasForecast {
+		t.Error("прогноза бонуса нет — has_forecast обязан быть false")
+	}
+	if bare.BonusForecast != 0 {
+		t.Errorf("бонус %d при неизвестном прогнозе", bare.BonusForecast)
+	}
+
+	// Состав есть, объёма нет: считать бонус не из чего, и выдавать
+	// ноль за посчитанный нельзя.
+	noVolume, err := svc.EstimateDraft(ctx, 3, 0, creators[:3])
+	if err != nil {
+		t.Fatalf("смета без объёма: %v", err)
+	}
+	if noVolume.HasForecast {
+		t.Error("объём не задан — прогноза быть не может")
+	}
+	if noVolume.Total != noVolume.Salaries {
+		t.Errorf("итог %d, ожидались одни оклады %d", noVolume.Total, noVolume.Salaries)
+	}
+
+	// А вот отрицательный объём — это уже ошибка ввода, а не «не знаю».
+	if _, err := svc.EstimateDraft(ctx, 1, -1, nil); err == nil {
+		t.Error("отрицательный videos_count прошёл")
+	}
+	// И ноль людей: без них не посчитать даже оклады.
+	if _, err := svc.EstimateDraft(ctx, 0, 10, creators[:1]); err == nil {
+		t.Error("needed = 0 прошёл")
+	}
+}
+
+// Тариф проекта — своя таблица, а не ссылка на прайс площадки.
+//
+// Правка лесенки действует с ТЕКУЩЕГО периода и видна сразу: суммы
+// хранятся строками, и без пересчёта менеджер сохранял бы тариф, видя на
+// экране прежние деньги. Подытоженный период при этом не трогается —
+// он заморожен вместе со срезом, и по нему уже выставлен счёт.
+func TestProjectTariffAppliesForwardOnly(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	clientID, creators, cleanup := setupOrderWorld(t, pool)
+	defer cleanup()
+	_ = clientID
+
+	pid, cleanupProject := overviewProject(t, pool, creators[0], 6_000_000, 9_000, 0, "tariff")
+	defer cleanupProject()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+
+	// Лесенка: до 300 тыс. просмотров период стоит 300 000 ₽, дальше 450 000.
+	fee := func(v int64) *int64 { return &v }
+	if _, err := svc.SaveTerms(ctx, billing.Terms{
+		ProjectID: pid,
+		Steps: []billing.TermsStep{
+			{FromViews: 0, ClientFee: 30_000_000, CreatorFee: fee(18_000_000)},
+			{FromViews: 300_000, ClientFee: 45_000_000, CreatorFee: fee(28_000_000)},
+		},
+	}, creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+
+	got, err := svc.Terms(ctx, pid)
+	if err != nil {
+		t.Fatalf("Terms: %v", err)
+	}
+	if len(got.Steps) != 2 {
+		t.Fatalf("ступеней %d, ожидалось две: таблица не сохранилась", len(got.Steps))
+	}
+	if !got.Stepped() {
+		t.Error("тариф со ступенями обязан считаться ступенчатым")
+	}
+
+	// Прайс площадки правится отдельно и проект не трогает: это и есть
+	// «снимок, а не ссылка».
+	if _, err := pool.Exec(ctx, `
+UPDATE terms_versions SET salary_per_month = 99000000, rate_per_1000_views = 99000`); err != nil {
+		t.Fatalf("правка прайса: %v", err)
+	}
+	after, err := svc.Terms(ctx, pid)
+	if err != nil {
+		t.Fatalf("Terms после правки прайса: %v", err)
+	}
+	if len(after.Steps) != 2 || after.Steps[1].ClientFee != 45_000_000 {
+		t.Errorf("прайс площадки переписал тариф проекта: %+v", after.Steps)
+	}
+}
+
+// Две ступени с одним порогом — неразрешимая неоднозначность: какую
+// цену брать, решал бы порядок строк.
+func TestProjectTariffRejectsAmbiguousLadder(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	_, creators, cleanup := setupOrderWorld(t, pool)
+	defer cleanup()
+	pid, cleanupProject := overviewProject(t, pool, creators[0], 6_000_000, 9_000, 0, "tariff2")
+	defer cleanupProject()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	fee := func(v int64) *int64 { return &v }
+	_, err := svc.SaveTerms(ctx, billing.Terms{
+		ProjectID: pid,
+		Steps: []billing.TermsStep{
+			{FromViews: 300_000, ClientFee: 30_000_000},
+			{FromViews: 300_000, ClientFee: 45_000_000},
+		},
+	}, creators[0])
+	if err == nil {
+		t.Error("две ступени с одним порогом прошли")
+	}
+
+	// И креатору нельзя обещать больше, чем берём с клиента.
+	_, err = svc.SaveTerms(ctx, billing.Terms{
+		ProjectID: pid,
+		Steps:     []billing.TermsStep{{FromViews: 0, ClientFee: 10_000, CreatorFee: fee(20_000)}},
+	}, creators[0])
+	if err == nil {
+		t.Error("ступень с убытком на каждом периоде прошла")
+	}
+}
+
+// Реестр тарифов: строка — проект.
+//
+// Раздел «Прайс» показывал общую версию, а вопрос к нему другой: по
+// каким условиям идёт вот этот проект и чем он отличается от соседнего.
+// Отдельно видно худшее состояние — проект без тарифа: он считается по
+// нулям, и на экране денег это выглядит как «ещё не начислили».
+func TestTariffRegistryShowsEveryProjectRow(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	_, creators, cleanup := setupOrderWorld(t, pool)
+	defer cleanup()
+
+	withTerms, c1 := overviewProject(t, pool, creators[0], 6_000_000, 9_000, 0, "reg-a")
+	defer c1()
+	bare, c2 := overviewProject(t, pool, creators[0], 6_000_000, 9_000, 0, "reg-b")
+	defer c2()
+	// У второго снимок условий снимаем совсем: так выглядит проект,
+	// которому тариф не задали.
+	if _, err := pool.Exec(ctx, `DELETE FROM project_billing WHERE project_id = $1`, bare); err != nil {
+		t.Fatalf("очистка условий: %v", err)
+	}
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	fee := func(v int64) *int64 { return &v }
+	if _, err := svc.SaveTerms(ctx, billing.Terms{
+		ProjectID: withTerms,
+		Steps: []billing.TermsStep{
+			{FromViews: 0, ClientFee: 30_000_000, CreatorFee: fee(18_000_000)},
+			{FromViews: 1_000_000, ClientFee: 70_000_000, CreatorFee: fee(45_000_000)},
+		},
+	}, creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+
+	rows, err := svc.TariffRegistry(ctx)
+	if err != nil {
+		t.Fatalf("TariffRegistry: %v", err)
+	}
+	byID := map[uuid.UUID]billing.TariffRow{}
+	for _, r := range rows {
+		byID[r.ProjectID] = r
+	}
+
+	a, ok := byID[withTerms]
+	if !ok {
+		t.Fatalf("проекта с тарифом нет в реестре")
+	}
+	if !a.Stepped || a.StepsCount != 2 {
+		t.Errorf("ступеней %d, ступенчатость %v — ожидалось две ступени", a.StepsCount, a.Stepped)
+	}
+	// Вилка видна, не открывая проект.
+	if a.MinFee != 30_000_000 || a.MaxFee != 70_000_000 {
+		t.Errorf("вилка %d..%d, ожидалось 300 000..700 000 ₽", a.MinFee, a.MaxFee)
+	}
+
+	b, ok := byID[bare]
+	if !ok {
+		t.Fatalf("проекта без тарифа нет в реестре — а он самый важный")
+	}
+	if b.HasTerms {
+		t.Error("проект без снимка условий помечен как имеющий тариф")
+	}
+	if b.StepsCount != 0 {
+		t.Errorf("у проекта без тарифа нашлись ступени: %d", b.StepsCount)
+	}
+
+	// Проект без тарифа стоит первым: это то, что надо чинить.
+	if rows[0].HasTerms {
+		t.Error("проекты без тарифа обязаны идти первыми — иначе их не заметят")
+	}
+}

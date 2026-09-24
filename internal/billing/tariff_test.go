@@ -154,70 +154,53 @@ func TestPartialStepIsNotBilledAndNotCarried(t *testing.T) {
 // TestGuaranteeShortfallBecomesDebtInViews — недобор гарантии
 // оплачивается как гарантия, а недостающие просмотры уходят в долг и
 // гасятся из следующего периода. Долг в ПРОСМОТРАХ, а не в деньгах.
-func TestGuaranteeShortfallBecomesDebtInViews(t *testing.T) {
+func TestGuaranteeOff(t *testing.T) {
 	terms := steppedTerms()
 
+	// Гарантия и перенос выключены (сентябрь 2026): период стоит ровно
+	// столько, сколько просмотров набрал, и ничего не передаёт дальше.
+	// Сам тариф гарантию по-прежнему объявляет — проверяем, что расчёт
+	// её больше не слушает.
+	if terms.GuaranteeViews == nil || *terms.GuaranteeViews == 0 {
+		t.Fatal("тариф теста должен объявлять гарантию, иначе проверять нечего")
+	}
+
 	short, left := calc(terms, facts(200_000, 0), periodContext{Seq: 2})
-	if short.Total != 78_000*rub {
-		t.Fatalf("недобор гарантии: %d, ожидалось %d", short.Total, 78_000*rub)
+	if short.Total != 72_000*rub {
+		t.Fatalf("две ступени по факту: %d, ожидалось %d", short.Total, 72_000*rub)
 	}
-	if left.ClientDebtOut != 100_000 {
-		t.Fatalf("долг по гарантии: %d просмотров, ожидалось 100 000", left.ClientDebtOut)
-	}
-
-	// Следующий период: 400 000 просмотров минус 100 000 долга — к
-	// оплате 300 000, то есть три ступени, а не четыре.
-	next, nextLeft := calc(terms, facts(400_000, 0), periodContext{Seq: 3, ClientDebtIn: left.ClientDebtOut})
-	if next.Total != 78_000*rub {
-		t.Fatalf("период после долга: %d, ожидалось %d", next.Total, 78_000*rub)
-	}
-	if nextLeft.ClientDebtOut != 0 {
-		t.Fatalf("долг не погашен: осталось %d", nextLeft.ClientDebtOut)
+	if left.ClientDebtOut != 0 {
+		t.Fatalf("долг по гарантии выключен, а записан: %d", left.ClientDebtOut)
 	}
 
-	// Долг больше, чем набрали: остаток долга едет дальше, счёт — по
-	// гарантии.
-	_, tail := calc(terms, facts(50_000, 0), periodContext{Seq: 3, ClientDebtIn: 200_000})
-	if tail.ClientDebtOut != 150_000+300_000 {
-		t.Fatalf("остаток долга плюс новый недобор: %d, ожидалось %d",
-			tail.ClientDebtOut, 150_000+300_000)
+	// Входящий долг тоже игнорируется: его больше некому было записать,
+	// но если он остался в базе от прежней модели — счёт он не меняет.
+	withDebt, wl := calc(terms, facts(200_000, 0), periodContext{Seq: 3, ClientDebtIn: 100_000})
+	if withDebt.Total != short.Total {
+		t.Fatalf("входящий долг повлиял на счёт: %d против %d", withDebt.Total, short.Total)
+	}
+	if wl.ClientDebtOut != 0 {
+		t.Fatalf("долг записан: %d", wl.ClientDebtOut)
 	}
 }
 
 // TestCreatorRemainderIsCarried — у креатора неполная ступень, наоборот,
 // переносится и складывается с просмотрами следующего периода.
-func TestCreatorRemainderIsCarried(t *testing.T) {
+func TestCreatorCarryOff(t *testing.T) {
 	terms := steppedTerms()
 
-	// Объёмы выше гарантии: иначе в счёт клиента вмешался бы недобор, и
-	// тест проверял бы не то, что заявлено.
+	// Перенос неполной ступени выключен вместе с гарантией: остаток
+	// сгорает и у креатора тоже.
 	a, left := calc(terms, facts(1_250_000, 0), periodContext{Seq: 2})
-	if left.CreatorCarryOut != 50_000 {
-		t.Fatalf("перенос креатора: %d, ожидалось 50 000", left.CreatorCarryOut)
-	}
-	if a.PayoutTotal != 132_000*rub {
-		t.Fatalf("выплата за 12 ступеней: %d, ожидалось %d", a.PayoutTotal, 132_000*rub)
+	if left.CreatorCarryOut != 0 {
+		t.Fatalf("перенос выключен, а записан: %d", left.CreatorCarryOut)
 	}
 
-	// 1 150 000 своих плюс 50 000 перенесённых — двенадцать ступеней, а
-	// не одиннадцать.
-	next, nextLeft := calc(terms, facts(1_150_000, 0), periodContext{Seq: 3, CreatorCarryIn: left.CreatorCarryOut})
-	if next.PayoutTotal != 132_000*rub {
-		t.Fatalf("выплата с переносом: %d, ожидалось %d", next.PayoutTotal, 132_000*rub)
-	}
-	if nextLeft.CreatorCarryOut != 0 {
-		t.Fatalf("перенос после ровных ступеней: %d, ожидалось 0", nextLeft.CreatorCarryOut)
-	}
-
-	// А клиенту за те же 1 150 000 выставлено одиннадцать ступеней: его
-	// остаток сгорел. Перекос односторонний и намеренный — при равных
-	// ставках креатор получает на ступень больше, чем выставлено
-	// клиенту, и эта ступень идёт из маржи (см. CreatorLadder).
-	if next.Total != 126_000*rub {
-		t.Fatalf("счёт клиенту: %d, ожидалось %d", next.Total, 126_000*rub)
-	}
-	if next.PayoutTotal <= next.Total {
-		t.Fatalf("односторонний перенос не виден: выплата %d, счёт %d", next.PayoutTotal, next.Total)
+	// Входящий перенос счёт не меняет.
+	next, _ := calc(terms, facts(1_250_000, 0), periodContext{Seq: 3, CreatorCarryIn: 50_000})
+	if next.PayoutTotal != a.PayoutTotal {
+		t.Fatalf("входящий перенос повлиял на выплату: %d против %d",
+			next.PayoutTotal, a.PayoutTotal)
 	}
 }
 

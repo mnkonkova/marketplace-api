@@ -75,11 +75,11 @@ func (s *Service) Check(ctx context.Context, in Input) (Result, error) {
 	// при добавлении третьей секции (например, portfolio) шанс настоящего
 	// data race вырастает. Локальные переменные — гарантированно без UB.
 	var (
-		wg       sync.WaitGroup
-		bioRes   PartResult
-		nameRes  PartResult
-		bioErr   error
-		nameErr  error
+		wg      sync.WaitGroup
+		bioRes  PartResult
+		nameRes PartResult
+		bioErr  error
+		nameErr error
 	)
 	bioRes = skippedPart()
 	nameRes = skippedPart()

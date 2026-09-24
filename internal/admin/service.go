@@ -14,6 +14,7 @@ import (
 	"marketpclce/internal/auth"
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/profiles"
+	"marketpclce/internal/publications"
 )
 
 var ErrInvalidInput = errors.New("invalid input")
@@ -35,7 +36,10 @@ type Service struct {
 	profiles *profiles.Repo // для очереди модерации специалистов
 	// audit — чтение журнала админских действий. Пишут в него сами
 	// домены из своих транзакций, здесь только читаем.
-	audit      *audit.Repo
+	audit *audit.Repo
+	// pubs — выкладки: отсюда берётся медиана просмотров креатора.
+	// Необязательна, см. WithPublicationsRepo.
+	pubs       *publications.Repo
 	appBaseURL string
 	inviteTTL  time.Duration
 	tokens     *auth.TokenIssuer
@@ -65,7 +69,40 @@ func (s *Service) ListManagers(ctx context.Context, approved *bool) ([]ManagerIn
 // SearchUsers — лукап юзеров для admin/manager UI. Прокидывается в repo
 // как есть. Возвращает [] для коротких q (< 2 символов), чтобы не нагружать.
 func (s *Service) SearchUsers(ctx context.Context, q, kind string) ([]UserSearchResult, error) {
-	return s.repo.SearchUsers(ctx, q, kind)
+	items, err := s.repo.SearchUsers(ctx, q, kind)
+	if err != nil {
+		return nil, err
+	}
+	return s.withCreatorMedians(ctx, items), nil
+}
+
+// withCreatorMedians — дописать «сколько обычно даёт за ролик».
+//
+// Этим поиском менеджер подбирает креатора в проект (см. состав
+// проекта), и без этой цифры выбор идёт по почте — то есть вслепую. У
+// заказчиков поле просто не заполнится: роликов они не сдают.
+//
+// best-effort: поиск без подписи работает, поиск, не отдавший ничего
+// из-за подписи, — нет.
+func (s *Service) withCreatorMedians(ctx context.Context, items []UserSearchResult) []UserSearchResult {
+	if s.pubs == nil || len(items) == 0 {
+		return items
+	}
+	ids := make([]uuid.UUID, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.UserID)
+	}
+	medians, err := s.pubs.CreatorMedians(ctx, ids)
+	if err != nil || len(medians) == 0 {
+		return items
+	}
+	for i := range items {
+		if m, ok := medians[items[i].UserID]; ok {
+			v := m
+			items[i].Median = &v
+		}
+	}
+	return items
 }
 
 // ListAllUsers — полный листинг всех юзеров с пагинацией. Для /admin/users.
@@ -192,6 +229,14 @@ func (s *Service) PromoteToManager(
 // WithProfilesRepo подключает profiles.Repo для модерационных endpoint'ов
 // (см. docs/SPECIALIST_MODERATION.md). nil-safe: без вызова админские
 // /admin/moderation/* ручки отдают 503/пустоту.
+// WithPublicationsRepo — источник медиан просмотров. Необязательная
+// зависимость: без неё поиск людей работает, просто без подписи
+// «медиана столько-то».
+func (s *Service) WithPublicationsRepo(p *publications.Repo) *Service {
+	s.pubs = p
+	return s
+}
+
 func (s *Service) WithProfilesRepo(p *profiles.Repo) *Service {
 	s.profiles = p
 	return s

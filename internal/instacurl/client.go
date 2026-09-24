@@ -19,9 +19,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
+
+// maxResponseBytes — сколько байт ответа читаем, не больше.
+const maxResponseBytes = 16 << 20
 
 var (
 	// ErrNotConfigured — адрес или ключ не заданы. Клиент в этом случае
@@ -51,9 +55,20 @@ type PostMetrics struct {
 // OK=false — это НЕ ошибка транспорта: площадка не поддержана, ролик
 // удалён, кончились кредиты у поставщика. Такой ответ надо сохранить и
 // показать, а не ретраить до посинения.
+//
+// Kind разделяет два разных ответа на один и тот же запрос. Ссылка на
+// ролик даёт kind="media" и ровно один пост в Posts — это сбор
+// статистики. Ссылка на АККАУНТ даёт kind="profile" и последние десять
+// постов с адресами и датами — на этом построен обход аккаунтов
+// (internal/publications/accountscan.go). Путать их нельзя: у media
+// Posts[0] — тот самый ролик, у profile — просто самый свежий.
 type Result struct {
-	Platform  string        `json:"platform"`
-	URL       string        `json:"url"`
+	Platform string `json:"platform"`
+	URL      string `json:"url"`
+	// Handle — чей это аккаунт, как его пишет площадка («anya.kim»).
+	// Нужен обходу аккаунтов: находка без подписи автора — это «нашли
+	// какой-то ролик», и опознать его, не открывая ссылку, нельзя.
+	Handle    string        `json:"handle,omitempty"`
 	Kind      string        `json:"kind"`
 	MediaID   string        `json:"media_id,omitempty"`
 	OK        bool          `json:"ok"`
@@ -146,7 +161,10 @@ func (c *Client) Collect(ctx context.Context, urls []string) ([]Result, error) {
 	}
 
 	var out collectResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	// Потолок на читаемое: пачка на десять ссылок — это килобайты, и
+	// шестнадцать мегабайт означают, что отвечает не поставщик.
+	// Таймаут клиента ограничивает время, но не размер.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode collect response: %w", err)
 	}
 	return out.Results, nil

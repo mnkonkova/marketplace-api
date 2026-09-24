@@ -188,11 +188,8 @@ func (s *Service) EstimateDraft(ctx context.Context, needed, videos int, creator
 	if needed < 1 {
 		return OrderEstimate{}, fmt.Errorf("%w: needed must be positive", ErrInvalidInput)
 	}
-	if videos < 1 {
-		return OrderEstimate{}, fmt.Errorf("%w: videos_count must be positive", ErrInvalidInput)
-	}
-	if len(creatorIDs) == 0 {
-		return OrderEstimate{}, fmt.Errorf("%w: creator_ids is empty", ErrInvalidInput)
+	if videos < 0 {
+		return OrderEstimate{}, fmt.Errorf("%w: videos_count must not be negative", ErrInvalidInput)
 	}
 	if len(creatorIDs) > 50 {
 		return OrderEstimate{}, fmt.Errorf("%w: too many creators", ErrInvalidInput)
@@ -201,9 +198,23 @@ func (s *Service) EstimateDraft(ctx context.Context, needed, videos int, creator
 	if err != nil {
 		return OrderEstimate{}, err
 	}
-	forecast, err := s.repo.creatorsHistory(ctx, creatorIDs)
-	if err != nil {
-		return OrderEstimate{}, err
+	// Состав и объём здесь НЕОБЯЗАТЕЛЬНЫ, и это не послабление.
+	//
+	// Смету спрашивают раньше, чем набран состав: ползунок «сколько
+	// будет стоить следующий месяц» знает только число людей, а экран
+	// каталога — людей, но не объём роликов. Отказ на такой вопрос
+	// означает пустое место там, где сервер МОЖЕТ ответить точно:
+	// оклады считаются из числа людей и ставки, и это уже ответ.
+	//
+	// Чего не знаем, о том говорим прямо: без состава или без объёма
+	// прогноза бонуса нет, и в ответе стоит has_forecast=false — «бонус
+	// неизвестен», а не «бонус ноль».
+	var forecast []CreatorForecast
+	if len(creatorIDs) > 0 {
+		forecast, err = s.repo.creatorsHistory(ctx, creatorIDs)
+		if err != nil {
+			return OrderEstimate{}, err
+		}
 	}
 	return assemble(terms, needed, videos, forecast), nil
 }
@@ -231,8 +242,11 @@ func assemble(terms Terms, needed, videos int, forecast []CreatorForecast) Order
 		sum += f.AvgViewsPerVideo
 		withHistory++
 	}
-	if withHistory == 0 {
-		// Прогноза нет. Оклады при этом известны точно, их и показываем.
+	// Прогноза нет — ни по кому не из чего считать, либо не задан объём.
+	// Оклады при этом известны точно, их и показываем; has_forecast
+	// остаётся false, чтобы ноль бонуса нельзя было прочитать как
+	// посчитанный ноль.
+	if withHistory == 0 || videos < 1 {
 		e.Total = e.Salaries
 		return e
 	}

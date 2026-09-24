@@ -57,11 +57,16 @@ var dynamicEmitSites = map[string][]string{
 	},
 	"internal/publications/reminders.go": {
 		// "project." + Reminder*-константа.
+		"project.publication_due_tomorrow",
 		"project.publication_due_today",
 		"project.publication_overdue",
 		"project.publication_incomplete",
 		"project.publication_manual",
 		"project.manager_digest",
+	},
+	"internal/publications/plan_ending.go": {
+		// "project." + ReminderPlanEnding.
+		"project.project_plan_ending",
 	},
 	"internal/publications/review.go": {
 		// event = accepted | returned, выбирается по решению менеджера.

@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+// esMaxResponse — потолок ответа, который читаем в память.
+//
+// Ответ поиска: тридцать два мегабайта — это уже не ответ, а
+// авария на стороне индекса.
+// Таймаут клиента ограничивает время, но не размер: сервер может
+// отдавать байты сколь угодно долго и сколь угодно много.
+const esMaxResponse = 32 << 20
+
 type Client struct {
 	base string
 	http *http.Client
@@ -65,7 +73,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	defer resp.Body.Close()
 	status = resp.StatusCode
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, esMaxResponse))
 	if resp.StatusCode >= 400 {
 		return &ErrStatus{Status: resp.StatusCode, Body: string(respBody)}
 	}
@@ -125,7 +133,7 @@ func (c *Client) IndexExists(ctx context.Context, name string) (bool, error) {
 	case http.StatusNotFound:
 		return false, nil
 	default:
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, esMaxResponse))
 		return false, &ErrStatus{Status: resp.StatusCode, Body: string(body)}
 	}
 }
@@ -150,7 +158,7 @@ func (c *Client) DeleteIndex(ctx context.Context, name string) error {
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, esMaxResponse))
 	return &ErrStatus{Status: resp.StatusCode, Body: string(body)}
 }
 
@@ -256,7 +264,7 @@ func (c *Client) BulkIndex(ctx context.Context, index string, docs []BulkDoc) er
 	}
 	defer resp.Body.Close()
 	status = resp.StatusCode
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, esMaxResponse))
 	if resp.StatusCode >= 400 {
 		return &ErrStatus{Status: resp.StatusCode, Body: string(respBody)}
 	}
@@ -384,7 +392,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, esMaxResponse))
 		return &ErrStatus{Status: resp.StatusCode, Body: string(body)}
 	}
 	return nil

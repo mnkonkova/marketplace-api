@@ -193,12 +193,27 @@ const leaseDuration = 10 * time.Minute
 // Если воркер крашится между phase 2 и phase 3, записи "leased" до
 // next_attempt_at в будущем — другой воркер подхватит их после истечения
 // аренды. n8n идемпотентен по EventID (см. R4), повторов не страшно.
+// result — исход обработки одной записи очереди.
+type result struct {
+	entry     entry
+	hErr      error
+	permanent bool
+}
+
 func (w *Worker) tick(ctx context.Context) (int, error) {
 	// --- Phase 1: lease ---
 	leaseTx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("begin lease tx: %w", err)
 	}
+	// Страховка на случай раннего выхода. Все ветки ниже закрывают
+	// транзакцию руками, и пока это так — Rollback после Commit вернёт
+	// ErrTxClosed, который мы игнорируем. Но это единственная из
+	// семидесяти девяти транзакций без defer, и первый же новый return
+	// между арендой и коммитом оставил бы соединение с FOR UPDATE на
+	// строках очереди до конца его жизни.
+	defer func() { _ = leaseTx.Rollback(ctx) }()
+
 	const selectQ = `
 SELECT id, aggregate, aggregate_id, event_type, payload, attempts
 FROM outbox
@@ -248,11 +263,6 @@ LIMIT $1`
 	}
 
 	// --- Phase 2: handlers вне tx ---
-	type result struct {
-		entry     entry
-		hErr      error
-		permanent bool
-	}
 	results := make([]result, 0, len(entries))
 	for _, e := range entries {
 		h, ok := w.handlers[e.aggregate]
@@ -264,8 +274,21 @@ LIMIT $1`
 		}
 		hErr := h(ctx, e.id, e.aggregateID, e.eventType, e.payload)
 		if errors.Is(hErr, context.Canceled) {
-			// Shutdown посреди батча — оставляем оставшиеся записи "leased",
-			// при следующем старте обработаются после истечения аренды.
+			// Shutdown посреди пачки. Остановиться надо, но то, что уже
+			// СДЕЛАНО, обязано быть отмечено: иначе эти события
+			// переедут заново после истечения аренды, а дедуплицирует
+			// повтор только n8n — транскод и индексаторы сделают работу
+			// второй раз.
+			//
+			// Отмечаем отдельным контекстом: текущий уже отменён, и
+			// запись по нему не пройдёт.
+			if len(results) > 0 {
+				markCtx, markCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				if _, mErr := w.markResults(markCtx, results); mErr != nil {
+					w.logger.Warn("outbox mark on shutdown", "err", mErr, "done", len(results))
+				}
+				markCancel()
+			}
 			return 0, hErr
 		}
 		results = append(results, result{
@@ -276,6 +299,18 @@ LIMIT $1`
 	}
 
 	// --- Phase 3: маркировка результатов ---
+	n, err := w.markResults(ctx, results)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// markResults — записать исход пачки: обработано, к повтору или в DLQ.
+//
+// Отдельным методом, потому что зовётся ещё и при остановке посреди
+// пачки: сделанное обязано быть отмечено, иначе оно повторится.
+func (w *Worker) markResults(ctx context.Context, results []result) (int, error) {
 	markTx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("begin mark tx: %w", err)

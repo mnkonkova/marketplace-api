@@ -269,7 +269,8 @@ func main() {
 	adminRepo := admin.NewRepo(pool)
 	adminSvc := admin.NewService(adminRepo, tokenIssuer, cfg.AppBaseURL, cfg.EmailVerifyTokenTTL).
 		WithProfilesRepo(profilesRepo).
-		WithAuditRepo(audit.NewRepo(pool))
+		WithAuditRepo(audit.NewRepo(pool)).
+		WithPublicationsRepo(publications.NewRepo(pool))
 	adminHandler := admin.NewHandler(adminSvc)
 
 	var summarizeCache *summarize.Cache
@@ -349,6 +350,14 @@ func main() {
 		Handler:      router,
 		ReadTimeout:  cfg.HTTPReadTimeout,
 		WriteTimeout: cfg.HTTPWriteTimeout,
+		// Бездействующее соединение не должно жить вечно: без этого
+		// срока открытые и молчащие соединения копятся до предела
+		// файловых дескрипторов, и никакой ReadTimeout их не трогает —
+		// он про чтение запроса, а запроса нет.
+		IdleTimeout: 120 * time.Second,
+		// Потолок заголовков. Дефолт — мегабайт на запрос ДО того, как
+		// дело дойдёт до маршрутизации и лимитов.
+		MaxHeaderBytes: 64 << 10,
 	}
 
 	go func() {

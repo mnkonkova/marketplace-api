@@ -357,3 +357,235 @@ func TestRemindersStopAfterOverdueHorizon(t *testing.T) {
 			rems[0].DaysOverdue, horizon)
 	}
 }
+
+// Напоминание НАКАНУНЕ срока — по умолчанию выключено.
+//
+// Остальные три вида включены, потому что были с самого начала. Этот
+// появился позже, и включать его молча всем значило бы завтра утром
+// написать каждому креатору каждого проекта, никого не спросив.
+func TestDayBeforeReminderIsOffByDefault(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{pubDay(1)},
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	if _, err := svc.RunReminders(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("RunReminders: %v", err)
+	}
+	if n := countOutbox(t, projectID, "project.publication_due_tomorrow"); n != 0 {
+		t.Errorf("напоминаний накануне %d, а колокольчик никто не включал", n)
+	}
+}
+
+// Колокольчик напротив креатора включает напоминание накануне — ему
+// одному. В плане у восьми креаторов восемь строк, и включают его тому,
+// кто забывает, а не всем разом.
+func TestDayBeforeReminderPerCreator(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	repo := publications.NewRepo(pool)
+	svc := publications.NewService(repo)
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0], creators[1]},
+		Dates:          []time.Time{pubDay(1)},
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if _, err := svc.SaveCreatorReminderPref(ctx, projectID, creators[0], true, creators[0]); err != nil {
+		t.Fatalf("колокольчик: %v", err)
+	}
+
+	if _, err := svc.RunReminders(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("RunReminders: %v", err)
+	}
+	if n := countOutbox(t, projectID, "project.publication_due_tomorrow"); n != 1 {
+		t.Errorf("напоминаний накануне %d, ожидалось одно — только тому, кому включили", n)
+	}
+
+	// Сводка менеджерам про «завтра срок» молчит: ничего не горит.
+	var kinds int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM notification_log
+WHERE kind = 'manager_digest' AND subject_id = $1`, projectID).Scan(&kinds); err != nil {
+		t.Fatalf("журнал сводок: %v", err)
+	}
+	if kinds != 0 {
+		t.Errorf("сводок менеджерам %d, а гореть нечему: срок завтра", kinds)
+	}
+}
+
+// Колокольчик сильнее настройки проекта — в обе стороны.
+func TestDayBeforeCreatorOverridesProject(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0], creators[1]},
+		Dates:          []time.Time{pubDay(1)},
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	// Проект пингует накануне всех…
+	prefs, err := svc.ReminderPrefs(ctx, projectID)
+	if err != nil {
+		t.Fatalf("настройки: %v", err)
+	}
+	prefs.DayBefore = true
+	if _, err := svc.SaveReminderPrefs(ctx, prefs, creators[0]); err != nil {
+		t.Fatalf("сохранение настроек: %v", err)
+	}
+	// …кроме одного, кому колокольчик сняли.
+	if _, err := svc.SaveCreatorReminderPref(ctx, projectID, creators[1], false, creators[0]); err != nil {
+		t.Fatalf("колокольчик: %v", err)
+	}
+
+	if _, err := svc.RunReminders(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("RunReminders: %v", err)
+	}
+	if n := countOutbox(t, projectID, "project.publication_due_tomorrow"); n != 1 {
+		t.Errorf("напоминаний накануне %d, ожидалось одно: второму колокольчик сняли", n)
+	}
+}
+
+// Состав проекта отдаёт состояние колокольчика по каждому человеку —
+// включая тех, кому его не трогали: колокольчик рисуется напротив
+// каждого, значит у каждого должно быть значение.
+func TestProjectCreatorsCarryBellState(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	if _, err := svc.SaveCreatorReminderPref(ctx, projectID, creators[0], true, creators[0]); err != nil {
+		t.Fatalf("колокольчик: %v", err)
+	}
+
+	people, err := svc.ProjectCreators(ctx, projectID)
+	if err != nil {
+		t.Fatalf("состав проекта: %v", err)
+	}
+	var on, off int
+	for _, p := range people {
+		if p.RemindDayBefore {
+			on++
+		} else {
+			off++
+		}
+	}
+	if on != 1 {
+		t.Errorf("включённых колокольчиков %d, ожидался один", on)
+	}
+	if off == 0 {
+		t.Error("у остальных колокольчик обязан приходить выключенным, а не отсутствовать")
+	}
+}
+
+// «Выкладки заканчиваются через N дней» — предупреждение менеджеру.
+//
+// Момент, когда расписание кончилось, не виден ниоткуда: просрочек нет,
+// экран выглядит спокойным. Замечают его постфактум — по вопросу
+// заказчика, почему остановилось.
+func TestPlanEndingWarnsManagerInAdvance(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	// Последняя дата плана — ровно через порог.
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{pubDay(publications.PlanEndingLeadDays)},
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	if _, err := svc.RunReminders(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("RunReminders: %v", err)
+	}
+	if n := countOutbox(t, projectID, "project.project_plan_ending"); n != 1 {
+		t.Fatalf("предупреждений %d, ожидалось одно", n)
+	}
+
+	// Второй проход в тот же день ничего не добавляет.
+	if _, err := svc.RunReminders(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("повторный проход: %v", err)
+	}
+	if n := countOutbox(t, projectID, "project.project_plan_ending"); n != 1 {
+		t.Errorf("предупреждений стало %d — дедуп не сработал", n)
+	}
+}
+
+// План продлили — предупреждение замолкает само.
+func TestPlanEndingSilentWhenScheduleIsLong(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	// Дата дальше порога — предупреждать не о чем.
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{pubDay(publications.PlanEndingLeadDays + 5)},
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if _, err := svc.RunReminders(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("RunReminders: %v", err)
+	}
+	if n := countOutbox(t, projectID, "project.project_plan_ending"); n != 0 {
+		t.Errorf("предупреждений %d, а план на месяц вперёд", n)
+	}
+}
+
+// Даты уже кончились — предупреждение всё равно приходит: «плана нет»
+// не менее срочно, чем «план кончается».
+func TestPlanEndingFiresWhenScheduleAlreadyRanOut(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: []uuid.UUID{creators[0]},
+		Dates:          []time.Time{pubDay(-3)},
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	st, err := svc.RunReminders(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("RunReminders: %v", err)
+	}
+	if st.PlanEndings != 1 {
+		t.Errorf("предупреждений %d, ожидалось одно", st.PlanEndings)
+	}
+}

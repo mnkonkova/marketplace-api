@@ -15,6 +15,11 @@ import (
 // Виды напоминаний. Значение попадает в notification_log.kind и в
 // event_type для n8n, поэтому меняется вместе с настройками воркфлоу.
 const (
+	// ReminderDueTomorrow — накануне, за сутки до срока. Уходит креатору
+	// лично и только если менеджер включил колокольчик напротив него:
+	// «завтра срок» — ещё рабочее напоминание, в отличие от «сегодня
+	// срок», когда снимать и монтировать уже поздно.
+	ReminderDueTomorrow = "publication_due_tomorrow"
 	// ReminderDueToday — утро дня дедлайна. Уходит креатору лично.
 	ReminderDueToday = "publication_due_today"
 	// ReminderOverdue — следующий день после просрочки и дальше раз в
@@ -65,9 +70,13 @@ type RunStats struct {
 	Sent       int `json:"sent"`
 	// Skipped — напоминание уже уходило сегодня. Это норма, а не ошибка:
 	// именно так выглядит защита от повторной отправки при перезапуске.
-	Skipped  int `json:"skipped"`
-	Digests  int `json:"digests"`
-	Failures int `json:"failures"`
+	Skipped int `json:"skipped"`
+	Digests int `json:"digests"`
+	// PlanEndings — скольким менеджерам сказали, что расписание
+	// кончается. Считается отдельно от сводки: это не «что горит
+	// сегодня», а предупреждение на две недели вперёд.
+	PlanEndings int `json:"plan_endings"`
+	Failures    int `json:"failures"`
 }
 
 // DueReminders — что нужно отправить на дату today.
@@ -83,13 +92,19 @@ SELECT p.id, p.project_id, p.creator_user_id, p.due_date, p.status::text,
        COALESCE(array_agg(l.platform) FILTER (WHERE l.platform IS NOT NULL), '{}'),
        -- Выключатели автопинга. Нет строки — всё включено (см. 00036).
        COALESCE(rp.due_today, TRUE), COALESCE(rp.overdue, TRUE),
-       COALESCE(rp.incomplete, TRUE), COALESCE(rp.manager_digest, TRUE)
+       COALESCE(rp.incomplete, TRUE), COALESCE(rp.manager_digest, TRUE),
+       -- «Накануне» — исключение из правила «нет строки, значит
+       -- включено»: вид напоминания новый, и включают его поимённо.
+       -- Колокольчик напротив креатора сильнее настройки проекта.
+       COALESCE(cp.day_before, rp.day_before, FALSE)
 FROM project_publications p
 JOIN projects pr ON pr.id = p.project_id
 LEFT JOIN publication_links l ON l.publication_id = p.id
 LEFT JOIN project_reminder_prefs rp ON rp.project_id = p.project_id
+LEFT JOIN project_creator_reminder_prefs cp
+       ON cp.project_id = p.project_id AND cp.creator_user_id = p.creator_user_id
 WHERE p.status IN ('planned', 'partial')
-  AND p.due_date <= $1
+  AND p.due_date <= $1::date + 1
   AND p.due_date >= $1 - $2::int
   AND pr.kind = 'creators_turnkey'
   AND NOT EXISTS (
@@ -97,7 +112,8 @@ WHERE p.status IN ('planned', 'partial')
       WHERE dr.publication_id = p.id AND dr.status = 'pending'
   )
 GROUP BY p.id, p.project_id, p.creator_user_id, p.due_date, p.status, pr.title,
-         rp.due_today, rp.overdue, rp.incomplete, rp.manager_digest
+         rp.due_today, rp.overdue, rp.incomplete, rp.manager_digest,
+         cp.day_before, rp.day_before
 ORDER BY p.due_date`
 	rows, err := r.db.Query(ctx, q, day, OverdueHorizonDays)
 	if err != nil {
@@ -115,7 +131,8 @@ ORDER BY p.due_date`
 		if err := rows.Scan(&rem.PublicationID, &rem.ProjectID, &rem.CreatorUserID,
 			&rem.DueDate, &status, &rem.ProjectTitle, &platform,
 			&rem.autoping.DueToday, &rem.autoping.Overdue,
-			&rem.autoping.Incomplete, &rem.autoping.ManagerDigest); err != nil {
+			&rem.autoping.Incomplete, &rem.autoping.ManagerDigest,
+			&rem.autoping.DayBefore); err != nil {
 			return nil, fmt.Errorf("scan due reminder: %w", err)
 		}
 		rem.autoping.ProjectID = rem.ProjectID
@@ -128,6 +145,8 @@ ORDER BY p.due_date`
 }
 
 // classify — какой именно текст уходит человеку.
+//
+// daysOverdue отрицателен, когда срок ещё впереди: −1 — это «завтра».
 func classify(status string, daysOverdue, haveLinks int) string {
 	switch {
 	// Ролик вышел, но площадок меньше пяти — отдельная ветка, даже если
@@ -136,6 +155,8 @@ func classify(status string, daysOverdue, haveLinks int) string {
 		return ReminderIncomplete
 	case daysOverdue > 0:
 		return ReminderOverdue
+	case daysOverdue < 0:
+		return ReminderDueTomorrow
 	default:
 		return ReminderDueToday
 	}
@@ -266,6 +287,13 @@ func (r *Repo) Digests(ctx context.Context, reminders []Reminder) ([]ProjectDige
 		if !rem.autoping.ManagerDigest {
 			continue
 		}
+		// «Завтра срок» — ещё не событие для чата менеджеров: ничего не
+		// горит, человек в сроке. Проверка до создания записи, иначе по
+		// проекту, где на завтра стоит план и больше ничего, уедет
+		// пустая сводка с нулями — то есть «ничего не горит» словами.
+		if rem.Kind == ReminderDueTomorrow {
+			continue
+		}
 		d, ok := byProject[rem.ProjectID]
 		if !ok {
 			d = &ProjectDigest{ProjectID: rem.ProjectID, ProjectTitle: rem.ProjectTitle}
@@ -355,6 +383,25 @@ func (s *Service) RunReminders(ctx context.Context, now time.Time) (RunStats, er
 		} else {
 			remindersSuppressedTotal.Inc()
 			st.Skipped++
+		}
+	}
+
+	// План выкладок кончается — отдельным проходом, не из reminders:
+	// там выборка идёт по выкладкам, а здесь предмет — проект, и он
+	// попадает в неё как раз тогда, когда выкладок не осталось.
+	endings, err := s.repo.DuePlanEndings(ctx, now)
+	if err != nil {
+		return st, err
+	}
+	for _, e := range endings {
+		sent, err := s.repo.SendPlanEnding(ctx, e, now)
+		if err != nil {
+			st.Failures++
+			continue
+		}
+		if sent {
+			remindersSentTotal.WithLabelValues(ReminderPlanEnding).Inc()
+			st.PlanEndings++
 		}
 	}
 

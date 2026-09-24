@@ -43,11 +43,35 @@ var (
 	// человеку ответили «на эту дату у вас уже есть выкладка», а не
 	// пятисоткой из драйвера.
 	ErrDayTaken = errors.New("creator already has a publication on that day")
+	// ErrPublicationStarted — по выкладке уже сдавали ссылки: двигать её
+	// дату или снимать её нельзя. Работа креатора не исчезает из-за
+	// правки календаря, а «перенос» ролика, который уже вышел, переписал
+	// бы историю периода задним числом.
+	ErrPublicationStarted = errors.New("publication already has links")
 	// ErrPeriodLocked — день попадает в подытоженный период. Такой период
 	// заморожен вместе со срезом и суммами: добавить в него ролик значит
 	// поменять то, по чему уже выставлен счёт.
 	ErrPeriodLocked = errors.New("period is already locked")
+	// ErrLinkRemoveDenied — креатор пытается снять ссылку, а не заменить.
+	// Пустой адрес означает «этой площадки не было» — решение о работе, а
+	// не о ссылке, и принимает его менеджер.
+	ErrLinkRemoveDenied = errors.New("creator cannot remove a link")
 )
+
+// PublicationBelongsTo — его ли это выкладка. Проверка отдельным
+// запросом, а не условием в UPDATE: «не ваше» и «нет такой» должны
+// отвечать одинаково, и различить их надо ДО правки.
+func (r *Repo) PublicationBelongsTo(ctx context.Context, pubID, creatorID uuid.UUID) (bool, error) {
+	var mine bool
+	if err := r.db.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM project_publications
+    WHERE id = $1 AND creator_user_id = $2
+)`, pubID, creatorID).Scan(&mine); err != nil {
+		return false, fmt.Errorf("check publication owner: %w", err)
+	}
+	return mine, nil
+}
 
 type Repo struct{ db *pgxpool.Pool }
 
@@ -302,6 +326,225 @@ RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, stat
 	// раз и упёрся в 409 на дату, которой на экране не видел.
 	p.Links = []SubmittedLink{}
 	return p, nil
+}
+
+// ManagerAddPublication — одна дата одному креатору, рукой менеджера.
+//
+// Повторяет правила пачки (состав, подытоженный период, уникальность
+// дня), но пишет строку без батч-идентификатора: это правка плана, а не
+// его простановка, и «отменить пачку» её задеть не должно.
+func (r *Repo) ManagerAddPublication(ctx context.Context, in AddPublicationInput) (Publication, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Publication{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	draftRequired, err := r.assertCreatorsProject(ctx, tx, in.ProjectID)
+	if err != nil {
+		return Publication{}, err
+	}
+	members, err := txCreatorSet(ctx, tx, in.ProjectID)
+	if err != nil {
+		return Publication{}, err
+	}
+	if !members[in.CreatorUserID] {
+		return Publication{}, ErrCreatorNotInProject
+	}
+	if err := assertPeriodOpen(ctx, tx, in.ProjectID, in.Day); err != nil {
+		return Publication{}, err
+	}
+
+	var draft *time.Time
+	if draftRequired && in.DraftLeadDays > 0 {
+		dd := in.Day.AddDate(0, 0, -in.DraftLeadDays)
+		draft = &dd
+	}
+
+	var p Publication
+	err = tx.QueryRow(ctx, `
+INSERT INTO project_publications
+    (project_id, creator_user_id, due_date, draft_due_date, created_by)
+VALUES ($1, $2, $3::date, $4::date, $5)
+RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, status,
+          created_batch_id, self_added, created_at, updated_at`,
+		in.ProjectID, in.CreatorUserID, in.Day, draft, in.ManagerUserID).Scan(
+		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate,
+		&p.Status, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
+	if isUniqueViolation(err) {
+		return Publication{}, ErrDayTaken
+	}
+	if err != nil {
+		return Publication{}, fmt.Errorf("insert publication: %w", err)
+	}
+
+	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, in.ProjectID.String(),
+		outbox.EventPublicationsCreated, map[string]any{
+			"project_id":      in.ProjectID,
+			"publication_id":  p.ID,
+			"creator_user_id": in.CreatorUserID,
+			"due_date":        in.Day.Format("2006-01-02"),
+			"count":           1,
+			"created_by":      in.ManagerUserID,
+		}); err != nil {
+		return Publication{}, fmt.Errorf("emit publication_created: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Publication{}, fmt.Errorf("commit: %w", err)
+	}
+	p.Links = []SubmittedLink{}
+	return p, nil
+}
+
+// MoveDueDate — перенести дату плановой выкладки.
+//
+// Только по плановой и только пока по ней ничего не сдано: ссылки
+// значат, что ролик уже вышел, и дата у него не намерение, а факт.
+//
+// Открытая просьба о переносе закрывается тем же действием: менеджер на
+// неё ответил. Совпала с тем, что он поставил, — «одобрено», поставил
+// другое — «отклонено», и в обоих случаях у креатора в кабинете висит
+// решение, а не вечное «ждём менеджера».
+func (r *Repo) MoveDueDate(ctx context.Context, in MoveDueDateInput) (Publication, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Publication{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	projectID, err := lockPublicationForEdit(ctx, tx, in.PublicationID)
+	if err != nil {
+		return Publication{}, err
+	}
+
+	var status string
+	var creatorID uuid.UUID
+	var oldDay time.Time
+	var hasLinks bool
+	if err := tx.QueryRow(ctx, `
+SELECT p.status, p.creator_user_id, p.due_date,
+       EXISTS (SELECT 1 FROM publication_links l WHERE l.publication_id = p.id)
+FROM project_publications p WHERE p.id = $1`, in.PublicationID).Scan(
+		&status, &creatorID, &oldDay, &hasLinks); err != nil {
+		return Publication{}, fmt.Errorf("read publication: %w", err)
+	}
+	if Status(status) != StatusPlanned || hasLinks {
+		return Publication{}, ErrPublicationStarted
+	}
+	// Оба конца переноса: из подытоженного периода не уносят и в
+	// подытоженный не приносят — в обоих случаях менялся бы уже
+	// замороженный расчёт.
+	if err := assertPeriodOpen(ctx, tx, projectID, oldDay); err != nil {
+		return Publication{}, err
+	}
+	if err := assertPeriodOpen(ctx, tx, projectID, in.Day); err != nil {
+		return Publication{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+UPDATE project_publications
+SET due_date = $2::date,
+    draft_due_date = CASE
+        WHEN draft_due_date IS NULL THEN NULL
+        ELSE $2::date - (due_date - draft_due_date)
+    END,
+    updated_at = now()
+WHERE id = $1`, in.PublicationID, in.Day); err != nil {
+		if isUniqueViolation(err) {
+			return Publication{}, ErrDayTaken
+		}
+		return Publication{}, fmt.Errorf("move due date: %w", err)
+	}
+
+	// Просьба креатора, если она висела, получает ответ.
+	if _, err := tx.Exec(ctx, `
+UPDATE publication_date_requests
+SET status = CASE WHEN requested_date = $2::date THEN 'approved' ELSE 'rejected' END,
+    decided_by = $3, decided_at = now()
+WHERE publication_id = $1 AND status = 'pending'`,
+		in.PublicationID, in.Day, in.ManagerUserID); err != nil {
+		return Publication{}, fmt.Errorf("close date request: %w", err)
+	}
+
+	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, projectID.String(),
+		outbox.EventPublicationMoved, map[string]any{
+			"project_id":      projectID,
+			"publication_id":  in.PublicationID,
+			"creator_user_id": creatorID,
+			"from":            oldDay.Format("2006-01-02"),
+			"to":              in.Day.Format("2006-01-02"),
+			"moved_by":        in.ManagerUserID,
+		}); err != nil {
+		return Publication{}, fmt.Errorf("emit publication_moved: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Publication{}, fmt.Errorf("commit: %w", err)
+	}
+	return r.Get(ctx, in.PublicationID)
+}
+
+// CancelPublication — снять одну плановую выкладку.
+//
+// Правило то же, что у отмены пачки: сданное не снимается. Причина
+// пишется в close_reason — по ней потом видно, почему в плане дыра.
+func (r *Repo) CancelPublication(ctx context.Context, pubID, actor uuid.UUID, reason string) (Publication, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Publication{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	projectID, err := lockPublicationForEdit(ctx, tx, pubID)
+	if err != nil {
+		return Publication{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+UPDATE project_publications
+SET status = 'cancelled', closed_by = $2, close_reason = $3, updated_at = now()
+WHERE id = $1 AND status = 'planned'
+  AND NOT EXISTS (SELECT 1 FROM publication_links l WHERE l.publication_id = project_publications.id)`,
+		pubID, actor, reason)
+	if err != nil {
+		return Publication{}, fmt.Errorf("cancel publication: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Publication{}, ErrPublicationStarted
+	}
+
+	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, projectID.String(),
+		outbox.EventPublicationCancelled, map[string]any{
+			"project_id":     projectID,
+			"publication_id": pubID,
+			"reason":         reason,
+			"cancelled_by":   actor,
+		}); err != nil {
+		return Publication{}, fmt.Errorf("emit publication_cancelled: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Publication{}, fmt.Errorf("commit: %w", err)
+	}
+	return r.Get(ctx, pubID)
+}
+
+// assertPeriodOpen — дата не попадает в подытоженный период.
+//
+// Одна проверка на три места (завести, перенести, снять): подытоженный
+// период — это замороженный расчёт, и любая правка плана внутри него
+// меняет суммы, которые уже назвали обеим сторонам.
+func assertPeriodOpen(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, day time.Time) error {
+	var locked bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM project_periods
+    WHERE project_id = $1 AND status = 'locked' AND $2::date BETWEEN starts_on AND ends_on
+)`, projectID, day).Scan(&locked); err != nil {
+		return fmt.Errorf("check locked period: %w", err)
+	}
+	if locked {
+		return ErrPeriodLocked
+	}
+	return nil
 }
 
 // CancelBatch — снять пачку целиком. Отменяем только те выкладки, по
@@ -634,7 +877,7 @@ WHERE id = $1 FOR UPDATE`, in.PublicationID).Scan(&projectID, &creatorID, &statu
 		return Publication{}, err
 	}
 
-	const upsert = `
+	upsert := `
 INSERT INTO publication_links
     (publication_id, platform, url, url_canonical, external_media_id,
      submitted_at, collect_interval_days, next_collect_at)
@@ -645,9 +888,12 @@ SET url = EXCLUDED.url,
     external_media_id = EXCLUDED.external_media_id,
     submitted_at = now(),
     -- Переcданная ссылка — это другой ролик: сбрасываем расписание, чтобы
-    -- он попал в ближайший обход, а не ждал своего интервала.
+    -- он попал в ближайший обход, а не ждал своего интервала. Кроме
+    -- ссылок, уже снятых с обхода: период такого ролика подытожен, и
+    -- новые просмотры по нему записывать некуда (см. ParkedAt).
     collect_interval_days = 1,
-    next_collect_at = now()`
+    next_collect_at = ` + keepParked("publication_links.next_collect_at", "now()")
+
 	for _, l := range parsed {
 		if _, err := tx.Exec(ctx, upsert, in.PublicationID, l.Platform, l.Raw, l.Canonical, l.MediaID); err != nil {
 			return Publication{}, fmt.Errorf("upsert link %s: %w", l.Platform, err)
@@ -667,14 +913,25 @@ ON CONFLICT (publication_id, item_id) DO NOTHING`,
 		}
 	}
 
-	var have int
-	if err := tx.QueryRow(ctx,
-		`SELECT count(*) FROM publication_links WHERE publication_id = $1`,
-		in.PublicationID).Scan(&have); err != nil {
+	// Считаем ДВА числа, и это не дублирование.
+	//
+	// have — сколько ссылок сдано всего, оно едет в событие. required —
+	// сколько сдано из обязательной пятёрки, и закрывает выкладку
+	// только оно. Сейчас эти числа совпадают: принимаются ровно пять
+	// площадок, и UNIQUE (publication_id, platform) не даст сдать одну
+	// дважды. Но «пять ссылок» и «все пять площадок» — разные
+	// утверждения, и закрывать ролик по первому значит поставить
+	// правило на совпадение, которое переживёт ровно до шестой
+	// площадки в списке.
+	var have, required int
+	if err := tx.QueryRow(ctx, `
+SELECT count(*), count(*) FILTER (WHERE platform = ANY($2))
+FROM publication_links WHERE publication_id = $1`,
+		in.PublicationID, AllPlatforms).Scan(&have, &required); err != nil {
 		return Publication{}, fmt.Errorf("count links: %w", err)
 	}
 	newStatus := StatusPartial
-	if have >= len(AllPlatforms) {
+	if required >= len(AllPlatforms) {
 		newStatus = StatusDone
 	}
 	// COALESCE(NULLIF(...)) — пустое название не затирает записанное:
@@ -734,6 +991,16 @@ func (r *Repo) ManagerEditLink(ctx context.Context, in ManagerEditLinkInput, l L
 		return Publication{}, err
 	}
 
+	// Подытоженный период правку ссылки не принимает — ни от креатора,
+	// ни от менеджера. Срез снят, счёт выставлен, деньги посчитаны;
+	// подмена ролика задним числом поменяла бы то, по чему уже
+	// рассчитались, и никто бы этого не увидел. Ролик, исчезнувший с
+	// площадки в закрытом периоде, — разговор с клиентом, а не правка
+	// строки.
+	if err := assertPublicationPeriodOpen(ctx, tx, in.PublicationID); err != nil {
+		return Publication{}, err
+	}
+
 	// Тот же ролик или другой — решает канонический адрес: он и есть то,
 	// по чему ходит сборщик.
 	var prevCanonical string
@@ -745,7 +1012,7 @@ WHERE publication_id = $1 AND platform = $2`, in.PublicationID, in.Platform).Sca
 	}
 	statsReset := prevCanonical != "" && prevCanonical != l.Canonical
 
-	const upsert = `
+	upsert := `
 INSERT INTO publication_links
     (publication_id, platform, url, url_canonical, external_media_id,
      submitted_at, collect_interval_days, next_collect_at)
@@ -755,9 +1022,28 @@ SET url = EXCLUDED.url,
     url_canonical = EXCLUDED.url_canonical,
     external_media_id = EXCLUDED.external_media_id,
     submitted_at = now(),
+    -- Снятую с обхода ссылку правка адреса в очередь не возвращает:
+    -- её период подытожен, числа заморожены срезом (см. ParkedAt).
     collect_interval_days = 1,
-    next_collect_at = now()
+    next_collect_at = ` + keepParked("publication_links.next_collect_at", "now()") + `
 RETURNING id`
+	// Замеры сносим ДО правки самой ссылки, хотя логически это следствие.
+	//
+	// Порядок блокировок обязан совпадать со сборщиком: SaveStats берёт
+	// сначала video_stat_daily (upsert замера), потом publication_links
+	// (перенос расписания). Обратный порядок здесь давал классическую
+	// взаимную блокировку — Postgres ловил 40P01 и убивал одну из
+	// транзакций: либо 500 у менеджера, либо оборванная пачка сбора.
+	// Окно шире, чем кажется: тик сбора идёт до двадцати пачек подряд.
+	if statsReset {
+		if _, err := tx.Exec(ctx, `
+DELETE FROM video_stat_daily WHERE link_id IN (
+    SELECT id FROM publication_links WHERE publication_id = $1 AND platform = $2
+)`, in.PublicationID, in.Platform); err != nil {
+			return Publication{}, fmt.Errorf("reset stats: %w", err)
+		}
+	}
+
 	var linkID uuid.UUID
 	if err := tx.QueryRow(ctx, upsert,
 		in.PublicationID, in.Platform, l.Raw, l.Canonical, l.MediaID).Scan(&linkID); err != nil {
@@ -765,10 +1051,6 @@ RETURNING id`
 	}
 
 	if statsReset {
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM video_stat_daily WHERE link_id = $1`, linkID); err != nil {
-			return Publication{}, fmt.Errorf("reset stats: %w", err)
-		}
 		// Ссылка ведёт на другой ролик — значит, проверяли не его.
 		if err := reopenReview(ctx, tx, in.PublicationID); err != nil {
 			return Publication{}, err
@@ -845,6 +1127,19 @@ func (r *Repo) ManagerRemoveLink(ctx context.Context, in ManagerEditLinkInput) (
 
 // lockPublicationForEdit — общий пролог правки: блокирует выкладку и не
 // даёт трогать отменённую и закрытую руками.
+// assertPublicationPeriodOpen — период, которому принадлежит срок этой
+// выкладки, ещё не подытожен.
+func assertPublicationPeriodOpen(ctx context.Context, tx pgx.Tx, pubID uuid.UUID) error {
+	var projectID uuid.UUID
+	var day time.Time
+	if err := tx.QueryRow(ctx,
+		`SELECT project_id, due_date FROM project_publications WHERE id = $1`,
+		pubID).Scan(&projectID, &day); err != nil {
+		return fmt.Errorf("read publication day: %w", err)
+	}
+	return assertPeriodOpen(ctx, tx, projectID, day)
+}
+
 func lockPublicationForEdit(ctx context.Context, tx pgx.Tx, pubID uuid.UUID) (uuid.UUID, error) {
 	var projectID uuid.UUID
 	var status Status

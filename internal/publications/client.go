@@ -90,9 +90,20 @@ type NotificationPrefs struct {
 // их значило бы закрыть клиенту календарь заодно с цифрами.
 func (r *Repo) ClientOwnsProject(ctx context.Context, projectID, clientID uuid.UUID) (bool, error) {
 	var exists bool
+	// Заказчик, ведущий менеджер или админ. Менеджеру и админу это
+	// нужно ради «посмотреть глазами заказчика»: клиентский экран
+	// тянет свои ручки, и без этого кнопка вела в «Проект не найден».
+	// Больше, чем они и так видят, тут не открывается — меньше:
+	// клиентская сторона не показывает ни маржи, ни выплат.
 	err := r.db.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND client_user_id = $2)`,
-		projectID, clientID).Scan(&exists)
+SELECT EXISTS (
+    SELECT 1 FROM projects p
+    WHERE p.id = $1 AND (
+        p.client_user_id = $2
+     OR p.assigned_to_user_id = $2
+     OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_admin)
+    )
+)`, projectID, clientID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check project owner: %w", err)
 	}

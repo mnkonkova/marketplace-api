@@ -83,7 +83,11 @@ LIMIT 1`, projectID).Scan(&prev)
 	}
 
 	if _, err := tx.Exec(ctx,
-		`UPDATE projects SET status=$2, updated_at=now() WHERE id=$1`,
+		// Снимаем и срок прекращения обхода: восстановленный проект снова
+		// собирает статистику, иначе он остался бы живым, но слепым.
+		`UPDATE projects
+         SET status = $2, collection_stops_at = NULL, updated_at = now()
+         WHERE id = $1`,
 		projectID, string(restored)); err != nil {
 		return "", fmt.Errorf("restore: %w", err)
 	}

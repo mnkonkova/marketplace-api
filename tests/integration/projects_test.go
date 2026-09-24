@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -370,5 +371,82 @@ func TestAdvanceStageWithoutUpdatedAtSkipsLock(t *testing.T) {
 	if _, err := repo.AdvanceStage(ctx, pid, clientID, 7*24*time.Hour, &fresh); err != nil &&
 		!errors.Is(err, projects.ErrLastStage) && !errors.Is(err, projects.ErrStageBlocked) {
 		t.Fatalf("со свежим updated_at перемещение не должно конфликтовать: %v", err)
+	}
+}
+
+// Заказчик видит имя своего менеджера — и в списке проектов, и в самом
+// проекте.
+//
+// В кабинете переписка подписана именем человека («Ирина, ваш
+// менеджер»), а не «поддержкой». Взять это имя больше неоткуда: у
+// клиентских ручек проекта его до сих пор не было вовсе.
+func TestClientProjectCarriesManagerName(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	ctx := context.Background()
+
+	clientID, _, projectID, cleanup := setupPipelineAndProject(t, pool)
+	defer cleanup()
+
+	manager, cleanupManager := h.NewUser(t, userOpts{Kind: "client", IsManager: true})
+	defer cleanupManager()
+	if _, err := pool.Exec(ctx,
+		`UPDATE users SET display_name = 'Ирина' WHERE id = $1`, manager); err != nil {
+		t.Fatalf("имя менеджера: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE projects SET assigned_to_user_id = $1 WHERE id = $2`, manager, projectID); err != nil {
+		t.Fatalf("назначение менеджера: %v", err)
+	}
+
+	token := h.Token(t, clientID)
+
+	code, body := h.Do(t, http.MethodGet,
+		"/api/v1/me/projects/"+projectID.String()+"/funnel", token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("проект: код %d, тело %v", code, body)
+	}
+	if got := body["manager_display_name"]; got != "Ирина" {
+		t.Errorf("имя менеджера в проекте %v, ожидалось «Ирина»", got)
+	}
+
+	code, listBody := h.Do(t, http.MethodGet, "/api/v1/me/projects", token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("список проектов: код %d, тело %v", code, listBody)
+	}
+	items, _ := listBody["items"].([]any)
+	var found bool
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		if m["id"] != projectID.String() {
+			continue
+		}
+		found = true
+		if got := m["manager_display_name"]; got != "Ирина" {
+			t.Errorf("имя менеджера в списке %v, ожидалось «Ирина»", got)
+		}
+	}
+	if !found {
+		t.Fatalf("проект не пришёл в список заказчика: %v", listBody)
+	}
+}
+
+// Менеджер не назначен — поля нет вовсе. Пустая строка «ваш менеджер»
+// в кабинете хуже её отсутствия: интерфейсу нужно уметь не рисовать
+// блок, а для этого нужно отличать «нет» от «пусто».
+func TestClientProjectWithoutManagerHasNoName(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	clientID, _, projectID, cleanup := setupPipelineAndProject(t, pool)
+	defer cleanup()
+
+	code, body := h.Do(t, http.MethodGet,
+		"/api/v1/me/projects/"+projectID.String()+"/funnel", h.Token(t, clientID), nil)
+	if code != http.StatusOK {
+		t.Fatalf("проект: код %d, тело %v", code, body)
+	}
+	if _, ok := body["manager_display_name"]; ok {
+		t.Errorf("менеджер не назначен, а поле пришло: %v", body["manager_display_name"])
 	}
 }

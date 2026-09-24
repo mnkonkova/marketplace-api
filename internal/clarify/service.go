@@ -35,6 +35,10 @@ type SkillLister interface {
 
 const promptCacheTTL = 5 * time.Minute
 
+// skCacheMax — потолок числа категорий в кеше навыков. Настоящих
+// категорий десятки; всё, что сверх, — мусор из тела запроса.
+const skCacheMax = 256
+
 type Service struct {
 	client    llm.Provider
 	maxTokens int
@@ -47,12 +51,12 @@ type Service struct {
 	// одновременно прилетевшие запросы делят один load, остальные
 	// читают кеш без блокировки на лок. catCache/skCache читаются
 	// через atomic.Value, чтобы fast-path (cache hit) был lock-free.
-	catLoad   singleflight.Group
-	catCache  atomic.Value // *categoryCacheEntry
-	skLoad    singleflight.Group
-	skMu      sync.RWMutex // защищает skCache/skExpiry (map нельзя atomic.Value)
-	skCache   map[string][]SkillRef
-	skExpiry  map[string]time.Time
+	catLoad  singleflight.Group
+	catCache atomic.Value // *categoryCacheEntry
+	skLoad   singleflight.Group
+	skMu     sync.RWMutex // защищает skCache/skExpiry (map нельзя atomic.Value)
+	skCache  map[string][]SkillRef
+	skExpiry map[string]time.Time
 }
 
 type categoryCacheEntry struct {
@@ -153,6 +157,26 @@ func (s *Service) skills(ctx context.Context, category string) []SkillRef {
 			return nil, err
 		}
 		s.skMu.Lock()
+		// Ключ кеша — категория ИЗ ТЕЛА ЗАПРОСА, и проверять её здесь
+		// нечем. Без уборки каждая выдуманная строка оставалась бы в
+		// мапе навсегда: один клиент на лимите пять запросов в минуту
+		// кладёт семь тысяч ключей в сутки, и ни один не уходит.
+		// Поэтому перед записью выметаем протухшие, а если живых всё
+		// равно слишком много — чистим целиком: кеш здесь ускоряет
+		// повторный вопрос, а не хранит справочник.
+		if len(s.skCache) >= skCacheMax {
+			now := time.Now()
+			for k, exp := range s.skExpiry {
+				if now.After(exp) {
+					delete(s.skCache, k)
+					delete(s.skExpiry, k)
+				}
+			}
+			if len(s.skCache) >= skCacheMax {
+				s.skCache = make(map[string][]SkillRef, skCacheMax)
+				s.skExpiry = make(map[string]time.Time, skCacheMax)
+			}
+		}
 		s.skCache[category] = skills
 		s.skExpiry[category] = time.Now().Add(promptCacheTTL)
 		s.skMu.Unlock()

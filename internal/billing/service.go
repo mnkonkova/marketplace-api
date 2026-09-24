@@ -57,9 +57,20 @@ func (r *Repo) ManagerHasAccess(ctx context.Context, projectID, managerID uuid.U
 // ClientOwnsProject — проект принадлежит этому заказчику.
 func (r *Repo) ClientOwnsProject(ctx context.Context, projectID, clientID uuid.UUID) (bool, error) {
 	var exists bool
-	err := r.db.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND client_user_id = $2)`,
-		projectID, clientID).Scan(&exists)
+	// Заказчик, ведущий менеджер или админ. Менеджеру и админу это
+	// нужно ради «посмотреть глазами заказчика»: клиентский экран
+	// тянет свои ручки, и без этого кнопка вела в «Проект не найден».
+	// Больше, чем они и так видят, тут не открывается — меньше:
+	// клиентская сторона не показывает ни маржи, ни выплат.
+	err := r.db.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM projects p
+    WHERE p.id = $1 AND (
+        p.client_user_id = $2
+     OR p.assigned_to_user_id = $2
+     OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_admin)
+    )
+)`, projectID, clientID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check project owner: %w", err)
 	}
@@ -105,7 +116,44 @@ func (s *Service) SaveTerms(ctx context.Context, t Terms, actor uuid.UUID) (Term
 	if _, err := checkRates(t); err != nil {
 		return Terms{}, err
 	}
-	return s.repo.SaveTerms(ctx, t, actor)
+	saved, err := s.repo.SaveTerms(ctx, t, actor)
+	if err != nil {
+		return Terms{}, err
+	}
+	// Новый тариф действует с ТЕКУЩЕГО периода — и виден сразу.
+	//
+	// Суммы начислений хранятся строками, а не считаются на лету: без
+	// пересчёта менеджер сохранял лесенку и видел на экране прежние
+	// деньги, пока кто-нибудь не нажмёт «Пересчитать». Из этого он
+	// делал единственно возможный вывод — что правка не сохранилась.
+	//
+	// Подытоженный период не трогаем ВООБЩЕ: он заморожен вместе со
+	// срезом просмотров, по нему выставлен счёт, и переписать его задним
+	// числом значило бы поменять то, по чему уже рассчитались. Правка
+	// тарифа — договорённость на будущее, а не пересмотр прошлого.
+	if err := s.recalcOpenPeriod(ctx, t.ProjectID, time.Now()); err != nil {
+		return saved, err
+	}
+	return saved, nil
+}
+
+// recalcOpenPeriod — пересчитать текущий период, если он ещё открыт.
+//
+// Молча пропускает проект, у которого периодов нет вовсе (не вышло ни
+// одного ролика — считать нечего) и подытоженный период.
+func (s *Service) recalcOpenPeriod(ctx context.Context, projectID uuid.UUID, now time.Time) error {
+	p, err := s.Period(ctx, projectID, 0, now)
+	if errors.Is(err, ErrNoPeriods) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if p.IsLocked() {
+		return nil
+	}
+	_, err = s.Recalculate(ctx, projectID, p)
+	return err
 }
 
 // checkRates — проверка ставок, общая для условий проекта и для прайса
@@ -241,6 +289,11 @@ func (s *Service) Recalculate(ctx context.Context, projectID uuid.UUID, p Projec
 	if err != nil {
 		return nil, err
 	}
+	// Откуда взяты числа — решает periodFacts по статусу периода в этой
+	// же структуре. Дальше этот же признак едет в запись: пока мы
+	// считали, период мог стать подытоженным, и живым числам поверх
+	// замороженных ложиться нельзя (см. SaveAccrual).
+	fromSnapshot := p.IsLocked()
 	facts, err := s.periodFacts(ctx, projectID, p, viewsThreshold(terms))
 	if err != nil {
 		return nil, err
@@ -259,7 +312,7 @@ func (s *Service) Recalculate(ctx context.Context, projectID uuid.UUID, p Projec
 			return nil, err
 		}
 		for _, a := range rows {
-			if err := s.repo.SaveAccrual(ctx, a); err != nil {
+			if err := s.repo.SaveAccrual(ctx, a, fromSnapshot); err != nil {
 				return nil, err
 			}
 		}
@@ -274,7 +327,7 @@ func (s *Service) Recalculate(ctx context.Context, projectID uuid.UUID, p Projec
 
 	for _, f := range facts {
 		a := calcAccrual(terms, f, projectID, p.StartsOn)
-		if err := s.repo.SaveAccrual(ctx, a); err != nil {
+		if err := s.repo.SaveAccrual(ctx, a, fromSnapshot); err != nil {
 			return nil, err
 		}
 	}
@@ -513,26 +566,30 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 	// практике это одно и то же число: недобрать гарантию в 300 000 и
 	// при этом иметь виральный хвост нельзя — ролик, перешагнувший
 	// миллион, сам по себе даёт в ступенчатый объём целый миллион.
-	billable := stepPool - pc.ClientDebtIn
-	if billable < 0 {
-		billable = 0
-	}
-	// Недоставленная часть долга остаётся долгом.
-	if pc.ClientDebtIn > stepPool {
-		left.ClientDebtOut = pc.ClientDebtIn - stepPool
-	}
+	// ПЕРЕНОС ПРОСМОТРОВ И ГАРАНТИЯ ВЫКЛЮЧЕНЫ (решение владельца
+	// продукта, сентябрь 2026). Период считается сам по себе: сколько
+	// просмотров набрал — столько и стоит.
+	//
+	// Код оставлен, а не удалён, намеренно: оба правила записаны в
+	// оферте и включаются обратно одной правкой. Как было:
+	//
+	//   billable := stepPool - pc.ClientDebtIn   // долг гасится первым
+	//   if billable < 0 { billable = 0 }
+	//   if pc.ClientDebtIn > stepPool {          // недогашенный остаток
+	//       left.ClientDebtOut = pc.ClientDebtIn - stepPool
+	//   }
+	//   if pc.Seq > 1 && guarantee > 0 && billable < guarantee {
+	//       charged = guarantee                  // платим как за гарантию
+	//       left.ClientDebtOut += guarantee - billable
+	//   }
+	//
+	// Вместе с ними выключена и запись остатков: left остаётся пустым,
+	// значит client_debt_out/carry_out_creator всегда нули, и цепочка
+	// периодов ничего друг другу не передаёт.
+	billable := stepPool
 
 	client := t.ClientLadder()
-	guarantee := derefOr(t.GuaranteeViews, 0)
 	charged := billable
-	if pc.Seq > 1 && guarantee > 0 && billable < guarantee {
-		// Недобрали гарантию: период оплачивается как гарантия, а
-		// недостающие просмотры уходят в долг и гасятся из следующего.
-		// Долг в ПРОСМОТРАХ, а не в деньгах — так в оферте: «недостающее
-		// доберём бесплатно».
-		charged = guarantee
-		left.ClientDebtOut += guarantee - billable
-	}
 	clientFee, _ := client.Fee(pc.Seq, charged)
 	clientTail := client.Tail(f.ViewsOver)
 	// KPI по подписчикам стоит рядом со ступенями, а не внутри них:
@@ -553,7 +610,9 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 	// переносится: считаем от ступенчатого объёма периода плюс то, что
 	// пришло из прошлого.
 	creator := t.CreatorLadder()
-	counted := stepPool + pc.CreatorCarryIn
+	// Перенос выключен вместе с клиентским (см. выше). Было:
+	//   counted := stepPool + pc.CreatorCarryIn
+	counted := stepPool
 	creatorFee, steps := creator.Fee(pc.Seq, counted)
 	creatorTail := creator.Tail(f.ViewsOver)
 	creatorSubs := creator.Subscribers(f.Subscribers)
@@ -565,12 +624,13 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 	// блоком в сто тысяч просмотров. У лесенки порогов неполной ступени
 	// не существует: есть цена периода на взятом пороге и всё. Перенести
 	// «остаток» там значило бы придумать величину, которой нет в тарифе.
-	if pc.Seq > 1 && !creator.HasSteps() && creator.StepViews > 0 {
-		paid := steps * creator.StepViews
-		if counted > paid {
-			left.CreatorCarryOut = counted - paid
-		}
-	}
+	//
+	// Выключено вместе с остальным переносом. Было:
+	//   if pc.Seq > 1 && !creator.HasSteps() && creator.StepViews > 0 {
+	//       paid := steps * creator.StepViews
+	//       if counted > paid { left.CreatorCarryOut = counted - paid }
+	//   }
+	_ = steps
 	return a, left
 }
 

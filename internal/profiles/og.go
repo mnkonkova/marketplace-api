@@ -90,11 +90,15 @@ func (s *spaShell) get(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	html := string(body)
 	s.mu.Lock()
-	s.html = string(body)
+	s.html = html
 	s.fetchedAt = time.Now()
 	s.mu.Unlock()
-	return s.html, nil
+	// Возвращаем СВОЮ копию, а не поле: чтение s.html после Unlock —
+	// гонка по модели памяти Go. Два бота, промахнувшихся мимо кеша
+	// одновременно, читали бы его, пока сосед пишет.
+	return html, nil
 }
 
 // ogMeta — то, что видит превьюшник.

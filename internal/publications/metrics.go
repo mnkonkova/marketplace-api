@@ -25,12 +25,38 @@ var (
 		Help: "Stats collection attempts by platform and result.",
 	}, []string{"platform", "result"})
 
+	// accountScanTotal — обходы аккаунтов креаторов. result: ok | no_data.
+	//
+	// Отдельно от collectTotal, хотя сервис тот же: это ДРУГОЙ расход.
+	// Сбор по ссылкам растёт от числа сданных роликов и сам собой
+	// затихает по графику 1→2→4→8, а обход аккаунтов стоит ровно кредит
+	// на аккаунт в сутки, пока проект идёт, — и не зависит ни от чего,
+	// кроме числа строк в project_accounts. Сложенные в один счётчик,
+	// эти два расхода нельзя ни развести по причинам, ни спланировать.
+	accountScanTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "crm_account_scan_total",
+		Help: "Creator account scans by platform and result.",
+	}, []string{"platform", "result"})
+
 	// collectErrorsTotal — сервис не ответил вовсе. reason отделяет
 	// недоступность от отказа по ключу и от лимита: чинятся они по-разному.
 	collectErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "crm_stat_collect_errors_total",
 		Help: "Failed calls to the stats collection service by reason.",
 	}, []string{"reason"})
+
+	// collectSaturatedTotal — проходы, в которых выборка вернула РОВНО
+	// лимит.
+	//
+	// Это единственный ранний признак того, что мы упёрлись в потолок.
+	// Полная пачка означает «было что брать сверх лимита»: очередь не
+	// разгребается, и ссылки начнут отставать. Отставание видно по
+	// crm_links_stale, но оно загорается на сутки позже — когда цифры в
+	// отчёте уже протухли.
+	collectSaturatedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "crm_stat_collect_saturated_total",
+		Help: "Collection passes that filled the whole batch, meaning the queue is longer than capacity.",
+	})
 
 	// linksStale — живые ссылки, которые давно должны были обойтись,
 	// но не обошлись. Растёт, когда сбор встал.
@@ -74,9 +100,19 @@ func ObserveCollect(platform, result string) {
 	collectTotal.WithLabelValues(platform, result).Inc()
 }
 
+// ObserveAccountScan — исход одного обхода аккаунта.
+func ObserveAccountScan(platform, result string) {
+	accountScanTotal.WithLabelValues(platform, result).Inc()
+}
+
 // ObserveCollectError — сервис не ответил.
 func ObserveCollectError(reason string) {
 	collectErrorsTotal.WithLabelValues(reason).Inc()
+}
+
+// ObserveCollectSaturated — проход выгреб пачку целиком.
+func ObserveCollectSaturated() {
+	collectSaturatedTotal.Inc()
 }
 
 // GaugeSnapshot — то, что показывают gauge'и. Возвращается ещё и наружу,

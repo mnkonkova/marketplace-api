@@ -27,8 +27,15 @@ type ReminderPrefs struct {
 	// Incomplete — ролик вышел, но собраны не все пять ссылок.
 	Incomplete bool `json:"incomplete"`
 	// ManagerDigest — сводка в общий чат менеджеров. Креаторы её не видят.
-	ManagerDigest bool       `json:"manager_digest"`
-	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+	ManagerDigest bool `json:"manager_digest"`
+	// DayBefore — креатору в бот НАКАНУНЕ срока. Единственный из видов,
+	// выключенный по умолчанию: он появился позже остальных, и включать
+	// его молча всем — значит завтра утром написать каждому креатору
+	// каждого проекта, никого не спросив. Колокольчик напротив креатора
+	// в плане выкладок сильнее этой настройки, см.
+	// CreatorReminderPref.
+	DayBefore bool       `json:"day_before"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // defaultReminderPrefs — всё включено. Именно это означает отсутствие
@@ -37,12 +44,15 @@ func defaultReminderPrefs(projectID uuid.UUID) ReminderPrefs {
 	return ReminderPrefs{
 		ProjectID: projectID,
 		DueToday:  true, Overdue: true, Incomplete: true, ManagerDigest: true,
+		DayBefore: false,
 	}
 }
 
 // enabled — включён ли этот вид напоминания.
 func (p ReminderPrefs) enabled(kind string) bool {
 	switch kind {
+	case ReminderDueTomorrow:
+		return p.DayBefore
 	case ReminderDueToday:
 		return p.DueToday
 	case ReminderOverdue:
@@ -61,9 +71,10 @@ func (p ReminderPrefs) enabled(kind string) bool {
 func (r *Repo) ReminderPrefs(ctx context.Context, projectID uuid.UUID) (ReminderPrefs, error) {
 	out := defaultReminderPrefs(projectID)
 	err := r.db.QueryRow(ctx, `
-SELECT due_today, overdue, incomplete, manager_digest, updated_at
+SELECT due_today, overdue, incomplete, manager_digest, day_before, updated_at
 FROM project_reminder_prefs WHERE project_id = $1`, projectID).
-		Scan(&out.DueToday, &out.Overdue, &out.Incomplete, &out.ManagerDigest, &out.UpdatedAt)
+		Scan(&out.DueToday, &out.Overdue, &out.Incomplete, &out.ManagerDigest,
+			&out.DayBefore, &out.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}
@@ -79,17 +90,20 @@ func (r *Repo) SaveReminderPrefs(ctx context.Context, p ReminderPrefs, actor uui
 	// щёлкнувшие разные тумблеры одновременно, иначе затирают друг друга.
 	if err := r.db.QueryRow(ctx, `
 INSERT INTO project_reminder_prefs
-  (project_id, due_today, overdue, incomplete, manager_digest, updated_by, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, now())
+  (project_id, due_today, overdue, incomplete, manager_digest, day_before,
+   updated_by, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, now())
 ON CONFLICT (project_id) DO UPDATE SET
   due_today = EXCLUDED.due_today,
   overdue = EXCLUDED.overdue,
   incomplete = EXCLUDED.incomplete,
   manager_digest = EXCLUDED.manager_digest,
+  day_before = EXCLUDED.day_before,
   updated_by = EXCLUDED.updated_by,
   updated_at = now()
 RETURNING updated_at`,
-		p.ProjectID, p.DueToday, p.Overdue, p.Incomplete, p.ManagerDigest, actor).
+		p.ProjectID, p.DueToday, p.Overdue, p.Incomplete, p.ManagerDigest,
+		p.DayBefore, actor).
 		Scan(&p.UpdatedAt); err != nil {
 		return ReminderPrefs{}, fmt.Errorf("save reminder prefs: %w", err)
 	}
@@ -160,4 +174,69 @@ func (s *Service) SaveProjectSettings(
 	ctx context.Context, projectID uuid.UUID, in ProjectSettings,
 ) (ProjectSettings, error) {
 	return s.repo.SaveProjectSettings(ctx, projectID, in)
+}
+
+// ---- колокольчик напротив креатора ----
+//
+// Настройка проекта отвечает на вопрос «пингуем ли мы вообще», а
+// колокольчик в плане — «пингуем ли накануне ЭТОГО человека». Второе
+// сильнее первого: в плане у восьми креаторов восемь строк, и
+// напоминание включают тому, кто забывает, а не всем разом.
+
+// CreatorReminderPref — состояние колокольчика одного креатора.
+type CreatorReminderPref struct {
+	ProjectID     uuid.UUID  `json:"project_id"`
+	CreatorUserID uuid.UUID  `json:"creator_user_id"`
+	DayBefore     bool       `json:"day_before"`
+	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+}
+
+// CreatorReminderPrefs — колокольчики всех креаторов проекта. В карте
+// только те, кому его трогали: остальные живут по настройке проекта.
+func (r *Repo) CreatorReminderPrefs(ctx context.Context, projectID uuid.UUID) (map[uuid.UUID]bool, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT creator_user_id, day_before
+FROM project_creator_reminder_prefs WHERE project_id = $1`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("load creator reminder prefs: %w", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		var on bool
+		if err := rows.Scan(&id, &on); err != nil {
+			return nil, fmt.Errorf("scan creator reminder pref: %w", err)
+		}
+		out[id] = on
+	}
+	return out, rows.Err()
+}
+
+// SaveCreatorReminderPref — щелчок по колокольчику.
+func (r *Repo) SaveCreatorReminderPref(ctx context.Context, projectID, creatorID uuid.UUID,
+	dayBefore bool, actor uuid.UUID) (CreatorReminderPref, error) {
+
+	out := CreatorReminderPref{ProjectID: projectID, CreatorUserID: creatorID, DayBefore: dayBefore}
+	var at time.Time
+	if err := r.db.QueryRow(ctx, `
+INSERT INTO project_creator_reminder_prefs
+  (project_id, creator_user_id, day_before, updated_by, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (project_id, creator_user_id) DO UPDATE SET
+  day_before = EXCLUDED.day_before,
+  updated_by = EXCLUDED.updated_by,
+  updated_at = now()
+RETURNING updated_at`, projectID, creatorID, dayBefore, actor).Scan(&at); err != nil {
+		return CreatorReminderPref{}, fmt.Errorf("save creator reminder pref: %w", err)
+	}
+	out.UpdatedAt = &at
+	return out, nil
+}
+
+// SaveCreatorReminderPref — сервисная обёртка.
+func (s *Service) SaveCreatorReminderPref(ctx context.Context, projectID, creatorID uuid.UUID,
+	dayBefore bool, actor uuid.UUID) (CreatorReminderPref, error) {
+
+	return s.repo.SaveCreatorReminderPref(ctx, projectID, creatorID, dayBefore, actor)
 }

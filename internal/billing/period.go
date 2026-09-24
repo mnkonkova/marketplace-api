@@ -252,6 +252,41 @@ WHERE project_id = $1 ORDER BY seq DESC LIMIT 1`, projectID).Scan(&aStart, &aSeq
 		haveLast = true
 	}
 
+	// Переякорение: первая публикация оказалась РАНЬШЕ начала отсчёта.
+	//
+	// Так бывает штатно. Креатор выложил ролик первого числа, а ссылку
+	// сдал пятого; периоды успели материализоваться от пятого, и через
+	// час сбор статистики проставил ссылке настоящую дату публикации —
+	// первое. С этого момента выкладка не попадала НИ В ОДИН период:
+	// publishedInPeriodSQL отбирает по BETWEEN, а она левее первой
+	// границы. Последствия тройные — за ролик не платят, его ссылки
+	// никогда не паркуются подытогом и обходятся вечно, и проект из-за
+	// него никогда не схлопывается.
+	//
+	// Двигать границы можно, только пока ничего не зафиксировано: ни
+	// одного подытоженного периода и ни одного утверждённого
+	// начисления. Иначе якорь остаётся замороженным, как и было
+	// задумано, — переписывать подытоженное нельзя.
+	if haveLast && first.Before(anchor) {
+		var frozen bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM project_periods WHERE project_id = $1 AND status = $2)
+    OR EXISTS (SELECT 1 FROM creator_accruals WHERE project_id = $1 AND status <> 'draft')`,
+			projectID, PeriodLocked).Scan(&frozen); err != nil {
+			return fmt.Errorf("check frozen periods: %w", err)
+		}
+		if !frozen {
+			if _, err := tx.Exec(ctx,
+				`DELETE FROM project_periods WHERE project_id = $1`, projectID); err != nil {
+				return fmt.Errorf("drop periods for reanchor: %w", err)
+			}
+			anchor = first
+			lastSeq = 0
+			lastID = nil
+			haveLast = false
+		}
+	}
+
 	limit := dayOf(upTo)
 	for seq := lastSeq + 1; ; seq++ {
 		starts := anchor.AddDate(0, seq-1, 0)
@@ -275,6 +310,19 @@ RETURNING id`, projectID, seq, starts, ends, lastID).Scan(&id); err != nil {
 		}
 	}
 	_ = haveLast
+
+	// Черновики начислений, оставшиеся от старых границ. Строка
+	// начисления привязана к period_start, а не к id периода: после
+	// переякорения её ключ указывает в никуда, и в списке рядом с новым
+	// периодом висел бы старый. Трогаем только черновики — утверждённых
+	// здесь быть не может, переякорение на них и не пошло бы.
+	if _, err := tx.Exec(ctx, `
+DELETE FROM creator_accruals
+WHERE project_id = $1 AND status = 'draft'
+  AND period_start NOT IN (SELECT starts_on FROM project_periods WHERE project_id = $1)`,
+		projectID); err != nil {
+		return fmt.Errorf("drop orphan accruals: %w", err)
+	}
 	return tx.Commit(ctx)
 }
 
@@ -373,6 +421,9 @@ WHERE id = $1`, periodID, PeriodLocked, now, actor, asOf, approx); err != nil {
 	if err := ratings.StampPeriod(ctx, tx, periodID, p.ProjectID); err != nil {
 		return ProjectPeriod{}, err
 	}
+	if err := parkPeriodLinks(ctx, tx, periodID); err != nil {
+		return ProjectPeriod{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ProjectPeriod{}, fmt.Errorf("commit: %w", err)
 	}
@@ -465,6 +516,62 @@ const publishedInPeriodSQL = `
     HAVING MIN(COALESCE(l.published_at, l.submitted_at))::date BETWEEN $3 AND $4
 `
 
+// parkPeriodLinks — снять с обхода ссылки подытоженного периода.
+//
+// Подытог и есть момент, после которого обходить нечего: числа периода
+// заморожены срезом, и новые просмотры этих роликов уже некуда
+// записать. До него ссылки ходят — последние ролики периода догоняют
+// просмотры ровно те две недели, ради которых подытог и отложен
+// (DefaultPeriodLockDelay). После каждый обход это кредит поставщика,
+// потраченный впустую.
+//
+// Набор ролики берём из среза, который только что записан в этой же
+// транзакции, а не считаем заново: «ролик этого периода» обязан
+// пониматься одинаково расчётом и сбором, иначе обход разойдётся с тем,
+// за что платят.
+//
+// 'infinity' — тот же признак «снято с обхода», что у схлопнутого
+// проекта (publications.CollapseFinished): очередь отбирает ссылки по
+// next_collect_at <= now, и такая строка в неё больше не вернётся.
+func parkPeriodLinks(ctx context.Context, tx pgx.Tx, periodID uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `
+UPDATE publication_links
+SET next_collect_at = 'infinity'::timestamptz
+WHERE publication_id IN (
+    SELECT publication_id FROM project_period_publications WHERE period_id = $1
+)`, periodID); err != nil {
+		return fmt.Errorf("park period links: %w", err)
+	}
+	return nil
+}
+
+// resumePeriodLinks — вернуть ссылки переоткрытого периода в очередь.
+//
+// Переоткрытие затем и делают, что числа периода нужно пересчитать по
+// свежим просмотрам; со снятыми с обхода ссылками пересчитывать было бы
+// нечего. Возвращаем только те, что сняли мы: у проекта, чей ряд уже
+// схлопнут, 'infinity' стоит по другой причине, но его ссылки всё равно
+// отсечёт collection_stops_at в очереди.
+//
+// Звать строго ДО удаления среза: набор роликов периода живёт в нём.
+//
+// Все ссылки становятся готовыми к обходу одновременно, и это намеренно:
+// переоткрытие затем и делают, что числа периода нужно пересчитать
+// целиком. Разгребает очередь сборщик своим лимитом на тик — растягивать
+// возврат здесь значило бы растягивать и пересчёт.
+func resumePeriodLinks(ctx context.Context, tx pgx.Tx, periodID uuid.UUID, now time.Time) error {
+	if _, err := tx.Exec(ctx, `
+UPDATE publication_links
+SET next_collect_at = $2
+WHERE next_collect_at = 'infinity'::timestamptz
+  AND publication_id IN (
+      SELECT publication_id FROM project_period_publications WHERE period_id = $1
+  )`, periodID, now); err != nil {
+		return fmt.Errorf("resume period links: %w", err)
+	}
+	return nil
+}
+
 // SyncCarryIn — подтянуть периоду то, что оставил предыдущий: долг
 // перед клиентом и перенесённый остаток креатора.
 //
@@ -517,7 +624,7 @@ WHERE id = $1 AND status = $4`, periodID, l.ClientDebtOut, l.CreatorCarryOut, Pe
 // переноса нет, это только предупреждение; когда появится, придётся
 // решать — пересчитывать цепочку или запрещать переоткрытие периода, за
 // которым уже есть подытоженные.
-func (r *Repo) UnlockPeriod(ctx context.Context, periodID uuid.UUID, actor uuid.UUID, reason string) (ProjectPeriod, error) {
+func (r *Repo) UnlockPeriod(ctx context.Context, periodID uuid.UUID, actor uuid.UUID, reason string, now time.Time) (ProjectPeriod, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return ProjectPeriod{}, fmt.Errorf("begin tx: %w", err)
@@ -562,6 +669,10 @@ SET status = $2, locked_at = NULL, locked_by = NULL,
     snapshot_as_of = NULL, snapshot_approx = FALSE, updated_at = now()
 WHERE id = $1`, periodID, PeriodOpen); err != nil {
 		return ProjectPeriod{}, fmt.Errorf("unlock period: %w", err)
+	}
+	// Строго до удаления среза: набор роликов периода живёт в нём.
+	if err := resumePeriodLinks(ctx, tx, periodID, now); err != nil {
+		return ProjectPeriod{}, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM project_period_views WHERE period_id = $1`, periodID); err != nil {
 		return ProjectPeriod{}, fmt.Errorf("drop views snapshot: %w", err)
@@ -760,8 +871,8 @@ func (s *Service) announcePeriod(ctx context.Context, p ProjectPeriod) error {
 
 // UnlockPeriod — вернуть период в работу (только админ, со следом в
 // журнале). См. Repo.UnlockPeriod о последствиях для переноса остатка.
-func (s *Service) UnlockPeriod(ctx context.Context, periodID uuid.UUID, actor uuid.UUID, reason string) (ProjectPeriod, error) {
-	return s.repo.UnlockPeriod(ctx, periodID, actor, reason)
+func (s *Service) UnlockPeriod(ctx context.Context, periodID uuid.UUID, actor uuid.UUID, reason string, now time.Time) (ProjectPeriod, error) {
+	return s.repo.UnlockPeriod(ctx, periodID, actor, reason, now)
 }
 
 // LockDuePeriods — фоновой подытог: закрыть все периоды, которым пора.

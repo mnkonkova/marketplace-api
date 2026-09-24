@@ -778,11 +778,15 @@ func (h *Handler) ClientOrderEstimate(w http.ResponseWriter, r *http.Request) {
 
 // draftEstimateReq — состав, который клиент ещё собирает.
 type draftEstimateReq struct {
-	// Needed — сколько креаторов нужно; VideosCount — объём роликов.
-	Needed      int `json:"needed"`
+	// Needed — сколько креаторов нужно. Единственное обязательное поле:
+	// без него не посчитать даже оклады.
+	Needed int `json:"needed"`
+	// VideosCount — объём роликов. Ноль значит «ещё не знаю»: смету
+	// спрашивают и до того, как решили, сколько роликов в месяц.
 	VideosCount int `json:"videos_count"`
 	// CreatorIDs — кого выбрал клиент. Порядок здесь не важен: на сумму
-	// влияет состав, а не приоритет.
+	// влияет состав, а не приоритет. Пусто — состав ещё не набран, и
+	// прогноз бонуса не считается.
 	CreatorIDs []uuid.UUID `json:"creator_ids"`
 }
 
@@ -797,13 +801,16 @@ type draftEstimateReq struct {
 // @Description has_forecast=false означает «бонус неизвестен», а не «ноль».
 // @Description Условия берутся действующие — те, с которыми клиент и
 // @Description согласится при оформлении.
+// @Description Обязателен только needed: смету спрашивают и до того, как
+// @Description набран состав и решён объём. Без них приходят точные
+// @Description оклады и has_forecast=false.
 // @Tags     client-billing
 // @Accept   json
 // @Produce  json
 // @Security BearerAuth
 // @Param    body body draftEstimateReq true "состав"
 // @Success  200 {object} OrderEstimate
-// @Failure  400 {object} errorResponse "bad_json; invalid_input — пустой состав, больше 50 человек, ноль роликов или креаторов"
+// @Failure  400 {object} errorResponse "bad_json; invalid_input — needed меньше единицы, отрицательный videos_count или больше 50 человек"
 // @Failure  401 {object} errorResponse "no_user — сессия истекла"
 // @Failure  404 {object} errorResponse "not_found — прайс ещё не заведён"
 // @Router   /me/orders/estimate [post]
@@ -952,7 +959,7 @@ func (h *Handler) AdminUnlockPeriod(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	out, err := h.svc.UnlockPeriod(r.Context(), period.ID, actor, in.Reason)
+	out, err := h.svc.UnlockPeriod(r.Context(), period.ID, actor, in.Reason, time.Now())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -987,4 +994,33 @@ func (h *Handler) ManagerPeriods(w http.ResponseWriter, r *http.Request) {
 
 type periodsResp struct {
 	Items []ProjectPeriod `json:"items"`
+}
+
+type tariffRegistryResp struct {
+	Items []TariffRow `json:"items"`
+}
+
+// AdminTariffRegistry godoc
+// @Summary  Тарифы всех проектов одной таблицей (админ)
+// @Description Строка — проект. Прайс площадки один на всех, а
+// @Description договариваются с каждым заказчиком отдельно: вопрос к этому
+// @Description разделу звучит не «какой у нас прайс», а «по каким условиям
+// @Description идёт вот этот проект и чем он отличается от соседнего».
+// @Description Видно и худшее состояние — проект без тарифа: он считается
+// @Description по нулям, а экран денег показывает ровные нули, и выглядит
+// @Description это как «ещё не начислили».
+// @Tags     admin-billing
+// @Produce  json
+// @Security BearerAuth
+// @Success  200 {object} tariffRegistryResp
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  403 {object} errorResponse "forbidden — нужна роль admin"
+// @Router   /admin/tariff/projects [get]
+func (h *Handler) AdminTariffRegistry(w http.ResponseWriter, r *http.Request) {
+	items, err := h.svc.TariffRegistry(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, tariffRegistryResp{Items: items})
 }

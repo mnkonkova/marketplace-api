@@ -118,10 +118,10 @@ func TestDeriveStageDisplayStatus(t *testing.T) {
 
 func TestDeriveCurrentStep(t *testing.T) {
 	cases := []struct {
-		name     string
-		steps    []projects.StepView
-		wantNil  bool
-		wantIdx  int
+		name    string
+		steps   []projects.StepView
+		wantNil bool
+		wantIdx int
 	}{
 		{"empty", nil, true, 0},
 		{"only done → nil", []projects.StepView{

@@ -390,6 +390,25 @@ func (r *Repo) GetByIDForClient(ctx context.Context, projectID, clientID uuid.UU
 	return r.getByID(ctx, projectID, &clientID, "client_user_id")
 }
 
+// GetByIDAsClientView — проект глазами заказчика, но открыть его может
+// не только он.
+//
+// Зачем: менеджеру и админу нужно видеть ровно то, что видит клиент —
+// «покажи, как это выглядит у него». Раньше такой кнопки не было, а
+// когда появилась, она вела в «Проект не найден»: клиентские ручки
+// проверяют client_user_id и никого больше не пускают.
+//
+// Ничего лишнего это не открывает: менеджер проекта и админ и так
+// видят больше клиента — маржу, выплаты, переписку креаторов. Чужой
+// менеджер (проект не на нём) по-прежнему получает 404.
+func (r *Repo) GetByIDAsClientView(ctx context.Context, projectID, viewerID uuid.UUID) (Project, error) {
+	return r.getByID(ctx, projectID, &viewerID, projectViewerCond)
+}
+
+// projectViewerCond — «этот человек вправе смотреть проект глазами
+// заказчика»: он и есть заказчик, он ведёт проект, либо он админ.
+const projectViewerCond = `viewer`
+
 // GetByID — без проверки доступа (для admin/manager). Внутренний.
 func (r *Repo) GetByID(ctx context.Context, projectID uuid.UUID) (Project, error) {
 	return r.getByID(ctx, projectID, nil, "")
@@ -405,7 +424,12 @@ SELECT id, lead_id, lead_recipient_specialist_id, client_user_id,
 FROM projects WHERE id = $1`
 	args := []any{projectID}
 	if userIDFilter != nil {
-		q += " AND " + col + " = $2"
+		if col == projectViewerCond {
+			q += ` AND (client_user_id = $2 OR assigned_to_user_id = $2
+                   OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_admin))`
+		} else {
+			q += " AND " + col + " = $2"
+		}
 		args = append(args, *userIDFilter)
 	}
 	var p Project

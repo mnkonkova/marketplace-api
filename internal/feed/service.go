@@ -26,6 +26,15 @@ var ErrBadCursor = errors.New("bad cursor")
 // спецов будет меньше pageSize (зависит от их количества среди топа).
 const pageSize = 50
 
+// cursorMaxBytes — потолок длины курсора в том виде, в каком он приехал.
+// Свой курсор с полным seen-сетом весит около 22 КБ; тридцать две —
+// запас на рост, за которым начинается уже не наш курсор.
+const cursorMaxBytes = 32 * 1024
+
+// searchAfterMaxLen — сколько значений сортировки бывает у ES: столько,
+// сколько полей в sort. Восемь с запасом.
+const searchAfterMaxLen = 8
+
 // seenVideosCap — потолок размера seen-сета в курсоре (видео уже отдавали,
 // исключаем через must_not.terms.video_id). FIFO-обрезка.
 //
@@ -102,12 +111,32 @@ func (s *Service) Feed(ctx context.Context, q Query) (Result, error) {
 
 	var cursor cursorPayload
 	if q.Cursor != "" {
+		// Курсор приходит от клиента, а лента — ручка без входа. Размер
+		// проверяем ДО декодирования: сам base64 уже может быть
+		// мегабайтным, и раскодировать его, чтобы потом отказать, —
+		// значит платить за отказ.
+		if len(q.Cursor) > cursorMaxBytes {
+			return Result{}, fmt.Errorf("%w: слишком длинный", ErrBadCursor)
+		}
 		raw, err := base64.RawURLEncoding.DecodeString(q.Cursor)
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: decode: %v", ErrBadCursor, err)
 		}
 		if err := json.Unmarshal(raw, &cursor); err != nil {
 			return Result{}, fmt.Errorf("%w: unmarshal: %v", ErrBadCursor, err)
+		}
+		// Свой же потолок seen-сета применяем и на входе, а не только
+		// при сборке. Иначе подделанный курсор уезжал в ES одним
+		// must_not.terms на сколько угодно значений, а его текст ещё и
+		// становился ключом в Redis на весь TTL.
+		if len(cursor.SeenVideos) > seenVideosCap {
+			cursor.SeenVideos = cursor.SeenVideos[:seenVideosCap]
+		}
+		// search_after — это значения сортировки последнего документа,
+		// их ровно столько, сколько полей в sort. Длинный массив тут
+		// означает не глубокий скролл, а подделку.
+		if len(cursor.SearchAfter) > searchAfterMaxLen {
+			return Result{}, fmt.Errorf("%w: search_after", ErrBadCursor)
 		}
 	}
 

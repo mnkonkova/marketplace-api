@@ -442,12 +442,12 @@ func (s *Service) SetPublished(ctx context.Context, userID uuid.UUID, published 
    аплоадит в бакет и зовёт ту же CreatePortfolioVideo. */
 
 const (
-	portfolioMaxVideosPerUser   = 20
+	portfolioMaxVideosPerUser    = 20
 	portfolioMaxPhotoSetsPerUser = 20
-	portfolioMaxImagesPerSet    = 10
-	portfolioMinImagesPerSet    = 1
-	portfolioMaxTitleLen        = 200
-	portfolioMaxDescriptionLen  = 1000
+	portfolioMaxImagesPerSet     = 10
+	portfolioMinImagesPerSet     = 1
+	portfolioMaxTitleLen         = 200
+	portfolioMaxDescriptionLen   = 1000
 
 	// 50 МБ — лимит для single PUT (legacy presign endpoint).
 	portfolioMaxUploadBytes = 50 * 1024 * 1024
@@ -910,12 +910,12 @@ func (s *Service) SetPortfolioFeatured(ctx context.Context, userID, itemID uuid.
 //
 // Concurrency: lock на parent portfolio_item берётся внутри DeletePortfolioImageInTx
 // через `SELECT ... FOR UPDATE`. Это решает сразу два race-сценария:
-//   1) параллельный DELETE последних двух фото — оба бы UPDATE cover вместо
-//      DELETE parent, сет остался бы с 0 фото (READ COMMITTED snapshot не
-//      видит uncommitted DELETE другой tx);
-//   2) рассинхрон с ReorderSetPhotos/AppendPhotosToSet — те тоже берут
-//      FOR UPDATE на parent item, теперь все три операции на одном сете
-//      сериализуются.
+//  1. параллельный DELETE последних двух фото — оба бы UPDATE cover вместо
+//     DELETE parent, сет остался бы с 0 фото (READ COMMITTED snapshot не
+//     видит uncommitted DELETE другой tx);
+//  2. рассинхрон с ReorderSetPhotos/AppendPhotosToSet — те тоже берут
+//     FOR UPDATE на parent item, теперь все три операции на одном сете
+//     сериализуются.
 func (s *Service) DeletePortfolioImage(ctx context.Context, userID, imageID uuid.UUID) error {
 	return s.repo.WithTx(ctx, func(tx pgx.Tx) error {
 		parentID, left, coverURL, err := s.repo.DeletePortfolioImageInTx(ctx, tx, userID, imageID)
@@ -1021,8 +1021,8 @@ func (s *Service) SetPortfolioCategories(ctx context.Context, userID, itemID uui
 // Сам файл клиент кладёт в YC через возвращённый upload_url; затем
 // шлёт POST /me/portfolio с public_url, чтобы создать запись в БД.
 // Это разделение даёт две полезные вещи:
-//  - наш сервер не проксирует mp4 (нет нагрузки)
-//  - запись в БД создаётся только если аплоад реально прошёл
+//   - наш сервер не проксирует mp4 (нет нагрузки)
+//   - запись в БД создаётся только если аплоад реально прошёл
 func (s *Service) CreatePortfolioUploadURL(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -1217,10 +1217,10 @@ func (s *Service) AbortPortfolioMultipart(
 // data-sec D3: одной только HasPrefix-проверки недостаточно — ключ вида
 // "portfolio/<my>/../<victim>/file.mp4" префиксу удовлетворяет, но после
 // S3-нормализации указывает на чужой объект. Поэтому дополнительно:
-//   1) запрещаем "..", "//" и начальный "/" в сыром ключе (раннее
-//      отсечение очевидного traversal),
-//   2) сверяем path.Clean(key) с исходником — любая нормализация значит
-//      попытку обмана.
+//  1. запрещаем "..", "//" и начальный "/" в сыром ключе (раннее
+//     отсечение очевидного traversal),
+//  2. сверяем path.Clean(key) с исходником — любая нормализация значит
+//     попытку обмана.
 func assertOwnedKey(userID uuid.UUID, key string) error {
 	if key == "" ||
 		strings.HasPrefix(key, "/") ||
@@ -1380,12 +1380,14 @@ type NormalizedProduction struct {
 
 // NormalizeProduction — XOR между production_id и is_freelance.
 // Семантика:
-//   productionID = "uuid" → выбрать (авто-снимает freelance);
-//   productionID = ""    → снять продакшен (SET NULL);
-//   productionID = nil   → не трогать.
-//   isFreelance  = &true → стать фрилансером (авто-снимает production);
-//   isFreelance  = &false → выключить freelance;
-//   isFreelance  = nil   → не трогать.
+//
+//	productionID = "uuid" → выбрать (авто-снимает freelance);
+//	productionID = ""    → снять продакшен (SET NULL);
+//	productionID = nil   → не трогать.
+//	isFreelance  = &true → стать фрилансером (авто-снимает production);
+//	isFreelance  = &false → выключить freelance;
+//	isFreelance  = nil   → не трогать.
+//
 // Конфликт productionID=valid + isFreelance=true → ErrInvalidInput.
 // lookup может быть nil — тогда активность не проверяется, и FK ловит
 // только несуществующий id.

@@ -153,6 +153,26 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 	}
 	names := map[uuid.UUID]string{}
 	primaryCats := map[uuid.UUID]string{}
+	// Имена менеджеров — одним запросом на весь список, как и всё
+	// остальное здесь: у заказчика проектов бывает десяток.
+	managers := map[uuid.UUID]PartyContact{}
+	mgrSet := map[uuid.UUID]bool{}
+	for _, p := range projects {
+		if p.AssignedToUserID != nil {
+			mgrSet[*p.AssignedToUserID] = true
+		}
+	}
+	if len(mgrSet) > 0 {
+		mgrIDs := make([]uuid.UUID, 0, len(mgrSet))
+		for id := range mgrSet {
+			mgrIDs = append(mgrIDs, id)
+		}
+		// best-effort, как и имена исполнителей: без имени карточка
+		// обходится, без списка проектов — нет.
+		if m, err := s.repo.LoadPartyContacts(ctx, mgrIDs); err == nil {
+			managers = m
+		}
+	}
 	if len(specSet) > 0 {
 		specIDs := make([]uuid.UUID, 0, len(specSet))
 		for id := range specSet {
@@ -183,6 +203,9 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 			view.SpecialistDisplayName = names[*p.SpecialistUserID]
 			view.SpecialistPrimaryCategory = primaryCats[*p.SpecialistUserID]
 		}
+		if p.AssignedToUserID != nil {
+			view.ManagerDisplayName = managers[*p.AssignedToUserID].DisplayName
+		}
 		views = append(views, view)
 	}
 	return views, nil
@@ -190,7 +213,9 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 
 // GetClientProject — полный проект клиента с воронкой.
 func (s *Service) GetClientProject(ctx context.Context, projectID, clientID uuid.UUID) (ProjectClientView, error) {
-	p, err := s.repo.GetByIDForClient(ctx, projectID, clientID)
+	// Глазами заказчика — но не только заказчику: менеджеру проекта и
+	// админу тоже, ради кнопки «посмотреть, как это видит клиент».
+	p, err := s.repo.GetByIDAsClientView(ctx, projectID, clientID)
 	if err != nil {
 		return ProjectClientView{}, err
 	}
@@ -218,6 +243,13 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 		// best-effort: имя specialist'а из specialist_profiles
 		if names, err := s.repo.LoadClientDisplayNames(ctx, []uuid.UUID{*p.SpecialistUserID}); err == nil {
 			view.SpecialistDisplayName = names[*p.SpecialistUserID]
+		}
+	}
+	if p.AssignedToUserID != nil {
+		// Тоже best-effort: проект без имени менеджера открывается,
+		// проект, не открывшийся из-за имени, — нет.
+		if m, err := s.repo.LoadPartyContacts(ctx, []uuid.UUID{*p.AssignedToUserID}); err == nil {
+			view.ManagerDisplayName = m[*p.AssignedToUserID].DisplayName
 		}
 	}
 	return view, nil

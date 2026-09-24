@@ -484,6 +484,14 @@ definitions:
         type: string
       kind:
         type: string
+      median:
+        allOf:
+        - $ref: '#/definitions/marketpclce_internal_publications.CreatorMedian'
+        description: |-
+          Median — сколько просмотров человек обычно даёт за ролик. Этим же
+          поиском менеджер подбирает креатора в проект, и выбирать по одной
+          почте — значит выбирать вслепую. nil у тех, кто роликов не сдавал
+          или сдал слишком мало, чтобы медиана что-то значила.
       phone:
         type: string
       user_id:
@@ -1576,6 +1584,24 @@ definitions:
     type: object
   internal_billing.OverviewTopVideo:
     properties:
+      creator_display_name:
+        type: string
+      creator_user_id:
+        description: |-
+          CreatorUserID/CreatorDisplayName — кто снял. В «лучшем за окно»
+          это половина ответа: заказчик смотрит не только что выстрелило,
+          но и с кем это повторить.
+        type: string
+      er_percent:
+        description: |-
+          ERPercent — вовлечённость ролика за то же окно, по которому он
+          сюда попал. Считается от прироста, а не от накопленных итогов:
+          иначе старый ролик с большим хвостом выглядел бы вовлекающим на
+          неделе, когда его никто не трогал. nil, пока прироста просмотров
+          нет — делить не на что.
+        type: number
+      er_without_shares:
+        type: boolean
       platform:
         description: |-
           Platform — площадка-лидер: та, что дала больше всех просмотров за
@@ -1963,6 +1989,51 @@ definitions:
         type: integer
       videos_next_months:
         type: integer
+    type: object
+  internal_billing.TariffRow:
+    properties:
+      client_name:
+        type: string
+      guarantee_views:
+        type: integer
+      has_terms:
+        description: |-
+          HasTerms — снимок условий заведён. false означает «проект
+          считается по нулям», и это худшее из состояний: экран денег
+          показывает ровные нули, и выглядит это как «ещё не начислили».
+        type: boolean
+      manager_name:
+        type: string
+      max_fee:
+        type: integer
+      min_fee:
+        type: integer
+      project_id:
+        type: string
+      rate_per_1000_views:
+        type: integer
+      salary_per_month:
+        description: |-
+          SalaryPerMonth/RatePer1000Views — числа старой модели. Показываем
+          их там, где ступеней нет: иначе строка выглядела бы пустой у
+          проекта, у которого тариф на самом деле задан.
+        type: integer
+      status:
+        type: string
+      stepped:
+        description: |-
+          Stepped — тариф считается лесенкой. false при HasTerms=true
+          означает старую модель: оклад плюс ставка за тысячу.
+        type: boolean
+      steps_count:
+        description: |-
+          StepsCount/MinFee/MaxFee — во что обходится период заказчику на
+          нижней и верхней ступени. По ним видно вилку, не открывая проект.
+        type: integer
+      title:
+        type: string
+      updated_at:
+        type: string
     type: object
   internal_billing.Terms:
     properties:
@@ -2562,14 +2633,20 @@ definitions:
       creator_ids:
         description: |-
           CreatorIDs — кого выбрал клиент. Порядок здесь не важен: на сумму
-          влияет состав, а не приоритет.
+          влияет состав, а не приоритет. Пусто — состав ещё не набран, и
+          прогноз бонуса не считается.
         items:
           type: string
         type: array
       needed:
-        description: Needed — сколько креаторов нужно; VideosCount — объём роликов.
+        description: |-
+          Needed — сколько креаторов нужно. Единственное обязательное поле:
+          без него не посчитать даже оклады.
         type: integer
       videos_count:
+        description: |-
+          VideosCount — объём роликов. Ноль значит «ещё не знаю»: смету
+          спрашивают и до того, как решили, сколько роликов в месяц.
         type: integer
     type: object
   internal_billing.errorResponse:
@@ -2728,6 +2805,13 @@ definitions:
       items:
         items:
           $ref: '#/definitions/internal_billing.CreatorSubscribers'
+        type: array
+    type: object
+  internal_billing.tariffRegistryResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_billing.TariffRow'
         type: array
     type: object
   internal_billing.termsReq:
@@ -4747,6 +4831,13 @@ definitions:
         type: string
       lead_recipient_specialist_id:
         type: string
+      manager_display_name:
+        description: |-
+          ManagerDisplayName — имя менеджера проекта. Заказчик пишет не «в
+          поддержку», а конкретному человеку: у вкладки переписки в кабинете
+          стоит его имя, и брать это имя больше неоткуда. Пусто, пока
+          менеджер не назначен.
+        type: string
       notes:
         type: string
       pipeline_id:
@@ -5442,6 +5533,49 @@ definitions:
         description: Transferred — сколько проектов переехало.
         type: integer
     type: object
+  internal_publications.Account:
+    properties:
+      created_at:
+        type: string
+      created_by:
+        type: string
+      creator_name:
+        description: |-
+          CreatorName — подпись владельца. Считается в запросе, в таблице
+          доступов её нет.
+        type: string
+      creator_user_id:
+        description: |-
+          CreatorUserID — чей это аккаунт. Ролики выходят С АККАУНТОВ
+          КРЕАТОРОВ, и список без владельца читается как чужая связка
+          ключей: пять строк, и неясно, с кого спрашивать, когда ссылка
+          перестала отвечать. Пусто у настоящих брендовых доступов —
+          почты, рекламного кабинета, аккаунта самого бренда.
+        type: string
+      has_password:
+        description: |-
+          HasPassword — пароль заведён. Само значение отдаётся отдельной
+          ручкой: пароль не должен ездить в каждом списке проекта.
+        type: boolean
+      id:
+        type: string
+      login:
+        type: string
+      note:
+        type: string
+      platform:
+        type: string
+      project_id:
+        type: string
+      sort_order:
+        type: integer
+      title:
+        type: string
+      updated_at:
+        type: string
+      url:
+        type: string
+    type: object
   internal_publications.BatchResult:
     properties:
       batch_id:
@@ -5479,6 +5613,13 @@ definitions:
     type: object
   internal_publications.ChecklistItem:
     properties:
+      added_for_project:
+        description: |-
+          AddedForProject — пункт завёл менеджер под этот проект, а не
+          скопирован из библиотеки. Обновление шаблона такие пункты не
+          трогает, и на экране они отличаются: иначе менеджер не знает, что
+          уцелеет при обновлении версии.
+        type: boolean
       id:
         type: string
       is_required:
@@ -5607,6 +5748,18 @@ definitions:
     x-enum-varnames:
     - ClientStatusPublished
     - ClientStatusPlanned
+  internal_publications.CreatorMedian:
+    properties:
+      basis:
+        description: |-
+          Basis — сколько роликов легло в расчёт. Идёт вместе с числом:
+          «медиана 190 тыс. по 12 роликам» и «по 3» — разной силы
+          утверждения, и читателю нужно их различать.
+        type: integer
+      views:
+        description: Views — медиана просмотров одного ролика.
+        type: integer
+    type: object
   internal_publications.CreatorProject:
     properties:
       added_at:
@@ -5651,6 +5804,14 @@ definitions:
         allOf:
         - $ref: '#/definitions/internal_publications.Person'
         description: Manager — кому писать. nil, пока проект никто не взял.
+      median:
+        allOf:
+        - $ref: '#/definitions/internal_publications.CreatorMedian'
+        description: |-
+          Median — медиана просмотров КРЕАТОРА по всем его проектам. Из неё
+          в кабинете считается «следующий ролик добавит примерно столько
+          просмотров» — то есть обещание, поэтому число обязано быть
+          типичным, а не средним. nil, пока мерить не на чем.
       monthly_plan:
         description: |-
           MonthlyPlan — сколько роликов за месяц по договору. Из него
@@ -5686,6 +5847,17 @@ definitions:
       status:
         type: string
       title:
+        type: string
+    type: object
+  internal_publications.CreatorReminderPref:
+    properties:
+      creator_user_id:
+        type: string
+      day_before:
+        type: boolean
+      project_id:
+        type: string
+      updated_at:
         type: string
     type: object
   internal_publications.CreatorRow:
@@ -5729,6 +5901,39 @@ definitions:
         type: string
       views:
         type: integer
+    type: object
+  internal_publications.LinkSuggestion:
+    properties:
+      author_handle:
+        type: string
+      created_at:
+        type: string
+      creator_user_id:
+        type: string
+      id:
+        type: string
+      platform:
+        type: string
+      project_id:
+        type: string
+      project_title:
+        type: string
+      published_at:
+        type: string
+      suggested_due_date:
+        type: string
+      suggested_publication_id:
+        description: |-
+          Suggested* — выкладка, к которой предлагаем привязать. Считается
+          при чтении, а не хранится: срок переносят, выкладку закрывают, и
+          прибитая к находке ссылка протухла бы на первом же переносе.
+          Пусто — подходящей выкладки сейчас нет, и кнопка «Привязать»
+          показывать некуда.
+        type: string
+      title:
+        type: string
+      url:
+        type: string
     type: object
   internal_publications.Material:
     properties:
@@ -5785,6 +5990,19 @@ definitions:
         type: string
       display_name:
         type: string
+      median:
+        allOf:
+        - $ref: '#/definitions/internal_publications.CreatorMedian'
+        description: |-
+          Median — сколько просмотров этот человек обычно даёт за ролик.
+          nil, пока измеренных роликов слишком мало: см. CreatorMedians.
+      remind_day_before:
+        description: |-
+          RemindDayBefore — колокольчик в плане выкладок: писать ли этому
+          человеку накануне срока. Разрешённое значение, а не сырая строка
+          настройки: если колокольчик не трогали, здесь стоит то, что
+          действует по проекту.
+        type: boolean
       user_id:
         type: string
     type: object
@@ -5890,6 +6108,13 @@ definitions:
           ещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают
           и через неделю после выхода.
         type: string
+      review:
+        allOf:
+        - $ref: '#/definitions/internal_publications.PublicationReview'
+        description: |-
+          Review — проверка ролика менеджером. nil означает «не смотрели», и
+          это не то же самое, что «принято» или «замечаний нет»: статус
+          выкладки говорит про ссылки, а проверка — про содержание ролика.
       self_added:
         description: |-
           SelfAdded — выкладку завёл себе сам креатор, а не менеджер.
@@ -5928,8 +6153,45 @@ definitions:
           videos_table значило бы держать вторую реализацию того же правила.
         type: integer
     type: object
+  internal_publications.PublicationReview:
+    properties:
+      comment:
+        description: |-
+          Comment — замечание последнего решения. При возврате обязательно:
+          «вернули молча» креатор всё равно придёт выяснять словами.
+        type: string
+      decided_at:
+        type: string
+      decided_by:
+        type: string
+      decided_by_name:
+        type: string
+      marks:
+        description: |-
+          Marks — вердикты по пунктам; пункта без строки менеджер ещё не
+          касался.
+        items:
+          $ref: '#/definitions/internal_publications.ReviewMark'
+        type: array
+      round:
+        description: |-
+          Round — какая это по счёту сдача. Больше единицы значит, что ролик
+          уже возвращали.
+        type: integer
+      status:
+        type: string
+    type: object
   internal_publications.ReminderPrefs:
     properties:
+      day_before:
+        description: |-
+          DayBefore — креатору в бот НАКАНУНЕ срока. Единственный из видов,
+          выключенный по умолчанию: он появился позже остальных, и включать
+          его молча всем — значит завтра утром написать каждому креатору
+          каждого проекта, никого не спросив. Колокольчик напротив креатора
+          в плане выкладок сильнее этой настройки, см.
+          CreatorReminderPref.
+        type: boolean
       due_today:
         description: DueToday — креатору в бот утром в день выкладки.
         type: boolean
@@ -5991,6 +6253,16 @@ definitions:
         type: array
       views:
         type: integer
+    type: object
+  internal_publications.ReviewMark:
+    properties:
+      item_id:
+        type: string
+      passed:
+        description: |-
+          Passed — «да» или «нет». Отсутствие строки означает третье
+          состояние — «ещё не смотрел», и оно не равно «нет».
+        type: boolean
     type: object
   internal_publications.Scheme:
     enum:
@@ -6088,6 +6360,51 @@ definitions:
       views:
         type: integer
     type: object
+  internal_publications.accountReq:
+    properties:
+      creator_user_id:
+        description: |-
+          CreatorUserID — чей это аккаунт. Пусто — брендовый доступ без
+          владельца (почта, рекламный кабинет).
+        type: string
+      login:
+        type: string
+      note:
+        type: string
+      password:
+        description: |-
+          Password: поле не прислали — пароль не трогаем; прислали пустым —
+          стираем.
+        type: string
+      platform:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_publications.accountsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.Account'
+        type: array
+      secrets_enabled:
+        description: |-
+          SecretsEnabled — можно ли заводить пароли. Выключено, когда в
+          окружении нет ключа шифрования: логины и ссылки при этом работают,
+          и интерфейсу надо это показать, а не молча прятать поле.
+        type: boolean
+    type: object
+  internal_publications.addPubReq:
+    properties:
+      creator_user_id:
+        type: string
+      draft_lead_days:
+        type: integer
+      due_date:
+        type: string
+    type: object
   internal_publications.addSelfReq:
     properties:
       due_date:
@@ -6095,8 +6412,26 @@ definitions:
         example: "2026-09-20"
         type: string
     type: object
+  internal_publications.addSuggestionReq:
+    properties:
+      author_handle:
+        type: string
+      creator_user_id:
+        type: string
+      published_at:
+        description: |-
+          PublishedAt — когда ролик вышел на площадке, RFC3339. Из неё
+          подбирается выкладка, к которой предложить привязку.
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
   internal_publications.autopingReq:
     properties:
+      day_before:
+        type: boolean
       due_today:
         type: boolean
       incomplete:
@@ -6154,6 +6489,16 @@ definitions:
       cancelled:
         type: integer
     type: object
+  internal_publications.checklistItemReq:
+    properties:
+      is_required:
+        type: boolean
+      platform:
+        description: Platform пустой = пункт общий для всех площадок.
+        type: string
+      text:
+        type: string
+    type: object
   internal_publications.checklistResp:
     properties:
       items:
@@ -6180,6 +6525,11 @@ definitions:
           $ref: '#/definitions/internal_publications.CreatorProject'
         type: array
     type: object
+  internal_publications.creatorRemindReq:
+    properties:
+      day_before:
+        type: boolean
+    type: object
   internal_publications.creatorReq:
     properties:
       creator_user_id:
@@ -6197,11 +6547,37 @@ definitions:
       approve:
         type: boolean
     type: object
+  internal_publications.dueDateReq:
+    properties:
+      due_date:
+        type: string
+    type: object
+  internal_publications.editLinkReq:
+    properties:
+      url:
+        description: URL — новый адрес ролика. Пусто — снять ссылку с площадки.
+        type: string
+    type: object
   internal_publications.errorResponse:
     properties:
       error:
         type: string
       message:
+        type: string
+    type: object
+  internal_publications.linkSuggestionReq:
+    properties:
+      checked_item_ids:
+        description: |-
+          CheckedItemIDs — пункты чеклиста: привязка идёт тем же путём, что
+          и ссылка, вставленная руками, и проверяется так же.
+        items:
+          type: string
+        type: array
+      publication_id:
+        description: |-
+          PublicationID — к какой выкладке привязать. Пусто — к той, что
+          предложил сервис.
         type: string
     type: object
   internal_publications.listResp:
@@ -6274,6 +6650,24 @@ definitions:
       sent:
         type: boolean
     type: object
+  internal_publications.reviewReq:
+    properties:
+      comment:
+        description: Comment — замечание. Обязательно при decision=return.
+        type: string
+      decision:
+        description: |-
+          Decision — пусто «сохранить ход проверки», return «вернуть»,
+          accept «принять».
+        type: string
+      marks:
+        description: |-
+          Marks — вердикты по пунктам целиком: что не прислали, того
+          менеджер не отмечал.
+        items:
+          $ref: '#/definitions/internal_publications.ReviewMark'
+        type: array
+    type: object
   internal_publications.saveTemplateReq:
     properties:
       description:
@@ -6286,6 +6680,11 @@ definitions:
         type: string
       replaces:
         description: Replaces — id версии, которую заменяем. Пусто — новый шаблон.
+        type: string
+    type: object
+  internal_publications.secretResp:
+    properties:
+      password:
         type: string
     type: object
   internal_publications.snapshotReq:
@@ -6312,6 +6711,13 @@ definitions:
       urls:
         items:
           type: string
+        type: array
+    type: object
+  internal_publications.suggestionsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.LinkSuggestion'
         type: array
     type: object
   internal_publications.templatesResp:
@@ -7050,6 +7456,18 @@ definitions:
         type: string
       youtube:
         type: string
+    type: object
+  marketpclce_internal_publications.CreatorMedian:
+    properties:
+      basis:
+        description: |-
+          Basis — сколько роликов легло в расчёт. Идёт вместе с числом:
+          «медиана 190 тыс. по 12 роликам» и «по 3» — разной силы
+          утверждения, и читателю нужно их различать.
+        type: integer
+      views:
+        description: Views — медиана просмотров одного ролика.
+        type: integer
     type: object
   marketpclce_internal_search.IndexDoc:
     properties:
@@ -8608,6 +9026,36 @@ paths:
       summary: 'Сводка: что требует внимания'
       tags:
       - admin-summary
+  /admin/tariff/projects:
+    get:
+      description: |-
+        Строка — проект. Прайс площадки один на всех, а
+        договариваются с каждым заказчиком отдельно: вопрос к этому
+        разделу звучит не «какой у нас прайс», а «по каким условиям
+        идёт вот этот проект и чем он отличается от соседнего».
+        Видно и худшее состояние — проект без тарифа: он считается
+        по нулям, а экран денег показывает ровные нули, и выглядит
+        это как «ещё не начислили».
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.tariffRegistryResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "403":
+          description: forbidden — нужна роль admin
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Тарифы всех проектов одной таблицей (админ)
+      tags:
+      - admin-billing
   /admin/team:
     get:
       description: |-
@@ -9653,6 +10101,209 @@ paths:
       summary: Inline-редактирование title/budget/notes
       tags:
       - manager-projects
+  /manager/projects/{id}/accounts:
+    get:
+      description: Логины, ссылки и заметки. Пароли в списке не отдаются — только
+        признак has_password.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.accountsResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Доступы к аккаунтам бренда (менеджер)
+      tags:
+      - manager-publications
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: доступ
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.accountReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.Account'
+        "400":
+          description: bad_json; bad_id; invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: too_many_accounts
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "501":
+          description: secrets_disabled — пароль прислали, а ключа шифрования нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Завести доступ к аккаунту бренда (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/accounts/{account_id}:
+    delete:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: account id
+        in: path
+        name: account_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Удалить доступ (менеджер)
+      tags:
+      - manager-publications
+    put:
+      consumes:
+      - application/json
+      description: 'Пароль не прислали — остаётся прежний: чтобы поправить логин,
+        знать пароль не нужно. Прислали пустым — пароль стирается.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: account id
+        in: path
+        name: account_id
+        required: true
+        type: string
+      - description: доступ
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.accountReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Account'
+        "400":
+          description: bad_json; bad_id; invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш или доступа нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "501":
+          description: secrets_disabled
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Править доступ (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/accounts/{account_id}/secret:
+    get:
+      description: 'Отдельная ручка: пароль не ездит в списке проекта, его запрашивают
+        явно — и запрос видно в логах.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: account id
+        in: path
+        name: account_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.secretResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — доступа нет или пароль не заведён
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "501":
+          description: secrets_disabled
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Показать пароль доступа (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/accruals/{accrual_id}/approve:
     post:
       description: После утверждения строка не пересчитывается.
@@ -10172,6 +10823,88 @@ paths:
       summary: Скопировать чеклист из библиотеки в проект (менеджер)
       tags:
       - manager-publications
+  /manager/projects/{id}/checklist/items:
+    post:
+      consumes:
+      - application/json
+      description: 'Пункт живёт только в этом проекте: в библиотеку не попадает.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: пункт
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.checklistItemReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.ChecklistItem'
+        "400":
+          description: bad_json; invalid_input — пустой или слишком длинный текст
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Добавить пункт в чек-лист проекта (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/checklist/items/{itemId}:
+    delete:
+      description: 'Пункт, по которому уже отчитывались, не удаляется: вместе с ним
+        исчез бы след проверки.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: checklist item id
+        in: path
+        name: itemId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект или пункт не найден
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: item_used — по пункту уже отчитывались
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Убрать пункт из чек-листа проекта (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/claim:
     post:
       parameters:
@@ -10445,6 +11178,56 @@ paths:
       summary: Убрать креатора из проекта (менеджер)
       tags:
       - manager-publications
+  /manager/projects/{id}/creators/{creator_id}/reminders:
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Колокольчик в плане выкладок — напротив каждого креатора
+        свой. Сильнее настройки проекта: напоминание включают тому,
+        кто забывает, а не всем восьмерым разом. «Завтра срок» —
+        ещё рабочее напоминание, в отличие от «сегодня срок».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: creator user id
+        in: path
+        name: creator_id
+        required: true
+        type: string
+      - description: day_before
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.creatorRemindReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.CreatorReminderPref'
+        "400":
+          description: bad_json; bad_id; bad_creator_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Напоминать креатору накануне срока (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/creators/{creator_id}/subscribers:
     put:
       consumes:
@@ -10583,6 +11366,52 @@ paths:
       summary: Лента активности проекта (менеджер)
       tags:
       - manager-projects
+  /manager/projects/{id}/link-suggestions:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Точка входа для того, кто находит ролики на площадках: обхода
+        аккаунтов, бота или менеджера, наткнувшегося на ролик руками.
+        Сама находка ничего не меняет — её подтверждает креатор.
+        Повторная находка того же адреса не плодит карточку: обход
+        идёт каждый день, а «не мой» не должен возвращаться завтра.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: находка
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.addSuggestionReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.LinkSuggestion'
+        "400":
+          description: bad_json; bad_id; unknown_platform
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или ведёт другой менеджер
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Положить найденный ролик (менеджер / обход аккаунтов)
+      tags:
+      - manager-publications
   /manager/projects/{id}/materials:
     get:
       description: |-
@@ -10934,6 +11763,53 @@ paths:
       security:
       - BearerAuth: []
       summary: Все выкладки проекта (менеджер)
+      tags:
+      - manager-publications
+    post:
+      consumes:
+      - application/json
+      description: 'Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше
+        состав и даты меняются поштучно.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: кому и на когда
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.addPubReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_date — дата не в формате ГГГГ-ММ-ДД; invalid_input
+            — дата в прошлом или дальше чем на год
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: wrong_project_kind; creator_not_in_project; day_taken — на
+            этот день у креатора уже есть выкладка; period_locked
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Поставить одну выкладку на дату (менеджер)
       tags:
       - manager-publications
   /manager/projects/{id}/publications/batch:
@@ -11412,6 +12288,52 @@ paths:
       summary: Решение по просьбе о переносе даты (менеджер)
       tags:
       - manager-publications
+  /manager/publications/{pub_id}/cancel:
+    post:
+      consumes:
+      - application/json
+      description: 'Не то же, что «закрыть неполную»: там ролик вышел не везде, здесь
+        выкладки не будет вовсе. Сданное не снимается.'
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: причина
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.closeReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_id; invalid_input — причина длиннее 300 символов
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или в чужом проекте
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: publication_started — по выкладке уже сдавали ссылки
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Снять запланированную выкладку (менеджер)
+      tags:
+      - manager-publications
   /manager/publications/{pub_id}/close:
     post:
       consumes:
@@ -11458,6 +12380,109 @@ paths:
       summary: Закрыть неполную выкладку вручную (менеджер)
       tags:
       - manager-publications
+  /manager/publications/{pub_id}/due_date:
+    put:
+      consumes:
+      - application/json
+      description: Только по плановой выкладке, по которой ещё не сдавали ссылки.
+        Открытая просьба креатора о переносе закрывается этим же действием.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: новая дата
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.dueDateReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_date; bad_id; invalid_input — дата в прошлом
+            или дальше чем на год
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или в чужом проекте
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: publication_started — по выкладке уже сдавали ссылки; day_taken;
+            period_locked
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Перенести дату выкладки (менеджер)
+      tags:
+      - manager-publications
+  /manager/publications/{pub_id}/links/{platform}:
+    put:
+      consumes:
+      - application/json
+      description: Ссылку сдаёт креатор, и ошибается в ней тоже он. Менеджер правит
+        адрес на месте; пустой url снимает ссылку с площадки, и выкладка снова становится
+        неполной. Если ролик другой — ежедневные замеры этой ссылки удаляются, иначе
+        история двух разных видео склеилась бы в одну линию.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: 'площадка: tiktok|instagram|youtube|vk|likee'
+        in: path
+        name: platform
+        required: true
+        type: string
+      - description: новый адрес
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.editLinkReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_id; invalid_input — неизвестная площадка, нераспознанная
+            ссылка или ссылка другой площадки
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка в чужом проекте либо ссылки на этой площадке
+            нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: publication_closed — выкладка отменена или закрыта руками
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Исправить сданную ссылку (менеджер)
+      tags:
+      - manager-publications
   /manager/publications/{pub_id}/remind:
     post:
       description: |-
@@ -11497,6 +12522,61 @@ paths:
       security:
       - BearerAuth: []
       summary: Напомнить о выкладке сейчас (менеджер)
+      tags:
+      - manager-publications
+  /manager/publications/{pub_id}/review:
+    post:
+      consumes:
+      - application/json
+      description: 'Менеджер отмечает по каждому пункту «да» или «нет» и выносит решение:
+        вернуть с замечанием или принять. Принять нельзя, пока хоть один обязательный
+        пункт сданных площадок не отмечен «да» — непроверенное считается непройденным.
+        Пустое decision сохраняет ход проверки, не вынося решения: ролик смотрят частями.
+        Новая сдача ссылок отменяет прежнее решение и стирает вердикты — они относились
+        к другому ролику.'
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: вердикты и решение
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.reviewReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_id; invalid_input — возврат без замечания или
+            неизвестное решение; foreign_checklist_item
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка в чужом проекте
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: publication_closed; nothing_to_review — ссылок нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "422":
+          description: review_blocked — обязательные пункты не пройдены
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: 'Проверка ролика: вердикты по чек-листу и решение (менеджер)'
       tags:
       - manager-publications
   /me:
@@ -11736,6 +12816,216 @@ paths:
       security:
       - BearerAuth: []
       summary: Карточка проекта (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}/accounts:
+    get:
+      description: |-
+        Аккаунты ЭТОГО проекта, а не личная страница из профиля: под
+        проект креатор заводит отдельные, и ведёт их сам. Чужие и
+        брендовые доступы сюда не попадают — в них пароли заказчика.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.accountsResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — вы не в составе проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои аккаунты в проекте (креатор)
+      tags:
+      - creator-publications
+    post:
+      consumes:
+      - application/json
+      description: Владелец проставляется сам — завести строку от чужого имени нельзя.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: аккаунт
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.accountReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.Account'
+        "400":
+          description: bad_json; bad_id; invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — вы не в составе проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: too_many_accounts
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "501":
+          description: secrets_disabled — пароль прислали, а ключа шифрования нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Завести свой аккаунт в проекте (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}/accounts/{account_id}:
+    delete:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: account id
+        in: path
+        name: account_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: удалён
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — аккаунт не ваш или его нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Снять свой аккаунт с проекта (креатор)
+      tags:
+      - creator-publications
+    put:
+      consumes:
+      - application/json
+      description: Пароль не прислали — остаётся прежний; прислали пустым — стирается.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: account id
+        in: path
+        name: account_id
+        required: true
+        type: string
+      - description: аккаунт
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.accountReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Account'
+        "400":
+          description: bad_json; bad_id; invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — аккаунт не ваш или его нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "501":
+          description: secrets_disabled
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Править свой аккаунт (креатор)
+      tags:
+      - creator-publications
+  /me/creator/projects/{id}/accounts/{account_id}/secret:
+    get:
+      description: Свой пароль забывают так же, как все — он его и вписывал.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: account id
+        in: path
+        name: account_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.secretResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — аккаунт не ваш, его нет или пароль не записан
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "501":
+          description: secrets_disabled
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Показать пароль своего аккаунта (креатор)
       tags:
       - creator-publications
   /me/creator/projects/{id}/checklist:
@@ -12168,6 +13458,176 @@ paths:
       security:
       - BearerAuth: []
       summary: Сдать ролик ссылками (креатор)
+      tags:
+      - creator-publications
+  /me/creator/publications/{pub_id}/links/{platform}:
+    put:
+      consumes:
+      - application/json
+      description: |-
+        Ролик удаляют с площадки, аккаунт перевыкладывают, короткая
+        ссылка протухает — и новый адрес есть ровно у автора. Раньше
+        он писал его в переписку, а переносил менеджер.
+        Снять площадку креатор не может: пустой адрес означает «ролика
+        не было», и это решение о работе, а не о ссылке.
+        Если ролик другой — ежедневные замеры этой ссылки удаляются, а
+        проверка открывается заново: проверяли не его.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      - description: 'площадка: tiktok|instagram|youtube|vk|likee'
+        in: path
+        name: platform
+        required: true
+        type: string
+      - description: новый адрес
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.editLinkReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_id; invalid_input; link_remove_denied — пустой
+            адрес
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или заведена на другого креатора
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: publication_closed; period_locked — период уже подытожен
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Переслать свою ссылку (креатор)
+      tags:
+      - creator-publications
+  /me/creator/suggestions:
+    get:
+      description: |-
+        Сервис находит ролик на аккаунте креатора раньше, чем тот
+        успевает вставить ссылку, — но ничего не привязывает сам:
+        подтверждает человек. К какой выкладке предложить привязку,
+        считается при чтении, поэтому перенос срока подсказку не ломает.
+        Находки по всем проектам сразу: карточка приходит от площадки,
+        а не от проекта.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.suggestionsResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Найденные ролики, ждущие подтверждения (креатор)
+      tags:
+      - creator-publications
+  /me/creator/suggestions/{id}:
+    delete:
+      description: |-
+        Отказ хранится, а не забывается: обход аккаунта идёт каждый
+        день, и удалённая находка вернулась бы завтра той же карточкой.
+      parameters:
+      - description: suggestion id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: отклонено
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — находка не найдена или чужая
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: suggestion_decided — по находке уже ответили
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: «Не мой» — отклонить находку (креатор)
+      tags:
+      - creator-publications
+  /me/creator/suggestions/{id}/link:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Находка становится обычной сданной ссылкой: те же проверки
+        чеклиста, то же закрытие выкладки при пятой площадке.
+      parameters:
+      - description: suggestion id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: куда привязать
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_publications.linkSuggestionReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "400":
+          description: bad_json; bad_id; invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — находка не найдена или чужая
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: suggestion_decided — по находке уже ответили
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "422":
+          description: checklist_incomplete
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: «Да, мой» — привязать найденный ролик (креатор)
       tags:
       - creator-publications
   /me/general-projects:
@@ -12790,6 +14250,9 @@ paths:
         has_forecast=false означает «бонус неизвестен», а не «ноль».
         Условия берутся действующие — те, с которыми клиент и
         согласится при оформлении.
+        Обязателен только needed: смету спрашивают и до того, как
+        набран состав и решён объём. Без них приходят точные
+        оклады и has_forecast=false.
       parameters:
       - description: состав
         in: body
@@ -12805,8 +14268,8 @@ paths:
           schema:
             $ref: '#/definitions/internal_billing.OrderEstimate'
         "400":
-          description: bad_json; invalid_input — пустой состав, больше 50 человек,
-            ноль роликов или креаторов
+          description: bad_json; invalid_input — needed меньше единицы, отрицательный
+            videos_count или больше 50 человек
           schema:
             $ref: '#/definitions/internal_billing.errorResponse'
         "401":
@@ -13640,6 +15103,77 @@ paths:
       summary: Мои проекты (для клиента)
       tags:
       - client-projects
+  /me/projects/{id}/accounts:
+    get:
+      description: 'Это аккаунты заказчика: он вправе видеть, где и под каким логином
+        выходят его ролики. Пароли — отдельной ручкой.'
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.accountsResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Доступы к аккаунтам бренда (заказчик)
+      tags:
+      - client-publications
+  /me/projects/{id}/accounts/{account_id}/secret:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: account id
+        in: path
+        name: account_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.secretResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — доступа нет или пароль не заведён
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "501":
+          description: secrets_disabled
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Показать пароль доступа (заказчик)
+      tags:
+      - client-publications
   /me/projects/{id}/billing:
     get:
       description: |-

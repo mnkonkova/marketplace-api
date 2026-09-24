@@ -2,8 +2,11 @@ package publications
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -337,6 +340,7 @@ type autopingReq struct {
 	Overdue       *bool `json:"overdue"`
 	Incomplete    *bool `json:"incomplete"`
 	ManagerDigest *bool `json:"manager_digest"`
+	DayBefore     *bool `json:"day_before"`
 }
 
 // ManagerAutoping godoc
@@ -410,6 +414,9 @@ func (h *Handler) ManagerSaveAutoping(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ManagerDigest != nil {
 		prefs.ManagerDigest = *req.ManagerDigest
+	}
+	if req.DayBefore != nil {
+		prefs.DayBefore = *req.DayBefore
 	}
 	saved, err := h.svc.SaveReminderPrefs(r.Context(), prefs, uid)
 	if err != nil {
@@ -627,4 +634,251 @@ func (h *Handler) ManagerSaveProjectSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// ---- колокольчик «напомнить накануне» ----
+
+type creatorRemindReq struct {
+	DayBefore *bool `json:"day_before"`
+}
+
+// ManagerSetCreatorReminder godoc
+// @Summary  Напоминать креатору накануне срока (менеджер)
+// @Description Колокольчик в плане выкладок — напротив каждого креатора
+// @Description свой. Сильнее настройки проекта: напоминание включают тому,
+// @Description кто забывает, а не всем восьмерым разом. «Завтра срок» —
+// @Description ещё рабочее напоминание, в отличие от «сегодня срок».
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id         path string true "project id"
+// @Param    creator_id path string true "creator user id"
+// @Param    body body creatorRemindReq true "day_before"
+// @Success  200 {object} CreatorReminderPref
+// @Failure  400 {object} errorResponse "bad_json; bad_id; bad_creator_id"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
+// @Router   /manager/projects/{id}/creators/{creator_id}/reminders [put]
+func (h *Handler) ManagerSetCreatorReminder(w http.ResponseWriter, r *http.Request) {
+	projectID, uid, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	creatorID, err := pathUUID(r, "creator_id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_creator_id", "Неверный id креатора.")
+		return
+	}
+	var req creatorRemindReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	if req.DayBefore == nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json",
+			"Нужно поле day_before: true или false.")
+		return
+	}
+	saved, err := h.svc.SaveCreatorReminderPref(r.Context(), projectID, creatorID, *req.DayBefore, uid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, saved)
+}
+
+// ---- «это ваш ролик?» ----
+
+type suggestionsResp struct {
+	Items []LinkSuggestion `json:"items"`
+}
+
+// CreatorSuggestions godoc
+// @Summary  Найденные ролики, ждущие подтверждения (креатор)
+// @Description Сервис находит ролик на аккаунте креатора раньше, чем тот
+// @Description успевает вставить ссылку, — но ничего не привязывает сам:
+// @Description подтверждает человек. К какой выкладке предложить привязку,
+// @Description считается при чтении, поэтому перенос срока подсказку не ломает.
+// @Description Находки по всем проектам сразу: карточка приходит от площадки,
+// @Description а не от проекта.
+// @Tags     creator-publications
+// @Produce  json
+// @Security BearerAuth
+// @Success  200 {object} suggestionsResp
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Router   /me/creator/suggestions [get]
+func (h *Handler) CreatorSuggestions(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	items, err := h.svc.CreatorSuggestions(r.Context(), uid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, suggestionsResp{Items: items})
+}
+
+type linkSuggestionReq struct {
+	// PublicationID — к какой выкладке привязать. Пусто — к той, что
+	// предложил сервис.
+	PublicationID string `json:"publication_id"`
+	// CheckedItemIDs — пункты чеклиста: привязка идёт тем же путём, что
+	// и ссылка, вставленная руками, и проверяется так же.
+	CheckedItemIDs []uuid.UUID `json:"checked_item_ids"`
+}
+
+// CreatorLinkSuggestion godoc
+// @Summary  «Да, мой» — привязать найденный ролик (креатор)
+// @Description Находка становится обычной сданной ссылкой: те же проверки
+// @Description чеклиста, то же закрытие выкладки при пятой площадке.
+// @Tags     creator-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path string true "suggestion id"
+// @Param    body body linkSuggestionReq false "куда привязать"
+// @Success  200 {object} Publication
+// @Failure  400 {object} errorResponse "bad_json; bad_id; invalid_input"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — находка не найдена или чужая"
+// @Failure  409 {object} errorResponse "suggestion_decided — по находке уже ответили"
+// @Failure  422 {object} errorResponse "checklist_incomplete"
+// @Router   /me/creator/suggestions/{id}/link [post]
+func (h *Handler) CreatorLinkSuggestion(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	id, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id находки.")
+		return
+	}
+	var req linkSuggestionReq
+	if r.Body != nil {
+		// Тело необязательное: «привязать к предложенной выкладке» —
+		// это запрос без единого поля.
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+			return
+		}
+	}
+	var pubID uuid.UUID
+	if s := strings.TrimSpace(req.PublicationID); s != "" {
+		pubID, err = uuid.Parse(s)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id выкладки.")
+			return
+		}
+	}
+	pub, err := h.svc.LinkSuggestion(r.Context(), id, uid, pubID, req.CheckedItemIDs)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, pub)
+}
+
+// CreatorDismissSuggestion godoc
+// @Summary  «Не мой» — отклонить находку (креатор)
+// @Description Отказ хранится, а не забывается: обход аккаунта идёт каждый
+// @Description день, и удалённая находка вернулась бы завтра той же карточкой.
+// @Tags     creator-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "suggestion id"
+// @Success  204 "отклонено"
+// @Failure  400 {object} errorResponse "bad_id"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — находка не найдена или чужая"
+// @Failure  409 {object} errorResponse "suggestion_decided — по находке уже ответили"
+// @Router   /me/creator/suggestions/{id} [delete]
+func (h *Handler) CreatorDismissSuggestion(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	id, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id находки.")
+		return
+	}
+	if err := h.svc.DismissSuggestion(r.Context(), id, uid); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type addSuggestionReq struct {
+	CreatorUserID string `json:"creator_user_id"`
+	URL           string `json:"url"`
+	Title         string `json:"title"`
+	AuthorHandle  string `json:"author_handle"`
+	// PublishedAt — когда ролик вышел на площадке, RFC3339. Из неё
+	// подбирается выкладка, к которой предложить привязку.
+	PublishedAt string `json:"published_at"`
+}
+
+// ManagerAddSuggestion godoc
+// @Summary  Положить найденный ролик (менеджер / обход аккаунтов)
+// @Description Точка входа для того, кто находит ролики на площадках: обхода
+// @Description аккаунтов, бота или менеджера, наткнувшегося на ролик руками.
+// @Description Сама находка ничего не меняет — её подтверждает креатор.
+// @Description Повторная находка того же адреса не плодит карточку: обход
+// @Description идёт каждый день, а «не мой» не должен возвращаться завтра.
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id   path string true "project id"
+// @Param    body body addSuggestionReq true "находка"
+// @Success  200 {object} LinkSuggestion
+// @Failure  400 {object} errorResponse "bad_json; bad_id; unknown_platform"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — проект не найден или ведёт другой менеджер"
+// @Router   /manager/projects/{id}/link-suggestions [post]
+func (h *Handler) ManagerAddSuggestion(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	var req addSuggestionReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	creatorID, err := uuid.Parse(strings.TrimSpace(req.CreatorUserID))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id креатора.")
+		return
+	}
+	in := AddSuggestionInput{
+		ProjectID:     projectID,
+		CreatorUserID: creatorID,
+		URL:           req.URL,
+		Title:         req.Title,
+		AuthorHandle:  req.AuthorHandle,
+	}
+	if s := strings.TrimSpace(req.PublishedAt); s != "" {
+		at, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json",
+				"published_at должен быть датой в формате RFC3339.")
+			return
+		}
+		in.PublishedAt = &at
+	}
+	saved, err := h.svc.AddSuggestion(r.Context(), in)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, saved)
 }

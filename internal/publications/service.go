@@ -39,6 +39,10 @@ type Service struct {
 	// тогда RunCollection честно возвращает ошибку, а не тихо ничего
 	// не делает.
 	collector Collector
+	// scanner — обход аккаунтов креаторов. Отдельно от collector, потому
+	// что включается отдельным ключом: сбор по сданным ссылкам
+	// обязателен, а поиск новых роликов — расход сверх него.
+	scanner AccountScanner
 	// secrets — шифрование паролей от аккаунтов бренда. Пустой (ключа в
 	// окружении нет) — логины и ссылки работают, пароли не заводятся.
 	secrets *Secrets
@@ -134,6 +138,65 @@ func (s *Service) AddSelfPublication(ctx context.Context, projectID, creatorID u
 	return s.repo.AddSelfPublication(ctx, projectID, creatorID, day)
 }
 
+// ManagerAddPublication — менеджер ставит одну дату одному креатору.
+//
+// Отдельно от пачки: пачка ставит план на месяц, а это — правка плана,
+// которая случается каждую неделю. Раньше её не было вовсе, и менеджер,
+// которому надо добавить креатору один день, заводил пачку из одного
+// креатора и одной даты — с батч-идентификатором, по которому потом
+// «отменить пачку» снимало бы ровно эту строку.
+func (s *Service) ManagerAddPublication(ctx context.Context, in AddPublicationInput) (Publication, error) {
+	in.Day = truncateDay(in.Day)
+	now := truncateDay(in.Now)
+	if in.Day.Before(now) {
+		// Задним числом выкладки не заводят: период считается по факту
+		// выхода, и дата в прошлом чинила бы уже посчитанное.
+		return Publication{}, fmt.Errorf("%w: выкладку ставят на сегодня или вперёд", ErrInvalidInput)
+	}
+	if in.Day.After(now.AddDate(1, 0, 0)) {
+		return Publication{}, fmt.Errorf("%w: дата больше чем на год вперёд", ErrInvalidInput)
+	}
+	if in.DraftLeadDays < 0 || in.DraftLeadDays > 30 {
+		return Publication{}, fmt.Errorf("%w: срок черновика вне разумных границ", ErrInvalidInput)
+	}
+	return s.repo.ManagerAddPublication(ctx, in)
+}
+
+// MoveDueDate — перенести дату одной выкладки.
+//
+// Двигать можно только то, по чему ещё не сдавали: у выкладки со
+// ссылками ролик уже вышел, и «перенос» задним числом переписал бы
+// историю периода.
+//
+// Открытая просьба о переносе закрывается здесь же: менеджер ответил на
+// неё делом, и оставить её висеть значило бы показывать креатору, что
+// его всё ещё не услышали.
+func (s *Service) MoveDueDate(ctx context.Context, in MoveDueDateInput) (Publication, error) {
+	in.Day = truncateDay(in.Day)
+	now := truncateDay(in.Now)
+	if in.Day.Before(now) {
+		return Publication{}, fmt.Errorf("%w: переносят на сегодня или вперёд", ErrInvalidInput)
+	}
+	if in.Day.After(now.AddDate(1, 0, 0)) {
+		return Publication{}, fmt.Errorf("%w: дата больше чем на год вперёд", ErrInvalidInput)
+	}
+	return s.repo.MoveDueDate(ctx, in)
+}
+
+// CancelPublication — снять одну запланированную выкладку.
+//
+// Не то же самое, что «закрыть неполную» (CloseManually): там ролик
+// вышел не везде и менеджер принимает это как факт, здесь выкладки не
+// будет вовсе. Сданное не снимается: работа креатора не исчезает из-за
+// правки плана.
+func (s *Service) CancelPublication(ctx context.Context, pubID, actor uuid.UUID, reason string) (Publication, error) {
+	reason = strings.TrimSpace(reason)
+	if utf8.RuneCountInString(reason) > 300 {
+		return Publication{}, fmt.Errorf("%w: причина длиннее 300 символов", ErrInvalidInput)
+	}
+	return s.repo.CancelPublication(ctx, pubID, actor, reason)
+}
+
 // SubmitLinks — креатор сдаёт ролик ссылками.
 func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publication, error) {
 	if len(in.URLs) == 0 {
@@ -179,6 +242,40 @@ func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publica
 // Пустой URL снимает ссылку с площадки: выкладка возвращается в
 // «неполную», а не остаётся закрытой по ошибочной ссылке.
 func (s *Service) ManagerEditLink(ctx context.Context, in ManagerEditLinkInput) (Publication, error) {
+	in.ByCreator = false
+	return s.editLink(ctx, in)
+}
+
+// CreatorEditLink — креатор пересылает свою ссылку.
+//
+// Ролик удаляют с площадки, аккаунт перевыкладывают, короткая ссылка
+// протухает — и адрес есть ровно у одного человека, у автора. До сих пор
+// он писал его в переписку, а менеджер переносил руками: лишний шаг, на
+// котором ссылка живёт в чате, а не в сервисе.
+//
+// Границы у креаторского пути две, и обе намеренные:
+//   - правит он ТОЛЬКО свою выкладку;
+//   - СНЯТЬ ссылку не может. Пустой адрес у менеджера означает «этой
+//     площадки не было», и это решение о работе, а не о ссылке: автору
+//     нечего решать, вышел его ролик или нет.
+func (s *Service) CreatorEditLink(ctx context.Context, in ManagerEditLinkInput) (Publication, error) {
+	in.ByCreator = true
+	if strings.TrimSpace(in.URL) == "" {
+		return Publication{}, ErrLinkRemoveDenied
+	}
+	mine, err := s.repo.PublicationBelongsTo(ctx, in.PublicationID, in.ManagerUserID)
+	if err != nil {
+		return Publication{}, err
+	}
+	// Не 403: «такая выкладка есть, но не ваша» — подтверждение чужой
+	// выкладки постороннему.
+	if !mine {
+		return Publication{}, ErrNotFound
+	}
+	return s.editLink(ctx, in)
+}
+
+func (s *Service) editLink(ctx context.Context, in ManagerEditLinkInput) (Publication, error) {
 	in.Platform = strings.ToLower(strings.TrimSpace(in.Platform))
 	if !IsKnownPlatform(in.Platform) {
 		return Publication{}, fmt.Errorf("%w: неизвестная площадка %q", ErrInvalidInput, in.Platform)

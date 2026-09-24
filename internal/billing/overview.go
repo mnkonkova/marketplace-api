@@ -530,6 +530,33 @@ ORDER BY stat_date`, clientID, from)
 // разойтись с ней в числах нет. Переписать ту же арифметику ещё раз,
 // пачкой, значило бы завести третью копию денежных правил — за это мы
 // уже платили.
+// periodForOverview — период проекта для сводки, дёшево.
+//
+// Обычный s.Period сначала материализует периоды, а это пишущая
+// транзакция с advisory-локом по проекту. На сводке заказчика она
+// выполнялась для КАЖДОГО проекта на каждом GET и гарантированно
+// встречалась на том же локе с фоновым LockDuePeriods.
+//
+// Здесь сперва пробуем прочитать уже заведённый период, и только если
+// его нет — идём полной дорогой. Второй случай редкий: периоды заводит
+// часовой тикер, а не читатель.
+func (s *Service) periodForOverview(
+	ctx context.Context, projectID uuid.UUID, now time.Time,
+) (ProjectPeriod, error) {
+	p, err := s.repo.PeriodOn(ctx, projectID, now)
+	if err == nil && !p.EndsOn.Before(dayOf(now)) {
+		// Найденный период действительно накрывает сегодня. PeriodOn
+		// отбирает по starts_on <= день и без этой проверки отдал бы
+		// ПРОШЛЫЙ период, если текущий ещё не заведён, — то есть
+		// молча показал бы устаревшие числа вместо материализации.
+		return p, nil
+	}
+	if err != nil && !errors.Is(err, ErrNoPeriods) {
+		return ProjectPeriod{}, err
+	}
+	return s.Period(ctx, projectID, 0, now)
+}
+
 func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng string, now time.Time) (ClientOverview, error) {
 	w, ok := newDashWindow(rng, now)
 	if !ok {
@@ -600,7 +627,7 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 		out.Money.Locked += locked
 
 		// Текущий период — если он вообще есть.
-		period, perr := s.Period(ctx, pr.ID, 0, now)
+		period, perr := s.periodForOverview(ctx, pr.ID, now)
 		switch {
 		case errors.Is(perr, ErrNoPeriods):
 			// Проект в сводке есть, но помечен «ещё не начался»: нулей,

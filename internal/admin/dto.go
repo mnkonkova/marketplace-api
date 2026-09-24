@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"marketpclce/internal/publications"
 )
 
 // ManagerInfo — карточка менеджера в админ-списке. Поверх email/role/
@@ -54,6 +56,11 @@ type UserSearchResult struct {
 	Phone       string    `json:"phone,omitempty"`
 	Kind        string    `json:"kind"`
 	DisplayName string    `json:"display_name,omitempty"`
+	// Median — сколько просмотров человек обычно даёт за ролик. Этим же
+	// поиском менеджер подбирает креатора в проект, и выбирать по одной
+	// почте — значит выбирать вслепую. nil у тех, кто роликов не сдавал
+	// или сдал слишком мало, чтобы медиана что-то значила.
+	Median *publications.CreatorMedian `json:"median,omitempty"`
 }
 
 // UserListItem — строка для полного admin-листинга /admin/users.

@@ -34,6 +34,14 @@ type Person struct {
 	AccountLinks map[string]string `json:"account_links,omitempty"`
 	// AddedAt — когда включён в состав проекта.
 	AddedAt time.Time `json:"added_at"`
+	// Median — сколько просмотров этот человек обычно даёт за ролик.
+	// nil, пока измеренных роликов слишком мало: см. CreatorMedians.
+	Median *CreatorMedian `json:"median,omitempty"`
+	// RemindDayBefore — колокольчик в плане выкладок: писать ли этому
+	// человеку накануне срока. Разрешённое значение, а не сырая строка
+	// настройки: если колокольчик не трогали, здесь стоит то, что
+	// действует по проекту.
+	RemindDayBefore bool `json:"remind_day_before"`
 }
 
 // resolveNames — имена пачкой. Один запрос на весь список, а не запрос на

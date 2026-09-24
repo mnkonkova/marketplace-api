@@ -130,6 +130,18 @@ const (
 	// payload: {project_id, batch_id, count, created_by}.
 	EventPublicationsCreated = "project.publications_created"
 
+	// EventPublicationMoved — менеджер перенёс дату выкладки. payload:
+	// {project_id, publication_id, creator_user_id, from, to, moved_by}.
+	// Отдельно от publications_created: для креатора это не новая
+	// работа, а сдвиг срока по уже поручённой, и бот говорит о нём
+	// другими словами.
+	EventPublicationMoved = "project.publication_moved"
+
+	// EventPublicationCancelled — менеджер снял запланированную
+	// выкладку. payload: {project_id, publication_id, reason,
+	// cancelled_by}.
+	EventPublicationCancelled = "project.publication_cancelled"
+
 	// EventPublicationSubmitted — креатор сдал ссылки. payload содержит
 	// status ("partial"|"done") и список сданных площадок: по нему n8n
 	// отличает «вышло полностью» от «вышло, но не везде».

@@ -101,10 +101,19 @@ var chatRouting = map[string]Delivery{
 	// что у project.unassigned).
 	"project.publication_returned": CRMOnly,
 	"project.publication_accepted": CRMOnly,
+	// Правка плана по одной строке: дату перенесли или день сняли.
+	// CRMOnly, и по той же причине, что правка ссылки: сделал это
+	// менеджер, и рассказывать ему в общем чате о его же действии
+	// нечего. Того, кого это касается, — креатора — касается адресно,
+	// и до него событие доезжает ботом, а не чатом менеджеров.
+	"project.publication_moved":     CRMOnly,
+	"project.publication_cancelled": CRMOnly,
 	// Напоминания креатору лично: «сегодня срок» и «вышло не везде» —
 	// его дело, чат менеджеров они бы только засыпали.
-	"project.publication_due_today":  CRMOnly,
-	"project.publication_incomplete": CRMOnly,
+	// «Завтра срок» — тоже его дело: ничего не горит, человек в сроке.
+	"project.publication_due_tomorrow": CRMOnly,
+	"project.publication_due_today":    CRMOnly,
+	"project.publication_incomplete":   CRMOnly,
 	// Ручное напоминание менеджера: он его сам и отправил.
 	"project.publication_manual": CRMOnly,
 	// А вот просрочка — уже срыв срока, тут нужен человек.
@@ -112,6 +121,11 @@ var chatRouting = map[string]Delivery{
 	// Сводка менеджерам ровно для чата и задумана: она и есть
 	// «что горит сегодня».
 	"project.manager_digest": ToChat,
+	// Расписание кончается через две недели. В чат — по тому же
+	// правилу: это дело, которое надо сделать руками (согласовать
+	// следующий месяц и проставить даты), и в CRM оно ничем себя не
+	// проявляет — там просто нет просрочек, экран выглядит спокойным.
+	"project.project_plan_ending": ToChat,
 	// Период подытожен: просмотры заморожены, счёт посчитан. Это
 	// единственный момент, когда по периоду становится что обсуждать, и
 	// происходит он сам — человек об этом иначе не узнает вовремя.

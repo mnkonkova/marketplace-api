@@ -617,6 +617,84 @@ groups:
           summary: "{{ $value }} ссылок просрочили обход"
           description: "Сбор встал или не успевает. instacurl держит два параллельных слота — возможно, упёрлись в них."
 
+      - alert: CollectVolumeSpike
+        # РАСХОД, а не поломка. Все остальные правила этой группы ловят
+        # «сбор не работает»; это — «сбор работает слишком хорошо».
+        #
+        # Обходы стоят кредитов у поставщика, и кончаются они молча:
+        # ScrapeCreatorsCreditsLow загорится уже по факту. Внезапный рост
+        # вдвое против вчерашнего того же часа означает, что кто-то
+        # массово сбросил next_collect_at (перезалив ссылок, новый обход
+        # аккаунтов, миграция) — и за сутки это съест месячный бюджет.
+        #
+        # Сравнение с «вчера в этот же час», а не с абсолютным порогом:
+        # проектов становится больше, и любой фиксированный потолок
+        # устареет через квартал.
+        expr: |
+          sum(increase(crm_stat_collect_total[1h]))
+          >
+          2 * sum(increase(crm_stat_collect_total[1h] offset 24h))
+          and
+          sum(increase(crm_stat_collect_total[1h])) > 200
+        for: 30m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Обходов за час вдвое больше вчерашнего"
+          description: "{{ $value }} обходов за час против вчерашнего того же часа. Каждый обход — кредит у поставщика. Проверь, не сбросил ли кто next_collect_at массово: SELECT count(*) FROM publication_links WHERE next_collect_at <= now()."
+
+      - alert: AccountScanVolumeSpike
+        # РАСХОД обхода аккаунтов, а не его поломка.
+        #
+        # Обход ходит по аккаунтам креаторов раз в сутки и стоит кредит
+        # за каждый — независимо от того, вышло там что-нибудь или нет.
+        # В отличие от сбора по ссылкам он не затихает со временем,
+        # поэтому нормальный суточный объём — почти константа: столько,
+        # сколько строк в project_accounts у живых проектов.
+        #
+        # Резкий рост означает ровно одно: кто-то сбросил next_scan_at
+        # массово (миграция, ручной UPDATE, перезалив аккаунтов) — и
+        # суточное правило перестало держать расход.
+        #
+        # Окно суточное, а не часовое, как у CollectVolumeSpike: обход
+        # идёт четырьмя тиками в сутки и в часовом разрезе выглядит как
+        # редкие всплески, на которых сравнение «вдвое больше» врало бы
+        # каждый день.
+        expr: |
+          sum(increase(crm_account_scan_total[24h]))
+          >
+          2 * sum(increase(crm_account_scan_total[24h] offset 24h))
+          and
+          sum(increase(crm_account_scan_total[24h])) > 100
+        for: 1h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Обходов аккаунтов за сутки вдвое больше вчерашнего"
+          description: "{{ $value }} обходов аккаунтов за сутки против вчерашнего. Каждый — кредит у поставщика, и их число должно быть почти постоянным. Проверь: SELECT count(*) FROM project_accounts WHERE next_scan_at <= now() AND creator_user_id IS NOT NULL."
+
+      - alert: CollectNearDailyCapacity
+        # Потолок воркера: STATS_COLLECT_BATCHES_PER_TICK × STATS_COLLECT_BATCH
+        # × тиков в сутки (по умолчанию 20 × 10 × 24 = 4800). Выше него
+        # сбор физически не успеет, и ссылки начнут отставать — но
+        # crm_links_stale заметит это на сутки позже.
+        expr: sum(increase(crm_stat_collect_total[24h])) > 3600
+        for: 1h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Сбор съел {{ $value }} обходов за сутки"
+          description: "Больше трёх четвертей суточного потолка воркера (по умолчанию 4800 = 20 пачек × 10 ссылок × 24 тика). Либо поднимать STATS_COLLECT_BATCHES_PER_TICK, либо реже обходить архив — иначе свежие ролики начнут отставать."
+
+      - alert: CollectQueueSaturated
+        # Пачка заполняется целиком — значит, очередь длиннее нашей
+        # пропускной способности. Самый ранний признак: отставание
+        # (crm_links_stale) загорится через сутки, когда цифры в отчёте
+        # уже протухнут.
+        expr: increase(crm_stat_collect_saturated_total[1h]) > 20
+        for: 2h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Очередь сбора не разгребается"
+          description: "{{ $value }} проходов за час выгребли пачку целиком. Сбор упёрся в потолок — проверь STATS_COLLECT_BATCH и STATS_COLLECT_BATCHES_PER_TICK."
+
       - alert: StatsLagHigh
         # 48 часов: при графике 1→2→4→8 даже самый редкий обход укладывается
         # в 8 дней, но свежие ролики должны обновляться ежедневно.

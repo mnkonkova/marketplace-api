@@ -368,6 +368,57 @@ func (h *Handler) ManagerEditLink(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, got)
 }
 
+// CreatorEditLink godoc
+// @Summary  Переслать свою ссылку (креатор)
+// @Description Ролик удаляют с площадки, аккаунт перевыкладывают, короткая
+// @Description ссылка протухает — и новый адрес есть ровно у автора. Раньше
+// @Description он писал его в переписку, а переносил менеджер.
+// @Description Снять площадку креатор не может: пустой адрес означает «ролика
+// @Description не было», и это решение о работе, а не о ссылке.
+// @Description Если ролик другой — ежедневные замеры этой ссылки удаляются, а
+// @Description проверка открывается заново: проверяли не его.
+// @Tags     creator-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    pub_id path string true "publication id"
+// @Param    platform path string true "площадка: tiktok|instagram|youtube|vk|likee"
+// @Param    body body editLinkReq true "новый адрес"
+// @Success  200 {object} Publication
+// @Failure      400  {object}  errorResponse  "bad_json; bad_id; invalid_input; link_remove_denied — пустой адрес"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — выкладка не найдена или заведена на другого креатора"
+// @Failure      409  {object}  errorResponse  "publication_closed; period_locked — период уже подытожен"
+// @Router   /me/creator/publications/{pub_id}/links/{platform} [put]
+func (h *Handler) CreatorEditLink(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	pubID, err := pathUUID(r, "pub_id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id выкладки.")
+		return
+	}
+	var req editLinkReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	got, err := h.svc.CreatorEditLink(r.Context(), ManagerEditLinkInput{
+		PublicationID: pubID,
+		ManagerUserID: uid,
+		Platform:      chi.URLParam(r, "platform"),
+		URL:           req.URL,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, got)
+}
+
 // ManagerClosePublication godoc
 // @Summary  Закрыть неполную выкладку вручную (менеджер)
 // @Description Исключение из правила «закрыто на пяти ссылках». Причина обязательна.
@@ -396,6 +447,134 @@ func (h *Handler) ManagerClosePublication(w http.ResponseWriter, r *http.Request
 	got, err := h.svc.CloseManually(r.Context(), CloseManuallyInput{
 		PublicationID: pubID, ManagerUserID: uid, Reason: req.Reason,
 	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, got)
+}
+
+type addPubReq struct {
+	CreatorUserID uuid.UUID `json:"creator_user_id"`
+	DueDate       string    `json:"due_date"`
+	DraftLeadDays int       `json:"draft_lead_days"`
+}
+
+// ManagerAddPublication godoc
+// @Summary  Поставить одну выкладку на дату (менеджер)
+// @Description Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше состав и даты меняются поштучно.
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Param    body body addPubReq true "кому и на когда"
+// @Success  201 {object} Publication
+// @Failure      400  {object}  errorResponse  "bad_json; bad_date — дата не в формате ГГГГ-ММ-ДД; invalid_input — дата в прошлом или дальше чем на год"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — проект не найден или чужой"
+// @Failure      409  {object}  errorResponse  "wrong_project_kind; creator_not_in_project; day_taken — на этот день у креатора уже есть выкладка; period_locked"
+// @Router   /manager/projects/{id}/publications [post]
+func (h *Handler) ManagerAddPublication(w http.ResponseWriter, r *http.Request) {
+	projectID, uid, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	var req addPubReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CreatorUserID == uuid.Nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Нужны creator_user_id и due_date.")
+		return
+	}
+	day, err := time.Parse(dateLayout, req.DueDate)
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_date", "Дата должна быть в формате ГГГГ-ММ-ДД.")
+		return
+	}
+	got, err := h.svc.ManagerAddPublication(r.Context(), AddPublicationInput{
+		ProjectID:     projectID,
+		CreatorUserID: req.CreatorUserID,
+		Day:           day,
+		DraftLeadDays: req.DraftLeadDays,
+		ManagerUserID: uid,
+		Now:           time.Now(),
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, got)
+}
+
+type dueDateReq struct {
+	DueDate string `json:"due_date"`
+}
+
+// ManagerMoveDueDate godoc
+// @Summary  Перенести дату выкладки (менеджер)
+// @Description Только по плановой выкладке, по которой ещё не сдавали ссылки. Открытая просьба креатора о переносе закрывается этим же действием.
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    pub_id path string true "publication id"
+// @Param    body body dueDateReq true "новая дата"
+// @Success  200 {object} Publication
+// @Failure      400  {object}  errorResponse  "bad_json; bad_date; bad_id; invalid_input — дата в прошлом или дальше чем на год"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — выкладка не найдена или в чужом проекте"
+// @Failure      409  {object}  errorResponse  "publication_started — по выкладке уже сдавали ссылки; day_taken; period_locked"
+// @Router   /manager/publications/{pub_id}/due_date [put]
+func (h *Handler) ManagerMoveDueDate(w http.ResponseWriter, r *http.Request) {
+	pubID, uid, ok := h.managerPublication(w, r)
+	if !ok {
+		return
+	}
+	var req dueDateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	day, err := time.Parse(dateLayout, req.DueDate)
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_date", "Дата должна быть в формате ГГГГ-ММ-ДД.")
+		return
+	}
+	got, err := h.svc.MoveDueDate(r.Context(), MoveDueDateInput{
+		PublicationID: pubID, ManagerUserID: uid, Day: day, Now: time.Now(),
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, got)
+}
+
+// ManagerCancelPublication godoc
+// @Summary  Снять запланированную выкладку (менеджер)
+// @Description Не то же, что «закрыть неполную»: там ролик вышел не везде, здесь выкладки не будет вовсе. Сданное не снимается.
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    pub_id path string true "publication id"
+// @Param    body body closeReq true "причина"
+// @Success  200 {object} Publication
+// @Failure      400  {object}  errorResponse  "bad_json; bad_id; invalid_input — причина длиннее 300 символов"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — выкладка не найдена или в чужом проекте"
+// @Failure      409  {object}  errorResponse  "publication_started — по выкладке уже сдавали ссылки"
+// @Router   /manager/publications/{pub_id}/cancel [post]
+func (h *Handler) ManagerCancelPublication(w http.ResponseWriter, r *http.Request) {
+	pubID, uid, ok := h.managerPublication(w, r)
+	if !ok {
+		return
+	}
+	var req closeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	got, err := h.svc.CancelPublication(r.Context(), pubID, uid, req.Reason)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -965,6 +1144,12 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrCollapsedNoDetail):
 		httpx.WriteErrMsg(w, http.StatusGone, "collapsed_no_detail",
 			"Проект закрыт, подробная статистика по роликам больше не хранится — остались только итоги проекта.")
+	case errors.Is(err, ErrSuggestionDecided):
+		httpx.WriteErrMsg(w, http.StatusConflict, "suggestion_decided",
+			"По этой находке уже ответили — обновите страницу.")
+	case errors.Is(err, ErrSuggestionPlatformMismatch):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "platform_mismatch",
+			"Ролик с другой площадки — в этот слот он не встанет.")
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Выкладка или проект не найдены.")
 	case errors.Is(err, ErrForbidden):
@@ -983,9 +1168,16 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrDayTaken):
 		httpx.WriteErrMsg(w, http.StatusConflict, "day_taken",
 			"На эту дату у вас уже есть выкладка — выберите другой день.")
+	case errors.Is(err, ErrLinkRemoveDenied):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "link_remove_denied",
+			"Снять площадку может только менеджер — пришлите новый адрес или напишите ему.")
 	case errors.Is(err, ErrPeriodLocked):
 		httpx.WriteErrMsg(w, http.StatusConflict, "period_locked",
 			"Этот период уже подытожен — добавить в него ролик нельзя.")
+	case errors.Is(err, ErrPublicationStarted):
+		httpx.WriteErrMsg(w, http.StatusConflict, "publication_started",
+			"По этой выкладке уже сдавали ссылки — дату у неё не двигают и саму её не снимают. "+
+				"Если ролик вышел не везде, закройте её с причиной.")
 	case errors.Is(err, ErrPublicationClosed):
 		httpx.WriteErrMsg(w, http.StatusConflict, "publication_closed",
 			"Выкладка закрыта — досылать ссылки нельзя.")

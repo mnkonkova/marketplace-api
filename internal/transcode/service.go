@@ -224,11 +224,12 @@ func (s *Service) Process(ctx context.Context, payload []byte) error {
 
 // claim — атомарно перевести запись в processing. true = взяли, false =
 // уже занято/готово/удалено. Допускаем:
-//   pending  → processing (новая запись)
-//   failed   → processing (ручной retry или backfill)
-//   processing с updated_at < now - StuckRecoveryAfter → processing
-//     (auto-recovery: предыдущий handler крашнулся между claim и markReady,
-//     запись осталась залипшей — иначе она навсегда заблокирована).
+//
+//	pending  → processing (новая запись)
+//	failed   → processing (ручной retry или backfill)
+//	processing с updated_at < now - StuckRecoveryAfter → processing
+//	  (auto-recovery: предыдущий handler крашнулся между claim и markReady,
+//	  запись осталась залипшей — иначе она навсегда заблокирована).
 //
 // StuckRecoveryAfter > outbox.leaseDuration (10м), поэтому два воркера
 // не могут одновременно claim'нуть один и тот же item.
@@ -280,8 +281,18 @@ func (s *Service) makeAnimatedThumb(ctx context.Context, itemID uuid.UUID, input
 	info, statErr := os.Stat(output)
 	// Sanity-check: ffmpeg может вернуть exit 0 с dummy-файлом (<1KB)
 	// на пограничных входах. Не загружаем такой в S3.
-	if statErr != nil || info.Size() < 1024 {
-		s.logger.Warn("animated_thumb: output too small or missing, skipping upload",
+	//
+	// Размер берём ТОЛЬКО когда stat удался: при ошибке info == nil, и
+	// info.Size() в логе — паника ровно на той ветке, ради которой
+	// проверка и написана. Роняет она весь воркер: recover'а в нём нет,
+	// и вместе с транскодом встают outbox, переиндексация и почта.
+	if statErr != nil {
+		s.logger.Warn("animated_thumb: output missing, skipping upload",
+			"item_id", itemID, "err", statErr)
+		return ""
+	}
+	if info.Size() < 1024 {
+		s.logger.Warn("animated_thumb: output too small, skipping upload",
 			"item_id", itemID, "size", info.Size())
 		return ""
 	}

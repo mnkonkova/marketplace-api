@@ -88,6 +88,37 @@ type Deps struct {
 	CRMWindows       []ratelimit.Window
 }
 
+// maxRequestBody — потолок тела запроса.
+//
+// Все ручки этого API принимают JSON: описания, тексты для LLM, списки
+// идентификаторов. Файлы сюда не ходят — их заливают в S3 по подписанной
+// ссылке, а серверу приезжают только метаданные. Мегабайта на такой
+// разговор хватает с запасом.
+//
+// До этого ограничения не было нигде, кроме партнёрской ручки, и хуже
+// всего это выглядело на двух местах: текст из тела уходит в промпт
+// языковой модели (один токен лимита покупает произвольно большой счёт)
+// и на завершении мультипарт-загрузки, где длина массива частей из тела
+// напрямую становится размером аллокации.
+const maxRequestBody = 1 << 20
+
+// LimitBody — обрезает тело запроса на входе.
+//
+// MaxBytesReader, а не ручная проверка Content-Length: заголовок может
+// врать или отсутствовать при chunked, а читатель закрывает ровно то,
+// что реально прочитано. Превышение приходит хендлеру ошибкой
+// декодирования, то есть 400 — ровно то, чем оно и является.
+func LimitBody(n int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil && r.Body != http.NoBody {
+				r.Body = http.MaxBytesReader(w, r.Body, n)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
 
@@ -95,6 +126,7 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(120 * time.Second))
+	r.Use(LimitBody(maxRequestBody))
 	r.Use(slogRequestLogger(d.Logger))
 	r.Use(CORS(d.CORSOrigins))
 	r.Use(PrometheusMetrics())
@@ -303,6 +335,15 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/me/creator/projects/{id}/publications", d.Publications.CreatorAddPublication)
 				r.Get("/me/creator/projects/{id}/checklist", d.Publications.CreatorChecklist)
 				r.Post("/me/creator/publications/{pub_id}/links", d.Publications.CreatorSubmitLinks)
+				// Переслать свою ссылку: ролик стёрли, адрес протух.
+				r.Put("/me/creator/publications/{pub_id}/links/{platform}",
+					d.Publications.CreatorEditLink)
+				// «Это ваш ролик?» — находки обхода аккаунтов. Список по
+				// всем проектам сразу: карточка приходит от площадки, а
+				// не от проекта.
+				r.Get("/me/creator/suggestions", d.Publications.CreatorSuggestions)
+				r.Post("/me/creator/suggestions/{id}/link", d.Publications.CreatorLinkSuggestion)
+				r.Delete("/me/creator/suggestions/{id}", d.Publications.CreatorDismissSuggestion)
 				r.Post("/me/creator/publications/{pub_id}/date_request", d.Publications.CreatorRequestDateChange)
 				r.Get("/me/creator/projects/{id}/report", d.Publications.CreatorReport)
 				// «В каких проектах я креатор» — до этого ответить было
@@ -311,6 +352,16 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/creator/projects", d.Publications.CreatorProjects)
 				r.Get("/me/creator/projects/{id}", d.Publications.CreatorProjectCard)
 				r.Get("/me/creator/projects/{id}/materials", d.Publications.CreatorMaterials)
+				// «Мои аккаунты» — аккаунты ЭТОГО проекта, которые креатор
+				// заводит и правит сам. Чужие и брендовые сюда не входят.
+				r.Get("/me/creator/projects/{id}/accounts", d.Publications.CreatorAccounts)
+				r.Post("/me/creator/projects/{id}/accounts", d.Publications.CreatorAddAccount)
+				r.Put("/me/creator/projects/{id}/accounts/{account_id}",
+					d.Publications.CreatorUpdateAccount)
+				r.Delete("/me/creator/projects/{id}/accounts/{account_id}",
+					d.Publications.CreatorRemoveAccount)
+				r.Get("/me/creator/projects/{id}/accounts/{account_id}/secret",
+					d.Publications.CreatorAccountSecret)
 
 				// Взгляд клиента на проект. Здесь же, а не в блоке заказов:
 				// это выкладки, и зависят они от d.Publications.
@@ -415,6 +466,12 @@ func NewRouter(d Deps) http.Handler {
 
 				if d.Publications != nil {
 					r.Get("/manager/projects/{id}/publications", d.Publications.ManagerList)
+					// Правка плана по одной строке: поставить дату,
+					// перенести, снять. Пачкой ставят месяц вперёд, а
+					// дальше план живёт — заболел, заменили, сдвинули.
+					r.Post("/manager/projects/{id}/publications", d.Publications.ManagerAddPublication)
+					r.Put("/manager/publications/{pub_id}/due_date", d.Publications.ManagerMoveDueDate)
+					r.Post("/manager/publications/{pub_id}/cancel", d.Publications.ManagerCancelPublication)
 					r.Post("/manager/projects/{id}/publications/preview", d.Publications.ManagerPreviewBatch)
 					r.Post("/manager/projects/{id}/publications/batch", d.Publications.ManagerCreateBatch)
 					r.Post("/manager/projects/{id}/publications/cancel_batch", d.Publications.ManagerCancelBatch)
@@ -436,6 +493,12 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/manager/projects/{id}/creators", d.Publications.ManagerListCreators)
 					r.Post("/manager/projects/{id}/creators", d.Publications.ManagerAddCreator)
 					r.Delete("/manager/projects/{id}/creators/{creator_id}", d.Publications.ManagerRemoveCreator)
+					// Колокольчик «напомнить накануне» — у каждого креатора свой.
+					r.Put("/manager/projects/{id}/creators/{creator_id}/reminders",
+						d.Publications.ManagerSetCreatorReminder)
+					// Точка входа для того, кто находит ролики на площадках.
+					r.Post("/manager/projects/{id}/link-suggestions",
+						d.Publications.ManagerAddSuggestion)
 
 					// Материалы проекта: бренд-гайд и обучение креаторам,
 					// клиентские — заказчику.
@@ -607,6 +670,9 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/rating_scales", d.Ratings.AdminPublishScale)
 				}
 				if d.Billing != nil {
+					// Строка — проект: свои условия у каждого, а прайс
+					// площадки остался шаблоном для заполнения.
+					r.Get("/admin/tariff/projects", d.Billing.AdminTariffRegistry)
 					r.Get("/admin/terms", d.Billing.AdminListTerms)
 					r.Post("/admin/terms", d.Billing.AdminPublishTerms)
 					// Переоткрытие периода — только админ и только со

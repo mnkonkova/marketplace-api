@@ -676,3 +676,94 @@ func TestDashboardCollectedAtEmptyWithoutStats(t *testing.T) {
 		t.Error("площадок не пять: пустая отметка сломала ответ целиком")
 	}
 }
+
+// Ролик в «лучшем за окно» подписан автором и вовлечённостью.
+//
+// Обе величины отвечают на один вопрос: с кем повторить. Просмотры
+// говорят, что ролик выстрелил; ER — что его досмотрели и обсудили, а
+// имя креатора — к кому за этим идти. Без них список «что выстрелило»
+// заканчивается тупиком.
+func TestDashboardTopVideoCreatorAndER(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	ctx := context.Background()
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	pid, cleanup := overviewProject(t, pool, client, 6_000_000, 9_000, 0, "dsh-er")
+	defer cleanup()
+
+	var pubID, creatorID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT id, creator_user_id FROM project_publications WHERE project_id = $1 LIMIT 1`,
+		pid).Scan(&pubID, &creatorID); err != nil {
+		t.Fatalf("выкладка: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE users SET display_name = 'Настя Креатор' WHERE id = $1`,
+		creatorID); err != nil {
+		t.Fatalf("имя креатора: %v", err)
+	}
+	resetDailyViews(t, pool, pid)
+
+	// 100 000 просмотров и 5 000 взаимодействий — ровно 5,0 %.
+	shares := int64(1_000)
+	dashDay(t, pool, pubID, "tiktok", daysAgo(4), 100_000, 3_000, 1_000, &shares)
+
+	body := dashboardBody(t, h, client, "month")
+	top := list(t, body, "top_videos")
+	if len(top) != 1 {
+		t.Fatalf("роликов в top_videos %d, ожидался один", len(top))
+	}
+	v, _ := top[0].(map[string]any)
+	if v["creator_user_id"] != creatorID.String() {
+		t.Errorf("автор ролика %v, ожидался %s", v["creator_user_id"], creatorID)
+	}
+	if v["creator_display_name"] != "Настя Креатор" {
+		t.Errorf("имя автора %v, ожидалось «Настя Креатор»", v["creator_display_name"])
+	}
+	er, ok := v["er_percent"].(float64)
+	if !ok {
+		t.Fatalf("er_percent отсутствует: %v", v)
+	}
+	if er != 5.0 {
+		t.Errorf("ER %v, ожидалось 5.0", er)
+	}
+	if v["er_without_shares"] == true {
+		t.Error("репосты пришли — звёздочки «без репостов» быть не должно")
+	}
+}
+
+// Площадка не отдала репосты — ER считается без них и честно об этом
+// говорит. Ноль репостов и «мы их не знаем» — разные утверждения.
+func TestDashboardTopVideoERWithoutShares(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	ctx := context.Background()
+
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	pid, cleanup := overviewProject(t, pool, client, 6_000_000, 9_000, 0, "dsh-er2")
+	defer cleanup()
+
+	var pubID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM project_publications WHERE project_id = $1 LIMIT 1`, pid).Scan(&pubID); err != nil {
+		t.Fatalf("выкладка: %v", err)
+	}
+	resetDailyViews(t, pool, pid)
+	dashDay(t, pool, pubID, "tiktok", daysAgo(4), 100_000, 4_000, 0, nil)
+
+	body := dashboardBody(t, h, client, "month")
+	top := list(t, body, "top_videos")
+	if len(top) != 1 {
+		t.Fatalf("роликов в top_videos %d, ожидался один", len(top))
+	}
+	v, _ := top[0].(map[string]any)
+	if er, _ := v["er_percent"].(float64); er != 4.0 {
+		t.Errorf("ER %v, ожидалось 4.0", er)
+	}
+	if v["er_without_shares"] != true {
+		t.Error("репостов площадка не отдала — нужна звёздочка er_without_shares")
+	}
+}

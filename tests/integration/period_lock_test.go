@@ -639,3 +639,99 @@ ON CONFLICT (project_id) DO NOTHING`, pid); err != nil {
 		t.Error("заказчик не видит, что числа приблизительные")
 	}
 }
+
+// Подытог снимает ролики периода с обхода: числа заморожены срезом, и
+// дальше каждый обход — кредит поставщика впустую. Переоткрытие
+// возвращает их в очередь: пересчитывать иначе будет нечего.
+func TestLockStopsCollectingPeriodLinks(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("условия: %v", err)
+	}
+	// Два ролика в РАЗНЫХ периодах: первый — в том, который подытожим,
+	// второй — в следующем. Без второго тест был бы зелёным и у запроса
+	// без всякого условия по периоду, то есть проверял бы не правило, а
+	// сам факт записи.
+	first := time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)
+	inPeriod := publishOn(t, pool, pid, creators[0], first, "stop01", 0)
+	next := time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC)
+	nextPeriod := publishOn(t, pool, pid, creators[0], next, "stop02", 0)
+	cutoff := time.Date(2026, 5, 5, 0, 0, 0, 0, time.UTC).AddDate(0, 0, 14)
+
+	// Сколько ссылок этой выкладки ещё в очереди. Считаем по конкретному
+	// ролику, а не по проекту: правило именно про ролики периода.
+	due := func(pub uuid.UUID) int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM publication_links
+WHERE publication_id = $1 AND next_collect_at <> 'infinity'::timestamptz`, pub).Scan(&n); err != nil {
+			t.Fatalf("ссылки в очереди: %v", err)
+		}
+		return n
+	}
+
+	if due(inPeriod) == 0 || due(nextPeriod) == 0 {
+		t.Fatal("до подытога ссылки уже сняты с обхода")
+	}
+
+	p1, err := svc.Period(ctx, pid, 1, cutoff)
+	if err != nil {
+		t.Fatalf("период: %v", err)
+	}
+	if _, err := svc.LockPeriod(ctx, p1, nil, cutoff, cutoff); err != nil {
+		t.Fatalf("подытог: %v", err)
+	}
+	if n := due(inPeriod); n != 0 {
+		t.Errorf("после подытога у ролика периода осталось %d ссылок, ожидали ноль", n)
+	}
+	// Ролик следующего периода трогать нельзя: его период ещё идёт.
+	if due(nextPeriod) == 0 {
+		t.Error("подытог снял с обхода и ролик чужого периода")
+	}
+
+	locked, err := svc.Period(ctx, pid, 1, cutoff)
+	if err != nil {
+		t.Fatalf("период после подытога: %v", err)
+	}
+	if _, err := svc.UnlockPeriod(ctx, locked.ID, creators[0], "пересчитать", cutoff); err != nil {
+		t.Fatalf("переоткрытие: %v", err)
+	}
+	if due(inPeriod) == 0 {
+		t.Error("после переоткрытия ссылки не вернулись в очередь")
+	}
+
+	// И правка адреса у снятой с обхода ссылки не возвращает её в
+	// очередь: подытог для её периода уже был и больше не повторится,
+	// снять её снова будет некому.
+	//
+	// Период перечитываем: в руках лежит снимок ДО переоткрытия, а
+	// Service.LockPeriod по нему решает, что подытоживать уже нечего.
+	reopened, err := svc.Period(ctx, pid, 1, cutoff)
+	if err != nil {
+		t.Fatalf("период после переоткрытия: %v", err)
+	}
+	if _, err := svc.LockPeriod(ctx, reopened, nil, cutoff, cutoff); err != nil {
+		t.Fatalf("повторный подытог: %v", err)
+	}
+	if n := due(inPeriod); n != 0 {
+		t.Fatalf("повторный подытог не снял ссылки с обхода: осталось %d", n)
+	}
+	pubSvc := publications.NewService(publications.NewRepo(pool))
+	if _, err := pubSvc.CreatorEditLink(ctx, publications.ManagerEditLinkInput{
+		PublicationID: inPeriod,
+		ManagerUserID: creators[0],
+		Platform:      "tiktok",
+		URL:           "https://www.tiktok.com/@u/video/777",
+	}); err != nil {
+		t.Fatalf("правка ссылки: %v", err)
+	}
+	if n := due(inPeriod); n != 0 {
+		t.Errorf("правка адреса вернула в очередь %d ссылок подытоженного периода", n)
+	}
+}

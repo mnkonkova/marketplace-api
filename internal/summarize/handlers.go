@@ -127,7 +127,6 @@ func (h *Handler) attachCategoryTotal(ctx context.Context, res *Result, targetCa
 	res.TotalInCategory = n
 }
 
-
 type errorResponse struct {
 	Error string `json:"error"`
 	// Message — человеческий текст для интерфейса. omitempty: часть ручек

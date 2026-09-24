@@ -193,6 +193,32 @@ type BatchResult struct {
 	Items   []Publication `json:"items"`
 }
 
+// AddPublicationInput — менеджер ставит одну дату одному креатору.
+//
+// Отдельный тип, а не CreateBatchInput с одним элементом: у пачки есть
+// батч-идентификатор, по которому её потом снимают целиком, и одиночная
+// правка плана в такую пачку попадать не должна.
+type AddPublicationInput struct {
+	ProjectID     uuid.UUID
+	CreatorUserID uuid.UUID
+	Day           time.Time
+	// DraftLeadDays — за сколько дней сдать черновик. Учитывается только
+	// у проекта с включённым этапом черновика, как и в пачке.
+	DraftLeadDays int
+	ManagerUserID uuid.UUID
+	// Now — «сегодня» приходит из хендлера, а не берётся внутри: так
+	// правило «не задним числом» проверяется в тестах без подмены часов.
+	Now time.Time
+}
+
+// MoveDueDateInput — перенос даты одной выкладки.
+type MoveDueDateInput struct {
+	PublicationID uuid.UUID
+	ManagerUserID uuid.UUID
+	Day           time.Time
+	Now           time.Time
+}
+
 // SubmitLinksInput — креатор сдаёт ролик ссылками. Можно сдать не все
 // площадки сразу и дослать остальные позже.
 type SubmitLinksInput struct {
@@ -209,18 +235,28 @@ type SubmitLinksInput struct {
 	CheckedItemIDs []uuid.UUID
 }
 
-// ManagerEditLinkInput — менеджер правит сданную ссылку.
+// ManagerEditLinkInput — правка сданной ссылки.
 //
 // Площадка берётся из самой ссылки, а не из пути: вставили адрес другой
 // площадки — это другая строка, и менять её под видом правки нельзя.
 // Слот, который правим, передаётся отдельно и должен совпасть.
+//
+// Правит и менеджер, и сам креатор: ролик удаляют с площадки, аккаунт
+// перевыкладывают, ссылка протухает — и переслать её должен тот, у кого
+// она есть, а не тот, кому написали в переписку. Имя поля осталось
+// менеджерским, потому что менеджеру можно больше (см. ErrLinkRemoveDenied).
 type ManagerEditLinkInput struct {
 	PublicationID uuid.UUID
+	// ManagerUserID — кто правит. Для креаторского пути здесь он сам.
 	ManagerUserID uuid.UUID
 	// Platform — какую из пяти ссылок правим.
 	Platform string
-	// URL — новый адрес. Пусто — снять ссылку с площадки.
+	// URL — новый адрес. Пусто — снять ссылку с площадки; креатору так
+	// нельзя.
 	URL string
+	// ByCreator — правит сам креатор, а не менеджер. Меняет две вещи:
+	// выкладка обязана быть его, и снять ссылку он не может.
+	ByCreator bool
 }
 
 // CloseManuallyInput — менеджер закрывает неполную выкладку.

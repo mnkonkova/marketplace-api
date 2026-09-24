@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -254,8 +255,22 @@ func main() {
 	if ic := instacurl.New(cfg.InstacurlURL, cfg.InstacurlAPIKey, cfg.InstacurlTimeout); ic != nil {
 		go runStatsCollectTicker(rootCtx,
 			publications.NewService(publications.NewRepo(pool)).WithCollector(ic),
+			billing.NewService(billing.NewRepo(pool)),
 			cfg.StatsCollectInterval, cfg.StatsCollectBatch,
 			cfg.StatsCollectBatchesPerTick, logger)
+		// Обход аккаунтов креаторов. Тот же клиент: instacurl отвечает
+		// на адрес профиля списком последних роликов. Требует ОТДЕЛЬНОГО
+		// разрешения — расход у него свой (кредит на аккаунт в сутки, не
+		// затихающий со временем), и включаться вместе со сбором он не
+		// должен.
+		if cfg.AccountScanEnabled {
+			go runAccountScanTicker(rootCtx,
+				publications.NewService(publications.NewRepo(pool)).WithAccountScanner(ic),
+				cfg.AccountScanInterval, cfg.AccountScanBatch,
+				cfg.AccountScanBatchesPerTick, logger)
+		} else {
+			logger.Info("creator account scan disabled: ACCOUNT_SCAN_ENABLED is not set")
+		}
 	} else {
 		logger.Warn("stats collection disabled: INSTACURL_URL or INSTACURL_API_KEY not set")
 	}
@@ -602,7 +617,8 @@ func runPublicationGaugeTicker(ctx context.Context, svc *publications.Service,
 // тикера. Поэтому рестарт воркера не приводит к повторному обходу и не
 // жжёт кредиты.
 func runStatsCollectTicker(ctx context.Context, svc *publications.Service,
-	interval time.Duration, batch, batchesPerTick int, logger *slog.Logger) {
+	billingSvc *billing.Service, interval time.Duration, batch, batchesPerTick int,
+	logger *slog.Logger) {
 
 	if interval <= 0 {
 		interval = time.Hour
@@ -620,6 +636,12 @@ func runStatsCollectTicker(ctx context.Context, svc *publications.Service,
 		// несколько подряд — пока есть что собирать. Иначе часовой тик
 		// упирался бы в десять ссылок и не успевал за объёмом.
 		var total publications.CollectStats
+		// Проекты, которых коснулся сбор, копим на ВЕСЬ тик и
+		// пересчитываем один раз в конце. Пачка мелкая, и проект
+		// попадает в несколько пачек подряд: пересчёт по каждой гонял
+		// одни и те же агрегаты по всей истории проекта по два-три
+		// раза, а это самые тяжёлые запросы в тике.
+		touched := make(map[uuid.UUID]struct{}, 32)
 		for i := 0; i < batchesPerTick; i++ {
 			st, err := svc.RunCollection(ctx, time.Now(), batch)
 			total.Considered += st.Considered
@@ -631,6 +653,17 @@ func runStatsCollectTicker(ctx context.Context, svc *publications.Service,
 					"batch", i+1, "collected_before_failure", total.Saved)
 				break
 			}
+			// Просмотры пришли — начисления по ним устарели.
+			//
+			// Перепросчёт идёт здесь, а не по кнопке: суммы считаются ИЗ
+			// просмотров, и пока никто не нажал «Пересчитать», экран
+			// менеджера показывает вчерашние деньги при сегодняшних
+			// цифрах. Подытоженные периоды пересчёт не трогает — там
+			// срез, — а утверждённые и выплаченные строки не трогает сам
+			// Recalculate.
+			for _, id := range st.Projects {
+				touched[id] = struct{}{}
+			}
 			// Собирать больше нечего — ждём следующего тика.
 			if st.Considered == 0 {
 				break
@@ -638,6 +671,13 @@ func runStatsCollectTicker(ctx context.Context, svc *publications.Service,
 			if ctx.Err() != nil {
 				return
 			}
+		}
+		if len(touched) > 0 {
+			ids := make([]uuid.UUID, 0, len(touched))
+			for id := range touched {
+				ids = append(ids, id)
+			}
+			recalcAfterCollect(ctx, billingSvc, ids, now, logger)
 		}
 		if total.Considered > 0 {
 			logger.Info("stats collection",
@@ -650,6 +690,74 @@ func runStatsCollectTicker(ctx context.Context, svc *publications.Service,
 			logger.Warn("stats collapse failed", "err", err)
 		} else if n > 0 {
 			logger.Info("stats collapsed", "projects", n)
+		}
+	}
+
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runAccountScanTicker — обход аккаунтов креаторов: что вышло на
+// площадке, но не сдано ссылкой.
+//
+// Тикер держит только частоту проверки очереди. Правило «аккаунт не
+// чаще раза в сутки» живёт в выборке DueForScan, поэтому рестарт воркера
+// (при деплое их несколько секунд живёт два) не приводит к повторному
+// обходу и не жжёт кредиты — ровно как у сбора статистики.
+//
+// Находки отсюда ничего не привязывают: они ждут ответа человека в
+// кабинете креатора. Поэтому ошибка обхода — это warn, а не остановка:
+// не нашли сегодня — найдём завтра, ничего не испортив.
+func runAccountScanTicker(ctx context.Context, svc *publications.Service,
+	interval time.Duration, batch, batchesPerTick int, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = 6 * time.Hour
+	}
+	if batch <= 0 {
+		batch = 5
+	}
+	if batchesPerTick <= 0 {
+		batchesPerTick = 5
+	}
+
+	run := func() {
+		var total publications.AccountScanStats
+		for i := 0; i < batchesPerTick; i++ {
+			st, err := svc.RunAccountScan(ctx, time.Now(), batch)
+			total.Considered += st.Considered
+			total.Scanned += st.Scanned
+			total.NoData += st.NoData
+			total.Found += st.Found
+			total.Skipped += st.Skipped
+			if err != nil {
+				logger.Warn("account scan failed", "err", err,
+					"batch", i+1, "found_before_failure", total.Found)
+				break
+			}
+			// Очередь пуста — ждём следующего тика. Без этой проверки
+			// тик вхолостую делал бы пять запросов в базу там, где
+			// хватает одного.
+			if st.Considered == 0 {
+				break
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if total.Considered > 0 {
+			logger.Info("creator account scan",
+				"considered", total.Considered, "scanned", total.Scanned,
+				"no_data", total.NoData, "found", total.Found, "skipped", total.Skipped)
 		}
 	}
 
@@ -723,4 +831,45 @@ func ensureIndexWithRetry(ctx context.Context, esClient *es.Client, index string
 		return nil
 	}
 	return fmt.Errorf("ensure index %q after %d attempts: %w", label, maxAttempts, lastErr)
+}
+
+// recalcAfterCollect — пересчитать начисления открытого периода по
+// проектам, которым сбор только что записал новые просмотры.
+//
+// Деньги креатора считаются ИЗ просмотров, но считаются не на лету:
+// строки начислений хранятся и обновляются пересчётом. До сих пор его
+// звали только двое — менеджер кнопкой и подытог периода, — и между
+// сбором и нажатием экран показывал вчерашние суммы при сегодняшних
+// цифрах. Хуже того, подмена протухшей ссылки стирает замеры: без
+// пересчёта сумма так и оставалась посчитанной по удалённому ролику.
+//
+// Ошибки логируем и идём дальше: собранные цифры уже записаны, и терять
+// весь проход из-за одного проекта нельзя. Проект без единого ролика
+// отвечает ErrNoPeriods — это норма, а не сбой.
+func recalcAfterCollect(ctx context.Context, svc *billing.Service,
+	projects []uuid.UUID, now time.Time, logger *slog.Logger) {
+
+	if svc == nil {
+		return
+	}
+	for _, id := range projects {
+		if ctx.Err() != nil {
+			return
+		}
+		p, err := svc.Period(ctx, id, 0, now)
+		if err != nil {
+			if !errors.Is(err, billing.ErrNoPeriods) {
+				logger.Warn("recalc after collect: период", "project_id", id, "err", err)
+			}
+			continue
+		}
+		// Подытоженный период заморожен вместе со срезом: его числа — не
+		// сегодняшние просмотры, и трогать их нельзя.
+		if p.IsLocked() {
+			continue
+		}
+		if _, err := svc.Recalculate(ctx, id, p); err != nil {
+			logger.Warn("recalc after collect: начисления", "project_id", id, "err", err)
+		}
+	}
 }

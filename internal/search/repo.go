@@ -18,36 +18,36 @@ type Repo struct{ db *pgxpool.Pool }
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
 type IndexDoc struct {
-	UserID          string     `json:"user_id"`
-	DisplayName     string     `json:"display_name"`
-	Bio             string     `json:"bio"`
-	AvatarURL       string     `json:"avatar_url,omitempty"`
-	City            string     `json:"city,omitempty"`
-	Categories      []string   `json:"categories"`
-	PrimaryCategory string     `json:"primary_category,omitempty"`
-	SkillSlugs      []string   `json:"skill_slugs"`
-	SkillTitles     string     `json:"skill_titles"`
+	UserID          string   `json:"user_id"`
+	DisplayName     string   `json:"display_name"`
+	Bio             string   `json:"bio"`
+	AvatarURL       string   `json:"avatar_url,omitempty"`
+	City            string   `json:"city,omitempty"`
+	Categories      []string `json:"categories"`
+	PrimaryCategory string   `json:"primary_category,omitempty"`
+	SkillSlugs      []string `json:"skill_slugs"`
+	SkillTitles     string   `json:"skill_titles"`
 	// CategoryTitles — русские названия категорий спеца одной строкой
 	// («Монтажёр Моушн-дизайнер»). Индексируется под ru_en с synonyms,
 	// чтобы multi_match находил спецов по человеческому запросу вроде
 	// «моушн-дизайнер» / «сценарист» — категории в keyword'е ищутся
 	// только точным match'ем по slug'у.
-	CategoryTitles  string     `json:"category_titles"`
-	RateMin         *int       `json:"rate_min,omitempty"`
-	RateMax         *int       `json:"rate_max,omitempty"`
-	Currency        string     `json:"currency"`
-	RatingAvg       float64    `json:"rating_avg"`
-	ReviewsCount    int        `json:"reviews_count"`
-	IsPublished     bool       `json:"is_published"`
+	CategoryTitles string  `json:"category_titles"`
+	RateMin        *int    `json:"rate_min,omitempty"`
+	RateMax        *int    `json:"rate_max,omitempty"`
+	Currency       string  `json:"currency"`
+	RatingAvg      float64 `json:"rating_avg"`
+	ReviewsCount   int     `json:"reviews_count"`
+	IsPublished    bool    `json:"is_published"`
 	// ModerationStatus — pending_review|approved|rejected. В каталог попадают
 	// только approved (см. Indexer.Reconcile). Это поле НЕ уезжает в ES
 	// (json:"-") — проверка делается на Go-уровне сразу после загрузки из
 	// БД, mapping.go не трогаем.
 	ModerationStatus string    `json:"-"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 	// LastVideoAt — MAX(created_at) видео-айтемов спеца. nil если видео нет.
 	// Используется /feed для tie-breaker'а после rating_avg.
-	LastVideoAt     *time.Time `json:"last_video_at,omitempty"`
+	LastVideoAt *time.Time `json:"last_video_at,omitempty"`
 	// PreviewVideoURL / PreviewThumbURL / PreviewAnimatedURL — денормализованное
 	// последнее опубликованное видео спеца для рендера карточки в
 	// SearchResultsPage. Правила отбора:

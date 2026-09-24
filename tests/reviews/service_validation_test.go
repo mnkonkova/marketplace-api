@@ -85,8 +85,8 @@ func TestCreate_RejectsShortTextWithoutLead(t *testing.T) {
 		Rating:       5,
 		TargetUserID: uuid.New(),
 		AuthorUserID: uuid.New(),
-		LeadID:       nil,    // нет лида — текст обязателен
-		Text:         "ок",   // 2 руны, минимум 3
+		LeadID:       nil,  // нет лида — текст обязателен
+		Text:         "ок", // 2 руны, минимум 3
 	})
 	if !errors.Is(err, reviews.ErrInvalidInput) {
 		t.Errorf("want ErrInvalidInput for short text without lead, got %v", err)

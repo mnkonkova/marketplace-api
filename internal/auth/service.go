@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -59,6 +60,20 @@ type Service struct {
 	// Пусто = вход через Яндекс выключен: локальный запуск без ключей это
 	// нормальный режим, а не поломка.
 	yandex YandexConfig
+	// yandexOnce — клиент к Яндексу создаём один раз на сервис, а не на
+	// каждый вход. Свой http.Client на запрос — это свой пул соединений
+	// на запрос: TLS-рукопожатие заново каждый раз и ни одного
+	// переиспользованного соединения.
+	yandexOnce   sync.Once
+	yandexClient *yandexClient
+}
+
+// yandexAPI — ленивый общий клиент. Ленивый, потому что конфигурация
+// проверяется вызывающим: до первого входа его может не понадобиться
+// вовсе.
+func (s *Service) yandexAPI() *yandexClient {
+	s.yandexOnce.Do(func() { s.yandexClient = newYandexClient(s.yandex) })
+	return s.yandexClient
 }
 
 // ProviderYandex — идентификатор провайдера в user_identities.
@@ -341,7 +356,7 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 		kind = KindClient
 	}
 
-	client := newYandexClient(s.yandex)
+	client := s.yandexAPI()
 	token, err := client.exchange(ctx, code)
 	if err != nil {
 		return RegisterResult{}, err

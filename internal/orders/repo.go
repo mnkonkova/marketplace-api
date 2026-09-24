@@ -815,6 +815,97 @@ SELECT EXISTS (SELECT 1 FROM creator_orders WHERE id = $1 AND client_user_id = $
 }
 
 // ListByClient — заказы клиента, новые сверху.
+// getMany — те же заказы, что отдаёт Get, но пачкой.
+//
+// Списки заказов собирались циклом `Get` по каждому id: два запроса на
+// заказ, то есть сорок один запрос на двадцать строк экрана. Здесь два
+// запроса на весь список, а порядок сохраняется тот, в котором пришли
+// идентификаторы, — его задаёт вызывающий, и ORDER BY внутри его бы
+// переписал.
+func (r *Repo) getMany(ctx context.Context, ids []uuid.UUID) ([]Order, error) {
+	if len(ids) == 0 {
+		return []Order{}, nil
+	}
+	byID := make(map[uuid.UUID]*Order, len(ids))
+
+	rows, err := r.db.Query(ctx, `
+SELECT id, client_user_id, start_month, needed, videos_count, status,
+       terms_version_id, project_id, paid_at, created_at, updated_at
+FROM creator_orders WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("get orders: %w", err)
+	}
+	for rows.Next() {
+		var o Order
+		if err := rows.Scan(&o.ID, &o.ClientUserID, &o.StartMonth, &o.Needed, &o.VideosCount,
+			&o.Status, &o.TermsVersionID, &o.ProjectID, &o.PaidAt,
+			&o.CreatedAt, &o.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan order: %w", err)
+		}
+		cp := o
+		byID[o.ID] = &cp
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	crows, err := r.db.Query(ctx, `
+SELECT c.order_id, c.creator_user_id,
+       COALESCE(
+         NULLIF(sp.display_name, ''),
+         NULLIF(cp.display_name, ''),
+         split_part(u.email, '@', 1),
+         ''
+       ),
+       c.priority, c.status, c.invited_at, c.expires_at, c.responded_at
+FROM order_candidates c
+LEFT JOIN users u                ON u.id = c.creator_user_id
+LEFT JOIN specialist_profiles sp ON sp.user_id = c.creator_user_id
+LEFT JOIN client_profiles cp     ON cp.user_id = c.creator_user_id
+WHERE c.order_id = ANY($1) ORDER BY c.order_id, c.priority`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list candidates: %w", err)
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var c Candidate
+		if err := crows.Scan(&c.OrderID, &c.CreatorUserID, &c.CreatorName, &c.Priority,
+			&c.Status, &c.InvitedAt, &c.ExpiresAt, &c.RespondedAt); err != nil {
+			return nil, fmt.Errorf("scan candidate: %w", err)
+		}
+		if o := byID[c.OrderID]; o != nil {
+			o.Candidates = append(o.Candidates, c)
+		}
+	}
+	if err := crows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]Order, 0, len(ids))
+	for _, id := range ids {
+		o := byID[id]
+		if o == nil {
+			continue
+		}
+		for _, c := range o.Candidates {
+			switch c.Status {
+			case CandidateAccepted:
+				o.Accepted++
+			case CandidateReserve:
+				o.ReserveLeft++
+			}
+		}
+		o.NeedMore = o.Needed - o.Accepted
+		if o.NeedMore < 0 {
+			o.NeedMore = 0
+		}
+		out = append(out, *o)
+	}
+	return out, nil
+}
+
 func (r *Repo) ListByClient(ctx context.Context, clientID uuid.UUID, limit int) ([]Order, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -838,15 +929,7 @@ ORDER BY created_at DESC LIMIT $2`, clientID, limit)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]Order, 0, len(ids))
-	for _, id := range ids {
-		o, err := r.Get(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, o)
-	}
-	return out, nil
+	return r.getMany(ctx, ids)
 }
 
 // Invitation — приглашение глазами креатора.
@@ -900,7 +983,10 @@ WHERE o.status = 'inviting'
 GROUP BY o.id, o.needed
 HAVING count(*) FILTER (WHERE c.status = 'accepted') < o.needed
    AND count(*) FILTER (WHERE c.status IN ('invited', 'reserve')) = 0
-ORDER BY o.created_at`)
+ORDER BY o.created_at
+-- Потолок: это список «разобрать руками», и если он длиннее двух
+-- сотен, проблема не в том, что не показали двести первый.
+LIMIT 200`)
 	if err != nil {
 		return nil, fmt.Errorf("orders needing attention: %w", err)
 	}
@@ -917,15 +1003,7 @@ ORDER BY o.created_at`)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]Order, 0, len(ids))
-	for _, id := range ids {
-		o, err := r.Get(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, o)
-	}
-	return out, nil
+	return r.getMany(ctx, ids)
 }
 
 // Cancel — клиент распускает состав. Приглашения отзываются.

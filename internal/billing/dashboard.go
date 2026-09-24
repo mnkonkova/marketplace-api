@@ -144,6 +144,15 @@ type OverviewER struct {
 // Поэтому: здесь всё оконное, а views.total, engagement и er выше —
 // за всё время, и приростов при них нет вовсе.
 type OverviewWindow struct {
+	// From/To — границы окна датами, ГГГГ-ММ-ДД.
+	//
+	// Подпись range_label рядом человеческая («26 июня — 23 сент.
+	// 2026») и для расчётов не годится: по ней нельзя отрезать поденный
+	// ряд. А отрезать его надо ровно там, где границу провёл сервер, —
+	// своё правило на фронте однажды с этим разойдётся, и на одном
+	// экране окажутся два разных «окна».
+	From string `json:"from"`
+	To   string `json:"to"`
 	Views int64 `json:"views"`
 	// ViewsDeltaPct — против предыдущего окна такой же длины. Поля нет
 	// вовсе, если сравнивать не с чем: ноль означал бы «не выросло».
@@ -198,6 +207,18 @@ type OverviewTopVideo struct {
 	// PublishedAt — когда ролик вышел, ГГГГ-ММ-ДД. Дата выхода, а не
 	// сдачи ссылки: см. publications.ClientFeed.
 	PublishedAt string `json:"published_at"`
+	// CreatorUserID/CreatorDisplayName — кто снял. В «лучшем за окно»
+	// это половина ответа: заказчик смотрит не только что выстрелило,
+	// но и с кем это повторить.
+	CreatorUserID      uuid.UUID `json:"creator_user_id"`
+	CreatorDisplayName string    `json:"creator_display_name,omitempty"`
+	// ERPercent — вовлечённость ролика за то же окно, по которому он
+	// сюда попал. Считается от прироста, а не от накопленных итогов:
+	// иначе старый ролик с большим хвостом выглядел бы вовлекающим на
+	// неделе, когда его никто не трогал. nil, пока прироста просмотров
+	// нет — делить не на что.
+	ERPercent       *float64 `json:"er_percent,omitempty"`
+	ERWithoutShares bool     `json:"er_without_shares,omitempty"`
 	// Views — просмотры, набранные ЗА ОКНО. Показываем ту же величину,
 	// по которой сортируем: иначе список едет относительно чисел.
 	Views int64  `json:"views"`
@@ -404,24 +425,46 @@ WITH mine AS (
     WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'
 ), daily AS (
     SELECT d.link_id, d.stat_date,
-           d.views - COALESCE(LAG(d.views) OVER (PARTITION BY d.link_id ORDER BY d.stat_date), 0) AS dviews
+           d.views    - COALESCE(LAG(d.views)    OVER w, 0) AS dviews,
+           d.likes    - COALESCE(LAG(d.likes)    OVER w, 0) AS dlikes,
+           d.comments - COALESCE(LAG(d.comments) OVER w, 0) AS dcomments,
+           COALESCE(d.shares, 0) - COALESCE(LAG(COALESCE(d.shares, 0)) OVER w, 0) AS dshares,
+           d.shares IS NOT NULL AS has_shares
     FROM video_stat_daily d
     JOIN mine m ON m.id = d.link_id
+    -- Границу окна ставим ЗДЕСЬ, до оконной функции, а не в per_link.
+    -- Протолкнуть предикат сквозь LAG планировщик не может, и через
+    -- окно проходила вся накопленная история клиента — сотни тысяч
+    -- строк ради трёх. Один день слева нужен самой LAG: без него у
+    -- первого дня окна не с чем считать прирост.
+    WHERE d.stat_date BETWEEN $2::date - 1 AND $3::date
+    WINDOW w AS (PARTITION BY d.link_id ORDER BY d.stat_date)
 ), per_link AS (
-    SELECT m.publication_id, m.platform, m.url, GREATEST(SUM(dl.dviews), 0)::bigint AS gain
+    SELECT m.publication_id, m.platform, m.url,
+           GREATEST(SUM(dl.dviews), 0)::bigint AS gain,
+           GREATEST(SUM(dl.dlikes + dl.dcomments + dl.dshares), 0)::bigint AS eng,
+           bool_and(dl.has_shares) AS has_shares
     FROM daily dl
     JOIN mine m ON m.id = dl.link_id
     WHERE dl.stat_date BETWEEN $2::date AND $3::date
     GROUP BY m.publication_id, m.platform, m.url
 ), per_pub AS (
-    SELECT publication_id, SUM(gain)::bigint AS gain
+    SELECT publication_id, SUM(gain)::bigint AS gain, SUM(eng)::bigint AS eng,
+           bool_and(has_shares) AS has_shares
     FROM per_link GROUP BY publication_id
 )
 SELECT pp.publication_id, pub.title, lead.platform, lead.url, pp.gain,
+       pp.eng, pp.has_shares,
+       pub.creator_user_id,
+       COALESCE(NULLIF(sp.display_name, ''), NULLIF(cp.display_name, ''),
+                NULLIF(u.display_name, ''), split_part(u.email, '@', 1), ''),
        (SELECT MIN(COALESCE(l2.published_at, l2.submitted_at))
         FROM publication_links l2 WHERE l2.publication_id = pp.publication_id)
 FROM per_pub pp
 JOIN project_publications pub ON pub.id = pp.publication_id
+LEFT JOIN users u ON u.id = pub.creator_user_id
+LEFT JOIN specialist_profiles sp ON sp.user_id = pub.creator_user_id
+LEFT JOIN client_profiles cp ON cp.user_id = pub.creator_user_id
 JOIN LATERAL (
     SELECT platform, url FROM per_link pl
     WHERE pl.publication_id = pp.publication_id
@@ -437,16 +480,23 @@ LIMIT $4`, clientID, w.From, w.To, limit)
 	out := make([]OverviewTopVideo, 0, limit)
 	for rows.Next() {
 		var (
-			v         OverviewTopVideo
-			published *time.Time
+			v          OverviewTopVideo
+			published  *time.Time
+			engagement int64
+			hasShares  bool
 		)
 		if err := rows.Scan(&v.PublicationID, &v.Title, &v.Platform, &v.URL,
-			&v.Views, &published); err != nil {
+			&v.Views, &engagement, &hasShares,
+			&v.CreatorUserID, &v.CreatorDisplayName, &published); err != nil {
 			return nil, fmt.Errorf("scan top video: %w", err)
 		}
 		if published != nil {
 			v.PublishedAt = published.UTC().Format("2006-01-02")
 		}
+		// Звёздочку «без репостов» ставим только там, где репосты вообще
+		// могли быть: у ролика без прироста вовлечённости терять нечего.
+		v.ERPercent = erPercent(engagement, v.Views)
+		v.ERWithoutShares = !hasShares && engagement > 0
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -474,7 +524,12 @@ SELECT GREATEST(MAX(l.last_collected_at), MAX(d.collected_at))
 FROM publication_links l
 JOIN project_publications pub ON pub.id = l.publication_id AND pub.status <> 'cancelled'
 JOIN projects p ON p.id = pub.project_id
-LEFT JOIN video_stat_daily d ON d.link_id = l.id
+-- Замеры смотрим только за последнюю неделю. Отметка о сборе свежее
+-- недели по определению (самый редкий интервал обхода — восемь дней), а
+-- без границы этот LEFT JOIN протаскивал ВСЮ историю клиента — сотни
+-- тысяч строк ради одной метки времени на каждом открытии дашборда.
+LEFT JOIN video_stat_daily d
+       ON d.link_id = l.id AND d.stat_date >= current_date - 8
 WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'`,
 		clientID).Scan(&at); err != nil {
 		return nil, fmt.Errorf("last collected at: %w", err)
@@ -538,6 +593,8 @@ func (s *Service) fillDashboard(ctx context.Context, out *ClientOverview, client
 	// Окно — своими именами, и прирост стоит рядом с той величиной,
 	// которую описывает.
 	out.Window = OverviewWindow{
+		From:               w.From.Format("2006-01-02"),
+		To:                 w.To.Format("2006-01-02"),
 		Views:              gains.CurTotal.Views,
 		ViewsDeltaPct:      deltaPct(gains.CurTotal.Views, gains.PrevTotal.Views),
 		Engagement:         gains.CurTotal.Engagement,

@@ -125,7 +125,7 @@ func (d *DeepSeek) Messages(ctx context.Context, req MessagesRequest) (*Messages
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, llmMaxResponse))
 	if resp.StatusCode >= 400 {
 		return nil, &APIError{Status: resp.StatusCode, Body: string(respBody)}
 	}

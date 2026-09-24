@@ -151,6 +151,8 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 	if err != nil {
 		return out, err
 	}
+	// Итоги ниже считаются по ВСЕМ строкам, а в ответ уедет свежая
+	// часть — см. videoRowsLimit.
 	out.VideoRows = rows
 
 	byCreator := make(map[uuid.UUID]*CreatorRow, 4)
@@ -202,6 +204,9 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 			platformShares[v.Platform] = ps
 		}
 		ps.add(v.Shares)
+	}
+	if len(out.VideoRows) > videoRowsLimit {
+		out.VideoRows = out.VideoRows[:videoRowsLimit]
 	}
 	out.Shares = totalShares.value()
 	out.ERPercent, out.ERWithoutShares = erPercent(out.Likes, out.Comments, out.Shares, out.Views)
@@ -270,6 +275,20 @@ func (r *Repo) nameRows(ctx context.Context, out *Report) error {
 	}
 	return nil
 }
+
+// videoRowsLimit — сколько строк роликов УЕЗЖАЕТ в ответ.
+//
+// Именно уезжает, а не читается: из этих же строк складываются итоги
+// отчёта — просмотры, лайки, ролики, разбор по креаторам и площадкам.
+// Ограничить сам запрос значило бы посчитать итог годового проекта по
+// пятистам самым свежим ссылкам из трёх с половиной тысяч, то есть
+// по седьмой части работы, — и показать это число над графиком,
+// который нарисован по всем.
+//
+// Поэтому читаем всё, складываем всё, а в ответ кладём свежую часть:
+// тяжёлым в этом ответе был килобайтный JSON на ссылку, а не сам
+// проход по индексу.
+const videoRowsLimit = 500
 
 // videoRows — по строке на сданную ссылку: последний снимок и прирост
 // относительно предыдущего.
@@ -353,6 +372,16 @@ GROUP BY p.creator_user_id`
 // один отчёт. Теперь один проход по снимкам, а перенос последнего
 // известного значения делается здесь: стоимость растёт как объём данных,
 // а не как произведение.
+// reportWindowDays — за какой срок рисуем поденный ряд.
+//
+// Ряд читается целиком в память и схлопывается максимум в столько же
+// точек, сколько дней. Без границы годовой проект на 60 роликов в месяц
+// — это 3600 ссылок × 365 дат, до 160 тысяч строк и внешняя сортировка
+// на десятки мегабайт, и всё это на ПЯТИ ручках отчёта. Год покрывает
+// любой разумный вопрос к графику; кому нужна вся история, у того есть
+// выгрузка.
+const reportWindowDays = 365
+
 func (r *Repo) viewsByDay(ctx context.Context, projectID uuid.UUID, f ReportFilter) ([]DayPoint, error) {
 	const q = `
 SELECT d.stat_date, d.link_id, COALESCE(d.views, 0)
@@ -360,10 +389,11 @@ FROM video_stat_daily d
 JOIN publication_links l ON l.id = d.link_id
 JOIN project_publications p ON p.id = l.publication_id
 WHERE p.project_id = $1
+  AND d.stat_date >= current_date - $3::int
   AND p.status <> 'cancelled'
   AND ($2::uuid IS NULL OR p.creator_user_id = $2)
 ORDER BY d.stat_date`
-	rows, err := r.db.Query(ctx, q, projectID, f.CreatorUserID)
+	rows, err := r.db.Query(ctx, q, projectID, f.CreatorUserID, reportWindowDays)
 	if err != nil {
 		return nil, fmt.Errorf("views by day: %w", err)
 	}
@@ -474,9 +504,18 @@ func (s *Service) Report(ctx context.Context, projectID uuid.UUID, f ReportFilte
 // закрыты».
 func (r *Repo) ClientCanSeeStats(ctx context.Context, projectID, clientID uuid.UUID) (bool, error) {
 	var ok bool
+	// Тот же круг смотрящих, что у остальных клиентских ручек:
+	// заказчик, ведущий менеджер, админ (см. ClientOwnsProject). Сам
+	// выключатель показа статистики при этом остаётся в силе — если
+	// менеджер закрыл цифры клиенту, «глазами заказчика» он и увидит
+	// их закрытыми. В этом и смысл кнопки.
 	err := r.db.QueryRow(ctx, `
-SELECT client_sees_stats FROM projects
-WHERE id = $1 AND client_user_id = $2`, projectID, clientID).Scan(&ok)
+SELECT p.client_sees_stats FROM projects p
+WHERE p.id = $1 AND (
+    p.client_user_id = $2
+ OR p.assigned_to_user_id = $2
+ OR EXISTS (SELECT 1 FROM users u WHERE u.id = $2 AND u.is_admin)
+)`, projectID, clientID).Scan(&ok)
 	if err != nil {
 		if isNoRows(err) {
 			return false, nil

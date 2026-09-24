@@ -71,7 +71,8 @@ func NewAPIHarness(t *testing.T, pool *pgxpool.Pool) *APIHarness {
 	// проверять их мимо роутера — значит не проверять роль админа.
 	adminSvc := admin.NewService(admin.NewRepo(pool), issuer, "http://harness.local", time.Hour).
 		WithProfilesRepo(profiles.NewRepo(pool)).
-		WithAuditRepo(audit.NewRepo(pool))
+		WithAuditRepo(audit.NewRepo(pool)).
+		WithPublicationsRepo(publications.NewRepo(pool))
 
 	srv := httpapi.NewRouter(httpapi.Deps{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})),
