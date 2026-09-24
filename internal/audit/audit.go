@@ -58,6 +58,11 @@ const (
 	ActionProjectAssignManager = "project.assign_manager"
 	ActionProjectMarkTest      = "project.mark_test"
 	ActionProjectTransferBatch = "project.transfer_batch"
+	// ActionPeriodConfirmEnd — менеджер подтвердил, каким числом
+	// кончается период. Подтверждённая граница сильнее вычисленной, а
+	// вместе с ней едет вся цепочка дальше — поэтому след в журнале.
+	ActionPeriodConfirmEnd = "project.period_confirm_end"
+
 	// ActionPeriodUnlock — админ вернул подытоженный период в работу.
 	// Переоткрытие переписывает историю расчёта, поэтому след в журнале
 	// обязателен: иначе «почему числа поменялись» отвечается ничем.

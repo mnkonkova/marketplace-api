@@ -540,6 +540,11 @@ func NewRouter(d Deps) http.Handler {
 					// подытоживаются сами через 14 дней после конца
 					// (тикер в воркере). Ручного подытога нет намеренно.
 					r.Get("/manager/projects/{id}/billing/periods", d.Billing.ManagerPeriods)
+					// Подтверждение конца периода. Автомат считает
+					// границу сам, но подтверждённая дата сильнее: план
+					// знает менеджер, а календарь только считает месяцы.
+					r.Post("/manager/projects/{id}/billing/confirm_period_end",
+						d.Billing.ManagerConfirmPeriodEnd)
 					r.Post("/manager/projects/{id}/accruals/{accrual_id}/approve", d.Billing.ManagerApproveAccrual)
 					r.Post("/manager/projects/{id}/accruals/{accrual_id}/paid", d.Billing.ManagerPayAccrual)
 					r.Put("/manager/projects/{id}/creators/{creator_id}/utm", d.Billing.ManagerSaveUTM)

@@ -63,6 +63,13 @@ type ProjectPeriod struct {
 	// ступени переносится по цепочке, и она должна быть явной.
 	PrevPeriodID *uuid.UUID `json:"prev_period_id,omitempty"`
 
+	// EndsOnConfirmedAt/By — менеджер подтвердил, что период кончается
+	// именно этой датой. Подтверждённая граница сильнее вычисленной:
+	// план знает человек, а календарь только считает месяцы. Пусто —
+	// никто не подтверждал, работает автомат.
+	EndsOnConfirmedAt *time.Time `json:"ends_on_confirmed_at,omitempty"`
+	EndsOnConfirmedBy *uuid.UUID `json:"ends_on_confirmed_by,omitempty"`
+
 	Status   string     `json:"status"`
 	LockedAt *time.Time `json:"locked_at,omitempty"`
 	// LockedBy — кто подытожил. nil = фоновая задача; ручного подытога
@@ -128,6 +135,7 @@ func (p ProjectPeriod) LockDueAt(delay time.Duration) time.Time {
 }
 
 const periodScanCols = `id, project_id, seq, starts_on, ends_on, prev_period_id,
+       ends_on_confirmed_at, ends_on_confirmed_by,
        status, locked_at, locked_by, snapshot_as_of, snapshot_approx,
        carry_in_client, carry_out_client, carry_in_creator, carry_out_creator,
        client_debt_in, client_debt_out,
@@ -137,6 +145,7 @@ const periodScanCols = `id, project_id, seq, starts_on, ends_on, prev_period_id,
 func scanPeriod(row pgx.Row) (ProjectPeriod, error) {
 	var p ProjectPeriod
 	err := row.Scan(&p.ID, &p.ProjectID, &p.Seq, &p.StartsOn, &p.EndsOn, &p.PrevPeriodID,
+		&p.EndsOnConfirmedAt, &p.EndsOnConfirmedBy,
 		&p.Status, &p.LockedAt, &p.LockedBy, &p.SnapshotAsOf, &p.SnapshotApprox,
 		&p.CarryInClient, &p.CarryOutClient, &p.CarryInCreator, &p.CarryOutCreator,
 		&p.ClientDebtIn, &p.ClientDebtOut,
@@ -287,13 +296,33 @@ SELECT EXISTS (SELECT 1 FROM project_periods WHERE project_id = $1 AND status = 
 		}
 	}
 
+	// Начало следующего периода — день после конца предыдущего, а не
+	// «якорь плюс N месяцев».
+	//
+	// Разница видна, только когда менеджер подтвердил конец периода
+	// своей датой: подтверждённая граница сильнее вычисленной, и
+	// следующий период обязан начаться от неё, иначе в цепочке
+	// появится дыра или нахлёст. Пока никто ничего не подтверждал,
+	// оба правила дают одно и то же число.
+	var prevEnds time.Time
+	if haveLast {
+		if err := tx.QueryRow(ctx,
+			`SELECT ends_on FROM project_periods WHERE project_id = $1 ORDER BY seq DESC LIMIT 1`,
+			projectID).Scan(&prevEnds); err != nil {
+			return fmt.Errorf("last period end: %w", err)
+		}
+	}
+
 	limit := dayOf(upTo)
 	for seq := lastSeq + 1; ; seq++ {
-		starts := anchor.AddDate(0, seq-1, 0)
+		starts := anchor
+		if seq > 1 {
+			starts = dayOf(prevEnds).AddDate(0, 0, 1)
+		}
 		if starts.After(limit) {
 			break
 		}
-		ends := anchor.AddDate(0, seq, 0).AddDate(0, 0, -1)
+		ends := starts.AddDate(0, 1, 0).AddDate(0, 0, -1)
 		var id uuid.UUID
 		if err := tx.QueryRow(ctx, `
 INSERT INTO project_periods (project_id, seq, starts_on, ends_on, prev_period_id)
@@ -303,6 +332,7 @@ RETURNING id`, projectID, seq, starts, ends, lastID).Scan(&id); err != nil {
 		}
 		lastID = &id
 		haveLast = true
+		prevEnds = ends
 		// Защита от бесконечного цикла на испорченных данных: периодов
 		// больше тысячи быть не может — это восемьдесят лет работы.
 		if seq > 1000 {

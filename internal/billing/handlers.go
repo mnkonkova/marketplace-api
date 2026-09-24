@@ -933,6 +933,90 @@ type unlockPeriodReq struct {
 // @Failure  400 {object} errorResponse "bad_id; bad_period"
 // @Failure  404 {object} errorResponse "not_found — у проекта ещё нет периодов"
 // @Router   /admin/projects/{id}/billing/unlock_period [post]
+type confirmPeriodEndReq struct {
+	// EndsOn — ГГГГ-ММ-ДД. Пусто — подтверждаем ту дату, что стоит:
+	// это отметка «я проверил», а не правка.
+	EndsOn string `json:"ends_on"`
+}
+
+// ManagerConfirmPeriodEnd godoc
+// @Summary  Подтвердить конец периода
+// @Description Менеджер подтверждает, каким числом кончается период.
+// @Description Границу считает автомат — месяц от первой выкладки, — и он
+// @Description остаётся главным путём. Но подтверждённая дата СИЛЬНЕЕ
+// @Description вычисленной: план знает человек, а календарь только считает
+// @Description месяцы.
+// @Description
+// @Description Дата та же — это отметка «проверил», она гасит тревогу и
+// @Description больше ничего не меняет. Другая — граница переезжает, и
+// @Description вместе с ней вся цепочка дальше: начало следующего периода,
+// @Description его конец, отсечка.
+// @Description
+// @Description Подытоженный период не подтверждают: под ним уже стоит счёт.
+// @Tags     manager-billing
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id     path  string true  "project id"
+// @Param    period query int    false "номер периода, по умолчанию текущий"
+// @Param    body   body  confirmPeriodEndReq false "дата конца"
+// @Success  200 {object} periodResp
+// @Failure  400 {object} errorResponse "bad_id; bad_period; bad_date; bad_range"
+// @Failure  409 {object} errorResponse "period_locked — период подытожен"
+// @Router   /manager/projects/{id}/billing/confirm_period_end [post]
+func (h *Handler) ManagerConfirmPeriodEnd(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	projectID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	seq, ok := periodParam(r)
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
+			"period — номер периода, целое число начиная с единицы.")
+		return
+	}
+	var in confirmPeriodEndReq
+	if r.ContentLength > 0 {
+		_ = json.NewDecoder(r.Body).Decode(&in)
+	}
+	now := time.Now()
+	period, err := h.svc.Period(r.Context(), projectID, seq, now.UTC())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	endsOn := period.EndsOn
+	if in.EndsOn != "" {
+		endsOn, err = time.Parse("2006-01-02", in.EndsOn)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_date",
+				"ends_on — дата в формате ГГГГ-ММ-ДД.")
+			return
+		}
+	}
+	out, err := h.svc.ConfirmPeriodEnd(r.Context(), period.ID, endsOn, actor, now)
+	switch {
+	case errors.Is(err, ErrPeriodLocked):
+		httpx.WriteErrMsg(w, http.StatusConflict, "period_locked",
+			"Период подытожен — его границу больше не двигают.")
+		return
+	case errors.Is(err, ErrBadPeriodEnd):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_range",
+			"Конец периода не может быть раньше его начала.")
+		return
+	case err != nil:
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, periodResp{Period: out})
+}
+
 func (h *Handler) AdminUnlockPeriod(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.UserIDFrom(r.Context())
 	if !ok {
