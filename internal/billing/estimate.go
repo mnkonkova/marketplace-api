@@ -42,7 +42,10 @@ type OrderEstimate struct {
 	// Creators/Videos — из самого заказа.
 	Creators int `json:"creators"`
 	Videos   int `json:"videos"`
-	// Salaries — оклады, единственная точно известная часть.
+	// Salaries — фиксированная часть: фикс за ролик, умноженный на объём
+	// (у старых версий прайса — оклад за период на число людей). Точно
+	// известна, пока известен объём: бонус за просмотры — прогноз, фикс —
+	// нет. Имя поля осталось прежним, чтобы не ломать клиентов.
 	Salaries int64 `json:"salaries"`
 
 	// AvgViewsPerVideo — среднее по подборке, из него и растёт прогноз.
@@ -225,7 +228,7 @@ func assemble(terms Terms, needed, videos int, forecast []CreatorForecast) Order
 		Terms:    terms.ClientTerms(),
 		Creators: needed,
 		Videos:   videos,
-		Salaries: int64(needed) * terms.SalaryPerMonth,
+		Salaries: fixPart(terms, needed, videos),
 		Forecast: forecast,
 	}
 
@@ -243,7 +246,7 @@ func assemble(terms Terms, needed, videos int, forecast []CreatorForecast) Order
 		withHistory++
 	}
 	// Прогноза нет — ни по кому не из чего считать, либо не задан объём.
-	// Оклады при этом известны точно, их и показываем; has_forecast
+	// Фикс при этом известен точно, его и показываем; has_forecast
 	// остаётся false, чтобы ноль бонуса нельзя было прочитать как
 	// посчитанный ноль.
 	if withHistory == 0 || videos < 1 {
@@ -257,6 +260,22 @@ func assemble(terms Terms, needed, videos int, forecast []CreatorForecast) Order
 	e.BonusForecast = int64(videos) * bonusForOneVideo(terms, e.AvgViewsPerVideo)
 	e.Total = e.Salaries + e.BonusForecast
 	return e
+}
+
+// fixPart — фиксированная часть сметы.
+//
+// Фикс считается ЗА РОЛИК: месяц с пятью роликами не должен стоить как
+// месяц с тридцатью, и умножать его на число людей — значит назвать цену
+// по выключенной механике. Оклад за период остаётся только у старых
+// версий прайса, где фикса за ролик нет вовсе.
+//
+// Без объёма фикс за ролик неизвестен, и ноль здесь — это «не из чего
+// считать», ровно как has_forecast=false для бонуса.
+func fixPart(t Terms, needed, videos int) int64 {
+	if t.FeePerVideo != nil && *t.FeePerVideo > 0 {
+		return int64(videos) * *t.FeePerVideo
+	}
+	return int64(needed) * t.SalaryPerMonth
 }
 
 // bonusForOneVideo — бонус за один ролик с такими просмотрами, по

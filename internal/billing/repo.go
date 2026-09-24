@@ -166,7 +166,8 @@ SELECT id, salary_per_month, videos_first_month, videos_next_months,
        step_views, first_period_fee, base_fee, step_fee,
        step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
        creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
-       subscriber_rate, creator_subscriber_rate
+       subscriber_rate, creator_subscriber_rate,
+       fee_per_video, creator_fee_per_video
 FROM terms_versions ORDER BY version DESC LIMIT 1`).
 		Scan(&t.TermsVersionID, &t.SalaryPerMonth, &t.VideosFirstMonth, &t.VideosNextMonths,
 			&t.RatePer1000Views, &t.BonusViewsThreshold, &t.RatePer1000ViewsOver,
@@ -175,7 +176,8 @@ FROM terms_versions ORDER BY version DESC LIMIT 1`).
 			&t.StepViews, &t.FirstPeriodFee, &t.BaseFee, &t.StepFee,
 			&t.StepTier2From, &t.StepFeeOver, &t.StepCapViews, &t.GuaranteeViews,
 			&t.CreatorFirstPeriodFee, &t.CreatorBaseFee, &t.CreatorStepFee, &t.CreatorStepFeeOver,
-			&t.SubscriberRate, &t.CreatorSubscriberRate)
+			&t.SubscriberRate, &t.CreatorSubscriberRate,
+			&t.FeePerVideo, &t.CreatorFeePerVideo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Terms{}, ErrNotFound
 	}

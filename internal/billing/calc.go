@@ -46,6 +46,9 @@ func (s *Service) steppedAccruals(
 	// их по доле просмотров значило бы отдать часть чужого KPI тому, кто
 	// его не набирал.
 	clientLadder, creatorLadder := terms.ClientLadder(), terms.CreatorLadder()
+	// Фикс за ролик раскладывается по роликам, фикс за период — по
+	// просмотрам: см. shareFix ниже.
+	perVideo := clientLadder.FeePerVideo > 0 || creatorLadder.FeePerVideo > 0
 
 	rows := make([]Accrual, 0, len(facts))
 	if len(facts) == 0 {
@@ -79,18 +82,29 @@ func (s *Service) steppedAccruals(
 		}
 		a.SubscriberBonus = clientLadder.Subscribers(f.Subscribers)
 		a.PayoutSubscriberBonus = creatorLadder.Subscribers(f.Subscribers)
-		share := func(sum int64) int64 {
-			if agg.ViewsTotal <= 0 {
-				// Просмотров нет вовсе — делим поровну: фикс за период
-				// платится и тогда, когда ничего не набрали.
+		byPart := func(sum, mine, whole int64) int64 {
+			if whole <= 0 {
+				// Делить не по чему — поровну: фикс за период платится и
+				// тогда, когда ничего не набрали.
 				return sum / int64(len(facts))
 			}
-			return sum * f.ViewsTotal / agg.ViewsTotal
+			return sum * mine / whole
 		}
-		a.Salary = share(total.Salary)
+		share := func(sum int64) int64 { return byPart(sum, f.ViewsTotal, agg.ViewsTotal) }
+		// Фикс считается ЗА РОЛИК — и достаётся тому, кто этот ролик
+		// сделал. Разложить его по просмотрам значило бы отдать чужие 500
+		// ₽ тому, у кого ролик выстрелил: работа сделана поровну, а
+		// заплачено по удаче. По просмотрам делится только хвост.
+		shareFix := share
+		if perVideo {
+			shareFix = func(sum int64) int64 {
+				return byPart(sum, int64(f.DeliveredAssigned), int64(agg.DeliveredAssigned))
+			}
+		}
+		a.Salary = shareFix(total.Salary)
 		a.ViewsBonus = share(total.ViewsBonus)
 		a.Total = a.Salary + a.ViewsBonus + a.SubscriberBonus
-		a.PayoutSalary = share(total.PayoutSalary)
+		a.PayoutSalary = shareFix(total.PayoutSalary)
 		a.PayoutViewsBonus = share(total.PayoutViewsBonus)
 		a.PayoutTotal = a.PayoutSalary + a.PayoutViewsBonus + a.PayoutSubscriberBonus
 		givenClient.salary += a.Salary
@@ -275,8 +289,12 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 
 	client := t.ClientLadder()
 	charged := billable
-	// Ролики считаем сданные: фикс платится за вышедшую работу.
-	clientFee, _ := client.Fee(pc.Seq, charged, int64(f.Delivered))
+	// Ролики считаем сданные и ПОСТАВЛЕННЫЕ МЕНЕДЖЕРОМ: фикс платится за
+	// вышедшую работу по договорённости. Самодобавленный ролик в фикс не
+	// идёт — иначе креатор кнопкой «добавить ролик» выставлял бы
+	// заказчику счёт, которого никто не заказывал. Просмотры таких
+	// роликов при этом считаются наравне: просмотры есть просмотры.
+	clientFee, _ := client.Fee(pc.Seq, charged, int64(f.DeliveredAssigned))
 	clientTail := client.Tail(f.ViewsOver)
 	// KPI по подписчикам стоит рядом со ступенями, а не внутри них:
 	// ступени считаются от просмотров, подписчики — своё число, и
@@ -299,7 +317,7 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 	// Перенос выключен вместе с клиентским (см. выше). Было:
 	//   counted := stepPool + pc.CreatorCarryIn
 	counted := stepPool
-	creatorFee, steps := creator.Fee(pc.Seq, counted, int64(f.Delivered))
+	creatorFee, steps := creator.Fee(pc.Seq, counted, int64(f.DeliveredAssigned))
 	creatorTail := creator.Tail(f.ViewsOver)
 	creatorSubs := creator.Subscribers(f.Subscribers)
 	a.PayoutSalary = creatorFee

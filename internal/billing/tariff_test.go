@@ -426,7 +426,7 @@ func TestFeePerVideoReplacesPeriodFee(t *testing.T) {
 	// Просмотров мало — до настоящих ступеней не дотянули, платим за
 	// ролики. Десять выкладок: клиенту 10 000 ₽, креатору 5 000 ₽.
 	f := facts(10_000, 0)
-	f.Delivered = 10
+	f.Delivered, f.DeliveredAssigned = 10, 10
 	a, _ := calc(terms, f, periodContext{Seq: 2})
 	if a.Salary != 10*fee {
 		t.Errorf("клиенту за 10 роликов: %d, ожидалось %d", a.Salary, 10*fee)
@@ -437,7 +437,7 @@ func TestFeePerVideoReplacesPeriodFee(t *testing.T) {
 
 	// Вдвое меньше роликов — вдвое меньше фикс. В прежней модели цена
 	// периода от объёма не зависела вовсе.
-	f.Delivered = 5
+	f.Delivered, f.DeliveredAssigned = 5, 5
 	half, _ := calc(terms, f, periodContext{Seq: 2})
 	if half.Salary != 5*fee {
 		t.Errorf("клиенту за 5 роликов: %d, ожидалось %d", half.Salary, 5*fee)
@@ -453,9 +453,29 @@ func TestFeePerVideoReplacesPeriodFee(t *testing.T) {
 	// А дотянули до настоящей ступени — платим её цену, а не ролики:
 	// ступень и есть цена периода на взятом пороге.
 	big := facts(400_000, 0)
-	big.Delivered = 10
+	big.Delivered, big.DeliveredAssigned = 10, 10
 	step, _ := calc(terms, big, periodContext{Seq: 2})
 	if step.Salary == 10*fee {
 		t.Errorf("ступень не взяла верх над фиксом за ролик: %d", step.Salary)
+	}
+}
+
+// Самодобавленный ролик фикса не приносит.
+//
+// Кнопка «добавить ролик» в кабинете креатора — про добор ступени по
+// просмотрам, и платить за неё фикс значило бы дать креатору выставлять
+// заказчику счёт, которого никто не заказывал. Просмотры таких роликов
+// при этом считаются наравне: просмотры есть просмотры.
+func TestFeePerVideoIgnoresSelfAdded(t *testing.T) {
+	terms := steppedTerms()
+	fee := int64(1_000 * rub)
+	terms.FeePerVideo = &fee
+
+	f := facts(10_000, 0)
+	// Десять роликов вышло, но поставил менеджер только четыре.
+	f.Delivered, f.DeliveredAssigned = 10, 4
+	a, _ := calc(terms, f, periodContext{Seq: 2})
+	if a.Salary != 4*fee {
+		t.Errorf("фикс за самодобавленные: %d, ожидалось %d", a.Salary, 4*fee)
 	}
 }

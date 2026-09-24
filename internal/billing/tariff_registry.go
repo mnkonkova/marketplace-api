@@ -40,6 +40,10 @@ type TariffRow struct {
 	StepsCount int   `json:"steps_count"`
 	MinFee     int64 `json:"min_fee"`
 	MaxFee     int64 `json:"max_fee"`
+	// FeePerVideo/CreatorFeePerVideo — фикс за ролик: основная цена
+	// работы. Ступени и ставка за тысячу — надбавка за просмотры.
+	FeePerVideo        *int64 `json:"fee_per_video,omitempty"`
+	CreatorFeePerVideo *int64 `json:"creator_fee_per_video,omitempty"`
 	// SalaryPerMonth/RatePer1000Views — числа старой модели. Показываем
 	// их там, где ступеней нет: иначе строка выглядела бы пустой у
 	// проекта, у которого тариф на самом деле задан.
@@ -67,6 +71,7 @@ SELECT pr.id, COALESCE(pr.title, ''), pr.status::text,
                 split_part(mu.email, '@', 1), '') AS manager_name,
        (b.project_id IS NOT NULL) AS has_terms,
        COALESCE(b.salary_per_month, 0), COALESCE(b.rate_per_1000_views, 0),
+       b.fee_per_video, b.creator_fee_per_video,
        b.guarantee_views, b.updated_at,
        COALESCE(s.cnt, 0), COALESCE(s.min_fee, 0), COALESCE(s.max_fee, 0)
 FROM projects pr
@@ -93,6 +98,7 @@ ORDER BY (b.project_id IS NULL) DESC, pr.created_at DESC`)
 		var t TariffRow
 		if err := rows.Scan(&t.ProjectID, &t.Title, &t.Status, &t.ClientName, &t.ManagerName,
 			&t.HasTerms, &t.SalaryPerMonth, &t.RatePer1000Views,
+			&t.FeePerVideo, &t.CreatorFeePerVideo,
 			&t.GuaranteeViews, &t.UpdatedAt,
 			&t.StepsCount, &t.MinFee, &t.MaxFee); err != nil {
 			return nil, fmt.Errorf("scan tariff row: %w", err)
