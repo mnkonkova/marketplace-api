@@ -63,6 +63,15 @@ var dynamicEmitSites = map[string][]string{
 		"project.publication_incomplete",
 		"project.publication_manual",
 		"project.manager_digest",
+		// Клиентские уведомления идут тем же Repo.Send: порог
+		// просмотров, новый ролик и сдвиг даты.
+		"project.client_views_threshold",
+		"project.client_new_video",
+		"project.client_date_shift",
+	},
+	"internal/publications/client_notify.go": {
+		// "project." + kind недельной сводки заказчику.
+		"project.client_weekly_digest",
 	},
 	"internal/publications/weak_video.go": {
 		// "project." + WeakVideo.Kind(): мало просмотров или битая ссылка.

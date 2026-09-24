@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -180,7 +181,15 @@ func (s *Service) MoveDueDate(ctx context.Context, in MoveDueDateInput) (Publica
 	if in.Day.After(now.AddDate(1, 0, 0)) {
 		return Publication{}, fmt.Errorf("%w: дата больше чем на год вперёд", ErrInvalidInput)
 	}
-	return s.repo.MoveDueDate(ctx, in)
+	pub, err := s.repo.MoveDueDate(ctx, in)
+	if err != nil {
+		return pub, err
+	}
+	// Заказчику — если он про это просил. После транзакции и молча при
+	// ошибке: перенос состоялся, и падать из-за неотправленного
+	// уведомления значило бы отменить сделанное.
+	s.notifyClientShift(ctx, pub, in.Now)
+	return pub, nil
 }
 
 // CancelPublication — снять одну запланированную выкладку.
@@ -194,7 +203,27 @@ func (s *Service) CancelPublication(ctx context.Context, pubID, actor uuid.UUID,
 	if utf8.RuneCountInString(reason) > 300 {
 		return Publication{}, fmt.Errorf("%w: причина длиннее 300 символов", ErrInvalidInput)
 	}
-	return s.repo.CancelPublication(ctx, pubID, actor, reason)
+	pub, err := s.repo.CancelPublication(ctx, pubID, actor, reason)
+	if err != nil {
+		return pub, err
+	}
+	s.notifyClientShift(ctx, pub, time.Now())
+	return pub, nil
+}
+
+// notifyClientShift — «дата изменилась» заказчику, если он подписан.
+//
+// Отдельным методом, потому что зовётся из двух мест: перенос и снятие
+// для заказчика — один вопрос «когда теперь», и разводить их по двум
+// видам уведомлений значило бы прислать ему два письма об одном.
+func (s *Service) notifyClientShift(ctx context.Context, pub Publication, now time.Time) {
+	if pub.ProjectID == uuid.Nil {
+		return
+	}
+	if _, err := s.repo.NotifyClientDateShift(ctx, pub.ProjectID, pub.ID, now); err != nil {
+		slog.Warn("client date shift notify failed",
+			"project", pub.ProjectID, "publication", pub.ID, "err", err)
+	}
 }
 
 // SubmitLinks — креатор сдаёт ролик ссылками.
@@ -228,7 +257,20 @@ func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publica
 		return Publication{}, ErrNoLinks
 	}
 	in.CheckedItemIDs = dedupeIDs(in.CheckedItemIDs)
-	return s.repo.SubmitLinks(ctx, in, parsed)
+	pub, err := s.repo.SubmitLinks(ctx, in, parsed)
+	if err != nil {
+		return pub, err
+	}
+	// Ролик ВЫШЕЛ — говорим заказчику. Именно на переходе в «вышел», а
+	// не на каждой досланной ссылке: заказчику важен ролик, а не то,
+	// что креатор добавил четвёртую площадку.
+	if pub.Status == StatusDone {
+		if _, nerr := s.repo.NotifyClientNewVideo(ctx, pub.ProjectID, pub.ID, time.Now()); nerr != nil {
+			slog.Warn("client new video notify failed",
+				"project", pub.ProjectID, "publication", pub.ID, "err", nerr)
+		}
+	}
+	return pub, nil
 }
 
 // ManagerEditLink — менеджер правит сданную ссылку.
@@ -306,7 +348,18 @@ func (s *Service) CloseManually(ctx context.Context, in CloseManuallyInput) (Pub
 	if utf8.RuneCountInString(in.Reason) > 500 {
 		return Publication{}, fmt.Errorf("%w: причина слишком длинная", ErrInvalidInput)
 	}
-	return s.repo.CloseManually(ctx, in)
+	pub, err := s.repo.CloseManually(ctx, in)
+	if err != nil {
+		return pub, err
+	}
+	// Закрытая вручную выкладка для заказчика такой же вышедший ролик:
+	// он видит её в ленте, и молчать о ней значило бы показать ролик,
+	// про который не сказали.
+	if _, nerr := s.repo.NotifyClientNewVideo(ctx, pub.ProjectID, pub.ID, time.Now()); nerr != nil {
+		slog.Warn("client new video notify failed",
+			"project", pub.ProjectID, "publication", pub.ID, "err", nerr)
+	}
+	return pub, nil
 }
 
 // RequestDateChange — креатор просит перенос.

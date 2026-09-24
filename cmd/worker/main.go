@@ -495,6 +495,14 @@ func runPublicationRemindersTicker(ctx context.Context, svc *publications.Servic
 		} else if weak > 0 {
 			logger.Info("weak video pings", "sent", weak)
 		}
+		// Недельная сводка заказчику — тем же проходом. Отбор идёт по
+		// журналу отправок, а не по дню недели, поэтому частота тикера
+		// на неё не влияет: пока неделя не прошла, отбор пуст.
+		if digests, err := svc.RunClientDigests(ctx, now); err != nil {
+			logger.Warn("client digests failed", "err", err)
+		} else if digests > 0 {
+			logger.Info("client digests", "sent", digests)
+		}
 		if st.Sent > 0 || st.Failures > 0 || st.Digests > 0 {
 			logger.Info("publication reminders",
 				"considered", st.Considered, "sent", st.Sent,

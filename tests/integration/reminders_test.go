@@ -589,3 +589,72 @@ func TestPlanEndingFiresWhenScheduleAlreadyRanOut(t *testing.T) {
 		t.Errorf("предупреждений %d, ожидалось одно", st.PlanEndings)
 	}
 }
+
+// Уведомления ЗАКАЗЧИКУ по его выключателям.
+//
+// Три галочки из четырёх в кабинете заказчика ничего не делали: они
+// сохранялись и отдавались обратно, а событий под них не существовало.
+// Проверяем то, чего не было: выключатель спрашивают ДО отправки, а
+// журнал не даёт прислать одно и то же дважды за день.
+func TestClientNotificationsFollowPrefs(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	repo := publications.NewRepo(pool)
+	now := time.Now().UTC()
+
+	var clientID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT client_user_id FROM projects WHERE id = $1`, projectID).Scan(&clientID); err != nil {
+		t.Fatalf("клиент проекта: %v", err)
+	}
+
+	pubID := creatorPubWithViews(t, pool, projectID, creators[0], 0, 1000)
+
+	// Настроек нет вовсе — человек в уведомления не заходил. Умолчание
+	// схемы «включено», и решать за него «молчим» мы не вправе.
+	sent, err := repo.NotifyClientNewVideo(ctx, projectID, pubID, now)
+	if err != nil {
+		t.Fatalf("NotifyClientNewVideo: %v", err)
+	}
+	if !sent {
+		t.Error("без строки настроек уведомление не ушло, хотя умолчание — включено")
+	}
+
+	// Второй раз в тот же день — не уходит: журнал и есть дедуп.
+	again, err := repo.NotifyClientNewVideo(ctx, projectID, pubID, now)
+	if err != nil {
+		t.Fatalf("NotifyClientNewVideo 2: %v", err)
+	}
+	if again {
+		t.Error("одно и то же уведомление ушло заказчику дважды за день")
+	}
+
+	// Выключатель выключили — молчим, и это ровно то, чего раньше не
+	// происходило: галочка не спрашивалась вообще.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO client_notification_prefs (project_id, user_id, on_new_video, on_date_shift)
+VALUES ($1, $2, FALSE, FALSE)
+ON CONFLICT (project_id, user_id) DO UPDATE
+SET on_new_video = FALSE, on_date_shift = FALSE`, projectID, clientID); err != nil {
+		t.Fatalf("настройки: %v", err)
+	}
+
+	other := creatorPubWithViews(t, pool, projectID, creators[0], 1, 1000)
+	off, err := repo.NotifyClientNewVideo(ctx, projectID, other, now)
+	if err != nil {
+		t.Fatalf("NotifyClientNewVideo 3: %v", err)
+	}
+	if off {
+		t.Error("выключенная галочка «новый ролик» всё равно прислала уведомление")
+	}
+	shift, err := repo.NotifyClientDateShift(ctx, projectID, other, now)
+	if err != nil {
+		t.Fatalf("NotifyClientDateShift: %v", err)
+	}
+	if shift {
+		t.Error("выключенная галочка «сдвиг даты» всё равно прислала уведомление")
+	}
+}
