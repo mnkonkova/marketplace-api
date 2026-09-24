@@ -86,13 +86,27 @@ func (r *Repo) AddCreator(ctx context.Context, projectID, creatorID, addedBy uui
 	if err := r.assertCanBeCreator(ctx, creatorID); err != nil {
 		return err
 	}
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	const q = `
 INSERT INTO project_creators (project_id, creator_user_id, added_by)
 VALUES ($1, $2, $3)
 ON CONFLICT (project_id, creator_user_id)
 DO UPDATE SET removed_at = NULL, added_at = now(), added_by = EXCLUDED.added_by`
-	if _, err := r.db.Exec(ctx, q, projectID, creatorID, addedBy); err != nil {
+	if _, err := tx.Exec(ctx, q, projectID, creatorID, addedBy); err != nil {
 		return fmt.Errorf("add creator: %w", err)
+	}
+	// Задание проекта человек получает в момент, когда его в проект
+	// добавили, а не когда он сам догадается открыть вкладку.
+	if err := notifyNewCreator(ctx, tx, projectID, creatorID, time.Now()); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

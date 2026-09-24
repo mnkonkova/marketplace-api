@@ -89,6 +89,20 @@ var chatRouting = map[string]Delivery{
 	"project.publications_created":  CRMOnly,
 	"project.publication_submitted": CRMOnly,
 	"project.publication_closed":    CRMOnly,
+	// Ролик не пошёл: меньше сотни просмотров на вторые сутки или
+	// площадка по ссылке ничего не отдаёт. Разговор с креатором в его
+	// боте — переснять и перезалить может только он.
+	"project.publication_weak":      CRMOnly,
+	"project.publication_dead_link": CRMOnly,
+
+	// Задание креатора изменилось: материалы, чеклист или человека
+	// только что добавили в проект. Это разговор с креатором в его
+	// боте, а не с командой: в общем чате менеджер прочитал бы
+	// сообщение о том, что сам минуту назад и сделал.
+	"project.project_materials_updated": CRMOnly,
+	"project.project_checklist_updated": CRMOnly,
+	"project.project_creator_briefed":   CRMOnly,
+
 	// Правка ссылки менеджером — CRMOnly: это внутренняя починка
 	// данных, а не повод отвечать человеком. В карточке выкладки она
 	// видна, в истории проекта записана.

@@ -151,9 +151,9 @@ type OverviewWindow struct {
 	// ряд. А отрезать его надо ровно там, где границу провёл сервер, —
 	// своё правило на фронте однажды с этим разойдётся, и на одном
 	// экране окажутся два разных «окна».
-	From string `json:"from"`
-	To   string `json:"to"`
-	Views int64 `json:"views"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Views int64  `json:"views"`
 	// ViewsDeltaPct — против предыдущего окна такой же длины. Поля нет
 	// вовсе, если сравнивать не с чем: ноль означал бы «не выросло».
 	ViewsDeltaPct *int `json:"views_delta_pct,omitempty"`

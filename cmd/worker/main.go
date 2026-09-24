@@ -487,6 +487,14 @@ func runPublicationRemindersTicker(ctx context.Context, svc *publications.Servic
 			logger.Warn("publication reminders failed", "err", err)
 			return
 		}
+		// Ролики, которые не пошли, — тем же проходом и в то же окно:
+		// это разговор с креатором, и будить его ради него отдельно в
+		// другое время незачем.
+		if weak, err := svc.RunWeakVideos(ctx, now, 0); err != nil {
+			logger.Warn("weak video pings failed", "err", err)
+		} else if weak > 0 {
+			logger.Info("weak video pings", "sent", weak)
+		}
 		if st.Sent > 0 || st.Failures > 0 || st.Digests > 0 {
 			logger.Info("publication reminders",
 				"considered", st.Considered, "sent", st.Sent,

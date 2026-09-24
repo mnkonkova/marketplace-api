@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"marketpclce/internal/audit"
 )
@@ -321,7 +323,33 @@ RETURNING id, project_id, text, platform, is_required, sort_order, added_for_pro
 	if err != nil {
 		return ChecklistItem{}, fmt.Errorf("add checklist item: %w", err)
 	}
+	if err := r.notifyChecklist(ctx, projectID); err != nil {
+		return ChecklistItem{}, err
+	}
 	return it, nil
+}
+
+// notifyChecklist — сказать составу, что чеклист сдачи изменился.
+//
+// Своей транзакцией, а не общей с правкой: обе правки чеклиста —
+// одиночные запросы без транзакции вовсе, и заводить её ради
+// уведомления значило бы переписать их обе. Цена — уведомление может
+// уйти о правке, которая тут же упадёт следом; следом ничего нет, оба
+// запроса на этом кончаются.
+func (r *Repo) notifyChecklist(ctx context.Context, projectID uuid.UUID) error {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := notifyBrief(ctx, tx, projectID,
+		ReminderChecklistUpdated, nil, time.Now()); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // ErrChecklistItemUsed — по пункту уже отчитывались.
@@ -354,7 +382,7 @@ SELECT (SELECT COUNT(*) FROM publication_checklist_marks WHERE item_id = $1)
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return r.notifyChecklist(ctx, projectID)
 }
 
 func (s *Service) AddChecklistItem(ctx context.Context, projectID uuid.UUID, text, platform string, required bool) (ChecklistItem, error) {

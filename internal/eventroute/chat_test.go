@@ -64,6 +64,17 @@ var dynamicEmitSites = map[string][]string{
 		"project.publication_manual",
 		"project.manager_digest",
 	},
+	"internal/publications/weak_video.go": {
+		// "project." + WeakVideo.Kind(): мало просмотров или битая ссылка.
+		"project.publication_weak",
+		"project.publication_dead_link",
+	},
+	"internal/publications/brief.go": {
+		// "project." + Reminder*-константа задания креатора.
+		"project.project_materials_updated",
+		"project.project_checklist_updated",
+		"project.project_creator_briefed",
+	},
 	"internal/publications/plan_ending.go": {
 		// "project." + ReminderPlanEnding.
 		"project.project_plan_ending",

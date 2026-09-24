@@ -130,6 +130,14 @@ RETURNING id, created_by, created_at`,
 		Scan(&m.ID, &m.CreatedBy, &m.CreatedAt); err != nil {
 		return Material{}, fmt.Errorf("insert material: %w", err)
 	}
+	// Материал креатору — это изменение его задания, и узнать о нём он
+	// должен от нас, а не открыв проект по своей воле.
+	if in.Audience == "creator" || in.Audience == "all" {
+		if err := notifyBrief(ctx, tx, in.ProjectID,
+			ReminderMaterialsUpdated, nil, time.Now()); err != nil {
+			return Material{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Material{}, fmt.Errorf("commit: %w", err)
 	}
@@ -139,15 +147,34 @@ RETURNING id, created_by, created_at`,
 // DeleteMaterial — убрать материал. Возвращает ErrNotFound, если он не из
 // этого проекта: id материала сам по себе не даёт права его удалить.
 func (r *Repo) DeleteMaterial(ctx context.Context, projectID, materialID uuid.UUID) error {
-	tag, err := r.db.Exec(ctx,
-		`DELETE FROM project_materials
-		 WHERE id = $1 AND project_id = $2 AND delivery_id IS NULL`,
-		materialID, projectID)
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Кому он был виден — нужно знать ДО удаления: после него спросить
+	// уже не у кого, а убранный у креатора материал меняет его задание
+	// ровно так же, как добавленный.
+	var audience string
+	err = tx.QueryRow(ctx, `
+DELETE FROM project_materials
+WHERE id = $1 AND project_id = $2 AND delivery_id IS NULL
+RETURNING audience`, materialID, projectID).Scan(&audience)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
 	if err != nil {
 		return fmt.Errorf("delete material: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+	if audience == "creator" || audience == "all" {
+		if err := notifyBrief(ctx, tx, projectID,
+			ReminderMaterialsUpdated, nil, time.Now()); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }
