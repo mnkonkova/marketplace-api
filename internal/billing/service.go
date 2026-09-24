@@ -793,17 +793,6 @@ func (s *Service) fillMissingAccruals(
 // nil, если считать не по чему: у проекта нет периодов или пустой тариф.
 // Ноль в этом случае читался бы как «ступень ничего не даст», а это
 // другое утверждение.
-// payoutOf — выплата одного креатора в разложенном периоде. Нет строки
-// — ноль: человека нет в составе периода, и платить ему не за что.
-func payoutOf(rows []Accrual, creatorID uuid.UUID) int64 {
-	for _, a := range rows {
-		if a.CreatorUserID == creatorID {
-			return a.PayoutTotal
-		}
-	}
-	return 0
-}
-
 func (s *Service) nextStepForecast(
 	ctx context.Context, projectID, creatorID uuid.UUID, terms Terms, now time.Time,
 ) (*NextStepForecast, error) {
@@ -841,15 +830,13 @@ func (s *Service) nextStepForecast(
 	// показывать обратное значило бы обещать креатору ступень за
 	// просмотры, которые в неё не идут.
 	//
-	// И объём этот — ПЕРИОДА, а не человека: ступень берётся объёмом
-	// всего проекта, цена периода считается от него. Личными просмотрами
-	// «до ступени осталось» отвечало не на тот вопрос: креатору в
-	// проекте из пятерых говорили, что до ступени триста тысяч, когда
-	// проект её уже взял, — и обещанная прибавка не приходила.
-	agg := aggregateFacts(facts)
+	// Объём — ЕГО СОБСТВЕННЫЙ: ступень берётся просмотрами человека, а
+	// не общим объёмом проекта. «Набрал полмиллиона — ступень» сказано
+	// про него, и считать расстояние до неё по чужим роликам значило бы
+	// обещать прибавку, которой он не получит.
 	pool := mine.ViewsTotal
 	if terms.Stepped() {
-		pool = agg.ViewsBase
+		pool = mine.ViewsBase
 	}
 	// Перенесённый остаток уже в счёте — значит и до ступени с ним ближе.
 	counted := pool + period.CarryInCreator
@@ -912,33 +899,17 @@ func (s *Service) nextStepForecast(
 
 	var gain int64
 	if terms.Stepped() {
-		// Ступенчатый тариф считается по периоду целиком, поэтому и
-		// прогноз — по нему же: одна функция на счёт, выплату и прогноз.
+		// Ступень берётся ЕГО просмотрами, поэтому и прогноз считается
+		// по его же фактам — тем же кодом, что и настоящая выплата.
+		// Своя формула «для прогноза» разошлась бы с ней молча.
 		pc := periodContext{
 			Seq:            period.Seq,
 			ClientDebtIn:   period.ClientDebtIn,
 			CreatorCarryIn: period.CarryInCreator,
 		}
-		// Прибавка периода — ещё не прибавка человека: цена ступени
-		// делится между всеми, кто в периоде работал. Обещать одному всю
-		// разницу значило бы назвать сумму, которой он не увидит, —
-		// поэтому раскладываем обе картины тем же кодом, что и счёт, и
-		// сравниваем ЕГО строку.
-		grownFacts := make([]creatorPeriod, len(facts))
-		copy(grownFacts, facts)
-		for i := range grownFacts {
-			if grownFacts[i].CreatorID == creatorID {
-				grownFacts[i].ViewsTotal += toGo
-				grownFacts[i].ViewsBase += toGo
-			}
-		}
-		grownAgg := aggregateFacts(grownFacts)
-		nowPeriod, _ := calcPeriod(terms, agg, pc, projectID, period.StartsOn)
-		thenPeriod, _ := calcPeriod(terms, grownAgg, pc, projectID, period.StartsOn)
-		nowRows := splitAcrossCreators(terms, facts, agg, nowPeriod, projectID, period.StartsOn)
-		thenRows := splitAcrossCreators(terms, grownFacts, grownAgg, thenPeriod,
-			projectID, period.StartsOn)
-		gain = payoutOf(thenRows, creatorID) - payoutOf(nowRows, creatorID)
+		nowRow, _ := calcPeriod(terms, mine, pc, projectID, period.StartsOn)
+		thenRow, _ := calcPeriod(terms, grown, pc, projectID, period.StartsOn)
+		gain = thenRow.PayoutTotal - nowRow.PayoutTotal
 	} else {
 		nowAccrual := calcAccrual(terms, mine, projectID, period.StartsOn)
 		thenAccrual := calcAccrual(terms, grown, projectID, period.StartsOn)

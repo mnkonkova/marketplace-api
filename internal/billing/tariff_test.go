@@ -480,61 +480,51 @@ func TestFeePerVideoIgnoresSelfAdded(t *testing.T) {
 	}
 }
 
-// Раскладка суммы периода по людям: что чем делится.
+// Ступень берётся просмотрами КАЖДОГО КРЕАТОРА, а не общим объёмом.
 //
-// Ступени берутся от объёма периода целиком, а строка человека отвечает
-// на вопрос «сколько из этого моё». Делить всё подряд по общим
-// просмотрам нельзя: фикс платят за работу, хвост зарабатывают
-// просмотры сверх порога, и это разные основания.
-func TestSplitAcrossCreatorsSharesByTheRightThing(t *testing.T) {
-	terms := steppedTerms()
-	fee := int64(1_000 * rub)
-	terms.FeePerVideo = &fee
-
-	// Двое: у первого два ролика и ноль сверхпорогового объёма, у
-	// второго один ролик, который залетел.
-	facts := []creatorPeriod{
-		{
-			CreatorID: uuid.New(), Planned: 2, Delivered: 2,
-			PlannedAssigned: 2, DeliveredAssigned: 2,
-			ViewsTotal: 200_000, ViewsBase: 200_000,
-		},
-		{
-			CreatorID: uuid.New(), Planned: 1, Delivered: 1,
-			PlannedAssigned: 1, DeliveredAssigned: 1,
-			ViewsTotal: 800_000, ViewsBase: 300_000, ViewsOver: 500_000,
+// «Набрал полмиллиона — ступень 2 500 ₽» сказано про человека. Раньше
+// период считался от агрегата и раскладывался по людям пропорционально:
+// тот, кто не дотянул до порога сам, получал долю ступени, взятой
+// соседом, а проект платил за неё один раз вместо двух.
+func TestStepIsTakenByEachCreatorSeparately(t *testing.T) {
+	terms := Terms{
+		// Лесенка порогов: полмиллиона стоит 2 500 ₽, миллион — 5 000 ₽.
+		// Между порогами цена не растёт: берётся последняя взятая
+		// ступень, а не пропорция.
+		Steps: []TermsStep{
+			{FromViews: 500_000, ClientFee: 2_500 * rub},
+			{FromViews: 1_000_000, ClientFee: 5_000 * rub},
 		},
 	}
-	agg := aggregateFacts(facts)
-	total := Accrual{Salary: 3 * fee, ViewsBonus: 90 * rub, PayoutSalary: 3 * fee}
-	rows := splitAcrossCreators(terms, facts, agg, total, uuid.New(),
-		time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
 
-	if len(rows) != 2 {
-		t.Fatalf("строк %d, ожидалось 2", len(rows))
+	strong := creatorPeriod{
+		Planned: 1, Delivered: 1, PlannedAssigned: 1, DeliveredAssigned: 1,
+		ViewsTotal: 900_000, ViewsBase: 900_000,
 	}
-	// Фикс — по роликам: две трети и треть, а не по просмотрам (где было
-	// бы 20% и 80%).
-	if rows[0].Salary != 2*fee {
-		t.Errorf("фикс первому %d, ожидалось %d (два ролика из трёх)", rows[0].Salary, 2*fee)
+	weak := creatorPeriod{
+		Planned: 1, Delivered: 1, PlannedAssigned: 1, DeliveredAssigned: 1,
+		ViewsTotal: 100_000, ViewsBase: 100_000,
 	}
-	if rows[1].Salary != fee {
-		t.Errorf("фикс второму %d, ожидалось %d (один ролик из трёх)", rows[1].Salary, fee)
+
+	a, _ := calc(terms, strong, periodContext{Seq: 2})
+	b, _ := calc(terms, weak, periodContext{Seq: 2})
+
+	// Сильный взял первую ступень сам, слабый не взял ни одной.
+	if a.Salary != 2_500*rub {
+		t.Errorf("ступень сильного: %d, ожидалось %d", a.Salary, 2_500*rub)
 	}
-	// Хвост — весь второму: сверх порога набрал только он.
-	if rows[0].ViewsBonus != 0 {
-		t.Errorf("хвост первому %d, а сверх порога он не набрал ничего", rows[0].ViewsBonus)
+	if b.Salary != 0 {
+		t.Errorf("слабый не дотянул до порога, а ему начислили %d", b.Salary)
 	}
-	if rows[1].ViewsBonus != total.ViewsBonus {
-		t.Errorf("хвост второму %d, ожидалось %d", rows[1].ViewsBonus, total.ViewsBonus)
-	}
-	// Сумма строк равна сумме периода копейка в копейку.
-	var sum int64
-	for _, r := range rows {
-		sum += r.Salary + r.ViewsBonus
-	}
-	if sum != total.Salary+total.ViewsBonus {
-		t.Errorf("сумма строк %d, цена периода %d", sum, total.Salary+total.ViewsBonus)
+
+	// А вместе их объём — миллион, и по прежнему правилу проект платил
+	// бы 5 000 ₽ за одну общую ступень. Теперь платит 2 500: ступень
+	// взял один человек, и второй раз её никто не брал.
+	together, _ := calc(terms, aggregateFacts([]creatorPeriod{strong, weak}),
+		periodContext{Seq: 2})
+	if a.Salary+b.Salary == together.Salary {
+		t.Errorf("сумма строк совпала со ступенью от агрегата (%d) — считаем по-старому",
+			together.Salary)
 	}
 }
 
