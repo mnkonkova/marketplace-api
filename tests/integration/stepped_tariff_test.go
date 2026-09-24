@@ -270,3 +270,109 @@ func TestSteppedForecastMatchesRealRecalculation(t *testing.T) {
 		t.Errorf("прогноз обещал %d, начислено %d", earn.NextStep.ForecastPayout, got)
 	}
 }
+
+// Раскладка периода между ДВУМЯ креаторами — вживую, через базу.
+//
+// Цена периода — величина проекта: ступень берётся общим объёмом, фикс
+// платится за каждый вышедший ролик. А строка человека отвечает на
+// вопрос «сколько из этого моё», и делится каждая часть по своему
+// основанию: фикс — по роликам, виральный хвост — по просмотрам СВЕРХ
+// порога. Одним креатором эти правила неразличимы: любая доля равна
+// единице, и ошибка проявляется только когда людей двое.
+func TestPeriodSplitBetweenTwoCreators(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	terms := steppedProjectTerms(pid)
+	fee := int64(1_000 * rubles)
+	creatorFee := int64(500 * rubles)
+	terms.FeePerVideo = &fee
+	terms.CreatorFeePerVideo = &creatorFee
+	if _, err := svc.SaveTerms(ctx, terms, creators[0]); err != nil {
+		t.Fatalf("terms: %v", err)
+	}
+
+	// Первый: два ролика, оба скромные — сверх порога ноль.
+	seedPublicationViews(t, pid, creators[0], nextDue(), "two-a1", 200_000, true)
+	seedPublicationViews(t, pid, creators[0], nextDue(), "two-a2", 300_000, true)
+	// Второй: один ролик, и он залетел — весь виральный хвост его.
+	seedPublicationViews(t, pid, creators[1], nextDue(), "two-b1", 2_500_000, true)
+
+	rows, err := recalcCurrent(t, svc, pid)
+	if err != nil {
+		t.Fatalf("recalc: %v", err)
+	}
+	byCreator := map[uuid.UUID]billing.Accrual{}
+	for _, a := range rows {
+		byCreator[a.CreatorUserID] = a
+	}
+	first, second := byCreator[creators[0]], byCreator[creators[1]]
+
+	// Фикс — по роликам: два из трёх и один из трёх. По просмотрам это
+	// было бы 17% и 83%, то есть работа оплачена по удаче.
+	if first.PayoutSalary != 2*creatorFee || second.PayoutSalary != creatorFee {
+		t.Errorf("фикс разложен %d/%d, ожидалось %d/%d (два ролика и один)",
+			first.PayoutSalary, second.PayoutSalary, 2*creatorFee, creatorFee)
+	}
+	// Хвост — по просмотрам СВЕРХ порога, а сверх него набрал только
+	// второй. Ровный исполнитель доли чужой виральности не получает.
+	if first.ViewsBonus != 0 {
+		t.Errorf("хвост первому %d, а порога он не переходил", first.ViewsBonus)
+	}
+	if second.ViewsBonus <= 0 {
+		t.Errorf("хвост второму %d, а залетел ролик именно у него", second.ViewsBonus)
+	}
+
+	// И главное правило подачи: сумма строк равна ЦЕНЕ ПЕРИОДА. Цену
+	// считаем теми же ступенями, что и расчёт, но по известным фактам:
+	// три сданных ролика, просмотры до порога и сверх него — те, что
+	// посеяны выше.
+	ladder := terms.ClientLadder()
+	price := func(base, over int64, videos int64) int64 {
+		fee, _ := ladder.Fee(1, base, videos)
+		return fee + ladder.Tail(over)
+	}
+	// Порог на ролик — миллион: 200 000 + 300 000 + 1 000 000 до него,
+	// 1 500 000 сверх.
+	want := price(1_500_000, 1_500_000, 3)
+	if got := first.Total + second.Total; got != want {
+		t.Errorf("сумма строк %d, цена периода %d", got, want)
+	}
+
+	// Утверждённая строка — замороженные деньги: пересчёт её не трогает.
+	// А остальным делится ОСТАТОК цены периода, а не вся цена: иначе
+	// после утверждения сумма строк разойдётся с ценой ровно на
+	// утверждённое — и «оклады + бонус» в шапке перестанут сходиться со
+	// столбцом «итого» под таблицей.
+	if _, err := svc.ApproveAccrual(ctx, first.ID, creators[0]); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	// Просмотры выросли вдвое — цена периода стала другой, а
+	// утверждённая строка прежней.
+	if _, err := pool.Exec(ctx, `
+UPDATE video_stat_daily SET views = views * 2
+WHERE link_id IN (SELECT l.id FROM publication_links l
+                  JOIN project_publications p ON p.id = l.publication_id
+                  WHERE p.project_id = $1)`, pid); err != nil {
+		t.Fatalf("bump views: %v", err)
+	}
+	after, err := recalcCurrent(t, svc, pid)
+	if err != nil {
+		t.Fatalf("recalc 2: %v", err)
+	}
+	var sum int64
+	for _, a := range after {
+		if a.ID == first.ID && a.Total != first.Total {
+			t.Errorf("утверждённую строку переписали: было %d, стало %d", first.Total, a.Total)
+		}
+		sum += a.Total
+	}
+	// 400 000 + 600 000 + 1 000 000 до порога, 4 000 000 сверх.
+	wantAfter := price(2_000_000, 4_000_000, 3)
+	if sum != wantAfter {
+		t.Errorf("после утверждения сумма строк %d, цена периода %d", sum, wantAfter)
+	}
+}
