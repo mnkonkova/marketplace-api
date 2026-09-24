@@ -590,7 +590,8 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 
 	client := t.ClientLadder()
 	charged := billable
-	clientFee, _ := client.Fee(pc.Seq, charged)
+	// Ролики считаем сданные: фикс платится за вышедшую работу.
+	clientFee, _ := client.Fee(pc.Seq, charged, int64(f.Delivered))
 	clientTail := client.Tail(f.ViewsOver)
 	// KPI по подписчикам стоит рядом со ступенями, а не внутри них:
 	// ступени считаются от просмотров, подписчики — своё число, и
@@ -613,7 +614,7 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 	// Перенос выключен вместе с клиентским (см. выше). Было:
 	//   counted := stepPool + pc.CreatorCarryIn
 	counted := stepPool
-	creatorFee, steps := creator.Fee(pc.Seq, counted)
+	creatorFee, steps := creator.Fee(pc.Seq, counted, int64(f.Delivered))
 	creatorTail := creator.Tail(f.ViewsOver)
 	creatorSubs := creator.Subscribers(f.Subscribers)
 	a.PayoutSalary = creatorFee

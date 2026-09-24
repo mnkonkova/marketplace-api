@@ -87,6 +87,7 @@ SELECT v.id, v.version, v.body, v.published_at,
        v.creator_first_period_fee, v.creator_base_fee, v.creator_step_fee,
        v.creator_step_fee_over,
        v.subscriber_rate, v.creator_subscriber_rate,
+       v.fee_per_video, v.creator_fee_per_video,
        v.version = (SELECT MAX(version) FROM terms_versions),
        (SELECT COUNT(*) FROM client_terms_consents c WHERE c.terms_version_id = v.id),
        (SELECT COUNT(*) FROM project_billing b WHERE b.terms_version_id = v.id)
@@ -110,6 +111,7 @@ ORDER BY v.version DESC`)
 			&v.CreatorFirstPeriodFee, &v.CreatorBaseFee, &v.CreatorStepFee,
 			&v.CreatorStepFeeOver,
 			&v.SubscriberRate, &v.CreatorSubscriberRate,
+			&v.FeePerVideo, &v.CreatorFeePerVideo,
 			&v.IsCurrent, &v.ConsentedClients, &v.UsedByProjects); err != nil {
 			return nil, fmt.Errorf("scan terms version: %w", err)
 		}
@@ -159,6 +161,9 @@ type TermsPublishResult struct {
 	// ConsentsRequired — сколько клиентов согласились с прежней
 	// действующей версией и теперь должны согласиться заново.
 	ConsentsRequired int `json:"consents_required"`
+	// ProjectsRefreshed — сколько ещё не начавшихся проектов переехало
+	// на эту версию. Начавшиеся не трогаются: у них снимок.
+	ProjectsRefreshed int `json:"projects_refreshed"`
 }
 
 // PublishTermsVersion — выпустить новую версию прайса.
@@ -187,10 +192,12 @@ INSERT INTO terms_versions
    step_views, first_period_fee, base_fee, step_fee,
    step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
    creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
-   subscriber_rate, creator_subscriber_rate)
+   subscriber_rate, creator_subscriber_rate,
+   fee_per_video, creator_fee_per_video)
 VALUES ((SELECT COALESCE(MAX(version), 0) + 1 FROM terms_versions),
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
+        $28, $29)
 RETURNING id, version, published_at`,
 		v.Body, v.SalaryPerMonth, v.VideosFirstMonth, v.VideosNextMonths,
 		v.RatePer1000Views, v.BonusViewsThreshold, v.RatePer1000ViewsOver,
@@ -199,7 +206,8 @@ RETURNING id, version, published_at`,
 		v.StepViews, v.FirstPeriodFee, v.BaseFee, v.StepFee,
 		v.StepTier2From, v.StepFeeOver, v.StepCapViews, v.GuaranteeViews,
 		v.CreatorFirstPeriodFee, v.CreatorBaseFee, v.CreatorStepFee, v.CreatorStepFeeOver,
-		v.SubscriberRate, v.CreatorSubscriberRate).
+		v.SubscriberRate, v.CreatorSubscriberRate,
+		v.FeePerVideo, v.CreatorFeePerVideo).
 		Scan(&v.TermsVersionID, &v.Version, &v.PublishedAt)
 	if err != nil {
 		return TermsPublishResult{}, fmt.Errorf("publish terms version: %w", err)
@@ -226,11 +234,28 @@ RETURNING id, version, published_at`,
 		}
 	}
 
+	// Проекты, которые ещё не начались, переезжают на новую версию.
+	//
+	// Условия проекта — снимок, и это правильно: подытоженный период
+	// нельзя пересчитать задним числом. Но до первой выкладки считать
+	// нечего, а прайс к этому моменту уже мог смениться — проект,
+	// заведённый в понедельник и стартующий через месяц, не должен
+	// уехать в работу по позавчерашним ставкам.
+	//
+	// Граница — первая выкладка, то есть первая сданная ссылка: от неё
+	// же отсчитываются периоды. С этого момента снимок замораживается.
+	refreshed, err := refreshNotStartedProjects(ctx, tx, *v.TermsVersionID, v.Steps)
+	if err != nil {
+		return TermsPublishResult{}, err
+	}
+	out.ProjectsRefreshed = refreshed
+
 	if err := audit.Write(ctx, tx, actorID, audit.ActionTermsPublish,
 		audit.ObjectTerms, v.TermsVersionID.String(), map[string]any{
-			"version":           v.Version,
-			"changes":           len(out.Changes),
-			"consents_required": out.ConsentsRequired,
+			"version":            v.Version,
+			"changes":            len(out.Changes),
+			"consents_required":  out.ConsentsRequired,
+			"projects_refreshed": out.ProjectsRefreshed,
 		}); err != nil {
 		return TermsPublishResult{}, err
 	}
@@ -238,6 +263,100 @@ RETURNING id, version, published_at`,
 		return TermsPublishResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return out, nil
+}
+
+// refreshNotStartedProjects — перевести не начавшиеся проекты на версию.
+//
+// Не начавшийся — тот, у которого нет ни одной сданной ссылки: периоды
+// отсчитываются от первой выкладки, и пока её нет, считать нечего.
+// Отменённые проекты и те, у кого уже есть подытоженный период, не
+// трогаем ни при каких условиях — второе невозможно без первой выкладки,
+// но проверка стоит дёшево, а цена ошибки здесь — переписанный счёт.
+//
+// Возвращает, сколько проектов переехало: это число видит админ в ответе
+// на выпуск версии и оно же уходит в журнал.
+func refreshNotStartedProjects(
+	ctx context.Context, tx pgx.Tx, versionID uuid.UUID, steps []TermsStep,
+) (int, error) {
+	rows, err := tx.Query(ctx, `
+SELECT p.id
+FROM projects p
+WHERE p.status <> 'cancelled'
+  AND NOT EXISTS (
+      SELECT 1 FROM project_publications pub
+      JOIN publication_links l ON l.publication_id = pub.id
+      WHERE pub.project_id = p.id AND pub.status <> 'cancelled')
+  AND NOT EXISTS (
+      SELECT 1 FROM project_periods pp
+      WHERE pp.project_id = p.id AND pp.status = 'locked')`)
+	if err != nil {
+		return 0, fmt.Errorf("list not started projects: %w", err)
+	}
+	ids := make([]uuid.UUID, 0, 16)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan project id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// Числа переносим одним UPDATE из самой версии: перечислять их
+	// значениями значило бы держать третий список колонок рядом с двумя
+	// уже существующими, и он разошёлся бы с ними на первой же правке
+	// тарифа.
+	if _, err := tx.Exec(ctx, `
+UPDATE project_billing b
+SET terms_version_id = v.id,
+    salary_per_month = v.salary_per_month,
+    videos_first_month = v.videos_first_month,
+    videos_next_months = v.videos_next_months,
+    rate_per_1000_views = v.rate_per_1000_views,
+    bonus_views_threshold = v.bonus_views_threshold,
+    rate_per_1000_views_over = v.rate_per_1000_views_over,
+    click_bonus_rate = v.click_bonus_rate,
+    click_bonus_threshold = v.click_bonus_threshold,
+    click_bonus_rate_over = v.click_bonus_rate_over,
+    creator_salary_per_month = v.creator_salary_per_month,
+    creator_rate_per_1000_views = v.creator_rate_per_1000_views,
+    creator_rate_per_1000_views_over = v.creator_rate_per_1000_views_over,
+    step_views = v.step_views,
+    first_period_fee = v.first_period_fee,
+    base_fee = v.base_fee,
+    step_fee = v.step_fee,
+    step_tier2_from = v.step_tier2_from,
+    step_fee_over = v.step_fee_over,
+    step_cap_views = v.step_cap_views,
+    guarantee_views = v.guarantee_views,
+    creator_first_period_fee = v.creator_first_period_fee,
+    creator_base_fee = v.creator_base_fee,
+    creator_step_fee = v.creator_step_fee,
+    creator_step_fee_over = v.creator_step_fee_over,
+    subscriber_rate = v.subscriber_rate,
+    creator_subscriber_rate = v.creator_subscriber_rate,
+    fee_per_video = v.fee_per_video,
+    creator_fee_per_video = v.creator_fee_per_video,
+    updated_at = now()
+FROM terms_versions v
+WHERE v.id = $1 AND b.project_id = ANY($2)`, versionID, ids); err != nil {
+		return 0, fmt.Errorf("refresh project billing: %w", err)
+	}
+
+	// Ступени лежат своей таблицей и одним UPDATE не переносятся.
+	for _, id := range ids {
+		if err := replaceSteps(ctx, tx, stepsOwnerProject, id, steps); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
 }
 
 // currentTermsVersionTx — действующая версия (самая новая) внутри
@@ -253,7 +372,8 @@ SELECT id, version, body, published_at,
        step_views, first_period_fee, base_fee, step_fee,
        step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
        creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
-       subscriber_rate, creator_subscriber_rate
+       subscriber_rate, creator_subscriber_rate,
+       fee_per_video, creator_fee_per_video
 FROM terms_versions
 ORDER BY version DESC
 LIMIT 1`).Scan(&v.TermsVersionID, &v.Version, &v.Body, &v.PublishedAt,
@@ -264,7 +384,8 @@ LIMIT 1`).Scan(&v.TermsVersionID, &v.Version, &v.Body, &v.PublishedAt,
 		&v.StepViews, &v.FirstPeriodFee, &v.BaseFee, &v.StepFee,
 		&v.StepTier2From, &v.StepFeeOver, &v.StepCapViews, &v.GuaranteeViews,
 		&v.CreatorFirstPeriodFee, &v.CreatorBaseFee, &v.CreatorStepFee, &v.CreatorStepFeeOver,
-		&v.SubscriberRate, &v.CreatorSubscriberRate)
+		&v.SubscriberRate, &v.CreatorSubscriberRate,
+		&v.FeePerVideo, &v.CreatorFeePerVideo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TermsVersion{}, false, nil
 	}
@@ -330,6 +451,9 @@ func diffTerms(from, to Terms) []TermsChange {
 	add("creator_step_fee", "Креатору за ступень", from.CreatorStepFee, to.CreatorStepFee)
 	add("creator_step_fee_over", "Креатору за ступень сверх порога",
 		from.CreatorStepFeeOver, to.CreatorStepFeeOver)
+	add("fee_per_video", "Фикс за ролик", from.FeePerVideo, to.FeePerVideo)
+	add("creator_fee_per_video", "Креатору за ролик",
+		from.CreatorFeePerVideo, to.CreatorFeePerVideo)
 	add("subscriber_rate", "Ставка за подписчика", from.SubscriberRate, to.SubscriberRate)
 	add("creator_subscriber_rate", "Креатору за подписчика",
 		from.CreatorSubscriberRate, to.CreatorSubscriberRate)

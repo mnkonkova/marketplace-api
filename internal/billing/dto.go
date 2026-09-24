@@ -118,6 +118,19 @@ type Terms struct {
 	// ПРОСМОТРАХ, а не в деньгах: так в оферте.
 	GuaranteeViews *int64 `json:"guarantee_views,omitempty" extensions:"x-nullable"`
 
+	// FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.
+	//
+	// Клиент платит FeePerVideo за каждую вышедшую выкладку, креатор
+	// получает CreatorFeePerVideo. Этим фикс и отличается от ступеней:
+	// ступени про рост просмотров, фикс — про объём работы, и месяц с
+	// пятью выкладками не должен стоить как месяц с тридцатью.
+	//
+	// Заменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):
+	// она и была фиксом за период. Пусто — прежнее правило, фикс
+	// берётся из лесенки.
+	FeePerVideo        *int64 `json:"fee_per_video,omitempty" extensions:"x-nullable"`
+	CreatorFeePerVideo *int64 `json:"creator_fee_per_video,omitempty" extensions:"x-nullable"`
+
 	// Креаторская сторона тех же ступеней. nil означает «столько же,
 	// сколько у клиента» — то же правило, что у нынешних креаторских
 	// ставок.
@@ -202,6 +215,9 @@ type StepLadder struct {
 	// SubscriberRate — сколько стоит один подписчик, набранный за период.
 	// Число подписчиков сборщиком не добывается: его вводит менеджер.
 	SubscriberRate int64
+	// FeePerVideo — цена одного ролика. Когда задана, она занимает
+	// место нижней ступени: раньше там стоял фикс за период.
+	FeePerVideo int64
 }
 
 // LadderStep — ступень, сведённая к одной стороне сделки.
@@ -291,6 +307,7 @@ func (t Terms) ClientLadder() StepLadder {
 		TailRate:       t.RatePer1000ViewsOver,
 		Steps:          clientSteps(t.Steps),
 		SubscriberRate: derefOr(t.SubscriberRate, 0),
+		FeePerVideo:    derefOr(t.FeePerVideo, 0),
 	}
 }
 
@@ -357,6 +374,10 @@ func (t Terms) CreatorLadder() StepLadder {
 	if t.CreatorSubscriberRate != nil {
 		l.SubscriberRate = *t.CreatorSubscriberRate
 	}
+	// Своя цена ролика. Пусто — фикса за ролик у креатора нет вовсе, и
+	// клиентскую цену ему не отдаём: это цена для клиента, а не для
+	// него. Так же устроены и остальные creator_*-поля.
+	l.FeePerVideo = derefOr(t.CreatorFeePerVideo, 0)
 	return l
 }
 
@@ -397,21 +418,37 @@ func (t Terms) creatorTailRate(stepViews, creatorStepFee int64) int64 {
 // Ступени только ПОЛНЫЕ: 149 999 просмотров — это одна ступень, а не
 // полторы. Что делать с остатком, решает вызывающий: у клиента он
 // сгорает, у креатора переносится.
-func (l StepLadder) Fee(seq int, views int64) (fee int64, steps int64) {
-	if seq <= 1 && l.FirstPeriodFee > 0 {
+func (l StepLadder) Fee(seq int, views, videos int64) (fee int64, steps int64) {
+	// Фикс за ролик подменяет собой фикс за период — и цену запуска, и
+	// нижнюю ступень. Ступени выше нуля остаются: они про просмотры, а
+	// не про объём работы, и складывать их с ценой роликов нельзя —
+	// ступень и есть цена периода на взятом пороге.
+	base := l.FeePerVideo * videos
+	perVideo := l.FeePerVideo > 0
+
+	if seq <= 1 && l.FirstPeriodFee > 0 && !perVideo {
 		return l.FirstPeriodFee, 0
+	}
+	if seq <= 1 && perVideo {
+		return base, 0
 	}
 	// Лесенка произвольной длины: цена периода — у последней ступени,
 	// порог которой взят. Остатка здесь нет вовсе, поэтому и ступеней
 	// возвращаем ноль: перенос неполной ступени — правило прежней
 	// модели, и к порогам объёма оно не относится.
 	if l.HasSteps() {
+		if perVideo {
+			return l.stepFeeOrPerVideo(views, base), 0
+		}
 		return l.stepFee(views), 0
 	}
 	if seq <= 1 {
 		return l.FirstPeriodFee, 0
 	}
 	fee = l.BaseFee
+	if perVideo {
+		fee = base
+	}
 	if l.StepViews <= 0 {
 		return fee, 0
 	}
@@ -447,6 +484,27 @@ func (l StepLadder) Fee(seq int, views int64) (fee int64, steps int64) {
 // нулевым порогом владелец продукта заводит сам, и это и есть голый
 // оклад. Подставлять её за него значит выдумать цену, которой он не
 // называл.
+// stepFeeOrPerVideo — то же, что stepFee, но нижняя ступень заменена
+// ценой роликов.
+//
+// Нижняя ступень (порог ноль) и была фиксом за период: её берут, когда
+// просмотров не набрали ни на одну настоящую ступень. Теперь на её
+// месте стоит цена за вышедшие ролики.
+func (l StepLadder) stepFeeOrPerVideo(views, perVideo int64) int64 {
+	fee := perVideo
+	for _, s := range l.Steps {
+		if views < s.FromViews {
+			break
+		}
+		if s.FromViews == 0 {
+			// Нижняя ступень — это фикс, и он теперь за ролик.
+			continue
+		}
+		fee = s.Fee
+	}
+	return fee
+}
+
 func (l StepLadder) stepFee(views int64) int64 {
 	fee := int64(0)
 	for _, s := range l.Steps {

@@ -408,3 +408,54 @@ func TestTariffLadderHiddenWhenItWouldNotAddUp(t *testing.T) {
 		})
 	}
 }
+
+// Фикс считается ЗА РОЛИК, а не за период.
+//
+// Прежняя модель платила цену периода независимо от объёма: месяц с
+// пятью выкладками стоил столько же, сколько с тридцатью. Теперь фикс —
+// цена одного ролика, и он занимает место нижней ступени лесенки: там и
+// был фикс за период. Ступени выше нуля не меняются — они про
+// просмотры, а не про объём работы.
+func TestFeePerVideoReplacesPeriodFee(t *testing.T) {
+	terms := steppedTerms()
+	fee := int64(1_000 * rub)
+	creatorFee := int64(500 * rub)
+	terms.FeePerVideo = &fee
+	terms.CreatorFeePerVideo = &creatorFee
+
+	// Просмотров мало — до настоящих ступеней не дотянули, платим за
+	// ролики. Десять выкладок: клиенту 10 000 ₽, креатору 5 000 ₽.
+	f := facts(10_000, 0)
+	f.Delivered = 10
+	a, _ := calc(terms, f, periodContext{Seq: 2})
+	if a.Salary != 10*fee {
+		t.Errorf("клиенту за 10 роликов: %d, ожидалось %d", a.Salary, 10*fee)
+	}
+	if a.PayoutSalary != 10*creatorFee {
+		t.Errorf("креатору за 10 роликов: %d, ожидалось %d", a.PayoutSalary, 10*creatorFee)
+	}
+
+	// Вдвое меньше роликов — вдвое меньше фикс. В прежней модели цена
+	// периода от объёма не зависела вовсе.
+	f.Delivered = 5
+	half, _ := calc(terms, f, periodContext{Seq: 2})
+	if half.Salary != 5*fee {
+		t.Errorf("клиенту за 5 роликов: %d, ожидалось %d", half.Salary, 5*fee)
+	}
+
+	// Первый период тоже за ролики: цена запуска фиксом больше не
+	// назначается.
+	first, _ := calc(terms, f, periodContext{Seq: 1})
+	if first.Salary != 5*fee {
+		t.Errorf("первый период: %d, ожидалось %d", first.Salary, 5*fee)
+	}
+
+	// А дотянули до настоящей ступени — платим её цену, а не ролики:
+	// ступень и есть цена периода на взятом пороге.
+	big := facts(400_000, 0)
+	big.Delivered = 10
+	step, _ := calc(terms, big, periodContext{Seq: 2})
+	if step.Salary == 10*fee {
+		t.Errorf("ступень не взяла верх над фиксом за ролик: %d", step.Salary)
+	}
+}
