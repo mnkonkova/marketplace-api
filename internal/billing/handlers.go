@@ -47,6 +47,15 @@ type termsReq struct {
 	ClickBonusThreshold int    `json:"click_bonus_threshold"`
 	ClickBonusRateOver  *int64 `json:"click_bonus_rate_over" extensions:"x-nullable"`
 
+	// ---- фикс за РОЛИК ----
+	//
+	// Цена одной вышедшей выкладки, а не месяца: месяц с пятью роликами
+	// не должен стоить как месяц с тридцатью. Заменяет собой нижнюю
+	// ступень лесенки — там и был фикс за период. null = фикса за ролик
+	// нет, версия считается прежней моделью (оклад за период).
+	FeePerVideo        *int64 `json:"fee_per_video" extensions:"x-nullable"`
+	CreatorFeePerVideo *int64 `json:"creator_fee_per_video" extensions:"x-nullable"`
+
 	// Креаторская сторона: что получает исполнитель. null = «столько же,
 	// сколько платит клиент», то есть платформа ничего не удерживает.
 	CreatorSalaryPerMonth       *int64 `json:"creator_salary_per_month" extensions:"x-nullable"`
@@ -109,6 +118,9 @@ func (req termsReq) terms() Terms {
 		ClickBonusRate:       req.ClickBonusRate,
 		ClickBonusThreshold:  req.ClickBonusThreshold,
 		ClickBonusRateOver:   req.ClickBonusRateOver,
+
+		FeePerVideo:        req.FeePerVideo,
+		CreatorFeePerVideo: req.CreatorFeePerVideo,
 
 		CreatorSalaryPerMonth:       req.CreatorSalaryPerMonth,
 		CreatorRatePer1000Views:     req.CreatorRatePer1000Views,

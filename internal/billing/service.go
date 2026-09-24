@@ -164,6 +164,22 @@ func checkRates(t Terms) (Terms, error) {
 			return Terms{}, fmt.Errorf("%w: ставки креатора не бывают отрицательными", ErrInvalidInput)
 		}
 	}
+	// Фикс за ролик. Отрицательного не бывает, и креатору нельзя обещать
+	// за ролик больше, чем берём за него с заказчика: это не тариф, а
+	// убыток на каждой выкладке, и почти всегда просто описка.
+	if t.FeePerVideo != nil && *t.FeePerVideo < 0 {
+		return Terms{}, fmt.Errorf("%w: фикс за ролик не бывает отрицательным", ErrInvalidInput)
+	}
+	if t.CreatorFeePerVideo != nil {
+		if *t.CreatorFeePerVideo < 0 {
+			return Terms{}, fmt.Errorf(
+				"%w: фикс креатору за ролик не бывает отрицательным", ErrInvalidInput)
+		}
+		if t.FeePerVideo != nil && *t.CreatorFeePerVideo > *t.FeePerVideo {
+			return Terms{}, fmt.Errorf(
+				"%w: креатору за ролик обещано больше, чем платит заказчик", ErrInvalidInput)
+		}
+	}
 	if t.VideosFirstMonth < 0 || t.VideosNextMonths < 0 {
 		return Terms{}, fmt.Errorf("%w: объём роликов не бывает отрицательным", ErrInvalidInput)
 	}

@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -1692,4 +1693,62 @@ func TestTariffRegistryShowsEveryProjectRow(t *testing.T) {
 	if rows[0].HasTerms {
 		t.Error("проекты без тарифа обязаны идти первыми — иначе их не заметят")
 	}
+}
+
+// Фикс за ролик доезжает до базы ЧЕРЕЗ РУЧКУ.
+//
+// Ловушка, стоившая целой модели: у ручки свой запрос (termsReq), и
+// новое поле надо добавлять в него отдельно. Пока его там не было,
+// менеджер сохранял «фикс за ролик» в интерфейсе, сервер отвечал 200 —
+// и молча клал в снимок ноль. Ни одна проверка на уровне сервиса этого
+// не видела: там число приходило уже разобранным.
+func TestSaveTermsKeepsFeePerVideoOverHTTP(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	manager, cleanupManager := h.NewUser(t, userOpts{Kind: "client", IsManager: true})
+	defer cleanupManager()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE projects SET assigned_to_user_id = $1 WHERE id = $2`, manager, pid); err != nil {
+		t.Fatalf("назначение менеджера: %v", err)
+	}
+
+	code, _ := h.Do(t, http.MethodPut, "/api/v1/manager/projects/"+pid.String()+"/billing",
+		h.Token(t, manager), map[string]any{
+			"fee_per_video":         100_000,
+			"creator_fee_per_video": 50_000,
+			"salary_per_month":      0,
+			"rate_per_1000_views":   0,
+			"steps": []map[string]any{
+				{"from_views": 300_000, "client_fee": 4_500_000},
+			},
+		})
+	if code != http.StatusOK {
+		t.Fatalf("сохранение условий: код %d", code)
+	}
+
+	terms, err := billing.NewRepo(pool).Terms(context.Background(), pid)
+	if err != nil {
+		t.Fatalf("Terms: %v", err)
+	}
+	if terms.FeePerVideo == nil || *terms.FeePerVideo != 100_000 {
+		t.Errorf("фикс за ролик в снимке: %v, ожидалось 100000", terms.FeePerVideo)
+	}
+	if terms.CreatorFeePerVideo == nil || *terms.CreatorFeePerVideo != 50_000 {
+		t.Errorf("фикс креатору в снимке: %v, ожидалось 50000", terms.CreatorFeePerVideo)
+	}
+
+	// И то же правило, что у остальных креаторских ставок: больше, чем
+	// платит заказчик, обещать нельзя — это убыток на каждом ролике.
+	code, _ = h.Do(t, http.MethodPut, "/api/v1/manager/projects/"+pid.String()+"/billing",
+		h.Token(t, manager), map[string]any{
+			"fee_per_video":         100_000,
+			"creator_fee_per_video": 200_000,
+		})
+	if code != http.StatusBadRequest {
+		t.Errorf("фикс креатору выше клиентского: код %d, ожидался 400", code)
+	}
+	_ = creators
 }
