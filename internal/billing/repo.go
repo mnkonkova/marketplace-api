@@ -405,7 +405,11 @@ type creatorPeriod struct {
 	// ноль сверхпорогового объёма, а не 200 000.
 	ViewsBase int64
 	ViewsOver int64
-	Clicks    int
+	// Clicks — переходы по метке ЗА ЭТОТ ПЕРИОД: счётчик метки
+	// накопительный, и из него вычтено всё, что уже зачли прошлые
+	// периоды. Иначе одни и те же переходы оплачивались бы заново
+	// каждые тридцать дней.
+	Clicks int
 	// Subscribers — сколько подписчиков прибавилось за период. Вводит
 	// менеджер руками: сборщика подписчиков у нас нет, и выдумывать его
 	// под объявленную ставку нельзя — ровно как с переходами по UTM.
@@ -446,17 +450,33 @@ SELECT pc.creator_user_id,
        -- ролика получал бонус за миллион просмотров.
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $5)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $5, 0)), 0),
-       COALESCE(MAX(utm.clicks), 0),
+       GREATEST(COALESCE(MAX(utm.clicks), 0) - COALESCE(MAX(prevclicks.counted), 0), 0),
        COALESCE(MAX(subs.subscribers), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
        ON utm.project_id = pc.project_id AND utm.creator_user_id = pc.creator_user_id
+LEFT JOIN LATERAL (
+    -- Переходы по метке — счётчик НАКОПИТЕЛЬНЫЙ: в creator_utm_links
+    -- лежит «всего кликов по ссылке», а не «кликов за период». Считать
+    -- его целиком каждый период значило бы выставлять одни и те же
+    -- переходы заново каждые тридцать дней. Отнимаем то, что уже
+    -- посчитано прошлыми периодами — строки начислений и есть история
+    -- зачтённого.
+    SELECT COALESCE(SUM(ca.clicks), 0) AS counted
+    FROM creator_accruals ca
+    WHERE ca.project_id = pc.project_id
+      AND ca.creator_user_id = pc.creator_user_id
+      AND ca.period_start < $6
+) prevclicks ON TRUE
 LEFT JOIN creator_period_subscribers subs
        ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
-      AND subs.period_start = $3
+      AND subs.period_start = $6
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
-GROUP BY pc.creator_user_id`, projectID, projectID, p.StartsOn, p.EndsOn, threshold)
+-- $3 — левая граница отбора выкладок: у первого периода её нет (см.
+-- periodFrom). $6 — начало периода как таковое: подписчиков менеджер
+-- вписывает ИМЕННО периоду, и им открытая граница не нужна.
+GROUP BY pc.creator_user_id`, projectID, projectID, periodFrom(p), p.EndsOn, threshold, p.StartsOn)
 	if err != nil {
 		return nil, fmt.Errorf("period facts: %w", err)
 	}
@@ -509,12 +529,25 @@ SELECT pc.creator_user_id,
        COALESCE(SUM(pub.views), 0),
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $3)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $3, 0)), 0),
-       COALESCE(MAX(utm.clicks), 0),
+       GREATEST(COALESCE(MAX(utm.clicks), 0) - COALESCE(MAX(prevclicks.counted), 0), 0),
        COALESCE(MAX(subs.subscribers), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
        ON utm.project_id = pc.project_id AND utm.creator_user_id = pc.creator_user_id
+LEFT JOIN LATERAL (
+    -- Переходы по метке — счётчик НАКОПИТЕЛЬНЫЙ: в creator_utm_links
+    -- лежит «всего кликов по ссылке», а не «кликов за период». Считать
+    -- его целиком каждый период значило бы выставлять одни и те же
+    -- переходы заново каждые тридцать дней. Отнимаем то, что уже
+    -- посчитано прошлыми периодами — строки начислений и есть история
+    -- зачтённого.
+    SELECT COALESCE(SUM(ca.clicks), 0) AS counted
+    FROM creator_accruals ca
+    WHERE ca.project_id = pc.project_id
+      AND ca.creator_user_id = pc.creator_user_id
+      AND ca.period_start < $4
+) prevclicks ON TRUE
 LEFT JOIN creator_period_subscribers subs
        ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
       AND subs.period_start = $4

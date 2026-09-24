@@ -479,3 +479,77 @@ func TestFeePerVideoIgnoresSelfAdded(t *testing.T) {
 		t.Errorf("фикс за самодобавленные: %d, ожидалось %d", a.Salary, 4*fee)
 	}
 }
+
+// Раскладка суммы периода по людям: что чем делится.
+//
+// Ступени берутся от объёма периода целиком, а строка человека отвечает
+// на вопрос «сколько из этого моё». Делить всё подряд по общим
+// просмотрам нельзя: фикс платят за работу, хвост зарабатывают
+// просмотры сверх порога, и это разные основания.
+func TestSplitAcrossCreatorsSharesByTheRightThing(t *testing.T) {
+	terms := steppedTerms()
+	fee := int64(1_000 * rub)
+	terms.FeePerVideo = &fee
+
+	// Двое: у первого два ролика и ноль сверхпорогового объёма, у
+	// второго один ролик, который залетел.
+	facts := []creatorPeriod{
+		{
+			CreatorID: uuid.New(), Planned: 2, Delivered: 2,
+			PlannedAssigned: 2, DeliveredAssigned: 2,
+			ViewsTotal: 200_000, ViewsBase: 200_000,
+		},
+		{
+			CreatorID: uuid.New(), Planned: 1, Delivered: 1,
+			PlannedAssigned: 1, DeliveredAssigned: 1,
+			ViewsTotal: 800_000, ViewsBase: 300_000, ViewsOver: 500_000,
+		},
+	}
+	agg := aggregateFacts(facts)
+	total := Accrual{Salary: 3 * fee, ViewsBonus: 90 * rub, PayoutSalary: 3 * fee}
+	rows := splitAcrossCreators(terms, facts, agg, total, uuid.New(),
+		time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+
+	if len(rows) != 2 {
+		t.Fatalf("строк %d, ожидалось 2", len(rows))
+	}
+	// Фикс — по роликам: две трети и треть, а не по просмотрам (где было
+	// бы 20% и 80%).
+	if rows[0].Salary != 2*fee {
+		t.Errorf("фикс первому %d, ожидалось %d (два ролика из трёх)", rows[0].Salary, 2*fee)
+	}
+	if rows[1].Salary != fee {
+		t.Errorf("фикс второму %d, ожидалось %d (один ролик из трёх)", rows[1].Salary, fee)
+	}
+	// Хвост — весь второму: сверх порога набрал только он.
+	if rows[0].ViewsBonus != 0 {
+		t.Errorf("хвост первому %d, а сверх порога он не набрал ничего", rows[0].ViewsBonus)
+	}
+	if rows[1].ViewsBonus != total.ViewsBonus {
+		t.Errorf("хвост второму %d, ожидалось %d", rows[1].ViewsBonus, total.ViewsBonus)
+	}
+	// Сумма строк равна сумме периода копейка в копейку.
+	var sum int64
+	for _, r := range rows {
+		sum += r.Salary + r.ViewsBonus
+	}
+	if sum != total.Salary+total.ViewsBonus {
+		t.Errorf("сумма строк %d, цена периода %d", sum, total.Salary+total.ViewsBonus)
+	}
+}
+
+// У первого периода левой границы отбора выкладок нет.
+//
+// Он и начинается с первой выкладки, поэтому «левее начала» означает
+// ролик, вышедший или исправленный задним числом уже после заморозки
+// якоря. При строгой границе такой ролик проваливался мимо всех
+// периодов: за него не платили, его ссылки обходились вечно.
+func TestPeriodFromIsOpenOnTheFirstPeriod(t *testing.T) {
+	start := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
+	if got := periodFrom(ProjectPeriod{Seq: 1, StartsOn: start}); !got.IsZero() {
+		t.Errorf("у первого периода граница %v, ожидалась открытая", got)
+	}
+	if got := periodFrom(ProjectPeriod{Seq: 2, StartsOn: start}); !got.Equal(start) {
+		t.Errorf("у второго периода граница %v, ожидалось %v", got, start)
+	}
+}

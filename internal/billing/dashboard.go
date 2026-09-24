@@ -253,6 +253,14 @@ type platformGain struct {
 	SharesUnknown bool
 }
 
+// clampZero — обрезать итог по нулю. Зовётся ОДИН раз, на готовой
+// сумме: пока числа складываются, минус обязан гасить плюс.
+func (g *platformGain) clampZero() {
+	g.Views = notBelowZero(g.Views)
+	g.Engagement = notBelowZero(g.Engagement)
+	g.Comments = notBelowZero(g.Comments)
+}
+
 func (g *platformGain) add(o platformGain) {
 	g.Views += o.Views
 	g.Engagement += o.Engagement
@@ -365,10 +373,14 @@ WITH mine AS (
       AND d.stat_date >= COALESCE(b.prev_date, $2::date)
     WINDOW w AS (PARTITION BY d.link_id ORDER BY d.stat_date)
 )
+-- Суммы СЫРЫЕ, без обрезки по нулю: обрезать на паре «площадка ×
+-- день» значит потерять поправку счётчика вниз. Площадка, скинувшая
+-- за день 50 тысяч, давала бы ноль, а не минус, и окно вырастало бы
+-- на эти 50 тысяч. Обрезаем один раз — там, где число показывают.
 SELECT platform, stat_date,
-       GREATEST(SUM(dviews), 0)::bigint,
-       GREATEST(SUM(dlikes + dcomments + dshares), 0)::bigint,
-       GREATEST(SUM(dcomments), 0)::bigint,
+       SUM(dviews)::bigint,
+       SUM(dlikes + dcomments + dshares)::bigint,
+       SUM(dcomments)::bigint,
        bool_and(has_shares)
 FROM daily
 WHERE stat_date BETWEEN $2::date AND $3::date
@@ -405,9 +417,34 @@ ORDER BY stat_date`, clientID, w.PrevFrom, w.To)
 		// нуля — фронт рвёт линию на пропусках, а ноль нарисовал бы
 		// провал.
 		out.Series[platform] = append(out.Series[platform],
-			OverviewPoint{Date: day.Format("2006-01-02"), ViewsGained: g.Views})
+			OverviewPoint{Date: day.Format("2006-01-02"), ViewsGained: notBelowZero(g.Views)})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	// Обрезка по нулю — здесь, на показываемом числе, а не на каждой
+	// паре «площадка × день». Внутри окна минус одной площадки гасит
+	// плюс другой, как оно и есть на самом деле.
+	for p, g := range out.Cur {
+		g.clampZero()
+		out.Cur[p] = g
+	}
+	for p, g := range out.Prev {
+		g.clampZero()
+		out.Prev[p] = g
+	}
+	out.CurTotal.clampZero()
+	out.PrevTotal.clampZero()
+	return out, nil
+}
+
+// notBelowZero — отрицательный прирост на экране не рисуют: столбик
+// вниз читается как ошибка сбора, а не как поправка счётчика.
+func notBelowZero(v int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 // topVideos — ролики с наибольшим приростом просмотров за окно.
@@ -423,6 +460,18 @@ WITH mine AS (
     JOIN project_publications pub ON pub.project_id = p.id AND pub.status <> 'cancelled'
     JOIN publication_links l ON l.publication_id = pub.id
     WHERE p.client_user_id = $1 AND p.is_test = FALSE AND p.status <> 'cancelled'
+), before AS (
+    -- Последний снимок каждой ссылки ДО окна — предшественник первого
+    -- дня. Раньше вместо него брался «минус один день», и это работало
+    -- только при сборе каждый день: пропущенный день оставлял первый
+    -- день окна без предшественника, LAG отдавала NULL, и весь
+    -- накопленный объём ролика засчитывался приростом за сутки. Ролик
+    -- с миллионом просмотров въезжал в «топ недели» на ровном месте.
+    SELECT d.link_id, MAX(d.stat_date) AS prev_date
+    FROM video_stat_daily d
+    JOIN mine m ON m.id = d.link_id
+    WHERE d.stat_date < $2::date
+    GROUP BY d.link_id
 ), daily AS (
     SELECT d.link_id, d.stat_date,
            d.views    - COALESCE(LAG(d.views)    OVER w, 0) AS dviews,
@@ -432,24 +481,33 @@ WITH mine AS (
            d.shares IS NOT NULL AS has_shares
     FROM video_stat_daily d
     JOIN mine m ON m.id = d.link_id
-    -- Границу окна ставим ЗДЕСЬ, до оконной функции, а не в per_link.
-    -- Протолкнуть предикат сквозь LAG планировщик не может, и через
-    -- окно проходила вся накопленная история клиента — сотни тысяч
-    -- строк ради трёх. Один день слева нужен самой LAG: без него у
-    -- первого дня окна не с чем считать прирост.
-    WHERE d.stat_date BETWEEN $2::date - 1 AND $3::date
+    LEFT JOIN before b ON b.link_id = d.link_id
+    -- Границу окна ставим ЗДЕСЬ, до оконной функции, а не в per_link:
+    -- протолкнуть предикат сквозь LAG планировщик не может, и через
+    -- окно проходила бы вся накопленная история клиента. Слева граница
+    -- адресная — снимок-предшественник этой ссылки; у ролика, вышедшего
+    -- внутри окна, его нет вовсе, и весь его объём приростом окна и
+    -- является.
+    WHERE d.stat_date <= $3::date
+      AND d.stat_date >= COALESCE(b.prev_date, $2::date)
     WINDOW w AS (PARTITION BY d.link_id ORDER BY d.stat_date)
 ), per_link AS (
+    -- Суммы сырые: обрезка по нулю стоит на ролике, а не на ссылке.
+    -- Иначе поправка счётчика вниз на одной площадке не гасила бы
+    -- прирост на другой, и ролик попадал бы в топ приростом, которого
+    -- у него не было.
     SELECT m.publication_id, m.platform, m.url,
-           GREATEST(SUM(dl.dviews), 0)::bigint AS gain,
-           GREATEST(SUM(dl.dlikes + dl.dcomments + dl.dshares), 0)::bigint AS eng,
+           SUM(dl.dviews)::bigint AS gain,
+           SUM(dl.dlikes + dl.dcomments + dl.dshares)::bigint AS eng,
            bool_and(dl.has_shares) AS has_shares
     FROM daily dl
     JOIN mine m ON m.id = dl.link_id
     WHERE dl.stat_date BETWEEN $2::date AND $3::date
     GROUP BY m.publication_id, m.platform, m.url
 ), per_pub AS (
-    SELECT publication_id, SUM(gain)::bigint AS gain, SUM(eng)::bigint AS eng,
+    SELECT publication_id,
+           GREATEST(SUM(gain), 0)::bigint AS gain,
+           GREATEST(SUM(eng), 0)::bigint AS eng,
            bool_and(has_shares) AS has_shares
     FROM per_link GROUP BY publication_id
 )

@@ -1273,6 +1273,12 @@ func writeReportCSV(w http.ResponseWriter, projectID uuid.UUID, rep Report) {
 		if v.CollectedAt != nil {
 			collected = v.CollectedAt.Format(time.RFC3339)
 		}
+		// Прирост неизвестен — пустая клетка, а не ноль: ноль в Excel
+		// сложат с остальными и получат заниженную сумму.
+		growth := ""
+		if v.Growth24h != nil {
+			growth = strconv.FormatInt(*v.Growth24h, 10)
+		}
 		// Имя, а не uuid: выгрузку открывает человек в Excel.
 		creator := v.CreatorName
 		if creator == "" {
@@ -1286,7 +1292,7 @@ func writeReportCSV(w http.ResponseWriter, projectID uuid.UUID, rep Report) {
 			strconv.FormatInt(v.Views, 10),
 			strconv.FormatInt(v.Likes, 10),
 			strconv.FormatInt(v.Comments, 10),
-			strconv.FormatInt(v.Growth24h, 10),
+			growth,
 			er,
 			collected,
 		})

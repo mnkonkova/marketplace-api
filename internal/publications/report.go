@@ -81,8 +81,12 @@ type VideoRow struct {
 	Likes         int64     `json:"likes"`
 	Comments      int64     `json:"comments"`
 	Shares        *int64    `json:"shares,omitempty"`
-	Growth24h     int64     `json:"growth_24h"`
-	ERPercent     *float64  `json:"er_percent,omitempty"`
+	// Growth24h — прирост ЗА СУТКИ: разница с вчерашним снимком. null —
+	// вчерашнего снимка нет, и прирост неизвестен. Ноль здесь означал бы
+	// «ролик встал», а это другое утверждение: см. sharesTotal, правило
+	// то же.
+	Growth24h *int64   `json:"growth_24h"`
+	ERPercent *float64 `json:"er_percent,omitempty"`
 	// ERWithoutShares — вовлечённость посчитана без репостов: площадка
 	// их не отдала или ролик собирали до того, как мы начали их писать.
 	ERWithoutShares bool       `json:"er_without_shares,omitempty"`
@@ -97,8 +101,12 @@ type Report struct {
 	Comments  int64     `json:"comments"`
 	Shares    *int64    `json:"shares,omitempty"`
 	Videos    int       `json:"videos"`
-	Growth24h int64     `json:"growth_24h"`
-	ERPercent *float64  `json:"er_percent,omitempty"`
+	// Growth24h — прирост за сутки по всем роликам. null, если хоть по
+	// одной ссылке вчерашнего снимка нет: сложить известные с
+	// неизвестными и выдать за полное число — то же занижение, только
+	// спрятанное.
+	Growth24h *int64   `json:"growth_24h"`
+	ERPercent *float64 `json:"er_percent,omitempty"`
 	// ERWithoutShares — хоть одна площадка, вошедшая в расчёт, репостов
 	// не отдала. Показатель занижен, и сказать об этом обязаны.
 	ERWithoutShares bool          `json:"er_without_shares,omitempty"`
@@ -164,13 +172,16 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 	// состояние — «неизвестно», и обычным int64 его не выразить.
 	var totalShares sharesTotal
 	platformShares := map[string]*sharesTotal{}
+	// Прирост за сутки складывается по тем же правилам, что репосты: у
+	// него тоже есть третье состояние — «вчерашнего снимка нет».
+	var totalGrowth sharesTotal
 
 	for _, v := range rows {
 		out.Views += v.Views
 		out.Likes += v.Likes
 		out.Comments += v.Comments
 		totalShares.add(v.Shares)
-		out.Growth24h += v.Growth24h
+		totalGrowth.add(v.Growth24h)
 		if v.CollectedAt != nil && (out.AsOf == nil || v.CollectedAt.After(*out.AsOf)) {
 			out.AsOf = v.CollectedAt
 		}
@@ -209,6 +220,7 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 		out.VideoRows = out.VideoRows[:videoRowsLimit]
 	}
 	out.Shares = totalShares.value()
+	out.Growth24h = totalGrowth.value()
 	out.ERPercent, out.ERWithoutShares = erPercent(out.Likes, out.Comments, out.Shares, out.Views)
 	for platform, ps := range platformShares {
 		p := byPlatform[platform]
@@ -296,7 +308,8 @@ func (r *Repo) videoRows(ctx context.Context, projectID uuid.UUID, f ReportFilte
 	const q = `
 SELECT p.id, l.id, p.creator_user_id, l.platform, l.url_canonical, l.submitted_at,
        COALESCE(cur.views, 0), COALESCE(cur.likes, 0), COALESCE(cur.comments, 0), cur.shares,
-       GREATEST(COALESCE(cur.views, 0) - COALESCE(prev.views, COALESCE(cur.views, 0)), 0),
+       CASE WHEN prev.views IS NULL THEN NULL
+            ELSE GREATEST(COALESCE(cur.views, 0) - prev.views, 0) END,
        cur.collected_at
 FROM project_publications p
 JOIN publication_links l ON l.publication_id = p.id
@@ -305,10 +318,14 @@ LEFT JOIN LATERAL (
     FROM video_stat_daily d WHERE d.link_id = l.id
     ORDER BY d.stat_date DESC LIMIT 1
 ) cur ON TRUE
+-- Прирост ЗА СУТКИ — значит с вчерашнего снимка, а не с предыдущего
+-- по счёту: собирают не каждый день, и разница с позавчерашним
+-- подписана «за сутки» была бы неправдой вдвое. Нет вчерашнего —
+-- прирост неизвестен, и это не ноль.
 LEFT JOIN LATERAL (
     SELECT views FROM video_stat_daily d
-    WHERE d.link_id = l.id AND d.stat_date < cur.stat_date
-    ORDER BY d.stat_date DESC LIMIT 1
+    WHERE d.link_id = l.id AND d.stat_date = cur.stat_date - 1
+    LIMIT 1
 ) prev ON TRUE
 WHERE p.project_id = $1
   AND p.status <> 'cancelled'

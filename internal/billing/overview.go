@@ -75,7 +75,8 @@ type OverviewViews struct {
 type OverviewMoney struct {
 	// Locked — сумма по подытоженным периодам: окончательная, из срезов.
 	Locked int64 `json:"locked"`
-	// Current — по текущим периодам: предварительная, числа ещё вырастут.
+	// Current — по НЕПОДЫТОЖЕННЫМ периодам: идущему и тем, что уже
+	// кончились, но ждут отсечки. Предварительная: числа ещё вырастут.
 	Current int64 `json:"current"`
 	// Total — Locked + Current, «сколько всего стоит работа на сегодня».
 	Total int64 `json:"total"`
@@ -97,7 +98,8 @@ type OverviewProject struct {
 	// Period — текущий период проекта. nil у не начавшегося.
 	Period *ClientPeriod `json:"period,omitempty"`
 	Views  int64         `json:"views"`
-	// Total — счёт по проекту: подытоженные периоды плюс текущий.
+	// Total — счёт по проекту: подытоженные периоды плюс все ещё не
+	// подытоженные, включая кончившийся и ждущий отсечки.
 	Total int64 `json:"total"`
 	// CostPer1000 — стоимость тысячи просмотров по этому проекту. nil,
 	// пока просмотров нет: делить не на что.
@@ -641,19 +643,45 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 			if period.SnapshotApprox {
 				out.SnapshotApprox = true
 			}
+			// Считаем ВСЕ неподытоженные периоды, а не только идущий.
+			//
+			// Период, который кончился, но ждёт отсечки, две недели не
+			// попадал никуда: подытоженным он ещё не стал, текущим уже
+			// не был, — и проект на эти две недели дешевел на целый
+			// период прямо на глазах у заказчика.
+			pending := []ProjectPeriod{}
 			if !period.IsLocked() {
+				pending = append(pending, period)
+			}
+			awaiting, werr := s.repo.PeriodsAwaitingLock(ctx, pr.ID, now)
+			if werr != nil {
+				return out, werr
+			}
+			for _, p := range awaiting {
+				if p.ID != period.ID {
+					pending = append(pending, p)
+				}
+			}
+			if len(pending) > 0 {
 				terms, terr := s.repo.Terms(ctx, pr.ID)
 				if terr != nil {
 					return out, terr
 				}
-				accruals, aerr := s.accrualsOrPreview(ctx, pr.ID, period, terms)
-				if aerr != nil {
-					return out, aerr
+				for _, p := range pending {
+					accruals, aerr := s.accrualsOrPreview(ctx, pr.ID, p, terms)
+					if aerr != nil {
+						return out, aerr
+					}
+					current := totals(accruals).Total
+					row.Total += current
+					out.Money.Current += current
+					// Лесенку показываем по идущему периоду: она
+					// объясняет ЦЕНУ СЕГОДНЯ, а сложенная по двум
+					// периодам ступень не сойдётся ни с одним из них.
+					if p.ID == period.ID {
+						ladder.add(terms, accruals)
+					}
 				}
-				current := totals(accruals).Total
-				row.Total += current
-				out.Money.Current += current
-				ladder.add(terms, accruals)
 			}
 		}
 

@@ -376,6 +376,35 @@ func (r *Repo) Periods(ctx context.Context, projectID uuid.UUID) ([]ProjectPerio
 }
 
 // PeriodBySeq — период по порядковому номеру.
+// PeriodsAwaitingLock — периоды, которые уже кончились, но ещё не
+// подытожены: между концом периода и отсечкой проходит две недели.
+//
+// Их деньги — заработанные, а не будущие: ролики вышли, просмотры
+// собраны. В сводке их не было ни в одном слагаемом — подытоженными они
+// ещё не стали, текущим периодом уже не были, — и проект на эти две
+// недели дешевел на целый период.
+func (r *Repo) PeriodsAwaitingLock(
+	ctx context.Context, projectID uuid.UUID, now time.Time,
+) ([]ProjectPeriod, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT `+periodScanCols+` FROM project_periods
+WHERE project_id = $1 AND status = $2 AND ends_on < $3
+ORDER BY seq`, projectID, PeriodOpen, dayOf(now))
+	if err != nil {
+		return nil, fmt.Errorf("periods awaiting lock: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ProjectPeriod, 0, 2)
+	for rows.Next() {
+		p, err := scanPeriod(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan period awaiting lock: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repo) PeriodBySeq(ctx context.Context, projectID uuid.UUID, seq int) (ProjectPeriod, error) {
 	p, err := scanPeriod(r.db.QueryRow(ctx,
 		`SELECT `+periodScanCols+` FROM project_periods WHERE project_id = $1 AND seq = $2`,
@@ -489,7 +518,7 @@ INSERT INTO project_period_publications
     (period_id, publication_id, creator_user_id, status, self_added, published_on)
 SELECT $1, f.id, f.creator_user_id, f.status, f.self_added, f.published_on
 FROM (`+publishedInPeriodSQL+`) f`,
-		p.ID, p.ProjectID, p.StartsOn, p.EndsOn); err != nil {
+		p.ID, p.ProjectID, periodFrom(p), p.EndsOn); err != nil {
 		return false, fmt.Errorf("snapshot publications: %w", err)
 	}
 
@@ -506,7 +535,7 @@ LEFT JOIN LATERAL (
     WHERE d.link_id = l.id AND d.stat_date <= $5::date
     ORDER BY d.stat_date DESC
     LIMIT 1
-) v ON TRUE`, p.ID, p.ProjectID, p.StartsOn, p.EndsOn, asOf); err != nil {
+) v ON TRUE`, p.ID, p.ProjectID, periodFrom(p), p.EndsOn, asOf); err != nil {
 		return false, fmt.Errorf("snapshot views: %w", err)
 	}
 
@@ -524,6 +553,24 @@ SELECT EXISTS (SELECT 1 FROM project_stat_summary s WHERE s.project_id = $1)
 		return false, fmt.Errorf("detect approximate snapshot: %w", err)
 	}
 	return approx, nil
+}
+
+// periodFrom — левая граница отбора выкладок периода.
+//
+// У ПЕРВОГО периода её нет, и это не послабление. Первый период сам
+// начинается с первой выкладки, поэтому «левее его начала» означает
+// одно: ролик вышел или ему исправили дату задним числом уже после
+// того, как якорь заморозили подытогом или утверждённым начислением.
+// Переякорить в этот момент нельзя — подытоженное не переписывают, — а
+// при строгой границе такой ролик проваливался мимо ВСЕХ периодов: за
+// него не платили, его ссылки никогда не парковались и обходились
+// вечно, и проект из-за него не схлопывался. Платят за работу, а не за
+// попадание в календарь.
+func periodFrom(p ProjectPeriod) time.Time {
+	if p.Seq <= 1 {
+		return time.Time{}
+	}
+	return p.StartsOn
 }
 
 // publishedInPeriodSQL — выкладки, вышедшие в границах периода.

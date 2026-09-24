@@ -630,6 +630,8 @@ type Accrual struct {
 	ViewsBase  int64 `json:"views_base"`
 	ViewsOver  int64 `json:"views_over"`
 	ViewsBonus int64 `json:"views_bonus"`
+	// Clicks — переходы по метке, зачтённые ИМЕННО в этом периоде:
+	// счётчик метки накопительный, и прошлые периоды из него вычтены.
 	Clicks     int   `json:"clicks"`
 	ClickBonus int64 `json:"click_bonus"`
 	// Subscribers/SubscriberBonus — KPI по подписчикам за период.

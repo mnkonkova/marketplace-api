@@ -41,6 +41,66 @@ func (s *Service) steppedAccruals(
 	}
 	agg := aggregateFacts(facts)
 	total, left := calcPeriod(terms, agg, pc, projectID, p.StartsOn)
+
+	// Утверждённая строка — замороженные деньги: пересчёт её не трогает
+	// (SaveAccrual пишет только черновики). Значит и делить между
+	// остальными надо ОСТАТОК цены периода, а не всю цену: иначе сумма
+	// строк расходилась с ценой периода ровно на утверждённое, и
+	// «оклады + бонус» в шапке переставали сходиться со столбцом
+	// «итого» под таблицей.
+	//
+	// Ступень при этом считается по ВСЕМУ объёму периода, включая
+	// просмотры утверждённых: порог взят проектом, а не теми, кому ещё
+	// не подписали строку.
+	start := p.StartsOn
+	saved, err := s.repo.Accruals(ctx, projectID, &start, nil)
+	if err != nil {
+		return nil, periodLeftovers{}, err
+	}
+	frozen := map[uuid.UUID]bool{}
+	for _, a := range saved {
+		if a.Status == AccrualDraft {
+			continue
+		}
+		frozen[a.CreatorUserID] = true
+		total.Salary -= a.Salary
+		total.ViewsBonus -= a.ViewsBonus
+		total.PayoutSalary -= a.PayoutSalary
+		total.PayoutViewsBonus -= a.PayoutViewsBonus
+	}
+	if len(frozen) > 0 {
+		// Утверждено больше, чем стоит период (тариф правили после
+		// подписи) — остаток нулевой, а не отрицательный: отнимать у
+		// неподписанных то, что пообещали подписанным, мы не будем.
+		total.Salary = atLeastZero(total.Salary)
+		total.ViewsBonus = atLeastZero(total.ViewsBonus)
+		total.PayoutSalary = atLeastZero(total.PayoutSalary)
+		total.PayoutViewsBonus = atLeastZero(total.PayoutViewsBonus)
+		open := make([]creatorPeriod, 0, len(facts))
+		for _, f := range facts {
+			if !frozen[f.CreatorID] {
+				open = append(open, f)
+			}
+		}
+		facts = open
+	}
+	return splitAcrossCreators(terms, facts, agg, total, projectID, p.StartsOn), left, nil
+}
+
+// splitAcrossCreators — разложить сумму периода по строкам креаторов.
+//
+// Раскладка — это ПОДАЧА, а не правило тарифа: ступени берутся от
+// объёма периода целиком, а строка человека отвечает на вопрос «сколько
+// из этого моё». Сумма строк равна сумме периода копейка в копейку,
+// остаток от деления достаётся тому, у кого больше просмотров.
+//
+// Отдельной функцией — потому что этим же кодом считается прогноз «что
+// даст следующая ступень»: своя формула для показа разошлась бы с
+// будущим счётом молча.
+func splitAcrossCreators(
+	terms Terms, facts []creatorPeriod, agg creatorPeriod, total Accrual,
+	projectID uuid.UUID, start time.Time,
+) []Accrual {
 	// Ступени — величина ПЕРИОДА и делятся между людьми по вкладу;
 	// подписчики — величина ЧЕЛОВЕКА: их вписывают каждому свои. Делить
 	// их по доле просмотров значило бы отдать часть чужого KPI тому, кто
@@ -52,7 +112,7 @@ func (s *Service) steppedAccruals(
 
 	rows := make([]Accrual, 0, len(facts))
 	if len(facts) == 0 {
-		return rows, left, nil
+		return rows
 	}
 
 	// Кому достанется остаток от деления: тому, у кого больше просмотров.
@@ -71,7 +131,7 @@ func (s *Service) steppedAccruals(
 		a := Accrual{
 			ProjectID:       projectID,
 			CreatorUserID:   f.CreatorID,
-			PeriodStart:     p.StartsOn,
+			PeriodStart:     start,
 			VideosPlanned:   f.Planned,
 			VideosDelivered: f.Delivered,
 			ViewsTotal:      f.ViewsTotal,
@@ -101,11 +161,16 @@ func (s *Service) steppedAccruals(
 				return byPart(sum, int64(f.DeliveredAssigned), int64(agg.DeliveredAssigned))
 			}
 		}
+		// Виральный хвост зарабатывают просмотры СВЕРХ ПОРОГА, и делится
+		// он по ним. По общим просмотрам он растекался на тех, кто порог
+		// не перешёл: ровный исполнитель получал долю надбавки за чужой
+		// залетевший ролик, а сам залетевший — меньше, чем заработал.
+		shareTail := func(sum int64) int64 { return byPart(sum, f.ViewsOver, agg.ViewsOver) }
 		a.Salary = shareFix(total.Salary)
-		a.ViewsBonus = share(total.ViewsBonus)
+		a.ViewsBonus = shareTail(total.ViewsBonus)
 		a.Total = a.Salary + a.ViewsBonus + a.SubscriberBonus
 		a.PayoutSalary = shareFix(total.PayoutSalary)
-		a.PayoutViewsBonus = share(total.PayoutViewsBonus)
+		a.PayoutViewsBonus = shareTail(total.PayoutViewsBonus)
 		a.PayoutTotal = a.PayoutSalary + a.PayoutViewsBonus + a.PayoutSubscriberBonus
 		givenClient.salary += a.Salary
 		givenClient.tail += a.ViewsBonus
@@ -125,7 +190,16 @@ func (s *Service) steppedAccruals(
 	rows[biggest].PayoutViewsBonus += total.PayoutViewsBonus - givenCreator.tail
 	rows[biggest].PayoutTotal = rows[biggest].PayoutSalary + rows[biggest].PayoutViewsBonus +
 		rows[biggest].PayoutSubscriberBonus
-	return rows, left, nil
+	return rows
+}
+
+// atLeastZero — денег меньше нуля не бывает: отрицательная доля в
+// раскладке означала бы, что у креатора что-то отнимают.
+func atLeastZero(v int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 // aggregateFacts — факты периода одной строкой: ступени считаются от
@@ -307,6 +381,15 @@ func calcPeriod(t Terms, f creatorPeriod, pc periodContext, projectID uuid.UUID,
 
 	// Неполная ступень клиенту не выставляется и НЕ переносится: решение
 	// владельца продукта, зафиксировано намеренно — это не баг.
+
+	// Вычета за недосдачу здесь нет — и это не пропуск.
+	//
+	// В прежней модели оклад платили за период целиком, поэтому
+	// несданный ролик приходилось вычитать отдельной строкой. Фикс
+	// считается ЗА РОЛИК: не вышел — не заплачен, и вычитать уже нечего.
+	// Отдельный вычет поверх этого был бы штрафом, которого в тарифе
+	// нет, а на экране — двойным наказанием за одно и то же.
+	// a.Deduction и a.PayoutDeduction остаются нулями осознанно.
 
 	// ---- креатор ----
 	//

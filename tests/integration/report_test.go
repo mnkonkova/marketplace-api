@@ -77,8 +77,13 @@ func TestReportTotalsUseLatestSnapshotNotSum(t *testing.T) {
 	if rep.Views != 900 {
 		t.Errorf("просмотров %d, ожидалось 900 — берётся последний снимок, а не сумма 1400", rep.Views)
 	}
-	if rep.Growth24h != 500 {
-		t.Errorf("прирост за сутки %d, ожидалось 500 (900 − 400)", rep.Growth24h)
+	// Прирост ЗА СУТКИ — с вчерашнего снимка: 900 сегодня против 400
+	// вчера. Снимки в посеве идут подряд, поэтому вчерашний есть.
+	if rep.Growth24h == nil {
+		t.Fatal("прирост за сутки не посчитан, хотя вчерашний снимок есть")
+	}
+	if *rep.Growth24h != 500 {
+		t.Errorf("прирост за сутки %d, ожидалось 500 (900 − 400)", *rep.Growth24h)
 	}
 	if rep.Videos != 1 {
 		t.Errorf("роликов %d, ожидался 1", rep.Videos)
@@ -92,6 +97,42 @@ func TestReportTotalsUseLatestSnapshotNotSum(t *testing.T) {
 	}
 	if rep.AsOf == nil {
 		t.Error("нет даты последнего сбора")
+	}
+}
+
+// Прирост «за сутки» считается ровно с вчерашнего снимка.
+//
+// Собирают не каждый день, и разница с позавчерашним под подписью «за
+// сутки» — неправда вдвое. Нет вчерашнего снимка — прирост НЕИЗВЕСТЕН,
+// и это не ноль: ноль читается как «ролик встал».
+func TestReportGrowthUnknownWithoutYesterday(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	// Снимки через день: сегодняшний есть, вчерашнего нет.
+	seedStats(t, projectID, creators[0],
+		[]string{"https://www.tiktok.com/@u/video/1"},
+		map[int]int64{-2: 400, 0: 900})
+
+	rep, err := publications.NewService(publications.NewRepo(pool)).
+		Report(ctx, projectID, publications.ReportFilter{})
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if rep.Views != 900 {
+		t.Errorf("просмотров %d, ожидалось 900", rep.Views)
+	}
+	if rep.Growth24h != nil {
+		t.Errorf("прирост за сутки %d, а вчерашнего снимка нет — должно быть «неизвестно»",
+			*rep.Growth24h)
+	}
+	if len(rep.VideoRows) != 1 {
+		t.Fatalf("строк роликов %d, ожидалась одна", len(rep.VideoRows))
+	}
+	if rep.VideoRows[0].Growth24h != nil {
+		t.Errorf("в строке ролика прирост %d, ожидалось «неизвестно»", *rep.VideoRows[0].Growth24h)
 	}
 }
 
