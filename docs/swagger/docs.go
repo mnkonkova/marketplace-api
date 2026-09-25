@@ -1605,69 +1605,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/admin/projects/{id}/billing/unlock_period": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Срез просмотров удаляется, период снова считается на лету.\nДействие пишется в журнал админских действий: переоткрытие\nпереписывает историю расчёта, и след обязателен.\nИдемпотентно: период, который и так идёт, ручка оставляет как есть.\n\nПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан\nот выхода этого, и после переоткрытия он недостоверен —\nкак и вся цепочка дальше. Пока арифметики переноса нет,\nэто предупреждение; в ответе видно, сколько подытоженных\nпериодов идёт следом.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "admin-billing"
-                ],
-                "summary": "Вернуть подытоженный период в работу (админ)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "project id",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "номер периода, по умолчанию текущий",
-                        "name": "period",
-                        "in": "query"
-                    },
-                    {
-                        "description": "причина",
-                        "name": "body",
-                        "in": "body",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.unlockPeriodReq"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.periodResp"
-                        }
-                    },
-                    "400": {
-                        "description": "bad_id; bad_period",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "not_found — у проекта ещё нет периодов",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/admin/projects/{id}/change_funnel": {
             "post": {
                 "security": [
@@ -4760,6 +4697,69 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "not_found — проект не найден, или прайс ещё не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/billing/confirm_period_end": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Менеджер подтверждает, каким числом кончается период.\nГраницу считает автомат — месяц от первой выкладки, — и он\nостаётся главным путём. Но подтверждённая дата СИЛЬНЕЕ\nвычисленной: план знает человек, а календарь только считает\nмесяцы.\n\nДата та же — это отметка «проверил», она гасит тревогу и\nбольше ничего не меняет. Другая — граница переезжает, и\nвместе с ней вся цепочка дальше: начало следующего периода,\nего конец, отсечка.\n\nПодытоженный период не подтверждают: под ним уже стоит счёт.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Подтвердить конец периода",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода, по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    },
+                    {
+                        "description": "дата конца",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.confirmPeriodEndReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.periodResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period; bad_date; bad_range",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "period_locked — период подытожен",
                         "schema": {
                             "$ref": "#/definitions/internal_billing.errorResponse"
                         }
@@ -13743,6 +13743,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "clicks": {
+                    "description": "Clicks — переходы по метке, зачтённые ИМЕННО в этом периоде:\nсчётчик метки накопительный, и прошлые периоды из него вычтены.",
                     "type": "integer"
                 },
                 "creator_avatar_url": {
@@ -14403,7 +14404,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "views_to_go": {
-                    "description": "ViewsToGo — сколько просмотров осталось до неё. Считается от\nпросмотров периода ПЛЮС перенесённый остаток: он уже в счёте, и не\nучесть его значило бы отправить человека добирать то, что у него\nуже есть.",
+                    "description": "ViewsToGo — сколько просмотров осталось до неё. Считается от\nпросмотров периода ПЛЮС перенесённый остаток: он уже в счёте, и не\nучесть его значило бы отправить человека добирать то, что у него\nуже есть.\n\nПри ступенчатом тарифе это просмотры ВСЕГО ПЕРИОДА, а не одного\nчеловека: ступень берётся объёмом проекта, и личное расстояние до\nнеё отвечало бы не на тот вопрос. Прибавка при этом всё равно\nличная — та доля цены ступени, которая достанется ему.",
                     "type": "integer"
                 }
             }
@@ -14435,7 +14436,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "salaries": {
-                    "description": "Salaries — оклады, единственная точно известная часть.",
+                    "description": "Salaries — фиксированная часть: фикс за ролик, умноженный на объём\n(у старых версий прайса — оклад за период на число людей). Точно\nизвестна, пока известен объём: бонус за просмотры — прогноз, фикс —\nнет. Имя поля осталось прежним, чтобы не ломать клиентов.",
                     "type": "integer"
                 },
                 "terms": {
@@ -14518,7 +14519,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "current": {
-                    "description": "Current — по текущим периодам: предварительная, числа ещё вырастут.",
+                    "description": "Current — по НЕПОДЫТОЖЕННЫМ периодам: идущему и тем, что уже\nкончились, но ждут отсечки. Предварительная: числа ещё вырастут.",
                     "type": "integer"
                 },
                 "locked": {
@@ -14617,7 +14618,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "total": {
-                    "description": "Total — счёт по проекту: подытоженные периоды плюс текущий.",
+                    "description": "Total — счёт по проекту: подытоженные периоды плюс все ещё не\nподытоженные, включая кончившийся и ждущий отсечки.",
                     "type": "integer"
                 },
                 "views": {
@@ -14750,6 +14751,13 @@ const docTemplate = `{
                 "er_without_shares": {
                     "description": "ERWithoutShares — в окне хотя бы одна площадка не отдала репосты.",
                     "type": "boolean"
+                },
+                "from": {
+                    "description": "From/To — границы окна датами, ГГГГ-ММ-ДД.\n\nПодпись range_label рядом человеческая («26 июня — 23 сент.\n2026») и для расчётов не годится: по ней нельзя отрезать поденный\nряд. А отрезать его надо ровно там, где границу провёл сервер, —\nсвоё правило на фронте однажды с этим разойдётся, и на одном\nэкране окажутся два разных «окна».",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
                 },
                 "views": {
                     "type": "integer"
@@ -14981,6 +14989,13 @@ const docTemplate = `{
                 "ends_on": {
                     "type": "string"
                 },
+                "ends_on_confirmed_at": {
+                    "description": "EndsOnConfirmedAt/By — менеджер подтвердил, что период кончается\nименно этой датой. Подтверждённая граница сильнее вычисленной:\nплан знает человек, а календарь только считает месяцы. Пусто —\nникто не подтверждал, работает автомат.",
+                    "type": "string"
+                },
+                "ends_on_confirmed_by": {
+                    "type": "string"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -15055,6 +15070,11 @@ const docTemplate = `{
                 "click_bonus_threshold": {
                     "type": "integer"
                 },
+                "fee_per_video": {
+                    "description": "FeePerVideo — фикс ЗА РОЛИК на этой стороне. Пусто — версия\nусловий старая, фикс платится окладом за период.\n\nПоля не было вовсе, хотя корзина воронки на него уже смотрела:\nветка ` + "`" + `@if (e.terms.fee_per_video)` + "`" + ` была мёртвой, и заказчику\nпоказывался оклад за месяц там, где с него берут за ролик. Число\nпри этом считалось правильно — расходилась только подпись, то\nесть объяснение, за что он платит.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "project_id": {
                     "type": "string"
                 },
@@ -15099,6 +15119,13 @@ const docTemplate = `{
             "properties": {
                 "client_name": {
                     "type": "string"
+                },
+                "creator_fee_per_video": {
+                    "type": "integer"
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс за ролик: основная цена\nработы. Ступени и ставка за тысячу — надбавка за просмотры.",
+                    "type": "integer"
                 },
                 "guarantee_views": {
                     "type": "integer"
@@ -15175,6 +15202,10 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_first_period_fee": {
                     "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
                     "type": "integer",
@@ -15203,6 +15234,11 @@ const docTemplate = `{
                 },
                 "creator_subscriber_rate": {
                     "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.\n\nКлиент платит FeePerVideo за каждую вышедшую выкладку, креатор\nполучает CreatorFeePerVideo. Этим фикс и отличается от ступеней:\nступени про рост просмотров, фикс — про объём работы, и месяц с\nпятью выкладками не должен стоить как месяц с тридцатью.\n\nЗаменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):\nона и была фиксом за период. Пусто — прежнее правило, фикс\nберётся из лесенки.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -15373,6 +15409,10 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_first_period_fee": {
                     "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
                     "type": "integer",
@@ -15404,6 +15444,11 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.\n\nКлиент платит FeePerVideo за каждую вышедшую выкладку, креатор\nполучает CreatorFeePerVideo. Этим фикс и отличается от ступеней:\nступени про рост просмотров, фикс — про объём работы, и месяц с\nпятью выкладками не должен стоить как месяц с тридцатью.\n\nЗаменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):\nона и была фиксом за период. Пусто — прежнее правило, фикс\nберётся из лесенки.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "first_period_fee": {
                     "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
                     "type": "integer",
@@ -15428,6 +15473,10 @@ const docTemplate = `{
                 },
                 "project_id": {
                     "type": "string"
+                },
+                "projects_refreshed": {
+                    "description": "ProjectsRefreshed — сколько ещё не начавшихся проектов переехало\nна эту версию. Начавшиеся не трогаются: у них снимок.",
+                    "type": "integer"
                 },
                 "published_at": {
                     "type": "string"
@@ -15561,6 +15610,10 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_first_period_fee": {
                     "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
                     "type": "integer",
@@ -15589,6 +15642,11 @@ const docTemplate = `{
                 },
                 "creator_subscriber_rate": {
                     "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.\n\nКлиент платит FeePerVideo за каждую вышедшую выкладку, креатор\nполучает CreatorFeePerVideo. Этим фикс и отличается от ступеней:\nступени про рост просмотров, фикс — про объём работы, и месяц с\nпятью выкладками не должен стоить как месяц с тридцатью.\n\nЗаменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):\nона и была фиксом за период. Пусто — прежнее правило, фикс\nберётся из лесенки.",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -15725,6 +15783,16 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_billing.confirmPeriodEndReq": {
+            "description": "Срез просмотров удаляется, период снова считается на лету. Действие пишется в журнал админских действий: переоткрытие переписывает историю расчёта, и след обязателен. Идемпотентно: период, который и так идёт, ручка оставляет как есть.  ПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан от выхода этого, и после переоткрытия он недостоверен — как и вся цепочка дальше. Пока арифметики переноса нет, это предупреждение; в ответе видно, сколько подытоженных периодов идёт следом.",
+            "type": "object",
+            "properties": {
+                "ends_on": {
+                    "description": "EndsOn — ГГГГ-ММ-ДД. Пусто — подтверждаем ту дату, что стоит:\nэто отметка «я проверил», а не правка.",
+                    "type": "string"
+                }
+            }
+        },
         "internal_billing.draftEstimateReq": {
             "type": "object",
             "properties": {
@@ -15816,6 +15884,10 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_first_period_fee": {
                     "description": "Креаторская сторона ступеней. null = «как у клиента».",
                     "type": "integer",
@@ -15844,6 +15916,11 @@ const docTemplate = `{
                 },
                 "creator_subscriber_rate": {
                     "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnull = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "---- фикс за РОЛИК ----\n\nЦена одной вышедшей выкладки, а не месяца: месяц с пятью роликами\nне должен стоить как месяц с тридцатью. Заменяет собой нижнюю\nступень лесенки — там и был фикс за период. null = фикса за ролик\nнет, версия считается прежней моделью (оклад за период).",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -15966,6 +16043,10 @@ const docTemplate = `{
                     "type": "integer",
                     "x-nullable": true
                 },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
                 "creator_first_period_fee": {
                     "description": "Креаторская сторона ступеней. null = «как у клиента».",
                     "type": "integer",
@@ -15994,6 +16075,11 @@ const docTemplate = `{
                 },
                 "creator_subscriber_rate": {
                     "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnull = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "---- фикс за РОЛИК ----\n\nЦена одной вышедшей выкладки, а не месяца: месяц с пятью роликами\nне должен стоить как месяц с тридцатью. Заменяет собой нижнюю\nступень лесенки — там и был фикс за период. null = фикса за ролик\nнет, версия считается прежней моделью (оклад за период).",
                     "type": "integer",
                     "x-nullable": true
                 },
@@ -16064,15 +16150,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_billing.TermsVersion"
                     }
-                }
-            }
-        },
-        "internal_billing.unlockPeriodReq": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "description": "Reason — зачем переоткрыли. Необязательно, но попадает в журнал:\nчерез полгода «почему числа поменялись» отвечается только этим.",
-                    "type": "string"
                 }
             }
         },
@@ -16740,6 +16817,10 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "click_bonus_threshold": {
+                    "type": "integer"
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo — фикс за ВЫШЕДШИЙ РОЛИК. nil = версия старая, фикс\nплатится окладом за период.\n\nЭто экран, на котором человек НАЖИМАЕТ «согласен», и цена здесь\nобязана быть той, по которой ему выставят счёт. Без этого поля\nусловия показывали оклад за месяц, а счёт приходил за ролики —\nпричём числа расходились вдвое.",
                     "type": "integer"
                 },
                 "id": {
@@ -20490,6 +20571,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "growth_24h": {
+                    "description": "Growth24h — прирост за сутки по всем роликам. null, если хоть по\nодной ссылке вчерашнего снимка нет: сложить известные с\nнеизвестными и выдать за полное число — то же занижение, только\nспрятанное.",
                     "type": "integer"
                 },
                 "likes": {
@@ -20627,6 +20709,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "growth_24h": {
+                    "description": "Growth24h — прирост ЗА СУТКИ: разница с вчерашним снимком. null —\nвчерашнего снимка нет, и прирост неизвестен. Ноль здесь означал бы\n«ролик встал», а это другое утверждение: см. sharesTotal, правило\nто же.",
                     "type": "integer"
                 },
                 "likes": {

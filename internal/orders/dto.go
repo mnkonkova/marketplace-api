@@ -130,6 +130,14 @@ type Terms struct {
 	ClickBonusRate      *int64 `json:"click_bonus_rate,omitempty"`
 	ClickBonusThreshold int    `json:"click_bonus_threshold"`
 	ClickBonusRateOver  *int64 `json:"click_bonus_rate_over,omitempty"`
+	// FeePerVideo — фикс за ВЫШЕДШИЙ РОЛИК. nil = версия старая, фикс
+	// платится окладом за период.
+	//
+	// Это экран, на котором человек НАЖИМАЕТ «согласен», и цена здесь
+	// обязана быть той, по которой ему выставят счёт. Без этого поля
+	// условия показывали оклад за месяц, а счёт приходил за ролики —
+	// причём числа расходились вдвое.
+	FeePerVideo *int64 `json:"fee_per_video,omitempty"`
 }
 
 // Availability — занятость креатора в месяце.

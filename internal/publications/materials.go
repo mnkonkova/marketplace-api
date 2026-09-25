@@ -132,7 +132,14 @@ RETURNING id, created_by, created_at`,
 	}
 	// Материал креатору — это изменение его задания, и узнать о нём он
 	// должен от нас, а не открыв проект по своей воле.
-	if in.Audience == "creator" || in.Audience == "all" {
+	//
+	// Сравниваем с КОНСТАНТОЙ, а не со строкой: здесь стояло
+	// `== "creator" || == "all"`, а legal-значения — `creators` и
+	// `client` (CHECK в 00036). Условие не выполнялось никогда, и
+	// уведомление «задание изменилось» не уходило ни разу за всё время
+	// жизни материалов. Молча: код есть, тест на отправку был, но
+	// вызывался он с той же выдуманной строкой.
+	if in.Audience == AudienceCreators {
 		if err := notifyBrief(ctx, tx, in.ProjectID,
 			ReminderMaterialsUpdated, nil, time.Now()); err != nil {
 			return Material{}, err
@@ -167,7 +174,9 @@ RETURNING audience`, materialID, projectID).Scan(&audience)
 	if err != nil {
 		return fmt.Errorf("delete material: %w", err)
 	}
-	if audience == "creator" || audience == "all" {
+	// Та же выдуманная строка, что и при добавлении, — и тот же
+	// результат: убранный у креатора материал молчал.
+	if audience == AudienceCreators {
 		if err := notifyBrief(ctx, tx, projectID,
 			ReminderMaterialsUpdated, nil, time.Now()); err != nil {
 			return err

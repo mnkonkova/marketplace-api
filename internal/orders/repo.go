@@ -51,12 +51,14 @@ func (r *Repo) CurrentTerms(ctx context.Context) (Terms, error) {
 SELECT id, version, body, published_at,
        salary_per_month, videos_first_month, videos_next_months,
        rate_per_1000_views, bonus_views_threshold, rate_per_1000_views_over,
-       click_bonus_rate, click_bonus_threshold, click_bonus_rate_over
+       click_bonus_rate, click_bonus_threshold, click_bonus_rate_over,
+       fee_per_video
 FROM terms_versions
 ORDER BY version DESC LIMIT 1`).Scan(&t.ID, &t.Version, &t.Body, &t.PublishedAt,
 		&t.SalaryPerMonth, &t.VideosFirstMonth, &t.VideosNextMonths,
 		&t.RatePer1000Views, &t.BonusViewsThreshold, &t.RatePer1000ViewsOver,
-		&t.ClickBonusRate, &t.ClickBonusThreshold, &t.ClickBonusRateOver)
+		&t.ClickBonusRate, &t.ClickBonusThreshold, &t.ClickBonusRateOver,
+		&t.FeePerVideo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Terms{}, ErrNotFound
 	}

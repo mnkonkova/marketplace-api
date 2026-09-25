@@ -52,8 +52,17 @@ type SideTerms struct {
 	Steps []SideStep `json:"steps,omitempty"`
 	// SubscriberRate — сколько стоит подписчик на этой стороне. Пусто —
 	// KPI по подписчикам не считается.
-	SubscriberRate *int64     `json:"subscriber_rate,omitempty" extensions:"x-nullable"`
-	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+	SubscriberRate *int64 `json:"subscriber_rate,omitempty" extensions:"x-nullable"`
+	// FeePerVideo — фикс ЗА РОЛИК на этой стороне. Пусто — версия
+	// условий старая, фикс платится окладом за период.
+	//
+	// Поля не было вовсе, хотя корзина воронки на него уже смотрела:
+	// ветка `@if (e.terms.fee_per_video)` была мёртвой, и заказчику
+	// показывался оклад за месяц там, где с него берут за ролик. Число
+	// при этом считалось правильно — расходилась только подпись, то
+	// есть объяснение, за что он платит.
+	FeePerVideo *int64     `json:"fee_per_video,omitempty" extensions:"x-nullable"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 // SideStep — ступень одной стороны сделки: порог и цена на нём.
@@ -87,6 +96,7 @@ func side(t Terms) SideTerms {
 	return SideTerms{
 		Steps:                steps,
 		SubscriberRate:       t.SubscriberRate,
+		FeePerVideo:          t.FeePerVideo,
 		ProjectID:            t.ProjectID,
 		TermsVersionID:       t.TermsVersionID,
 		SalaryPerMonth:       t.SalaryPerMonth,

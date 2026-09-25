@@ -1352,9 +1352,18 @@ func TestDraftEstimateMatchesOrderEstimate(t *testing.T) {
 	clientID, creators, cleanupOrders := setupOrderWorld(t, pool)
 	defer cleanupOrders()
 
+	// Фикс ЗА РОЛИК выставляем НАМЕРЕННО, и в этом весь тест.
+	//
+	// Без него обе сметы падали в одну и ту же запасную ветку — оклад за
+	// период, — совпадали числом и объявляли себя сошедшимися. А на
+	// живом прайсе, где фикс за ролик задан, смета до заказа считала по
+	// нему, а смета по заказу по окладу: 30 000 ₽ против 60 000 ₽ за
+	// один и тот же заказ. Причина — разные запросы условий: черновая
+	// берёт LatestTerms, заказная брала свой укороченный SELECT.
 	if _, err := pool.Exec(ctx, `
 UPDATE terms_versions SET salary_per_month = 6000000, rate_per_1000_views = 9000,
-       bonus_views_threshold = 1000000, rate_per_1000_views_over = 900`); err != nil {
+       bonus_views_threshold = 1000000, rate_per_1000_views_over = 900,
+       fee_per_video = 100000, creator_fee_per_video = 50000`); err != nil {
 		t.Fatalf("terms: %v", err)
 	}
 
@@ -1394,6 +1403,22 @@ UPDATE terms_versions SET salary_per_month = 6000000, rate_per_1000_views = 9000
 	if draft.WithoutHistory != byOrder.WithoutHistory {
 		t.Errorf("людей без истории: до заказа %d, по заказу %d",
 			draft.WithoutHistory, byOrder.WithoutHistory)
+	}
+
+	// И отдельно — что считалось это именно фиксом за ролик, а не
+	// совпало в запасной ветке: тридцать роликов по 1 000 ₽.
+	if want := int64(videos) * 100000; draft.Salaries != want {
+		t.Errorf("фикс за ролик не применён: %d вместо %d", draft.Salaries, want)
+	}
+
+	// Условия в ответе — то, чем смета объясняет свою сумму. Пустой
+	// fee_per_video здесь означает подпись «оклад за месяц» под ценой,
+	// посчитанной за ролик.
+	if byOrder.Terms.FeePerVideo == nil || *byOrder.Terms.FeePerVideo != 100000 {
+		t.Errorf("в условиях заказа нет фикса за ролик: %+v", byOrder.Terms.FeePerVideo)
+	}
+	if draft.Terms.FeePerVideo == nil || *draft.Terms.FeePerVideo != 100000 {
+		t.Errorf("в условиях черновой сметы нет фикса за ролик: %+v", draft.Terms.FeePerVideo)
 	}
 }
 

@@ -734,6 +734,9 @@ definitions:
       click_bonus:
         type: integer
       clicks:
+        description: |-
+          Clicks — переходы по метке, зачтённые ИМЕННО в этом периоде:
+          счётчик метки накопительный, и прошлые периоды из него вычтены.
         type: integer
       creator_avatar_url:
         description: |-
@@ -1346,6 +1349,11 @@ definitions:
           просмотров периода ПЛЮС перенесённый остаток: он уже в счёте, и не
           учесть его значило бы отправить человека добирать то, что у него
           уже есть.
+
+          При ступенчатом тарифе это просмотры ВСЕГО ПЕРИОДА, а не одного
+          человека: ступень берётся объёмом проекта, и личное расстояние до
+          неё отвечало бы не на тот вопрос. Прибавка при этом всё равно
+          личная — та доля цены ступени, которая достанется ему.
         type: integer
     type: object
   internal_billing.OrderEstimate:
@@ -1373,7 +1381,11 @@ definitions:
           нужно только оклады: бонус не «ноль», а неизвестен.
         type: boolean
       salaries:
-        description: Salaries — оклады, единственная точно известная часть.
+        description: |-
+          Salaries — фиксированная часть: фикс за ролик, умноженный на объём
+          (у старых версий прайса — оклад за период на число людей). Точно
+          известна, пока известен объём: бонус за просмотры — прогноз, фикс —
+          нет. Имя поля осталось прежним, чтобы не ломать клиентов.
         type: integer
       terms:
         allOf:
@@ -1452,7 +1464,9 @@ definitions:
   internal_billing.OverviewMoney:
     properties:
       current:
-        description: 'Current — по текущим периодам: предварительная, числа ещё вырастут.'
+        description: |-
+          Current — по НЕПОДЫТОЖЕННЫМ периодам: идущему и тем, что уже
+          кончились, но ждут отсечки. Предварительная: числа ещё вырастут.
         type: integer
       locked:
         description: 'Locked — сумма по подытоженным периодам: окончательная, из срезов.'
@@ -1539,7 +1553,9 @@ definitions:
       title:
         type: string
       total:
-        description: 'Total — счёт по проекту: подытоженные периоды плюс текущий.'
+        description: |-
+          Total — счёт по проекту: подытоженные периоды плюс все ещё не
+          подытоженные, включая кончившийся и ждущий отсечки.
         type: integer
       views:
         type: integer
@@ -1669,6 +1685,18 @@ definitions:
       er_without_shares:
         description: ERWithoutShares — в окне хотя бы одна площадка не отдала репосты.
         type: boolean
+      from:
+        description: |-
+          From/To — границы окна датами, ГГГГ-ММ-ДД.
+
+          Подпись range_label рядом человеческая («26 июня — 23 сент.
+          2026») и для расчётов не годится: по ней нельзя отрезать поденный
+          ряд. А отрезать его надо ровно там, где границу провёл сервер, —
+          своё правило на фронте однажды с этим разойдётся, и на одном
+          экране окажутся два разных «окна».
+        type: string
+      to:
+        type: string
       views:
         type: integer
       views_delta_pct:
@@ -1882,6 +1910,15 @@ definitions:
         type: integer
       ends_on:
         type: string
+      ends_on_confirmed_at:
+        description: |-
+          EndsOnConfirmedAt/By — менеджер подтвердил, что период кончается
+          именно этой датой. Подтверждённая граница сильнее вычисленной:
+          план знает человек, а календарь только считает месяцы. Пусто —
+          никто не подтверждал, работает автомат.
+        type: string
+      ends_on_confirmed_by:
+        type: string
       id:
         type: string
       locked_at:
@@ -1953,6 +1990,18 @@ definitions:
         x-nullable: true
       click_bonus_threshold:
         type: integer
+      fee_per_video:
+        description: |-
+          FeePerVideo — фикс ЗА РОЛИК на этой стороне. Пусто — версия
+          условий старая, фикс платится окладом за период.
+
+          Поля не было вовсе, хотя корзина воронки на него уже смотрела:
+          ветка `@if (e.terms.fee_per_video)` была мёртвой, и заказчику
+          показывался оклад за месяц там, где с него берут за ролик. Число
+          при этом считалось правильно — расходилась только подпись, то
+          есть объяснение, за что он платит.
+        type: integer
+        x-nullable: true
       project_id:
         type: string
       rate_per_1000_views:
@@ -1994,6 +2043,13 @@ definitions:
     properties:
       client_name:
         type: string
+      creator_fee_per_video:
+        type: integer
+      fee_per_video:
+        description: |-
+          FeePerVideo/CreatorFeePerVideo — фикс за ролик: основная цена
+          работы. Ступени и ставка за тысячу — надбавка за просмотры.
+        type: integer
       guarantee_views:
         type: integer
       has_terms:
@@ -2066,6 +2122,9 @@ definitions:
       creator_base_fee:
         type: integer
         x-nullable: true
+      creator_fee_per_video:
+        type: integer
+        x-nullable: true
       creator_first_period_fee:
         description: |-
           Креаторская сторона тех же ступеней. nil означает «столько же,
@@ -2100,6 +2159,20 @@ definitions:
         description: |-
           CreatorSubscriberRate — сколько из этого получает креатор.
           nil = столько же, сколько платит заказчик.
+        type: integer
+        x-nullable: true
+      fee_per_video:
+        description: |-
+          FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.
+
+          Клиент платит FeePerVideo за каждую вышедшую выкладку, креатор
+          получает CreatorFeePerVideo. Этим фикс и отличается от ступеней:
+          ступени про рост просмотров, фикс — про объём работы, и месяц с
+          пятью выкладками не должен стоить как месяц с тридцатью.
+
+          Заменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):
+          она и была фиксом за период. Пусто — прежнее правило, фикс
+          берётся из лесенки.
         type: integer
         x-nullable: true
       first_period_fee:
@@ -2273,6 +2346,9 @@ definitions:
       creator_base_fee:
         type: integer
         x-nullable: true
+      creator_fee_per_video:
+        type: integer
+        x-nullable: true
       creator_first_period_fee:
         description: |-
           Креаторская сторона тех же ступеней. nil означает «столько же,
@@ -2309,6 +2385,20 @@ definitions:
           nil = столько же, сколько платит заказчик.
         type: integer
         x-nullable: true
+      fee_per_video:
+        description: |-
+          FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.
+
+          Клиент платит FeePerVideo за каждую вышедшую выкладку, креатор
+          получает CreatorFeePerVideo. Этим фикс и отличается от ступеней:
+          ступени про рост просмотров, фикс — про объём работы, и месяц с
+          пятью выкладками не должен стоить как месяц с тридцатью.
+
+          Заменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):
+          она и была фиксом за период. Пусто — прежнее правило, фикс
+          берётся из лесенки.
+        type: integer
+        x-nullable: true
       first_period_fee:
         description: |-
           FirstPeriodFee — фикс за первый период проекта: там оплачивается
@@ -2337,6 +2427,11 @@ definitions:
           разошлась бы с ними на первой же правке ставок.
       project_id:
         type: string
+      projects_refreshed:
+        description: |-
+          ProjectsRefreshed — сколько ещё не начавшихся проектов переехало
+          на эту версию. Начавшиеся не трогаются: у них снимок.
+        type: integer
       published_at:
         type: string
       rate_per_1000_views:
@@ -2467,6 +2562,9 @@ definitions:
       creator_base_fee:
         type: integer
         x-nullable: true
+      creator_fee_per_video:
+        type: integer
+        x-nullable: true
       creator_first_period_fee:
         description: |-
           Креаторская сторона тех же ступеней. nil означает «столько же,
@@ -2501,6 +2599,20 @@ definitions:
         description: |-
           CreatorSubscriberRate — сколько из этого получает креатор.
           nil = столько же, сколько платит заказчик.
+        type: integer
+        x-nullable: true
+      fee_per_video:
+        description: |-
+          FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.
+
+          Клиент платит FeePerVideo за каждую вышедшую выкладку, креатор
+          получает CreatorFeePerVideo. Этим фикс и отличается от ступеней:
+          ступени про рост просмотров, фикс — про объём работы, и месяц с
+          пятью выкладками не должен стоить как месяц с тридцатью.
+
+          Заменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):
+          она и была фиксом за период. Пусто — прежнее правило, фикс
+          берётся из лесенки.
         type: integer
         x-nullable: true
       first_period_fee:
@@ -2628,6 +2740,21 @@ definitions:
           $ref: '#/definitions/internal_billing.Accrual'
         type: array
     type: object
+  internal_billing.confirmPeriodEndReq:
+    description: 'Срез просмотров удаляется, период снова считается на лету. Действие
+      пишется в журнал админских действий: переоткрытие переписывает историю расчёта,
+      и след обязателен. Идемпотентно: период, который и так идёт, ручка оставляет
+      как есть.  ПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан от выхода
+      этого, и после переоткрытия он недостоверен — как и вся цепочка дальше. Пока
+      арифметики переноса нет, это предупреждение; в ответе видно, сколько подытоженных
+      периодов идёт следом.'
+    properties:
+      ends_on:
+        description: |-
+          EndsOn — ГГГГ-ММ-ДД. Пусто — подтверждаем ту дату, что стоит:
+          это отметка «я проверил», а не правка.
+        type: string
+    type: object
   internal_billing.draftEstimateReq:
     properties:
       creator_ids:
@@ -2700,6 +2827,9 @@ definitions:
       creator_base_fee:
         type: integer
         x-nullable: true
+      creator_fee_per_video:
+        type: integer
+        x-nullable: true
       creator_first_period_fee:
         description: Креаторская сторона ступеней. null = «как у клиента».
         type: integer
@@ -2726,6 +2856,16 @@ definitions:
         description: |-
           CreatorSubscriberRate — сколько из этого получает креатор.
           null = «как у клиента».
+        type: integer
+        x-nullable: true
+      fee_per_video:
+        description: |-
+          ---- фикс за РОЛИК ----
+
+          Цена одной вышедшей выкладки, а не месяца: месяц с пятью роликами
+          не должен стоить как месяц с тридцатью. Заменяет собой нижнюю
+          ступень лесенки — там и был фикс за период. null = фикса за ролик
+          нет, версия считается прежней моделью (оклад за период).
         type: integer
         x-nullable: true
       first_period_fee:
@@ -2836,6 +2976,9 @@ definitions:
       creator_base_fee:
         type: integer
         x-nullable: true
+      creator_fee_per_video:
+        type: integer
+        x-nullable: true
       creator_first_period_fee:
         description: Креаторская сторона ступеней. null = «как у клиента».
         type: integer
@@ -2862,6 +3005,16 @@ definitions:
         description: |-
           CreatorSubscriberRate — сколько из этого получает креатор.
           null = «как у клиента».
+        type: integer
+        x-nullable: true
+      fee_per_video:
+        description: |-
+          ---- фикс за РОЛИК ----
+
+          Цена одной вышедшей выкладки, а не месяца: месяц с пятью роликами
+          не должен стоить как месяц с тридцатью. Заменяет собой нижнюю
+          ступень лесенки — там и был фикс за период. null = фикса за ролик
+          нет, версия считается прежней моделью (оклад за период).
         type: integer
         x-nullable: true
       first_period_fee:
@@ -2932,14 +3085,6 @@ definitions:
         items:
           $ref: '#/definitions/internal_billing.TermsVersion'
         type: array
-    type: object
-  internal_billing.unlockPeriodReq:
-    properties:
-      reason:
-        description: |-
-          Reason — зачем переоткрыли. Необязательно, но попадает в журнал:
-          через полгода «почему числа поменялись» отвечается только этим.
-        type: string
     type: object
   internal_billing.utmReq:
     properties:
@@ -3406,6 +3551,16 @@ definitions:
       click_bonus_rate_over:
         type: integer
       click_bonus_threshold:
+        type: integer
+      fee_per_video:
+        description: |-
+          FeePerVideo — фикс за ВЫШЕДШИЙ РОЛИК. nil = версия старая, фикс
+          платится окладом за период.
+
+          Это экран, на котором человек НАЖИМАЕТ «согласен», и цена здесь
+          обязана быть той, по которой ему выставят счёт. Без этого поля
+          условия показывали оклад за месяц, а счёт приходил за ролики —
+          причём числа расходились вдвое.
         type: integer
       id:
         type: string
@@ -6238,6 +6393,11 @@ definitions:
           не отдала. Показатель занижен, и сказать об этом обязаны.
         type: boolean
       growth_24h:
+        description: |-
+          Growth24h — прирост за сутки по всем роликам. null, если хоть по
+          одной ссылке вчерашнего снимка нет: сложить известные с
+          неизвестными и выдать за полное число — то же занижение, только
+          спрятанное.
         type: integer
       likes:
         type: integer
@@ -6342,6 +6502,11 @@ definitions:
           их не отдала или ролик собирали до того, как мы начали их писать.
         type: boolean
       growth_24h:
+        description: |-
+          Growth24h — прирост ЗА СУТКИ: разница с вчерашним снимком. null —
+          вчерашнего снимка нет, и прирост неизвестен. Ноль здесь означал бы
+          «ролик встал», а это другое утверждение: см. sharesTotal, правило
+          то же.
         type: integer
       likes:
         type: integer
@@ -8584,56 +8749,6 @@ paths:
       summary: Назначить специалиста на проект (по UUID) — админ
       tags:
       - admin-projects
-  /admin/projects/{id}/billing/unlock_period:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Срез просмотров удаляется, период снова считается на лету.
-        Действие пишется в журнал админских действий: переоткрытие
-        переписывает историю расчёта, и след обязателен.
-        Идемпотентно: период, который и так идёт, ручка оставляет как есть.
-
-        ПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан
-        от выхода этого, и после переоткрытия он недостоверен —
-        как и вся цепочка дальше. Пока арифметики переноса нет,
-        это предупреждение; в ответе видно, сколько подытоженных
-        периодов идёт следом.
-      parameters:
-      - description: project id
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: номер периода, по умолчанию текущий
-        in: query
-        name: period
-        type: integer
-      - description: причина
-        in: body
-        name: body
-        schema:
-          $ref: '#/definitions/internal_billing.unlockPeriodReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_billing.periodResp'
-        "400":
-          description: bad_id; bad_period
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-        "404":
-          description: not_found — у проекта ещё нет периодов
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Вернуть подытоженный период в работу (админ)
-      tags:
-      - admin-billing
   /admin/projects/{id}/change_funnel:
     post:
       consumes:
@@ -10718,6 +10833,58 @@ paths:
       security:
       - BearerAuth: []
       summary: Взять условия из действующего прайса (менеджер)
+      tags:
+      - manager-billing
+  /manager/projects/{id}/billing/confirm_period_end:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Менеджер подтверждает, каким числом кончается период.
+        Границу считает автомат — месяц от первой выкладки, — и он
+        остаётся главным путём. Но подтверждённая дата СИЛЬНЕЕ
+        вычисленной: план знает человек, а календарь только считает
+        месяцы.
+
+        Дата та же — это отметка «проверил», она гасит тревогу и
+        больше ничего не меняет. Другая — граница переезжает, и
+        вместе с ней вся цепочка дальше: начало следующего периода,
+        его конец, отсечка.
+
+        Подытоженный период не подтверждают: под ним уже стоит счёт.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: номер периода, по умолчанию текущий
+        in: query
+        name: period
+        type: integer
+      - description: дата конца
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/internal_billing.confirmPeriodEndReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.periodResp'
+        "400":
+          description: bad_id; bad_period; bad_date; bad_range
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "409":
+          description: period_locked — период подытожен
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Подтвердить конец периода
       tags:
       - manager-billing
   /manager/projects/{id}/billing/periods:

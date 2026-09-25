@@ -538,6 +538,12 @@ func (t Terms) CreatorSide() Terms {
 	if t.CreatorSubscriberRate != nil {
 		c.SubscriberRate = t.CreatorSubscriberRate
 	}
+	// Фикс за ролик — по тому же правилу «пусто значит как у клиента»:
+	// иначе в кабинете креатора под именем его фикса стояла бы цена
+	// клиента, и он прочитал бы её как свой заработок.
+	if t.CreatorFeePerVideo != nil {
+		c.FeePerVideo = t.CreatorFeePerVideo
+	}
 	// Лесенку тоже сводим к его стороне: после CreatorSide в Steps должна
 	// лежать ЕГО цена под тем же именем поля — иначе всякий, кто возьмёт
 	// у сведённого тарифа лесенку, получит цену клиента и назовёт её

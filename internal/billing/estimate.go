@@ -70,6 +70,13 @@ type OrderEstimate struct {
 }
 
 // orderFacts — заказ и его условия.
+//
+// Читаем ТЕ ЖЕ поля, по которым считается черновая смета (Repo.LatestTerms):
+// фикс за ролик и лесенку в том числе. Пока их здесь не было, одно и то
+// же число считалось двумя разными механиками — до оформления по фиксу
+// за ролик, после оформления по окладу за месяц, — и человек видел на
+// странице подбора одну сумму, а в заказе другую. Разойтись они могут
+// только молча: обе ветки честно считают, просто по разным условиям.
 func (r *Repo) orderFacts(ctx context.Context, orderID, clientID uuid.UUID) (int, int, Terms, error) {
 	var needed, videos int
 	var t Terms
@@ -77,18 +84,30 @@ func (r *Repo) orderFacts(ctx context.Context, orderID, clientID uuid.UUID) (int
 SELECT o.needed, o.videos_count,
        v.id, v.salary_per_month, v.rate_per_1000_views, v.bonus_views_threshold,
        v.rate_per_1000_views_over, v.click_bonus_rate,
-       v.click_bonus_threshold, v.click_bonus_rate_over
+       v.click_bonus_threshold, v.click_bonus_rate_over,
+       v.videos_first_month, v.videos_next_months,
+       v.fee_per_video, v.creator_fee_per_video, v.subscriber_rate
 FROM creator_orders o
 JOIN terms_versions v ON v.id = o.terms_version_id
 WHERE o.id = $1 AND o.client_user_id = $2`, orderID, clientID).
 		Scan(&needed, &videos, &t.TermsVersionID, &t.SalaryPerMonth,
 			&t.RatePer1000Views, &t.BonusViewsThreshold, &t.RatePer1000ViewsOver,
-			&t.ClickBonusRate, &t.ClickBonusThreshold, &t.ClickBonusRateOver)
+			&t.ClickBonusRate, &t.ClickBonusThreshold, &t.ClickBonusRateOver,
+			&t.VideosFirstMonth, &t.VideosNextMonths,
+			&t.FeePerVideo, &t.CreatorFeePerVideo, &t.SubscriberRate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, 0, Terms{}, ErrNotFound
 	}
 	if err != nil {
 		return 0, 0, Terms{}, fmt.Errorf("load order facts: %w", err)
+	}
+	// Лесенка — часть условий, а не приложение к ним: смета отдаёт её
+	// клиенту в terms.steps, и заказ без неё показывал бы ступенчатый
+	// тариф плоским.
+	if t.TermsVersionID != nil {
+		if t.Steps, err = loadSteps(ctx, r.db, stepsOwnerVersion, *t.TermsVersionID); err != nil {
+			return 0, 0, Terms{}, err
+		}
 	}
 	return needed, videos, t, nil
 }
