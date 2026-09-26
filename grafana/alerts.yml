@@ -429,6 +429,26 @@ groups:
       # сматчилось бы никогда — тихо мёртвый алерт. container_id вытаскивается
       # из cgroup-пути в alloy/config.alloy; по нему работает
       # `docker ps --filter id=<hash>`.
+      # Проверка на саму проверку: есть ли вообще ряды по контейнерам.
+      #
+      # 26.09.2026 выяснилось, что ContainerMemoryNearLimit ниже не мог
+      # сработать никогда: cAdvisor отдавал только системные слайсы
+      # (/system.slice/*.service), ни одного docker-<hash>.scope, и
+      # container_id не появлялся ни у одного ряда. Алерт с {container_id!=""}
+      # молчал не потому, что всё хорошо, а потому, что сравнивать было не с
+      # чем — и обнаружилось это в тот день, когда графики понадобились.
+      #
+      # Отсюда правило: у каждой проверки, которая опирается на метку,
+      # должна быть парная проверка на наличие самой метки. Молчащий алерт
+      # обязан уметь сказать, что он молчит.
+      - alert: ContainerMetricsMissing
+        expr: absent(container_memory_working_set_bytes{container_id!=""})
+        for: 30m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Метрик по контейнерам нет — ContainerMemoryNearLimit слеп"
+          description: "cAdvisor не отдаёт ни одного ряда с container_id: контейнерные cgroup'ы не опознаются. Проверь моунт /run/containerd/containerd.sock в сервисе alloy и `docker compose logs alloy`. Пока ряда нет, проверка «контейнер у потолка памяти» ничего не проверяет."
+
       - alert: ContainerMemoryNearLimit
         expr: |
           container_memory_working_set_bytes{container_id!=""}
@@ -440,7 +460,7 @@ groups:
         labels: { severity: warn, team: backend }
         annotations:
           summary: "Контейнер {{ $labels.container_id }} у потолка памяти"
-          description: "working_set > 90% mem_limit больше 15 минут. Какой это контейнер: `docker ps --filter id={{ $labels.container_id }}`. Контейнеру тесно в своём cgroup — на хосте память при этом может быть свободна. Подними mem_limit в docker-compose.prod.yml (для JVM-сервисов заодно heap: правило heap ≈ треть-половина лимита) или разберись, кто течёт."
+          description: "Парная проверка ContainerMetricsMissing выше следит за тем, что этот алерт вообще способен сработать. working_set > 90% mem_limit больше 15 минут. Какой это контейнер: `docker ps --filter id={{ $labels.container_id }}`. Контейнеру тесно в своём cgroup — на хосте память при этом может быть свободна. Подними mem_limit в docker-compose.prod.yml (для JVM-сервисов заодно heap: правило heap ≈ треть-половина лимита) или разберись, кто течёт."
 
       - alert: ErrorRate5xxBurst
         # Дублирует HighErrorRate (5m), но с for=1m — для более резкой реакции.

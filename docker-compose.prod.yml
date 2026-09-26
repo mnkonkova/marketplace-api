@@ -205,6 +205,22 @@ services:
       # docker-обработчик cAdvisor на этом драйвере (overlayfs) всё равно не
       # работает, зато они давали root-доступ ко всей файловой системе хоста.
       - /sys:/sys:ro
+      # Сокет containerd — только чтение.
+      #
+      # Без него cAdvisor видит в cgroup-дереве системные слайсы и НЕ ВИДИТ
+      # контейнеры: 26.09.2026 в Grafana по всему хосту было 41 ряда
+      # container_memory_*, и все — /system.slice/*.service, ни одного
+      # docker-<hash>.scope. Слайс /system.slice при этом показывал 7,7 ГБ,
+      # из которых пять с лишним приходились на неучтённых детей. Значит,
+      # «графики памяти по контейнерам» существовали только на бумаге: когда
+      # они понадобились по-настоящему, смотреть было нечего.
+      #
+      # Docker на этом хосте работает через containerd-снапшоттер, и
+      # контейнерные cgroup'ы опознаёт containerd-обработчик cAdvisor. Путь
+      # у него прибит по умолчанию (/run/containerd/containerd.sock), опции
+      # в компоненте Alloy нет — поэтому просто отдаём сокет по тому же
+      # адресу. Только чтение: cAdvisor из него ничего не создаёт.
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
     environment:
       GRAFANA_CLOUD_PROM_URL: ${GRAFANA_CLOUD_PROM_URL:-}
       GRAFANA_CLOUD_PROM_USER: ${GRAFANA_CLOUD_PROM_USER:-}
@@ -226,7 +242,17 @@ services:
         condition: service_started
       node-exporter:
         condition: service_started
-    mem_limit: 256m
+    # 512, а не 256.
+    #
+    # Alloy — это ГЛАЗА всей системы, и падает он особенно неудачно: вместе
+    # с ним замолкают все пять джоб разом, а алерты, которые должны об этом
+    # кричать, сами считаются по тем же метрикам. 26.09.2026 в 14:48 UTC
+    # метрики оборвались у api, worker, n8n, node-exporter и cadvisor в одну
+    # минуту, при этом на хосте было свободно 11 ГБ и 84 ГБ диска — то есть
+    # упал именно отправитель. 256 МБ для Alloy, который держит cAdvisor,
+    # скрейпы и хвосты логов всех контейнеров, — это впритык; свой же
+    # cgroup-лимит он и пробил.
+    mem_limit: 512m
 
 volumes:
   pgdata:
