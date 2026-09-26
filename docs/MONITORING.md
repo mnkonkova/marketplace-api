@@ -193,6 +193,44 @@ docker inspect <name> --format '{{.HostConfig.Memory}}'
 
 ---
 
+## Файл алертов и Grafana разъезжаются — как сверять
+
+`grafana/alerts.yml` **не провижинится автоматически**: правила заводятся
+в Grafana руками или скриптом. 26.09.2026 сверка показала, что в файле 50
+правил, а в Grafana 33 — не доехали восемнадцать: весь сбор статистики,
+instacurl, `RemindersNotSending`, `PublicationsOverdueHigh`. Правило,
+которое написали и не завели, вреднее отсутствующего: в репозитории оно
+выглядит работающим.
+
+Сверить и довезти:
+
+```bash
+export G=https://<ваш>.grafana.net T=<токен>
+python3 scripts/sync-alerts.py        # создаёт недостающие, существующие не трогает
+```
+
+Скрипт намеренно не правит уже заведённые: у них могли быть правки в
+интерфейсе. Расхождения в условиях смотрятся глазами.
+
+### noDataState: когда «нет данных» — это тревога
+
+У всех правил по умолчанию стоит `noDataState = OK`: метрика пропала —
+алерт зелёный. Именно так мёртвая проверка по контейнерам выглядела
+здоровой. Переключено на `Alerting` там, где отсутствие данных само по
+себе поломка:
+
+- **сервис жив** — `APIDown`, `APINotScraped`, `ESDown`, `N8nDown`,
+  `BotrabotDown`, `SiteUnreachableExternally`, `InstacurlDown`,
+  `InstacurlUnreachable`;
+- **работа идёт** — `StatsCollectionStalled`, `PlatformCollectSilent`,
+  `RemindersNotSending`, `PlatformViewsMissing`, `ContainerMetricsMissing`.
+
+Скорости, доли и перцентили (`HighErrorRate`, `APIp95LatencyHigh`,
+`*Spike`) оставлены на `OK` сознательно: ночью трафика нет, данных тоже,
+и `Alerting` означал бы звонок каждую ночь.
+
+---
+
 ## Раннбук: APINotScraped — и почему он опаснее, чем кажется
 
 Алерт означает, что метрика `up{job="marketpclce-api"}` не приходит две

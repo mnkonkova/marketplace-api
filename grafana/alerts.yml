@@ -376,6 +376,16 @@ groups:
       # Требует инициализированного Synthetic Monitoring с HTTP-проверкой
       # на https://wayprmarket.ru. Пока проверки нет, метрики нет и правило
       # молчит (noDataState=OK по умолчанию для не-up выражений).
+      # BotrabotDown живёт ТОЛЬКО в Grafana и сюда не переносится.
+      #
+      # Он не про Prometheus: проверка ходит HTTP-датасорсом (infinity) на
+      # https://www.prmarket-botrabot.ru/api/health и смотрит поле leads в
+      # ответе — соседний сервис на своей VDS, метрик от него мы не
+      # собираем. Выразить это в promql нечем, поэтому правило заведено в
+      # интерфейсе, а здесь о нём стоит запись: без неё сверка «файл против
+      # Grafana» каждый раз показывает лишнее правило и заставляет гадать,
+      # кто его завёл.
+
       - alert: SiteUnreachableExternally
         expr: |
           max_over_time(probe_success{job=~".*wayprmarket.*"}[5m]) == 0
