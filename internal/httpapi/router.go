@@ -375,6 +375,9 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/projects/{id}/notifications", d.Publications.ClientGetPrefs)
 				r.Put("/me/projects/{id}/notifications", d.Publications.ClientSavePrefs)
 				r.Get("/me/projects/{id}/materials", d.Publications.ClientMaterials)
+				// Заявка на следующий месяц: кнопка под прикидкой цены.
+				r.Get("/me/projects/{id}/month-request", d.Publications.ClientMonthRequest)
+				r.Post("/me/projects/{id}/month-request", d.Publications.ClientAskMonth)
 				r.Get("/me/projects/{id}/report.csv", d.Publications.ClientReportCSV)
 			}
 			if d.Billing != nil {
@@ -502,6 +505,9 @@ func NewRouter(d Deps) http.Handler {
 
 					// Материалы проекта: бренд-гайд и обучение креаторам,
 					// клиентские — заказчику.
+					r.Get("/manager/projects/{id}/month-request", d.Publications.ManagerMonthRequest)
+					r.Post("/manager/projects/{id}/month-request/handled",
+						d.Publications.ManagerHandleMonthRequest)
 					r.Get("/manager/projects/{id}/materials", d.Publications.ManagerListMaterials)
 					r.Post("/manager/projects/{id}/materials", d.Publications.ManagerAddMaterial)
 					r.Delete("/manager/projects/{id}/materials/{material_id}", d.Publications.ManagerDeleteMaterial)

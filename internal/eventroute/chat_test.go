@@ -73,6 +73,11 @@ var dynamicEmitSites = map[string][]string{
 		// "project." + kind недельной сводки заказчику.
 		"project.client_weekly_digest",
 	},
+	"internal/publications/month_request.go": {
+		// "project." + ReminderClientMonthRequest: заказчик нажал
+		// «Заказать» под прикидкой цены следующего месяца.
+		"project.client_month_request",
+	},
 	"internal/publications/weak_video.go": {
 		// "project." + WeakVideo.Kind(): мало просмотров или битая ссылка.
 		"project.publication_weak",

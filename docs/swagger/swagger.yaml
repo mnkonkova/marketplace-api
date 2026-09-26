@@ -6112,6 +6112,36 @@ definitions:
       url:
         type: string
     type: object
+  internal_publications.MonthRequest:
+    properties:
+      ceiling:
+        description: Ceiling — потолок, показанный заказчику, в копейках.
+        type: integer
+      client_name:
+        type: string
+      created_at:
+        type: string
+      creators:
+        type: integer
+      handled_at:
+        type: string
+      id:
+        type: string
+      month:
+        description: Month — первое число месяца, о котором просят.
+        type: string
+      project_id:
+        type: string
+      project_title:
+        description: |-
+          ProjectTitle и ClientName нужны сообщению в чат: по одному
+          идентификатору проекта дежурный не поймёт, о ком речь.
+        type: string
+      requested_by:
+        type: string
+      videos:
+        type: integer
+    type: object
   internal_publications.NotificationPrefs:
     properties:
       on_date_shift:
@@ -6782,6 +6812,27 @@ definitions:
         items:
           $ref: '#/definitions/internal_publications.Material'
         type: array
+    type: object
+  internal_publications.monthRequestReq:
+    properties:
+      ceiling:
+        description: |-
+          Ceiling — потолок в копейках, показанный на экране. Пересчитывать
+          его на сервере незачем: разговор пойдёт именно о той сумме,
+          которую человек прочитал, а прайс к этому моменту может смениться.
+        type: integer
+      creators:
+        type: integer
+      month:
+        description: Month — «ГГГГ-ММ». Пусто — следующий месяц от сегодняшнего дня.
+        type: string
+      videos:
+        type: integer
+    type: object
+  internal_publications.monthRequestResp:
+    properties:
+      request:
+        $ref: '#/definitions/internal_publications.MonthRequest'
     type: object
   internal_publications.personsResp:
     properties:
@@ -11693,6 +11744,61 @@ paths:
       summary: Убрать материал из проекта (менеджер)
       tags:
       - manager-publications
+  /manager/projects/{id}/month-request:
+    get:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: request = null, если заявки нет
+          schema:
+            $ref: '#/definitions/internal_publications.monthRequestResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "403":
+          description: forbidden — проект чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заявка заказчика на следующий месяц (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/month-request/handled:
+    post:
+      description: Плашка гаснет, строка остаётся историей разговора. Идемпотентно.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: заявка разобрана
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "403":
+          description: forbidden — проект чужой
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отметить заявку разобранной (менеджер)
+      tags:
+      - manager-publications
   /manager/projects/{id}/move_stage:
     post:
       consumes:
@@ -15600,6 +15706,81 @@ paths:
       security:
       - BearerAuth: []
       summary: Материалы проекта (заказчик)
+      tags:
+      - client-publications
+  /me/projects/{id}/month-request:
+    get:
+      description: |-
+        Нужна экрану, чтобы вместо кнопки показать «заявка у менеджера»:
+        иначе человек жмёт её второй раз, не понимая, ушло ли первое.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: request = null, если заявки нет
+          schema:
+            $ref: '#/definitions/internal_publications.monthRequestResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Открытая заявка на месяц (заказчик)
+      tags:
+      - client-publications
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Прикидка «во сколько обойдётся месяц» превращается в заявку:
+        у менеджера в проекте загорается плашка, в общий чат уходит
+        сообщение. Это ещё не заказ — цену и состав финализирует менеджер.
+        Повторный запрос до разбора уточняет ту же заявку, а не заводит вторую.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: ползунки и показанный потолок
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.monthRequestReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.monthRequestResp'
+        "400":
+          description: bad_id, bad_json, invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не ваш
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Заказать следующий месяц (заказчик)
       tags:
       - client-publications
   /me/projects/{id}/notifications:

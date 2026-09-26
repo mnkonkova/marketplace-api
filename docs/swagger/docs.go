@@ -5970,6 +5970,94 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/month-request": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Заявка заказчика на следующий месяц (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "request = null, если заявки нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — проект чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/month-request/handled": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Плашка гаснет, строка остаётся историей разговора. Идемпотентно.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Отметить заявку разобранной (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "заявка разобрана"
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — проект чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/move_stage": {
             "post": {
                 "security": [
@@ -11724,6 +11812,114 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "not_found — проект не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/month-request": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Нужна экрану, чтобы вместо кнопки показать «заявка у менеджера»:\nиначе человек жмёт её второй раз, не понимая, ушло ли первое.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Открытая заявка на месяц (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "request = null, если заявки нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Прикидка «во сколько обойдётся месяц» превращается в заявку:\nу менеджера в проекте загорается плашка, в общий чат уходит\nсообщение. Это ещё не заказ — цену и состав финализирует менеджер.\nПовторный запрос до разбора уточняет ту же заявку, а не заводит вторую.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Заказать следующий месяц (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "ползунки и показанный потолок",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id, bad_json, invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
                         }
@@ -20261,6 +20457,47 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.MonthRequest": {
+            "type": "object",
+            "properties": {
+                "ceiling": {
+                    "description": "Ceiling — потолок, показанный заказчику, в копейках.",
+                    "type": "integer"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "creators": {
+                    "type": "integer"
+                },
+                "handled_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "month": {
+                    "description": "Month — первое число месяца, о котором просят.",
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "description": "ProjectTitle и ClientName нужны сообщению в чат: по одному\nидентификатору проекта дежурный не поймёт, о ком речь.",
+                    "type": "string"
+                },
+                "requested_by": {
+                    "type": "string"
+                },
+                "videos": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_publications.NotificationPrefs": {
             "type": "object",
             "properties": {
@@ -21100,6 +21337,33 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_publications.Material"
                     }
+                }
+            }
+        },
+        "internal_publications.monthRequestReq": {
+            "type": "object",
+            "properties": {
+                "ceiling": {
+                    "description": "Ceiling — потолок в копейках, показанный на экране. Пересчитывать\nего на сервере незачем: разговор пойдёт именно о той сумме,\nкоторую человек прочитал, а прайс к этому моменту может смениться.",
+                    "type": "integer"
+                },
+                "creators": {
+                    "type": "integer"
+                },
+                "month": {
+                    "description": "Month — «ГГГГ-ММ». Пусто — следующий месяц от сегодняшнего дня.",
+                    "type": "string"
+                },
+                "videos": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.monthRequestResp": {
+            "type": "object",
+            "properties": {
+                "request": {
+                    "$ref": "#/definitions/internal_publications.MonthRequest"
                 }
             }
         },

@@ -882,3 +882,140 @@ func (h *Handler) ManagerAddSuggestion(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusOK, saved)
 }
+
+// ---- заявка на следующий месяц ----
+
+// monthRequestReq — что прислал кабинет заказчика: ползунки и число,
+// которое он видел сверху.
+type monthRequestReq struct {
+	Creators int `json:"creators"`
+	Videos   int `json:"videos"`
+	// Ceiling — потолок в копейках, показанный на экране. Пересчитывать
+	// его на сервере незачем: разговор пойдёт именно о той сумме,
+	// которую человек прочитал, а прайс к этому моменту может смениться.
+	Ceiling int64 `json:"ceiling"`
+	// Month — «ГГГГ-ММ». Пусто — следующий месяц от сегодняшнего дня.
+	Month string `json:"month,omitempty"`
+}
+
+type monthRequestResp struct {
+	Request *MonthRequest `json:"request"`
+}
+
+// ClientAskMonth godoc
+// @Summary  Заказать следующий месяц (заказчик)
+// @Description Прикидка «во сколько обойдётся месяц» превращается в заявку:
+// @Description у менеджера в проекте загорается плашка, в общий чат уходит
+// @Description сообщение. Это ещё не заказ — цену и состав финализирует менеджер.
+// @Description Повторный запрос до разбора уточняет ту же заявку, а не заводит вторую.
+// @Tags     client-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Param    body body monthRequestReq true "ползунки и показанный потолок"
+// @Success  201 {object} monthRequestResp
+// @Failure  400 {object} errorResponse "bad_id, bad_json, invalid_input"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — проект не ваш"
+// @Router   /me/projects/{id}/month-request [post]
+func (h *Handler) ClientAskMonth(w http.ResponseWriter, r *http.Request) {
+	projectID, uid, ok := h.assertClient(w, r)
+	if !ok {
+		return
+	}
+	var req monthRequestReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	in := AskMonthInput{
+		ProjectID: projectID, ClientID: uid,
+		Creators: req.Creators, Videos: req.Videos, Ceiling: req.Ceiling,
+	}
+	if req.Month != "" {
+		m, err := time.Parse("2006-01", req.Month)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", "Месяц в формате ГГГГ-ММ.")
+			return
+		}
+		in.Month = m
+	}
+	out, err := h.svc.AskMonth(r.Context(), in, time.Now())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, monthRequestResp{Request: &out})
+}
+
+// ClientMonthRequest godoc
+// @Summary  Открытая заявка на месяц (заказчик)
+// @Description Нужна экрану, чтобы вместо кнопки показать «заявка у менеджера»:
+// @Description иначе человек жмёт её второй раз, не понимая, ушло ли первое.
+// @Tags     client-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Success  200 {object} monthRequestResp "request = null, если заявки нет"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — проект не ваш"
+// @Router   /me/projects/{id}/month-request [get]
+func (h *Handler) ClientMonthRequest(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.assertClient(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.svc.OpenMonthRequest(r.Context(), projectID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, monthRequestResp{Request: out})
+}
+
+// ManagerMonthRequest godoc
+// @Summary  Заявка заказчика на следующий месяц (менеджер)
+// @Tags     manager-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Success  200 {object} monthRequestResp "request = null, если заявки нет"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  403 {object} errorResponse "forbidden — проект чужой"
+// @Router   /manager/projects/{id}/month-request [get]
+func (h *Handler) ManagerMonthRequest(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.svc.OpenMonthRequest(r.Context(), projectID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, monthRequestResp{Request: out})
+}
+
+// ManagerHandleMonthRequest godoc
+// @Summary  Отметить заявку разобранной (менеджер)
+// @Description Плашка гаснет, строка остаётся историей разговора. Идемпотентно.
+// @Tags     manager-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Success  204 "заявка разобрана"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  403 {object} errorResponse "forbidden — проект чужой"
+// @Router   /manager/projects/{id}/month-request/handled [post]
+func (h *Handler) ManagerHandleMonthRequest(w http.ResponseWriter, r *http.Request) {
+	projectID, uid, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.HandleMonthRequest(r.Context(), projectID, uid, time.Now()); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
