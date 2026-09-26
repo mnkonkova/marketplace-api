@@ -43,7 +43,10 @@ func (r *Repo) ReorderReserve(ctx context.Context, orderID, clientID uuid.UUID, 
 		return fmt.Errorf("lock order: %w", err)
 	}
 	// Собранный, оплаченный и отменённый заказ переставлять незачем.
-	if status != string(StatusDraft) && status != string(StatusInviting) {
+	// submitted — заявка из воронки: приглашений ещё не было, и порядок
+	// строк в ней менять можно.
+	if status != string(StatusDraft) && status != string(StatusSubmitted) &&
+		status != string(StatusInviting) {
 		return ErrPriorityLocked
 	}
 

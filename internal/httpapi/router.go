@@ -406,6 +406,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/orders", d.Orders.ClientListOrders)
 				r.Post("/me/orders", d.Orders.ClientCreateOrder)
 				r.Get("/me/orders/{id}", d.Orders.ClientGetOrder)
+				// Бриф правят и после отправки: половина заказчиков
+				// вспоминает про референсы уже потом.
+				r.Get("/me/orders/{id}/brief", d.Orders.ClientBrief)
+				r.Patch("/me/orders/{id}/brief", d.Orders.ClientSaveBrief)
 				r.Post("/me/orders/{id}/invite", d.Orders.ClientInvite)
 				r.Post("/me/orders/{id}/cancel", d.Orders.ClientCancelOrder)
 				// Порядок приоритета можно переставить, пока людей не

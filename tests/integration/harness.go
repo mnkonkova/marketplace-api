@@ -64,7 +64,9 @@ func NewAPIHarness(t *testing.T, pool *pgxpool.Pool) *APIHarness {
 	// зелёным на выключенной функции.
 	projectsSvc := projects.NewService(projects.NewRepo(pool)).
 		WithChecklistAttacher(pubSvc)
-	ordersSvc := orders.NewService(orders.NewRepo(pool))
+	// Проект под заявку заводится тем же способом, что в cmd/api: стенд,
+	// собранный иначе, проверяет другое приложение.
+	ordersSvc := orders.NewService(orders.NewRepo(pool)).WithProjects(projectsSvc)
 
 	// Админские ручки поднимаем здесь же: половина правил CRM живёт
 	// именно в них (журнал, 409 при снятии роли, скрытие тестовых), и

@@ -242,8 +242,11 @@ func main() {
 		WithChecklistAttacher(publicationsSvc)
 	projectsHandler := projects.NewHandler(projectsSvc)
 
-	// Самостоятельный подбор креаторов клиентом.
-	ordersHandler := orders.NewHandler(orders.NewService(orders.NewRepo(pool)))
+	// Самостоятельный подбор креаторов клиентом. Заявка заводит проект
+	// сразу — заказчику есть куда прийти и где написать, пока менеджер
+	// считает; без этого он уходит в тишину на несколько дней.
+	ordersHandler := orders.NewHandler(
+		orders.NewService(orders.NewRepo(pool)).WithProjects(projectsSvc))
 
 	// Деньги: условия, платежи заказчика и начисления креаторам.
 	billingHandler := billing.NewHandler(billing.NewService(billing.NewRepo(pool)))

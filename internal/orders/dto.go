@@ -1,6 +1,7 @@
 package orders
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,9 +11,17 @@ import (
 type OrderStatus string
 
 const (
-	StatusDraft     OrderStatus = "draft"
+	StatusDraft OrderStatus = "draft"
+	// StatusSubmitted — заявка отправлена: заказ и проект заведены,
+	// менеджер считает. Между «нажал отправить» и «оплачено» у заказа
+	// раньше не было имени вовсе, и заказчик всё это время висел в
+	// тишине.
+	StatusSubmitted OrderStatus = "submitted"
 	StatusInviting  OrderStatus = "inviting"
 	StatusStaffed   OrderStatus = "staffed"
+	// StatusFinalized — менеджер утвердил состав, цену и даты. Дальше
+	// живёт проект, а заказ становится историей сделки.
+	StatusFinalized OrderStatus = "finalized"
 	StatusPaid      OrderStatus = "paid"
 	StatusCancelled OrderStatus = "cancelled"
 )
@@ -26,6 +35,10 @@ const (
 	CandidateAccepted CandidateStatus = "accepted"
 	CandidateDeclined CandidateStatus = "declined"
 	CandidateExpired  CandidateStatus = "expired"
+	// CandidateResponded — креатор откликнулся на рассылку: прислал файл
+	// или указал свои ролики. Это НЕ «согласился»: согласие
+	// подтверждает менеджер, когда добавляет человека в состав.
+	CandidateResponded CandidateStatus = "responded"
 )
 
 // Правила объёма: первый месяц — один креатор, дальше 2–3.
@@ -98,10 +111,71 @@ type CreateOrderInput struct {
 	StartMonth   time.Time
 	Needed       int
 	VideosCount  int
-	// CreatorIDs — подборка В ПОРЯДКЕ ПРИОРИТЕТА: первый в списке —
-	// первый по приоритету. Клиент не «выбирает N человек», а расставляет
-	// собранных по порядку, и порядок пропустить нельзя.
+	// CreatorIDs — кого заказчик отметил.
+	//
+	// Раньше это была подборка В ПОРЯДКЕ ПРИОРИТЕТА, и порядок был
+	// смыслом: приглашения уходили сверху вниз по одному на свободное
+	// место. Очереди больше нет — приглашение уходит всем известным
+	// креаторам, а отмеченные получают его с пометкой «вас хотят
+	// особенно». Порядок остался только как порядок строк на экране.
 	CreatorIDs []uuid.UUID
+	// Brief — ответы на пять вопросов первого шага воронки. Пустой бриф
+	// не запрещён: человек может дописать его после отправки, и лучше
+	// пустой бриф с заведённым проектом, чем форма, которую бросили.
+	Brief OrderBrief
+}
+
+// OrderBrief — бриф заказчика: что снимаем, кому и каким тоном.
+//
+// Отдельным типом, а не набором полей заказа: заказ — это состояние
+// сделки, бриф — текст, который правят. Правка текста не должна трогать
+// строку, по которой считаются деньги и статусы.
+type OrderBrief struct {
+	// Goal — зачем снимаем: «продажи», «узнаваемость», «прогрев к
+	// запуску». С этого менеджер начинает разговор.
+	Goal string `json:"goal"`
+	// Product — что продвигаем.
+	Product string `json:"product"`
+	// Audience — кому.
+	Audience string `json:"audience"`
+	// Tone — каким тоном: «по-дружески», «экспертно», «без юмора».
+	Tone string `json:"tone"`
+	// Refs — на что равняться: ссылки на ролики, которые нравятся.
+	Refs string `json:"refs"`
+	// Platforms — площадки. Пусто = все пять: так работает пакет по
+	// умолчанию, и заставлять отмечать их ради этого незачем.
+	Platforms []string `json:"platforms,omitempty"`
+}
+
+// Filled — в брифе есть хоть что-то. Нужен там, где пустой бриф
+// показывать нечем: «Бриф: —» занимает место и ничего не сообщает.
+func (b OrderBrief) Filled() bool {
+	return b.Goal != "" || b.Product != "" || b.Audience != "" ||
+		b.Tone != "" || b.Refs != "" || len(b.Platforms) > 0
+}
+
+// Text — бриф одним куском для заметок проекта и сообщения в чат.
+//
+// Собирается здесь, а не в вызывающем коде: мест, где бриф надо
+// прочитать человеку, уже три (заметки проекта, карточка менеджера,
+// сообщение в чат), и три разные склейки разошлись бы на первой же
+// новой строке брифа.
+func (b OrderBrief) Text() string {
+	parts := make([]string, 0, 6)
+	add := func(label, v string) {
+		if v != "" {
+			parts = append(parts, label+": "+v)
+		}
+	}
+	add("Задача", b.Goal)
+	add("Продукт", b.Product)
+	add("Аудитория", b.Audience)
+	add("Тон", b.Tone)
+	add("Референсы", b.Refs)
+	if len(b.Platforms) > 0 {
+		parts = append(parts, "Площадки: "+strings.Join(b.Platforms, ", "))
+	}
+	return strings.Join(parts, "\n")
 }
 
 // Terms — версия правил работы.

@@ -3,6 +3,7 @@ package orders
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -69,6 +70,11 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Заказ не найден.")
 	default:
+		// Незнакомая ошибка — это 500, и по коду 500 в отчёте не видно
+		// ничего. Пишем её в лог здесь, а не в каждом хендлере: иначе
+		// половина веток отдаёт «internal» молча, и разбирать приходится
+		// по времени запроса.
+		slog.Error("orders: необработанная ошибка", "err", err)
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	}
 }
@@ -217,9 +223,23 @@ type createOrderReq struct {
 	StartMonth  string `json:"start_month"`
 	Needed      int    `json:"needed"`
 	VideosCount int    `json:"videos_count"`
-	// CreatorIDs — В ПОРЯДКЕ ПРИОРИТЕТА. Клиент не выбирает N человек,
-	// а расставляет собранных по порядку.
+	// CreatorIDs — кого заказчик отметил. Порядка в списке больше нет:
+	// очередь приглашений ушла, приглашение уходит всем известным
+	// креаторам, а отмеченные получают его с пометкой «хотят особенно».
 	CreatorIDs []uuid.UUID `json:"creator_ids"`
+	// Brief — первый шаг воронки. Необязателен: заявка без брифа лучше
+	// формы, которую бросили на полпути, а дописать его можно потом.
+	Brief OrderBrief `json:"brief"`
+}
+
+// briefReq — правка брифа после отправки. Половина заказчиков
+// вспоминает про референсы уже после «Отправить».
+type briefReq struct {
+	OrderBrief
+}
+
+type briefResp struct {
+	Brief OrderBrief `json:"brief"`
 }
 
 // ClientCreateOrder godoc
@@ -233,7 +253,9 @@ type createOrderReq struct {
 // @Failure      400  {object}  errorResponse  "bad_json; bad_month; invalid_input — объём, месяц в прошлом, пустой id; not_enough_candidates — в подборке меньше, чем нужно взять; duplicate_candidate"
 // @Failure      401  {object}  errorResponse  "no_user"
 // @Failure      403  {object}  errorResponse  "no_consent — не приняты условия работы"
-// @Failure      409  {object}  errorResponse  "too_many_creators — в первый месяц доступен один креатор, со второго до трёх; not_a_creator — в пакет берутся только блогеры и авторы UGC; creator_busy — кто-то занят в этом месяце"
+// @Failure      409  {object}  errorResponse  "not_a_creator — в пакет берутся только блогеры и авторы UGC"
+// @Description Заявка заводит ПРОЕКТ сразу: он виден в кабинете, и в нём работает
+// @Description переписка, пока менеджер считает. project_id приходит в ответе.
 // @Router   /me/orders [post]
 func (h *Handler) ClientCreateOrder(w http.ResponseWriter, r *http.Request) {
 	uid, ok := auth.UserIDFrom(r.Context())
@@ -252,9 +274,17 @@ func (h *Handler) ClientCreateOrder(w http.ResponseWriter, r *http.Request) {
 			"Месяц старта должен быть в формате ГГГГ-ММ.")
 		return
 	}
+	// Needed не спрашиваем у клиента как «сколько мест»: мест больше
+	// нет. Сколько отметили — столько и отметили, и это же число идёт в
+	// потолок цены.
+	needed := req.Needed
+	if needed == 0 {
+		needed = len(req.CreatorIDs)
+	}
 	res, err := h.svc.Create(r.Context(), CreateOrderInput{
-		ClientUserID: uid, StartMonth: month, Needed: req.Needed,
+		ClientUserID: uid, StartMonth: month, Needed: needed,
 		VideosCount: req.VideosCount, CreatorIDs: req.CreatorIDs,
+		Brief: req.Brief,
 	}, time.Now())
 	if err != nil {
 		writeErr(w, err)
@@ -832,4 +862,73 @@ func (h *Handler) ClientReorderPriority(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, o)
+}
+
+// ClientBrief godoc
+// @Summary  Бриф заявки (заказчик)
+// @Tags     client-orders
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "order id"
+// @Success  200 {object} briefResp
+// @Failure  401 {object} errorResponse "no_user"
+// @Failure  404 {object} errorResponse "not_found — заявка не ваша"
+// @Router   /me/orders/{id}/brief [get]
+func (h *Handler) ClientBrief(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	id, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id заявки.")
+		return
+	}
+	b, err := h.svc.Brief(r.Context(), id, uid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, briefResp{Brief: b})
+}
+
+// ClientSaveBrief godoc
+// @Summary  Дописать бриф заявки (заказчик)
+// @Description Бриф правят ПОСЛЕ отправки: половина заказчиков вспоминает про
+// @Description референсы уже потом. Текст переписывается целиком — стёртая
+// @Description строка должна исчезать и из задания креатора.
+// @Tags     client-orders
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "order id"
+// @Param    body body briefReq true "бриф"
+// @Success  200 {object} briefResp
+// @Failure  400 {object} errorResponse "bad_id, bad_json"
+// @Failure  401 {object} errorResponse "no_user"
+// @Failure  404 {object} errorResponse "not_found — заявка не ваша"
+// @Router   /me/orders/{id}/brief [patch]
+func (h *Handler) ClientSaveBrief(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	id, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id заявки.")
+		return
+	}
+	var req briefReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	b, err := h.svc.SaveBrief(r.Context(), id, uid, req.OrderBrief)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, briefResp{Brief: b})
 }

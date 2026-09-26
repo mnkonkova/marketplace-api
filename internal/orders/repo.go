@@ -180,7 +180,9 @@ WHERE creator_user_id = ANY($1) AND month = $2 AND is_available = FALSE`,
 // ---- заказ ----
 
 // Create — завести заказ с подборкой в порядке приоритета.
-func (r *Repo) Create(ctx context.Context, in CreateOrderInput, termsID uuid.UUID, now time.Time) (Order, error) {
+func (r *Repo) Create(
+	ctx context.Context, in CreateOrderInput, termsID, projectID uuid.UUID, now time.Time,
+) (Order, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Order{}, fmt.Errorf("begin tx: %w", err)
@@ -191,28 +193,51 @@ func (r *Repo) Create(ctx context.Context, in CreateOrderInput, termsID uuid.UUI
 	var o Order
 	err = tx.QueryRow(ctx, `
 INSERT INTO creator_orders
-    (client_user_id, start_month, needed, videos_count, terms_version_id)
-VALUES ($1, $2, $3, $4, $5)
+    (client_user_id, start_month, needed, videos_count, terms_version_id, project_id, status)
+VALUES ($1, $2, $3, $4, $5, NULLIF($6, '00000000-0000-0000-0000-000000000000'::uuid), 'submitted')
 RETURNING id, client_user_id, start_month, needed, videos_count, status,
           terms_version_id, project_id, paid_at, created_at, updated_at`,
-		in.ClientUserID, month, in.Needed, in.VideosCount, termsID).Scan(
+		in.ClientUserID, month, in.Needed, in.VideosCount, termsID, projectID).Scan(
 		&o.ID, &o.ClientUserID, &o.StartMonth, &o.Needed, &o.VideosCount, &o.Status,
 		&o.TermsVersionID, &o.ProjectID, &o.PaidAt, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return Order{}, fmt.Errorf("insert order: %w", err)
 	}
 
-	// Приоритет — позиция в списке. Уникальный индекс на (order_id,
-	// priority) не даст двум «первым» появиться даже при гонке.
+	// Отмеченные заказчиком. Приоритет пишем позицией в списке, но он
+	// больше не смысл, а порядок строк на экране: очередь приглашений
+	// ушла вместе со старой логикой, и is_preferred отвечает на другой
+	// вопрос — «кого хотят особенно».
 	priorities := make([]int, 0, len(in.CreatorIDs))
 	for i := range in.CreatorIDs {
 		priorities = append(priorities, i+1)
 	}
 	if _, err := tx.Exec(ctx, `
-INSERT INTO order_candidates (order_id, creator_user_id, priority)
-SELECT $1, c, p FROM unnest($2::uuid[], $3::int[]) AS t(c, p)`,
+INSERT INTO order_candidates (order_id, creator_user_id, priority, is_preferred)
+SELECT $1, c, p, TRUE FROM unnest($2::uuid[], $3::int[]) AS t(c, p)`,
 		o.ID, in.CreatorIDs, priorities); err != nil {
 		return Order{}, fmt.Errorf("insert candidates: %w", err)
+	}
+
+	// Бриф — в той же транзакции: заявка без брифа и бриф без заявки
+	// одинаково бесполезны, а разнести их значит однажды получить одно
+	// без другого.
+	if in.Brief.Filled() {
+		// Площадки — пустой массив, а не NULL: пустой означает «все
+		// пять», и различать его с «не выбирали» на этом поле нечем.
+		// nil в pgx приезжает именно NULL, и колонка NOT NULL его
+		// отвергает — на живом стенде это был 500 на кнопке «Отправить».
+		platforms := in.Brief.Platforms
+		if platforms == nil {
+			platforms = []string{}
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO order_briefs (order_id, goal, product, audience, tone, refs, platforms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			o.ID, in.Brief.Goal, in.Brief.Product, in.Brief.Audience,
+			in.Brief.Tone, in.Brief.Refs, platforms); err != nil {
+			return Order{}, fmt.Errorf("insert brief: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -265,7 +290,7 @@ func (r *Repo) InviteNext(ctx context.Context, orderID uuid.UUID, now time.Time)
 		}
 		return Order{}, fmt.Errorf("lock order: %w", err)
 	}
-	if status != StatusDraft && status != StatusInviting {
+	if status != StatusDraft && status != StatusSubmitted && status != StatusInviting {
 		return Order{}, fmt.Errorf("%w: заказ уже %s", ErrWrongStatus, status)
 	}
 
@@ -280,8 +305,10 @@ func (r *Repo) InviteNext(ctx context.Context, orderID uuid.UUID, now time.Time)
 		return Order{}, ErrNoFreeSlot
 	}
 	if _, err := tx.Exec(ctx,
+		// submitted — то же «ещё не звали»: заявка пришла из воронки и
+		// завела проект, но приглашений не отправляла.
 		`UPDATE creator_orders SET status = 'inviting', updated_at = now()
-		 WHERE id = $1 AND status = 'draft'`, orderID); err != nil {
+		 WHERE id = $1 AND status IN ('draft', 'submitted')`, orderID); err != nil {
 		return Order{}, fmt.Errorf("mark inviting: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -444,7 +471,10 @@ func (r *Repo) SendInvitations(ctx context.Context, orderID uuid.UUID, now time.
 		}
 		return Order{}, fmt.Errorf("lock order: %w", err)
 	}
-	if status != StatusDraft {
+	// submitted — то же «ещё не звали», просто заявка уже пришла из
+	// воронки и завела проект. Пока рассылки нет (Ф3), менеджер
+	// по-прежнему двигает очередь руками из карточки проекта.
+	if status != StatusDraft && status != StatusSubmitted {
 		return Order{}, fmt.Errorf("%w: заказ уже %s", ErrWrongStatus, status)
 	}
 
@@ -723,7 +753,7 @@ func (r *Repo) AddCandidates(ctx context.Context, orderID uuid.UUID, creatorIDs 
 		}
 		return Order{}, fmt.Errorf("lock order: %w", err)
 	}
-	if status != StatusDraft && status != StatusInviting {
+	if status != StatusDraft && status != StatusSubmitted && status != StatusInviting {
 		return Order{}, fmt.Errorf("%w: заказ уже %s", ErrWrongStatus, status)
 	}
 
@@ -1131,4 +1161,46 @@ ORDER BY month`, creatorID, months)
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// ---- бриф ----
+
+// LoadBrief — бриф заказа. Пустой бриф — нормальное состояние: человек
+// мог отправить заявку, не заполнив ни строки, и дописать её потом.
+func (r *Repo) LoadBrief(ctx context.Context, orderID uuid.UUID) (OrderBrief, error) {
+	var b OrderBrief
+	err := r.db.QueryRow(ctx, `
+SELECT goal, product, audience, tone, refs, platforms
+FROM order_briefs WHERE order_id = $1`, orderID).
+		Scan(&b.Goal, &b.Product, &b.Audience, &b.Tone, &b.Refs, &b.Platforms)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrderBrief{}, nil
+	}
+	if err != nil {
+		return OrderBrief{}, fmt.Errorf("load brief: %w", err)
+	}
+	return b, nil
+}
+
+// SaveBrief — переписать бриф целиком.
+//
+// Целиком, а не по полям: бриф правят как текст — стирают лишнее и
+// дописывают новое, — и «обнови присланное» оставило бы стёртую строку
+// жить в задании креатора.
+func (r *Repo) SaveBrief(ctx context.Context, orderID uuid.UUID, b OrderBrief) error {
+	if b.Platforms == nil {
+		b.Platforms = []string{}
+	}
+	_, err := r.db.Exec(ctx, `
+INSERT INTO order_briefs (order_id, goal, product, audience, tone, refs, platforms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (order_id) DO UPDATE
+SET goal = EXCLUDED.goal, product = EXCLUDED.product, audience = EXCLUDED.audience,
+    tone = EXCLUDED.tone, refs = EXCLUDED.refs, platforms = EXCLUDED.platforms,
+    updated_at = now()`,
+		orderID, b.Goal, b.Product, b.Audience, b.Tone, b.Refs, b.Platforms)
+	if err != nil {
+		return fmt.Errorf("save brief: %w", err)
+	}
+	return nil
 }

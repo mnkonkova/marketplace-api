@@ -19,16 +19,49 @@ var (
 	ErrNoReserve = errors.New("shortlist has no reserve")
 )
 
-type Service struct{ repo *Repo }
+type Service struct {
+	repo *Repo
+	// projects — кто заводит проект под заявку. Может быть пустым: см.
+	// WithProjects.
+	projects ProjectStarter
+}
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
 
 // CreateResult — что получилось из заказа.
 type CreateResult struct {
 	Order Order `json:"order"`
-	// WithoutReserve — в подборке ровно нужное число. При отказе одного
-	// придётся выбирать заново, и клиента об этом предупреждают.
-	WithoutReserve bool `json:"without_reserve"`
+	// BusyCreators — кого из отмеченных мы всё равно взяли в заявку,
+	// хотя он отметил себя занятым на этот месяц. Это предупреждение, а
+	// не отказ: приглашение ему уйдёт, а решать будет он сам.
+	BusyCreators []uuid.UUID `json:"busy_creators,omitempty"`
+}
+
+// ProjectStarter — кто умеет завести проект под заявку.
+//
+// Интерфейсом, а не прямой зависимостью на пакет projects: обратная
+// стрелка уже есть, и вторая замкнула бы импорты в кольцо. Поля —
+// простыми типами по той же причине: общий DTO пришлось бы держать в
+// одном из пакетов, и кольцо вернулось бы через него.
+type ProjectStarter interface {
+	// StartOrderProject — проект заявки: вид «креаторы под ключ»,
+	// заказчик известен, менеджера ещё нет.
+	StartOrderProject(
+		ctx context.Context, clientID uuid.UUID, title, notes string, monthlyPlan int,
+	) (uuid.UUID, error)
+	// CancelProject — компенсация, если заявка не записалась.
+	CancelOrderProject(ctx context.Context, projectID, clientID uuid.UUID) error
+	// UpdateProjectNotes — бриф дописали: менеджер читает его в
+	// заметках проекта, и два текста расходиться не должны.
+	UpdateProjectNotes(ctx context.Context, projectID uuid.UUID, notes string) error
+}
+
+// WithProjects — подключить заведение проектов. Без него заявка
+// создаётся по-старому, без проекта: так собран, например, тест,
+// которому проект не нужен.
+func (s *Service) WithProjects(p ProjectStarter) *Service {
+	s.projects = p
+	return s
 }
 
 // Create — завести заказ.
@@ -52,17 +85,17 @@ func (s *Service) Create(ctx context.Context, in CreateOrderInput, now time.Time
 		return out, ErrNoConsent
 	}
 
-	// Лимит считаем на месяц заказа, а не на сегодня: клиент мог выбрать
-	// декабрь, и к декабрю он отработает больше месяцев, чем сейчас.
-	allowed, err := s.repo.AllowedCreators(ctx, in.ClientUserID, in.StartMonth)
-	if err != nil {
-		return out, err
-	}
-	if in.Needed < 1 {
-		return out, fmt.Errorf("%w: нужен хотя бы один креатор", ErrInvalidInput)
-	}
-	if in.Needed > allowed {
-		return out, fmt.Errorf("%w: сейчас доступно %d", ErrTooManyCreators, allowed)
+	// Лимита «один креатор в первый месяц» больше нет.
+	//
+	// Он был обещанием клиенту: «берём одного, проверяете формат на
+	// небольшой сумме». В новой логике заказчик никого не «берёт» — он
+	// отмечает, кого хочет, а состав утверждает менеджер после ответов
+	// креаторов. Резать отметки лимитом значит запрещать хотеть.
+	//
+	// Needed теперь = сколько отметили; ноль допустим: «покажите, кто у
+	// вас есть» — это тоже заявка, и менеджер соберёт состав сам.
+	if in.Needed < 0 || in.Needed > 50 {
+		return out, fmt.Errorf("%w: отметить можно до 50 креаторов", ErrInvalidInput)
 	}
 	if in.VideosCount <= 0 {
 		return out, fmt.Errorf("%w: объём роликов должен быть больше нуля", ErrInvalidInput)
@@ -81,10 +114,6 @@ func (s *Service) Create(ctx context.Context, in CreateOrderInput, now time.Time
 		}
 		seen[id] = true
 	}
-	if len(in.CreatorIDs) < in.Needed {
-		return out, fmt.Errorf("%w: выбрано %d, нужно минимум %d",
-			ErrNotEnoughCandidates, len(in.CreatorIDs), in.Needed)
-	}
 
 	// В пакет блогеров попадают только креаторы: люди со своими
 	// аккаунтами из категорий blogger и ugc. Монтажёр или продакшн-студия
@@ -99,25 +128,66 @@ func (s *Service) Create(ctx context.Context, in CreateOrderInput, now time.Time
 		}
 	}
 
-	// Занятость проверяем ДО создания: иначе первым в списке окажется
-	// тот, кто взять не может, и заказ провисит трое суток впустую.
+	// Занятость больше не отказ, а ПРЕДУПРЕЖДЕНИЕ.
+	//
+	// Раньше занятый в списке ронял всю заявку: приглашения уходили по
+	// очереди, и звать занятого было некуда. Теперь приглашение уходит
+	// всем, а состав утверждает менеджер — и «этот отметил себя занятым
+	// на сентябрь» это факт для разговора, а не повод не принять
+	// заявку. Отказать человеку в заявке из-за чужой галочки — худшее,
+	// что можно сделать на входе.
 	busy, err := s.repo.BusyCreators(ctx, in.CreatorIDs, in.StartMonth)
 	if err != nil {
 		return out, err
 	}
 	for _, id := range in.CreatorIDs {
 		if busy[id] {
-			return out, fmt.Errorf("%w: %s", ErrCreatorBusy, id)
+			out.BusyCreators = append(out.BusyCreators, id)
 		}
 	}
 
-	order, err := s.repo.Create(ctx, in, terms.ID, now)
+	// Проект заводится ПЕРВЫМ и живёт даже если заказ не запишется.
+	//
+	// Порядок фиксирован: упадёт второй шаг — останется пустой проект,
+	// который заказчик увидит и о котором напишет. Обратный порядок
+	// оставил бы заявку без проекта, то есть ровно ту тишину, ради ухода
+	// от которой всё и затевается.
+	projectID := uuid.Nil
+	if s.projects != nil {
+		id, err := s.projects.StartOrderProject(
+			ctx, in.ClientUserID, projectTitle(in.Brief), in.Brief.Text(), in.VideosCount)
+		if err != nil {
+			return out, fmt.Errorf("start project: %w", err)
+		}
+		projectID = id
+	}
+
+	order, err := s.repo.Create(ctx, in, terms.ID, projectID, now)
 	if err != nil {
+		// Компенсация: пустой проект без заявки — мусор в кабинете.
+		// Отменённый ListForClient прячет.
+		if projectID != uuid.Nil && s.projects != nil {
+			_ = s.projects.CancelOrderProject(ctx, projectID, in.ClientUserID)
+		}
 		return out, err
 	}
 	out.Order = order
-	out.WithoutReserve = len(in.CreatorIDs) == in.Needed
 	return out, nil
+}
+
+// projectTitle — как назвать проект заявки.
+//
+// Из брифа, а не «Заявка от 26.09»: в списке проектов заказчика их
+// может быть несколько, и различать их по дате — значит открывать
+// каждый, чтобы вспомнить, который из них про корм для кошек.
+func projectTitle(b OrderBrief) string {
+	if b.Product != "" {
+		return b.Product
+	}
+	if b.Goal != "" {
+		return b.Goal
+	}
+	return "Новый проект"
 }
 
 // SendInvitations — отправить приглашения первым по приоритету.
@@ -234,4 +304,40 @@ func (s *Service) MyAvailability(ctx context.Context, creatorID uuid.UUID, month
 // произволом: видно, что месяцев работы пока ноль.
 func (s *Service) CompletedMonths(ctx context.Context, clientID uuid.UUID, month time.Time) (int, error) {
 	return s.repo.CompletedPaidMonths(ctx, clientID, firstOfMonth(month))
+}
+
+// Brief — бриф заявки. Чужую заявку не отдаём: бриф — это описание
+// продукта, и заглянуть в него по одному id нельзя.
+func (s *Service) Brief(ctx context.Context, orderID, clientID uuid.UUID) (OrderBrief, error) {
+	order, err := s.repo.Get(ctx, orderID)
+	if err != nil {
+		return OrderBrief{}, err
+	}
+	if order.ClientUserID != clientID {
+		return OrderBrief{}, ErrNotFound
+	}
+	return s.repo.LoadBrief(ctx, orderID)
+}
+
+// SaveBrief — дописать бриф. Заодно обновляем заметки проекта: менеджер
+// читает бриф там, и разойтись эти два текста не должны.
+func (s *Service) SaveBrief(
+	ctx context.Context, orderID, clientID uuid.UUID, b OrderBrief,
+) (OrderBrief, error) {
+	order, err := s.repo.Get(ctx, orderID)
+	if err != nil {
+		return OrderBrief{}, err
+	}
+	if order.ClientUserID != clientID {
+		return OrderBrief{}, ErrNotFound
+	}
+	if err := s.repo.SaveBrief(ctx, orderID, b); err != nil {
+		return OrderBrief{}, err
+	}
+	if order.ProjectID != nil && s.projects != nil {
+		if err := s.projects.UpdateProjectNotes(ctx, *order.ProjectID, b.Text()); err != nil {
+			return OrderBrief{}, err
+		}
+	}
+	return b, nil
 }

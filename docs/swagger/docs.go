@@ -9638,6 +9638,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Заявка заводит ПРОЕКТ сразу: он виден в кабинете, и в нём работает\nпереписка, пока менеджер считает. project_id приходит в ответе.",
                 "consumes": [
                     "application/json"
                 ],
@@ -9685,7 +9686,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "too_many_creators — в первый месяц доступен один креатор, со второго до трёх; not_a_creator — в пакет берутся только блогеры и авторы UGC; creator_busy — кто-то занят в этом месяце",
+                        "description": "not_a_creator — в пакет берутся только блогеры и авторы UGC",
                         "schema": {
                             "$ref": "#/definitions/internal_orders.errorResponse"
                         }
@@ -9963,6 +9964,113 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "not_found — заказ не ваш или не существует",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/{id}/brief": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Бриф заявки (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.briefResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заявка не ваша",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Бриф правят ПОСЛЕ отправки: половина заказчиков вспоминает про\nреференсы уже потом. Текст переписывается целиком — стёртая\nстрока должна исчезать и из задания креатора.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Дописать бриф заявки (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "бриф",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.briefReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.briefResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id, bad_json",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заявка не ваша",
                         "schema": {
                             "$ref": "#/definitions/internal_orders.errorResponse"
                         }
@@ -16875,25 +16983,30 @@ const docTemplate = `{
                 "invited",
                 "accepted",
                 "declined",
-                "expired"
+                "expired",
+                "responded"
             ],
             "x-enum-varnames": [
                 "CandidateReserve",
                 "CandidateInvited",
                 "CandidateAccepted",
                 "CandidateDeclined",
-                "CandidateExpired"
+                "CandidateExpired",
+                "CandidateResponded"
             ]
         },
         "internal_orders.CreateResult": {
             "type": "object",
             "properties": {
+                "busy_creators": {
+                    "description": "BusyCreators — кого из отмеченных мы всё равно взяли в заявку,\nхотя он отметил себя занятым на этот месяц. Это предупреждение, а\nне отказ: приглашение ему уйдёт, а решать будет он сам.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "order": {
                     "$ref": "#/definitions/internal_orders.Order"
-                },
-                "without_reserve": {
-                    "description": "WithoutReserve — в подборке ровно нужное число. При отказе одного\nпридётся выбирать заново, и клиента об этом предупреждают.",
-                    "type": "boolean"
                 }
             }
         },
@@ -16979,19 +17092,55 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_orders.OrderBrief": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — кому.",
+                    "type": "string"
+                },
+                "goal": {
+                    "description": "Goal — зачем снимаем: «продажи», «узнаваемость», «прогрев к\nзапуску». С этого менеджер начинает разговор.",
+                    "type": "string"
+                },
+                "platforms": {
+                    "description": "Platforms — площадки. Пусто = все пять: так работает пакет по\nумолчанию, и заставлять отмечать их ради этого незачем.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "product": {
+                    "description": "Product — что продвигаем.",
+                    "type": "string"
+                },
+                "refs": {
+                    "description": "Refs — на что равняться: ссылки на ролики, которые нравятся.",
+                    "type": "string"
+                },
+                "tone": {
+                    "description": "Tone — каким тоном: «по-дружески», «экспертно», «без юмора».",
+                    "type": "string"
+                }
+            }
+        },
         "internal_orders.OrderStatus": {
             "type": "string",
             "enum": [
                 "draft",
+                "submitted",
                 "inviting",
                 "staffed",
+                "finalized",
                 "paid",
                 "cancelled"
             ],
             "x-enum-varnames": [
                 "StatusDraft",
+                "StatusSubmitted",
                 "StatusInviting",
                 "StatusStaffed",
+                "StatusFinalized",
                 "StatusPaid",
                 "StatusCancelled"
             ]
@@ -17097,11 +17246,59 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_orders.briefReq": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — кому.",
+                    "type": "string"
+                },
+                "goal": {
+                    "description": "Goal — зачем снимаем: «продажи», «узнаваемость», «прогрев к\nзапуску». С этого менеджер начинает разговор.",
+                    "type": "string"
+                },
+                "platforms": {
+                    "description": "Platforms — площадки. Пусто = все пять: так работает пакет по\nумолчанию, и заставлять отмечать их ради этого незачем.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "product": {
+                    "description": "Product — что продвигаем.",
+                    "type": "string"
+                },
+                "refs": {
+                    "description": "Refs — на что равняться: ссылки на ролики, которые нравятся.",
+                    "type": "string"
+                },
+                "tone": {
+                    "description": "Tone — каким тоном: «по-дружески», «экспертно», «без юмора».",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.briefResp": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "$ref": "#/definitions/internal_orders.OrderBrief"
+                }
+            }
+        },
         "internal_orders.createOrderReq": {
             "type": "object",
             "properties": {
+                "brief": {
+                    "description": "Brief — первый шаг воронки. Необязателен: заявка без брифа лучше\nформы, которую бросили на полпути, а дописать его можно потом.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.OrderBrief"
+                        }
+                    ]
+                },
                 "creator_ids": {
-                    "description": "CreatorIDs — В ПОРЯДКЕ ПРИОРИТЕТА. Клиент не выбирает N человек,\nа расставляет собранных по порядку.",
+                    "description": "CreatorIDs — кого заказчик отметил. Порядка в списке больше нет:\nочередь приглашений ушла, приглашение уходит всем известным\nкреаторам, а отмеченные получают его с пометкой «хотят особенно».",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -19175,11 +19372,13 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "creators_turnkey",
+                "brand_turnkey",
                 "production_turnkey",
                 "general"
             ],
             "x-enum-varnames": [
                 "KindCreatorsTurnkey",
+                "KindBrandTurnkey",
                 "KindProductionTurnkey",
                 "KindGeneral"
             ]
@@ -19991,6 +20190,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "creator_user_id": {
+                    "description": "CreatorUserID — см. ClientVideo: пусто у ролика проекта.",
                     "type": "string"
                 },
                 "publication_id": {
@@ -20131,6 +20331,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "creator_user_id": {
+                    "description": "CreatorUserID — чей ролик. Пусто у проекта без креаторов: ролик\nпроекта, а не человека, и колонка «Креатор» у него не пустая по\nнедосмотру, а отсутствует по устройству.",
                     "type": "string"
                 },
                 "likes": {
@@ -20623,6 +20824,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "creator_user_id": {
+                    "description": "CreatorUserID — кому поручен ролик. nil означает «это ролик\nпроекта, а не чей-то»: у проекта без креаторов поручать некому, и\nподставной владелец тут же полез бы в состав, в отчёт по людям и\nв начисления как настоящий участник.",
                     "type": "string"
                 },
                 "draft_due_date": {
@@ -20936,6 +21138,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "creator_user_id": {
+                    "description": "CreatorUserID — чей ролик. Пусто у проекта без креаторов: там\nролик принадлежит проекту, и колонки «Креатор» в таблице нет.",
                     "type": "string"
                 },
                 "er_percent": {

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"marketpclce/internal/orders"
+	"marketpclce/internal/projects"
 	"marketpclce/tests/integration"
 )
 
@@ -89,9 +90,14 @@ func nextMonth() time.Time {
 	return time.Date(n.Year(), n.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
 }
 
-// Первый месяц — один креатор. Ограничение по КЛИЕНТУ, и клиент видит
-// его до подбора, а не при попытке добавить второго.
-func TestFirstMonthAllowsOneCreator(t *testing.T) {
+// Отметить можно СКОЛЬКО УГОДНО — лимит первого месяца снят.
+//
+// Он был обещанием клиенту: «берём одного, проверяете формат на
+// небольшой сумме». В новой логике заказчик никого не берёт — он
+// отмечает, кого хочет, а состав утверждает менеджер после ответов
+// креаторов. Резать отметки лимитом значит запрещать хотеть; сам расчёт
+// «сколько доступно» остаётся — он подсказка менеджеру, а не запрет.
+func TestMarkAsManyCreatorsAsWanted(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
 	clientID, creators, cleanup := setupOrderWorld(t, pool)
@@ -100,20 +106,18 @@ func TestFirstMonthAllowsOneCreator(t *testing.T) {
 	svc := orders.NewService(orders.NewRepo(pool))
 	now := time.Now().UTC()
 
-	allowed, err := svc.AllowedCreators(ctx, clientID, now)
-	if err != nil {
-		t.Fatalf("AllowedCreators: %v", err)
-	}
-	if allowed != orders.FirstMonthCreators {
-		t.Fatalf("доступно %d, ожидался %d", allowed, orders.FirstMonthCreators)
-	}
-
-	_, err = svc.Create(ctx, orders.CreateOrderInput{
-		ClientUserID: clientID, StartMonth: nextMonth(), Needed: 2,
+	res, err := svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID, StartMonth: nextMonth(), Needed: len(creators[:3]),
 		VideosCount: 30, CreatorIDs: creators[:3],
 	}, now)
-	if !errors.Is(err, orders.ErrTooManyCreators) {
-		t.Errorf("в первый месяц двое: got %v, want ErrTooManyCreators", err)
+	if err != nil {
+		t.Fatalf("трое отмеченных в первый месяц: %v", err)
+	}
+	if res.Order.Needed != 3 {
+		t.Errorf("в заявке отмечено %d, а отмечали троих", res.Order.Needed)
+	}
+	if res.Order.Status != orders.StatusSubmitted {
+		t.Errorf("статус заявки %q, ожидался submitted", res.Order.Status)
 	}
 }
 
@@ -134,9 +138,6 @@ func TestInvitationAdvancesOnDecline(t *testing.T) {
 	}, now)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
-	}
-	if res.WithoutReserve {
-		t.Error("в подборке трое при одном месте — резерв есть")
 	}
 
 	o, err := svc.SendInvitations(ctx, res.Order.ID, now)
@@ -267,9 +268,6 @@ func TestReserveExhaustedThenTopUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if !res.WithoutReserve {
-		t.Error("в подборке ровно одно место и один человек — резерва нет, клиента надо предупредить")
-	}
 	if _, err := svc.SendInvitations(ctx, res.Order.ID, now); err != nil {
 		t.Fatalf("SendInvitations: %v", err)
 	}
@@ -301,9 +299,15 @@ func TestReserveExhaustedThenTopUp(t *testing.T) {
 	}
 }
 
-// Занятого креатора нельзя поставить в подборку: иначе первым в списке
-// окажется тот, кто взять не может, и заказ провисит трое суток впустую.
-func TestBusyCreatorIsRejected(t *testing.T) {
+// Занятый креатор — ПРЕДУПРЕЖДЕНИЕ, а не отказ.
+//
+// Раньше занятый в списке ронял всю заявку: приглашения уходили по
+// очереди, и звать занятого было некуда. Теперь приглашение уходит
+// всем, а состав утверждает менеджер — и «отметил себя занятым на
+// сентябрь» это факт для разговора, а не повод не принять заявку.
+// Отказать человеку на входе из-за чужой галочки — худшее, что можно
+// сделать с заявкой, которую он только что собрал.
+func TestBusyCreatorIsWarningNotRejection(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
 	clientID, creators, cleanup := setupOrderWorld(t, pool)
@@ -318,23 +322,30 @@ func TestBusyCreatorIsRejected(t *testing.T) {
 		t.Fatalf("SetAvailability: %v", err)
 	}
 
-	_, err := svc.Create(ctx, orders.CreateOrderInput{
-		ClientUserID: clientID, StartMonth: month, Needed: 1,
+	res, err := svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID, StartMonth: month, Needed: 2,
 		VideosCount: 30, CreatorIDs: creators[:2],
 	}, now)
-	if !errors.Is(err, orders.ErrCreatorBusy) {
-		t.Errorf("занятый креатор: got %v, want ErrCreatorBusy", err)
+	if err != nil {
+		t.Fatalf("заявка с занятым креатором обязана приниматься: %v", err)
+	}
+	if len(res.BusyCreators) != 1 || res.BusyCreators[0] != creators[0] {
+		t.Errorf("о занятом не предупредили: %+v", res.BusyCreators)
 	}
 
-	// Освободился — можно.
+	// Освободился — и предупреждать не о чем.
 	if err := repo.SetAvailability(ctx, creators[0], month, true); err != nil {
 		t.Fatalf("SetAvailability: %v", err)
 	}
-	if _, err := svc.Create(ctx, orders.CreateOrderInput{
-		ClientUserID: clientID, StartMonth: month, Needed: 1,
+	res, err = svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID, StartMonth: month, Needed: 2,
 		VideosCount: 30, CreatorIDs: creators[:2],
-	}, now); err != nil {
+	}, now)
+	if err != nil {
 		t.Errorf("свободный креатор должен приниматься: %v", err)
+	}
+	if len(res.BusyCreators) != 0 {
+		t.Errorf("предупредили о свободных: %+v", res.BusyCreators)
 	}
 }
 
@@ -764,5 +775,110 @@ ORDER BY id DESC LIMIT 1`, orderID.String(), eventType).Scan(&got)
 	const pattern = "/manager/projects/"
 	if want, have := pattern+projectID.String(), pattern+*got; want != have {
 		t.Errorf("адрес %q, ожидали %q", have, want)
+	}
+}
+
+// Заявка заводит ПРОЕКТ сразу — до ответов креаторов.
+//
+// Раньше проект появлялся после оплаты, и до этого момента у заказчика
+// не было ничего: ни страницы, ни переписки. Человек нажимал
+// «Отправить», читал «мы вам напишем» и уходил в тишину на несколько
+// дней, пока менеджер звонит и считает. Проверяем то, ради чего это и
+// сделано: проект есть, он виден заказчику в кабинете, бриф лежит в его
+// заметках — менеджеру есть что читать, когда он начнёт считать.
+func TestOrderStartsProjectImmediately(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	clientID, creators, cleanup := setupOrderWorld(t, pool)
+	defer cleanup()
+
+	projectsSvc := projects.NewService(projects.NewRepo(pool))
+	svc := orders.NewService(orders.NewRepo(pool)).WithProjects(projectsSvc)
+
+	brief := orders.OrderBrief{
+		Goal:      "продажи",
+		Product:   "корм для кошек PetFlat",
+		Audience:  "хозяева кошек 25-40",
+		Tone:      "по-дружески, без пафоса",
+		Refs:      "https://example.com/ref1",
+		Platforms: []string{"tiktok", "instagram"},
+	}
+	res, err := svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID, StartMonth: nextMonth(), Needed: 2,
+		VideosCount: 30, CreatorIDs: creators[:2], Brief: brief,
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if res.Order.ProjectID == nil {
+		t.Fatal("заявка не завела проект — заказчику снова некуда прийти")
+	}
+	defer func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, *res.Order.ProjectID)
+	}()
+
+	// Проект виден заказчику в кабинете: это и есть «есть куда прийти».
+	mine, err := projectsSvc.ListClientProjects(ctx, clientID)
+	if err != nil {
+		t.Fatalf("ListClientProjects: %v", err)
+	}
+	var found bool
+	for _, p := range mine {
+		if p.ID == *res.Order.ProjectID {
+			found = true
+			if p.Kind != projects.KindCreatorsTurnkey {
+				t.Errorf("вид проекта %q, ожидался creators_turnkey", p.Kind)
+			}
+			// Название из брифа: в списке проектов их может быть
+			// несколько, и «Заявка от 26.09» заставляет открывать каждую.
+			if p.Title != brief.Product {
+				t.Errorf("название проекта %q, ожидалось из брифа", p.Title)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("проект заявки не виден заказчику в кабинете")
+	}
+
+	// Бриф — в заметках проекта: отдельного экрана под него нет, и
+	// менеджер читает его там.
+	var notes string
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(notes, '') FROM projects WHERE id = $1`, *res.Order.ProjectID).
+		Scan(&notes); err != nil {
+		t.Fatalf("notes: %v", err)
+	}
+	if !strings.Contains(notes, brief.Product) || !strings.Contains(notes, brief.Tone) {
+		t.Errorf("бриф не доехал до заметок проекта: %q", notes)
+	}
+
+	// И он же читается обратно как бриф заявки — правится он потом.
+	got, err := svc.Brief(ctx, res.Order.ID, clientID)
+	if err != nil {
+		t.Fatalf("Brief: %v", err)
+	}
+	if got.Product != brief.Product || len(got.Platforms) != 2 {
+		t.Errorf("бриф прочитался иначе, чем записан: %+v", got)
+	}
+
+	// Дописать бриф можно после отправки — и заметки проекта обязаны
+	// поехать следом, иначе менеджер читает вчерашнюю версию.
+	updated := brief
+	updated.Refs = "https://example.com/ref2"
+	if _, err := svc.SaveBrief(ctx, res.Order.ID, clientID, updated); err != nil {
+		t.Fatalf("SaveBrief: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(notes, '') FROM projects WHERE id = $1`, *res.Order.ProjectID).
+		Scan(&notes); err != nil {
+		t.Fatalf("notes after edit: %v", err)
+	}
+	if !strings.Contains(notes, "ref2") {
+		t.Errorf("правка брифа не доехала до заметок проекта: %q", notes)
+	}
+
+	// Чужую заявку не отдаём: бриф — это описание продукта.
+	if _, err := svc.Brief(ctx, res.Order.ID, creators[0]); !errors.Is(err, orders.ErrNotFound) {
+		t.Errorf("чужой бриф отдали: %v", err)
 	}
 }
