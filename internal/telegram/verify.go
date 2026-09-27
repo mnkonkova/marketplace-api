@@ -95,35 +95,19 @@ func Verify(initData, botToken string, ttl time.Duration, now time.Time) (Data, 
 	}
 	got := values.Get("hash")
 	if got == "" {
-		return Data{}, fmt.Errorf("%w: нет hash", ErrMalformed)
+		return Data{}, fmt.Errorf("%w: нет hash (поля: %s)", ErrMalformed, keysOf(values))
 	}
 
 	// Проверочная строка: все поля кроме hash, «ключ=значение», по
-	// одному на строку, отсортированные по ключу. signature — подпись
-	// Ed25519 для третьих лиц, в HMAC-проверку она не входит.
-	parts := make([]string, 0, len(values))
-	for k, v := range values {
-		if k == "hash" || k == "signature" || len(v) == 0 {
-			continue
-		}
-		parts = append(parts, k+"="+v[0])
-	}
-	sort.Strings(parts)
-	checkString := strings.Join(parts, "\n")
-
-	// Ключ — HMAC от токена бота под меткой WebAppData, и только потом
-	// им подписывается сама строка. Порядок не переставляется: с ним
-	// сходится подпись Telegram, без него — нет.
-	keyMac := hmac.New(sha256.New, []byte("WebAppData"))
-	keyMac.Write([]byte(botToken))
-	mac := hmac.New(sha256.New, keyMac.Sum(nil))
-	mac.Write([]byte(checkString))
-	want := hex.EncodeToString(mac.Sum(nil))
-
-	// hmac.Equal, а не ==: сравнение строк выходит за первым же
-	// несовпавшим байтом и рассказывает подбирающему, насколько он
-	// близок.
-	if !hmac.Equal([]byte(want), []byte(got)) {
+	// одному на строку, отсортированные по ключу.
+	//
+	// Проверяем ДВА варианта — с полем signature и без него. Telegram
+	// добавил его для сторонней проверки (Ed25519) уже после того, как
+	// описал этот алгоритм, и клиенты разных версий кладут в
+	// проверочную строку разное. Один вариант из двух — это отказ
+	// живому человеку на ровном месте, а перебрать оба стоит одного
+	// HMAC: подделать подпись это не помогает, ключ всё тот же.
+	if !signatureOK(values, botToken, got) {
 		return Data{}, ErrBadSignature
 	}
 
@@ -143,8 +127,11 @@ func Verify(initData, botToken string, ttl time.Duration, now time.Time) (Data, 
 	rawUser := values.Get("user")
 	if rawUser == "" {
 		// Бывает у инлайн-режима: подпись верна, а человека нет. Нам
-		// такое не подходит — привязывать нечего.
-		return Data{}, fmt.Errorf("%w: нет user", ErrMalformed)
+		// такое не подходит — привязывать нечего. Перечисляем, что
+		// пришло: без этого «данные не разобрались» не отличить от
+		// десятка других причин, а увидеть строку живого человека мы
+		// не можем — в ней его подпись.
+		return Data{}, fmt.Errorf("%w: нет user (поля: %s)", ErrMalformed, keysOf(values))
 	}
 	if err := json.Unmarshal([]byte(rawUser), &out.User); err != nil {
 		return Data{}, fmt.Errorf("%w: user: %v", ErrMalformed, err)
@@ -182,4 +169,59 @@ func SignForTest(botToken string, fields map[string]string) string {
 	}
 	q.Set("hash", hex.EncodeToString(mac.Sum(nil)))
 	return q.Encode()
+}
+
+// signatureOK — сходится ли подпись хотя бы в одном из двух вариантов
+// проверочной строки: с полем signature и без него.
+func signatureOK(values url.Values, botToken, got string) bool {
+	for _, withSignature := range []bool{false, true} {
+		parts := make([]string, 0, len(values))
+		for k, v := range values {
+			if k == "hash" || len(v) == 0 {
+				continue
+			}
+			if k == "signature" && !withSignature {
+				continue
+			}
+			parts = append(parts, k+"="+v[0])
+		}
+		sort.Strings(parts)
+
+		// Ключ — HMAC от токена бота под меткой WebAppData, и только
+		// потом им подписывается сама строка. Порядок не
+		// переставляется: с ним сходится подпись Telegram, без него —
+		// нет.
+		keyMac := hmac.New(sha256.New, []byte("WebAppData"))
+		keyMac.Write([]byte(botToken))
+		mac := hmac.New(sha256.New, keyMac.Sum(nil))
+		mac.Write([]byte(strings.Join(parts, "\n")))
+		want := hex.EncodeToString(mac.Sum(nil))
+
+		// hmac.Equal, а не ==: сравнение строк выходит за первым же
+		// несовпавшим байтом и рассказывает подбирающему, насколько он
+		// близок.
+		if hmac.Equal([]byte(want), []byte(got)) {
+			return true
+		}
+		if _, ok := values["signature"]; !ok {
+			// Второго варианта не существует — поля нет.
+			break
+		}
+	}
+	return false
+}
+
+// keysOf — какие поля пришли, без значений.
+//
+// Значения показывать нельзя: там подпись и данные человека. А имена
+// полей — единственное, чем «данные не разобрались» отличается от
+// «данные не разобрались» по другой причине; без них разбор такой
+// жалобы упирается в догадки.
+func keysOf(values url.Values) string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
