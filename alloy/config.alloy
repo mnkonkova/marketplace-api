@@ -191,11 +191,39 @@ discovery.relabel "containers" {
 }
 
 loki.source.docker "containers" {
-	host       = "unix:///var/run/docker.sock"
-	targets    = discovery.relabel.containers.output
-	forward_to = [loki.write.grafana_cloud.receiver]
-	labels = {
+	host    = "unix:///var/run/docker.sock"
+	targets = discovery.relabel.containers.output
+	// Через фильтр давности, а не прямо в loki.write: см. ниже.
+	forward_to = [loki.process.drop_ancient.receiver]
+	labels     = {
 		instance = "marketpclce-prod",
+	}
+}
+
+// Отбрасываем строки старше суток — иначе доставка логов встаёт колом.
+//
+// Grafana Cloud на нашем тарифе не принимает записи старше недели и
+// отвечает на такую пачку 400: «has timestamp too old». Alloy считает
+// это ошибкой доставки и ретраит ту же пачку — то есть очередь
+// затыкается древними строками, а СВЕЖИЕ логи не доезжают вовсе.
+//
+// Откуда берутся древние: при пересоздании контейнера Alloy позиции
+// чтения по некоторым целям начинаются заново, и он честно вычитывает
+// docker-лог контейнера, живущего с июля, с самого начала. 27.09.2026
+// так и вышло — после починки cAdvisor в логе висели строки от
+// 10 июля и батч уходил в 400 по кругу.
+//
+// Сутки, а не неделя: запас к границе облака нужен на случай, когда
+// контейнер простоял выключенным пару дней, а его лог всё ещё
+// вычитывается. Отброшенные считаются метрикой
+// loki_process_dropped_lines_total с причиной ниже — «молча потеряли»
+// и «сознательно не повезли» должны различаться.
+loki.process "drop_ancient" {
+	forward_to = [loki.write.grafana_cloud.receiver]
+
+	stage.drop {
+		older_than          = "24h"
+		drop_counter_reason = "too_old_for_cloud"
 	}
 }
 
