@@ -403,3 +403,79 @@ func (r *recordingBot) Send(_ context.Context, p notifications.Payload) error {
 	r.sent = append(r.sent, map[string]any{"event_type": p.EventType})
 	return nil
 }
+
+// Билет привязки: регистрация идёт на сайте, а телеграм привязывается
+// сам.
+//
+// Это замена регистрации в мини-аппе (решение владельца от 27
+// сентября): «я новый» нажимали и те, у кого аккаунт давно есть, и
+// телеграм оказывался привязан к пустому дублю. Теперь мини-апп
+// выдаёт билет, человек заводит аккаунт в браузере, и билет гасится
+// из-под свежей сессии.
+//
+// Проверяем то, из-за чего механизм и существует: билет одноразовый,
+// протухает, не привязывает чужой телеграм и ничего не значит сам по
+// себе — без сессии предъявить его некому.
+func TestTelegramLinkTicket(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	h := integration.NewAPIHarness(t, pool)
+
+	links := telegram.NewRepo(pool)
+	issuer := auth.NewTokenIssuer("telegram-ticket-secret", 15*time.Minute, 7*24*time.Hour)
+	authSvc := auth.NewService(auth.NewRepo(pool), issuer).
+		WithTelegram(auth.TelegramConfig{CreatorToken: tgCreatorToken, TTL: time.Hour}, links)
+	tgSvc := telegram.NewService(links).WithBots("c_bot", "cl_bot", "s")
+
+	const tgID = 660066006
+	init := tgInitData(t, tgID, "fresh", time.Now().UTC())
+
+	code, err := authSvc.TelegramLinkTicket(ctx, telegram.BotCreator, init)
+	if err != nil {
+		t.Fatalf("TelegramLinkTicket: %v", err)
+	}
+	if code == "" {
+		t.Fatal("билет пустой")
+	}
+
+	// Пока человек не зарегистрировался, привязки нет: билет сам по
+	// себе не привязывает ничего.
+	if _, err := links.ByTelegram(ctx, telegram.BotCreator, tgID); !errors.Is(err, telegram.ErrNotFound) {
+		t.Errorf("билет привязал телеграм до регистрации: %v", err)
+	}
+
+	// Человек завёл аккаунт в браузере — гасим билет из-под его
+	// сессии.
+	userID, cleanup := h.NewUser(t, integration.UserOpts{Kind: "specialist"})
+	t.Cleanup(cleanup)
+	link, err := tgSvc.Claim(ctx, userID, code)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if link.UserID != userID || link.TGUserID != tgID {
+		t.Errorf("привязалось не то: %+v", link)
+	}
+
+	// Второй раз тем же билетом — нет: иначе утёкший адрес анкеты
+	// остаётся ключом от привязки.
+	other, cleanupOther := h.NewUser(t, integration.UserOpts{Kind: "client"})
+	t.Cleanup(cleanupOther)
+	if _, err := tgSvc.Claim(ctx, other, code); !errors.Is(err, telegram.ErrCodeExpired) {
+		t.Errorf("билет погасили дважды: %v", err)
+	}
+
+	// Чужой билет к чужому телеграму: этот телеграм уже занят первым.
+	second, err := authSvc.TelegramLinkTicket(ctx, telegram.BotCreator,
+		tgInitData(t, tgID, "fresh", time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("второй билет: %v", err)
+	}
+	if _, err := tgSvc.Claim(ctx, other, second); !errors.Is(err, telegram.ErrTaken) {
+		t.Errorf("телеграм увели у первого аккаунта: %v", err)
+	}
+
+	// Несуществующий билет — не ошибка сервера, а «нет такого».
+	if _, err := tgSvc.Claim(ctx, other, "no-such-ticket"); !errors.Is(err, telegram.ErrNotFound) {
+		t.Errorf("несуществующий билет: %v", err)
+	}
+}

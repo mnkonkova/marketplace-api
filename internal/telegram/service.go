@@ -107,6 +107,25 @@ func (s *Service) NewLinkStart(ctx context.Context, userID uuid.UUID, bot string
 	}, nil
 }
 
+// NewTicket — билет привязки для того, у кого аккаунта ещё нет.
+//
+// Мини-апп кладёт его в адрес анкеты, браузер гасит сразу после
+// регистрации. Так человек не возвращается в бот нажимать что-то ещё:
+// он уже получил, зачем приходил, и половина не вернулась бы.
+func (s *Service) NewTicket(
+	ctx context.Context, bot string, tgUserID, tgChatID int64, username string,
+) (string, error) {
+	return s.repo.NewTicket(ctx, bot, tgUserID, tgChatID, username, s.now())
+}
+
+// Claim — предъявить билет из-под свежей сессии.
+func (s *Service) Claim(ctx context.Context, userID uuid.UUID, code string) (Link, error) {
+	if code == "" {
+		return Link{}, ErrNotFound
+	}
+	return s.repo.ClaimTicket(ctx, userID, code, s.now())
+}
+
 // Status — что показывает кабинет: привязки и доступные боты.
 type Status struct {
 	Links []Link `json:"links"`

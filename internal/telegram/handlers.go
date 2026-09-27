@@ -123,6 +123,47 @@ func (h *Handler) LinkCode(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, out)
 }
 
+type claimReq struct {
+	Code string `json:"code"`
+}
+
+// Claim godoc
+// @Summary  Привязать телеграм по билету из мини-аппа
+// @Description Человек нажал «я здесь впервые» в боте, зарегистрировался в
+// @Description браузере — и телеграм привязывается сам, без возврата в бот.
+// @Description Билет доказывает «этот телеграм просил привязку», сессия —
+// @Description «это его аккаунт»; по отдельности ни того, ни другого мало.
+// @Tags     telegram
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    body body claimReq true "билет"
+// @Success  200 {object} Link
+// @Failure  400 {object} errorResponse "bad_json"
+// @Failure  401 {object} errorResponse "no_user"
+// @Failure  404 {object} errorResponse "not_found — билета нет"
+// @Failure  409 {object} errorResponse "telegram_taken"
+// @Failure  410 {object} errorResponse "code_expired"
+// @Router   /me/telegram/claim [post]
+func (h *Handler) Claim(w http.ResponseWriter, r *http.Request) {
+	uid, ok := h.userID(r.Context())
+	if !ok {
+		httpx.WriteErr(w, http.StatusUnauthorized, "no_user")
+		return
+	}
+	var in claimReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	link, err := h.svc.Claim(r.Context(), uid, strings.TrimSpace(in.Code))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, link)
+}
+
 // Unlink godoc
 // @Summary  Отключить бота
 // @Tags     telegram

@@ -3057,6 +3057,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/telegram/link-ticket": {
+            "post": {
+                "description": "Для того, у кого аккаунта ещё нет: регистрация идёт на\nсайте, а телеграм привязывается сам — билет уезжает в адрес\nанкеты и гасится после регистрации. Сессию не выдаёт.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Билет привязки телеграма (мини-апп)",
+                "parameters": [
+                    {
+                        "description": "бот и initData",
+                        "name": "input",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.telegramTicketReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.telegramTicketResp"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "telegram_bad_signature; telegram_expired",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "telegram_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/telegram/miniapp": {
             "post": {
                 "description": "Проверяет подпись initData токеном бота и выдаёт пару токенов.\nТри сценария одной ручкой: знакомый телеграм — вход;\nlogin+password — привязка к существующему аккаунту;\ncreate=true — новый человек (без почты и пароля).\nНезнакомый телеграм без create и без пароля — 404: молча\nзаводить второй аккаунт нельзя, у человека уже может быть наш.",
@@ -13129,6 +13181,75 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/telegram/claim": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Человек нажал «я здесь впервые» в боте, зарегистрировался в\nбраузере — и телеграм привязывается сам, без возврата в бот.\nБилет доказывает «этот телеграм просил привязку», сессия —\n«это его аккаунт»; по отдельности ни того, ни другого мало.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "telegram"
+                ],
+                "summary": "Привязать телеграм по билету из мини-аппа",
+                "parameters": [
+                    {
+                        "description": "билет",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.claimReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.Link"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — билета нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "telegram_taken",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "code_expired",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/telegram/link": {
             "delete": {
                 "security": [
@@ -14710,6 +14831,26 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "password": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.telegramTicketReq": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "type": "string"
+                },
+                "init_data": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.telegramTicketResp": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "description": "Code — одноразовый билет. Уезжает в адрес анкеты на сайте и\nгасится сразу после регистрации.",
                     "type": "string"
                 }
             }
@@ -23391,6 +23532,14 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "tg_username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_telegram.claimReq": {
+            "type": "object",
+            "properties": {
+                "code": {
                     "type": "string"
                 }
             }

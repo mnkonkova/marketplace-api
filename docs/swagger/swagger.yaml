@@ -738,6 +738,21 @@ definitions:
       password:
         type: string
     type: object
+  internal_auth.telegramTicketReq:
+    properties:
+      bot:
+        type: string
+      init_data:
+        type: string
+    type: object
+  internal_auth.telegramTicketResp:
+    properties:
+      code:
+        description: |-
+          Code — одноразовый билет. Уезжает в адрес анкеты на сайте и
+          гасится сразу после регистрации.
+        type: string
+    type: object
   internal_auth.verifyEmailReq:
     properties:
       token:
@@ -7848,6 +7863,11 @@ definitions:
       tg_username:
         type: string
     type: object
+  internal_telegram.claimReq:
+    properties:
+      code:
+        type: string
+    type: object
   internal_telegram.errorResponse:
     properties:
       error:
@@ -10246,6 +10266,43 @@ paths:
       security:
       - BearerAuth: []
       summary: Перевыслать письмо подтверждения email
+      tags:
+      - auth
+  /auth/telegram/link-ticket:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Для того, у кого аккаунта ещё нет: регистрация идёт на
+        сайте, а телеграм привязывается сам — билет уезжает в адрес
+        анкеты и гасится после регистрации. Сессию не выдаёт.
+      parameters:
+      - description: бот и initData
+        in: body
+        name: input
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.telegramTicketReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_auth.telegramTicketResp'
+        "400":
+          description: invalid_input
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "401":
+          description: telegram_bad_signature; telegram_expired
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "501":
+          description: telegram_disabled
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Билет привязки телеграма (мини-апп)
       tags:
       - auth
   /auth/telegram/miniapp:
@@ -17064,6 +17121,54 @@ paths:
       security:
       - BearerAuth: []
       summary: Мои привязки к ботам
+      tags:
+      - telegram
+  /me/telegram/claim:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Человек нажал «я здесь впервые» в боте, зарегистрировался в
+        браузере — и телеграм привязывается сам, без возврата в бот.
+        Билет доказывает «этот телеграм просил привязку», сессия —
+        «это его аккаунт»; по отдельности ни того, ни другого мало.
+      parameters:
+      - description: билет
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_telegram.claimReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.Link'
+        "400":
+          description: bad_json
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "404":
+          description: not_found — билета нет
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "409":
+          description: telegram_taken
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "410":
+          description: code_expired
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Привязать телеграм по билету из мини-аппа
       tags:
       - telegram
   /me/telegram/link:
