@@ -1,6 +1,6 @@
 // Прописать вебхуки обоим ботам. Запускается руками после выката:
 //
-//   PUBLIC_URL=https://sotka-bots.up.railway.app npm run set-webhook
+//   PUBLIC_URL=https://prmarket-bots.up.railway.app npm run set-webhook
 //
 // Адрес вебхука содержит секрет (см. server.js), поэтому в лог печатаем
 // только имя бота и результат — не сам адрес.

@@ -1,4 +1,4 @@
-// Сервис двух телеграм-ботов «Сотки».
+// Сервис двух телеграм-ботов «PrMarket».
 //
 // Делает ровно две вещи:
 //   • принимает апдейты Telegram (вебхук) — /start с кодом привязки,
@@ -17,6 +17,7 @@ import { createServer } from 'node:http';
 import * as api from './api.js';
 import { config, botNames } from './config.js';
 import * as texts from './texts.js';
+import { managerMessageFor } from './texts.js';
 import { isBlockedError, sendMessage } from './telegram.js';
 
 const log = (level, msg, extra = {}) => {
@@ -69,7 +70,27 @@ async function onUpdate(bot, update) {
   if (!msg || !msg.text) return;
   const from = msg.from || {};
   const chatID = msg.chat?.id ?? from.id;
+  const chatType = msg.chat?.type || 'private';
   const text = msg.text.trim();
+
+  // Группы. Бот живёт в общем чате менеджеров и разговаривать там не
+  // должен: он туда пишет, а не отвечает. Единственное исключение —
+  // /chatid: идентификатор группы иначе неоткуда взять, а без него
+  // сообщения менеджерам отправлять некуда.
+  if (chatType !== 'private') {
+    if (text.startsWith('/chatid')) {
+      const thread = msg.message_thread_id;
+      await sendMessage(
+        bot,
+        chatID,
+        `TELEGRAM_MANAGERS_CHAT_ID=${chatID}` +
+          (thread ? `\nTELEGRAM_MANAGERS_THREAD_ID=${thread}` : ''),
+        thread ? { message_thread_id: thread } : {},
+      );
+      log('info', 'chatid asked', { bot, chat_type: chatType });
+    }
+    return;
+  }
 
   if (text.startsWith('/start')) {
     const code = text.slice('/start'.length).trim();
@@ -110,7 +131,14 @@ function signatureOK(raw, header) {
 }
 
 async function onNotify(envelope) {
-  const { event_id: eventID, event_type: eventType, bot, recipients = [], data = {} } = envelope;
+  const {
+    event_id: eventID,
+    event_type: eventType,
+    bot,
+    audience = 'person',
+    recipients = [],
+    data = {},
+  } = envelope;
   if (!bot || !config.bots[bot]) {
     // Бот не настроен — это НЕ ошибка доставки: второй бот может быть
     // ещё не выкачен. Ответим 200, иначе API будет ретраить вечно.
@@ -122,10 +150,36 @@ async function onNotify(envelope) {
     return { ok: true, sent: 0, duplicate: true };
   }
 
+  const app = envelope.app_base_url || config.appBaseURL;
+
+  // Общий чат менеджеров. Получателей здесь нет и не нужно: чат один,
+  // и знает о нём только сервис бота — API решает, ЧТО отправить, а
+  // «в какой чат» вопрос доставки.
+  if (audience === 'managers') {
+    if (!config.managers.chatID) {
+      // Чат не настроен — это НЕ ошибка доставки: бота могли ещё не
+      // добавить в группу. Ретраи её не вылечат, а 500 стоил бы
+      // десяти попыток на каждое событие.
+      log('warn', 'managers chat is not configured', { event: eventType });
+      return { ok: true, sent: 0 };
+    }
+    const text = managerMessageFor(eventType, data, app);
+    if (!text) {
+      log('warn', 'no manager text for event', { event: eventType });
+      return { ok: true, sent: 0 };
+    }
+    const extra = config.managers.threadID
+      ? { message_thread_id: Number(config.managers.threadID) }
+      : {};
+    await sendMessage(config.managers.bot, config.managers.chatID, text, extra);
+    log('info', 'notify managers', { event: eventType, sent: 1 });
+    return { ok: true, sent: 1 };
+  }
+
   let sent = 0;
   let blocked = 0;
   for (const r of recipients) {
-    const text = texts.messageFor(eventType, data, envelope.app_base_url || config.appBaseURL, r);
+    const text = texts.messageFor(eventType, data, app, r);
     if (!text) {
       // Неизвестный тип: писать человеку «project.foo» нельзя, а
       // ретраить нечего — текста не появится.
@@ -240,5 +294,12 @@ if (!config.notifySecret) {
 }
 if (botNames.length === 0) {
   log('warn', 'ни один бот не настроен: TELEGRAM_*_BOT_TOKEN пусты');
+}
+if (!config.managers.chatID) {
+  log(
+    'warn',
+    'TELEGRAM_MANAGERS_CHAT_ID пуст: сообщения менеджерам никуда не уйдут. ' +
+      'Добавьте бота в группу и отправьте там /chatid',
+  );
 }
 server.listen(config.port, () => log('info', 'listening', { port: config.port, bots: botNames }));

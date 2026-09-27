@@ -15,6 +15,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"marketpclce/internal/auth"
+	"marketpclce/internal/eventroute"
+	"marketpclce/internal/notifications"
 	"marketpclce/internal/telegram"
 	"marketpclce/tests/integration"
 )
@@ -53,16 +55,16 @@ func TestTelegramLinkByCode(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	svc := telegram.NewService(telegram.NewRepo(pool)).
-		WithBots("sotka_creator_bot", "sotka_client_bot", "shared-secret")
+		WithBots("prcreators_bot", "prmclients_bot", "shared-secret")
 
 	start, err := svc.NewLinkStart(ctx, userID, telegram.BotCreator)
 	if err != nil {
 		t.Fatalf("NewLinkStart: %v", err)
 	}
-	if !strings.HasPrefix(start.URL, "https://t.me/sotka_creator_bot?start=") {
+	if !strings.HasPrefix(start.URL, "https://t.me/prcreators_bot?start=") {
 		t.Fatalf("ссылка подключения: %q", start.URL)
 	}
-	code := strings.TrimPrefix(start.URL, "https://t.me/sotka_creator_bot?start=")
+	code := strings.TrimPrefix(start.URL, "https://t.me/prcreators_bot?start=")
 
 	const tgID = 482512345
 	link, err := svc.LinkByCode(ctx, telegram.BotCreator, code, tgID, tgID, "marina")
@@ -94,7 +96,7 @@ func TestTelegramLinkByCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLinkStart(other): %v", err)
 	}
-	otherCode := strings.TrimPrefix(otherStart.URL, "https://t.me/sotka_creator_bot?start=")
+	otherCode := strings.TrimPrefix(otherStart.URL, "https://t.me/prcreators_bot?start=")
 	if _, err := svc.LinkByCode(ctx, telegram.BotCreator, otherCode, tgID, tgID, "marina"); !errors.Is(err, telegram.ErrTaken) {
 		t.Errorf("чужой телеграм привязался к другому аккаунту: %v", err)
 	}
@@ -251,7 +253,7 @@ func TestTelegramMiniAppLogin(t *testing.T) {
 	//
 	// Своего человека заводим руками: харнессный лежит с непригодным
 	// хешем пароля, а здесь проверяется как раз вход паролем.
-	const password = "Sotka!2026-telegram"
+	const password = "PrMarket!2026-telegram"
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	if err != nil {
 		t.Fatalf("bcrypt: %v", err)
@@ -302,4 +304,102 @@ func TestBotEndpointsRequireSecret(t *testing.T) {
 	if code != http.StatusNotFound && code != http.StatusUnauthorized {
 		t.Errorf("ручка бота без секрета ответила %d — ожидали 404 или 401", code)
 	}
+}
+
+// Сообщения менеджерам едут тем же ботом, а не в n8n.
+//
+// Решение владельца от 27 сентября: отдельного менеджерского бота нет
+// — в общий чат пишет креаторский. Проверяем развилку целиком, потому
+// что ошибиться в ней можно тихо и дважды: отправить личное событие в
+// группу (тогда «сегодня срок» одного креатора прочитают все) или
+// отправить чатовое ещё и в n8n (тогда в группе два одинаковых
+// сообщения, и каждый решит, что это сбой).
+func TestBotFanoutSplitsPersonalAndManagers(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	h := integration.NewAPIHarness(t, pool)
+	creator, cleanup := h.NewUser(t, integration.UserOpts{Kind: "specialist"})
+	t.Cleanup(cleanup)
+
+	repo := telegram.NewRepo(pool)
+	if _, err := repo.LinkDirect(ctx, creator, telegram.BotCreator,
+		770123456, 770123456, "creator", time.Now().UTC()); err != nil {
+		t.Fatalf("LinkDirect: %v", err)
+	}
+
+	bot := &recordingBot{}
+	crm := &recordingBot{}
+	deps := eventroute.Deps{
+		Bot:        bot,
+		BotUsers:   telegram.NewService(repo),
+		CRM:        crm,
+		AppBaseURL: "https://example.test",
+	}
+	handler := deps.CRMHandler("project")
+
+	// 1. Личное: напоминание креатору. Уходит ему, в группу — нет.
+	personal, _ := json.Marshal(map[string]any{
+		"project_id": uuid.New(), "creator_user_id": creator, "due_date": "2026-10-03",
+	})
+	if err := handler(ctx, 1, uuid.NewString(),
+		"project.publication_due_today", personal); err != nil {
+		t.Fatalf("личное событие: %v", err)
+	}
+	if len(bot.sent) != 1 {
+		t.Fatalf("в бот ушло %d сообщений, ожидали одно", len(bot.sent))
+	}
+	if got := bot.sent[0]["audience"]; got != "person" {
+		t.Errorf("личное событие поехало как %v", got)
+	}
+	if rec, _ := bot.sent[0]["recipients"].([]any); len(rec) != 1 {
+		t.Errorf("получателей %d, ожидали одного", len(rec))
+	}
+
+	// 2. Чатовое: просрочка. Уходит в группу — и НЕ дублируется в n8n.
+	chat, _ := json.Marshal(map[string]any{
+		"project_id": uuid.New(), "project_title": "Проект", "days_overdue": 2,
+	})
+	if err := handler(ctx, 2, uuid.NewString(),
+		"project.publication_overdue", chat); err != nil {
+		t.Fatalf("чатовое событие: %v", err)
+	}
+	if len(bot.sent) != 2 {
+		t.Fatalf("после чатового в боте %d сообщений", len(bot.sent))
+	}
+	if got := bot.sent[1]["audience"]; got != "managers" {
+		t.Errorf("чатовое событие поехало как %v", got)
+	}
+	if rec, _ := bot.sent[1]["recipients"].([]any); len(rec) != 0 {
+		t.Errorf("в сообщение менеджерам попали получатели: %v", rec)
+	}
+	// В n8n личное событие уезжает как раньше (там оно попадает в
+	// ветку «неизвестное» и никуда не пишется), а вот ЧАТОВОЕ — не
+	// должно: иначе в группе два одинаковых сообщения.
+	for _, m := range crm.sent {
+		if m["event_type"] == "project.publication_overdue" {
+			t.Errorf("чатовое событие ушло ещё и в n8n — в группе будет два одинаковых сообщения")
+		}
+	}
+}
+
+// recordingBot — и BotSender, и Dispatcher: обе роли нужны одному
+// тесту, а заводить два типа ради двух методов незачем.
+type recordingBot struct{ sent []map[string]any }
+
+func (r *recordingBot) SendEnvelope(_ context.Context, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return err
+	}
+	r.sent = append(r.sent, m)
+	return nil
+}
+
+func (r *recordingBot) Send(_ context.Context, p notifications.Payload) error {
+	r.sent = append(r.sent, map[string]any{"event_type": p.EventType})
+	return nil
 }

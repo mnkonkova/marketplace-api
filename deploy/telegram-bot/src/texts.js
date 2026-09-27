@@ -111,11 +111,11 @@ export function messageFor(eventType, d = {}, app, recipient = null) {
 
 export const help = {
   creator:
-    'Это бот «Сотки» для креаторов.\n\n' +
+    'Это бот «PrMarket» для креаторов.\n\n' +
     'Здесь приходят сроки выкладок, заявки от заказчиков и решения по роликам. ' +
     'Работа живёт в кабинете — бот только сообщает, что в нём появилось.',
   client:
-    'Это бот «Сотки» для заказчиков.\n\n' +
+    'Это бот «PrMarket» для заказчиков.\n\n' +
     'Здесь приходят новые ролики, сдвиги дат и недельная сводка по проекту. ' +
     'Подробности — в кабинете.',
 };
@@ -135,3 +135,133 @@ export const linkFailed = {
 };
 
 export { money, plural, day };
+
+/**
+ * Сообщение в общий чат менеджеров.
+ *
+ * Раньше эти тексты жили в Code-ноде n8n, и правка каждого была
+ * правкой workflow в чужом интерфейсе — с копипастом JSON и без
+ * ревью. Теперь они здесь, рядом с остальными.
+ *
+ * Правило то же, что у личных: сообщение отвечает на вопрос «что
+ * делать», а не «что случилось в базе». Разница одна — адресат:
+ * менеджеру нужна ссылка в CRM, а не в кабинет.
+ */
+export function managerMessageFor(eventType, d = {}, app) {
+  const title = d.title || d.project_title || '(без названия)';
+  const projectID = d.project_id || d.aggregate_id || '';
+  const link = projectID && app ? `\n${app}/manager/projects/${projectID}` : '';
+  const client = d.client_contact
+    ? `${d.client_name || '—'} (${d.client_contact})`
+    : d.client_name || '—';
+  const spec = d.specialist_display_name || '—';
+  const rubles = (kop) => `${Math.round(Number(kop || 0) / 100).toLocaleString('ru-RU')} ₽`;
+  const num = (v) => Number(v || 0).toLocaleString('ru-RU');
+  // Короткий id — у событий заявки: пока заявка не стала проектом,
+  // отличить одну от другой в чате больше нечем.
+  const short = (v) => String(v ?? '').slice(0, 8);
+
+  switch (eventType) {
+    case 'project.created':
+      return `🆕 Новый бриф · ${title}\nКлиент: ${client}` +
+        (d.budget ? `\nБюджет: ${d.budget} ₽` : '') + link;
+    case 'project.general_created':
+      return `🆕 Разовый заказ · ${title}\nКлиент: ${client}` +
+        (spec !== '—' ? `\nИсполнитель: ${spec}` : '') +
+        (d.due_date ? `\nСрок: ${day(d.due_date)}` : '') + link;
+    case 'project.specialist_assigned':
+      return `👤 Назначен специалист · ${title}\nКлиент: ${client}\nСпециалист: ${spec}` + link;
+    case 'project.specialist_approved':
+      return `✅ Менеджер одобрил специалиста · ${title}\nСпециалист: ${spec}` + link;
+    case 'project.specialist_rejected':
+      // Половина истории хуже, чем никакой: чат сообщал «клиент
+      // выбрал» и молчал там, где подтверждения не будет.
+      return `🚫 Менеджер отклонил специалиста · ${title}\nСпециалист: ${spec}` +
+        (d.reason ? `\nПричина: ${d.reason}` : '') +
+        `\nНужно предложить клиенту другого` + link;
+    case 'project.assigned':
+      return `👨‍💼 Менеджер взял в работу · ${title}\nКлиент: ${client}` +
+        (d.manager_display_name ? `\nМенеджер: ${d.manager_display_name}` : '') + link;
+    case 'project.comment_added':
+      return `💬 Новый комментарий · ${title}\n${String(d.body || '').slice(0, 500)}` + link;
+    case 'project.disputed':
+      return `⚠️ Спор по проекту · ${title}\nКлиент: ${client}\nРабота остановлена — ответьте клиенту` + link;
+    case 'project.publication_overdue':
+      return `⏰ Просрочена выкладка · ${title}` +
+        (d.due_date ? `\nСрок был ${day(d.due_date)}` : '') +
+        (Number(d.days_overdue || 0) > 0 ? ` · просрочка ${d.days_overdue} дн.` : '') +
+        `\nКреатор не выложил — нужен менеджер` + link;
+    case 'project.manager_digest': {
+      const parts = [];
+      if (Number(d.due_today || 0) > 0) parts.push(`сегодня ${d.due_today}`);
+      if (Number(d.overdue || 0) > 0) parts.push(`просрочено ${d.overdue}`);
+      if (Number(d.incomplete || 0) > 0) parts.push(`неполных ${d.incomplete}`);
+      // Пустая сводка — не сводка: молчим вовсе.
+      if (!parts.length) return null;
+      return `📋 Сводка по проекту · ${title}\nВыкладки: ${parts.join(' · ')}` + link;
+    }
+    case 'project.project_plan_ending': {
+      const days = Number(d.days_left || 0);
+      const open = Number(d.open_left || 0);
+      return `📆 Выкладки заканчиваются · ${title}\n` +
+        (days > 0 ? `Последняя дата через ${days} дн.` : 'Дат больше нет') +
+        (open > 0 ? ` · не сдано ${open}` : '') +
+        `\nСогласуйте следующий месяц и проставьте даты` + link;
+    }
+    case 'project.period_closed':
+      return `🧾 Период подытожен · ${title}` +
+        (Number(d.period_seq || 0) > 0 ? `\nПериод ${d.period_seq}` : '') +
+        (d.starts_on && d.ends_on ? ` · ${d.starts_on} — ${d.ends_on}` : '') +
+        `\nРоликов: ${Number(d.videos || 0)} · просмотров: ${num(d.views)}` +
+        `\nК оплате клиенту: ${rubles(d.total)}` +
+        (d.snapshot_approx ? `\n⚠️ Данные приблизительные: поденной статистики за период уже нет` : '') +
+        link;
+    case 'project.client_month_request':
+      return `📝 Просят следующий месяц · ${title}\n${d.client_name || 'Заказчик'}` +
+        (d.month ? ` · ${String(d.month).slice(0, 7)}` : '') +
+        `\nРоликов: ${Number(d.videos || 0)} · креаторов: ${Number(d.creators || 0)}` +
+        `\nПоказали потолок: ${rubles(d.ceiling)}` +
+        `\nНужно связаться и завести заказ` + link;
+    case 'order.submitted': {
+      // Две ветки воронки — два разных разговора. У проекта без
+      // креаторов состав собирать не надо, и путать их нельзя:
+      // менеджер пойдёт искать людей, которых не будет.
+      const noCrew = d.project_kind === 'brand_turnkey';
+      return (noCrew ? `🎬 Заявка: видео под ключ · ${title}` : `🆕 Заявка под ключ · ${title}`) +
+        `\n${client}` + (d.start_month ? ` · ${String(d.start_month).slice(0, 7)}` : '') +
+        `\nРоликов: ${Number(d.videos_count || 0)}` +
+        (noCrew
+          ? ' · снимаем сами, креаторов нет'
+          : Number(d.preferred || 0) > 0
+            ? ` · отметили креаторов: ${d.preferred}`
+            : ' · креаторов не отмечали') +
+        (d.ceiling ? `\nПоказали потолок: ${rubles(d.ceiling)}` : '') +
+        (d.brief ? `\n\n${String(d.brief).slice(0, 600)}` : '') +
+        `\nПроект уже заведён — позвоните и посчитайте` + link;
+    }
+    case 'order.need_more':
+      return `🙋 Заказ некем закрыть · заявка ${short(d.order_id)}` +
+        (Number(d.need_more || 0) > 0 ? `\nНе хватает: ${d.need_more}` : '') +
+        `\nРезерв кончился — добрать креаторов вручную` + link;
+    case 'order.candidate_silent':
+      return `🔕 Креатор не отвечает сутки · заявка ${short(d.order_id)}` +
+        ` · креатор ${short(d.creator_id)}` +
+        `\nМесто занято и не двигается — позвать другого` + link;
+    case 'moderation.specialist_pending': {
+      const why = d.reason === 'content_changed'
+        ? 'изменения после одобрения'
+        : 'первая публикация / повторная попытка';
+      const who = d.display_name || '—';
+      const modLink = d.user_id && app ? `\n${app}/admin/moderation/${d.user_id}` : '';
+      return `🔍 Новая заявка на модерацию · ${who}` +
+        (d.email ? `\n${d.email}` : '') + `\nПричина: ${why}` + modLink;
+    }
+    case 'bot.blocked':
+      return `🔕 Человек заблокировал бота · ${d.bot === 'client' ? 'заказчик' : 'креатор'}` +
+        `\nУведомления ему больше не уходят — если он их ждёт, скажите об этом при следующем разговоре.`;
+    default:
+      // Неизвестный тип: писать в чат «project.foo» нельзя, а
+      // ретраить нечего — текста не появится.
+      return null;
+  }
+}
