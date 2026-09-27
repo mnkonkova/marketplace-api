@@ -169,6 +169,9 @@ func NewRouter(d Deps) http.Handler {
 			// сами — токен бота на клиент не попадает, и проверка не
 			// зависит от того, жив ли сервис бота.
 			r.Post("/auth/telegram/miniapp", d.Auth.TelegramMiniApp)
+			// Билет привязки для того, у кого аккаунта ещё нет: сессии
+			// тут нет по определению, а подпись Telegram есть.
+			r.Post("/auth/telegram/link-ticket", d.Auth.TelegramLinkTicket)
 			r.Post("/auth/login", d.Auth.Login)
 			r.Post("/auth/refresh", d.Auth.Refresh)
 			r.Post("/auth/verify-email", d.Auth.VerifyEmail)
@@ -443,6 +446,9 @@ func NewRouter(d Deps) http.Handler {
 				r.Use(auth.MiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
 				r.Get("/me/telegram", d.Telegram.MyStatus)
 				r.Post("/me/telegram/link-code", d.Telegram.LinkCode)
+				// Билет из мини-аппа: человек зарегистрировался в
+				// браузере, и телеграм привязывается сам.
+				r.Post("/me/telegram/claim", d.Telegram.Claim)
 				r.Delete("/me/telegram/link", d.Telegram.Unlink)
 			})
 

@@ -518,3 +518,57 @@ func (h *Handler) TelegramMiniApp(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 }
+
+type telegramTicketReq struct {
+	Bot      string `json:"bot"`
+	InitData string `json:"init_data"`
+}
+
+type telegramTicketResp struct {
+	// Code — одноразовый билет. Уезжает в адрес анкеты на сайте и
+	// гасится сразу после регистрации.
+	Code string `json:"code"`
+}
+
+// TelegramLinkTicket godoc
+// @Summary      Билет привязки телеграма (мини-апп)
+// @Description  Для того, у кого аккаунта ещё нет: регистрация идёт на
+// @Description  сайте, а телеграм привязывается сам — билет уезжает в адрес
+// @Description  анкеты и гасится после регистрации. Сессию не выдаёт.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        input  body      telegramTicketReq  true  "бот и initData"
+// @Success      200    {object}  telegramTicketResp
+// @Failure      400    {object}  errorResponse  "invalid_input"
+// @Failure      401    {object}  errorResponse  "telegram_bad_signature; telegram_expired"
+// @Failure      501    {object}  errorResponse  "telegram_disabled"
+// @Router       /auth/telegram/link-ticket [post]
+func (h *Handler) TelegramLinkTicket(w http.ResponseWriter, r *http.Request) {
+	var in telegramTicketReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", "Не удалось разобрать тело запроса.")
+		return
+	}
+	code, err := h.svc.TelegramLinkTicket(r.Context(), strings.TrimSpace(in.Bot), in.InitData)
+	switch {
+	case errors.Is(err, ErrTelegramDisabled):
+		httpx.WriteErrMsg(w, http.StatusNotImplemented, "telegram_disabled",
+			"Вход через этого бота не настроен.")
+	case errors.Is(err, telegram.ErrBadSignature):
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "telegram_bad_signature",
+			"Не удалось проверить данные Telegram. Откройте мини-апп заново.")
+	case errors.Is(err, telegram.ErrExpired):
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "telegram_expired",
+			"Данные Telegram устарели. Откройте мини-апп заново.")
+	case errors.Is(err, telegram.ErrMalformed):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input",
+			"Данные Telegram не разобрались: "+strings.TrimPrefix(
+				err.Error(), "telegram init data malformed: "))
+	case err != nil:
+		slog.Error("telegram link ticket", "err", err)
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+	default:
+		httpx.WriteJSON(w, http.StatusOK, telegramTicketResp{Code: code})
+	}
+}

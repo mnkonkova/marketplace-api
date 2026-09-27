@@ -62,12 +62,17 @@ func (c TelegramConfig) Token(bot string) string {
 }
 
 // TelegramLinker — кто записывает привязку к боту. Интерфейсом, чтобы
-// auth не тащил за собой хранилище доставки: ему нужно одно действие.
+// auth не тащил за собой хранилище доставки: ему нужно два действия.
 type TelegramLinker interface {
 	LinkDirect(
 		ctx context.Context, userID uuid.UUID, bot string,
 		tgUserID, tgChatID int64, username string, now time.Time,
 	) (telegram.Link, error)
+	// NewTicket — билет привязки для того, у кого аккаунта ещё нет.
+	NewTicket(
+		ctx context.Context, bot string, tgUserID, tgChatID int64,
+		username string, now time.Time,
+	) (string, error)
 }
 
 // WithTelegram — включить вход из мини-аппа.
@@ -305,4 +310,33 @@ func (s *Service) rememberLink(ctx context.Context, userID uuid.UUID, bot string
 		slog.Warn("auth: telegram link not saved",
 			"user_id", userID.String(), "bot", bot, "err", err)
 	}
+}
+
+// TelegramLinkTicket — билет привязки из мини-аппа.
+//
+// Регистрации в мини-аппе нет: анкета заполняется на сайте. Но
+// возвращать человека в бот «нажать ещё раз» нельзя — он уже получил,
+// зачем приходил, и половина не вернётся. Поэтому здесь мы проверяем
+// подпись Telegram и выдаём билет: он уедет в адрес анкеты, а браузер
+// погасит его сразу после регистрации.
+//
+// Билет НЕ даёт сессию и ничего не привязывает сам: он только
+// доказывает, что этот телеграм просил привязку. Вторую половину —
+// «это его аккаунт» — доказывает сессия в браузере.
+func (s *Service) TelegramLinkTicket(ctx context.Context, bot, initData string) (string, error) {
+	token := s.telegram.Token(bot)
+	if !telegram.KnownBot(bot) || token == "" {
+		return "", ErrTelegramDisabled
+	}
+	data, err := telegram.Verify(initData, token, s.telegram.TTL, s.now())
+	if err != nil {
+		return "", err
+	}
+	if s.tgLinks == nil {
+		return "", ErrTelegramDisabled
+	}
+	// В личке chat_id совпадает с id пользователя: мини-апп других
+	// чатов не знает.
+	return s.tgLinks.NewTicket(
+		ctx, bot, data.User.ID, data.User.ID, data.User.Username, s.now())
 }

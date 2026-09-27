@@ -42,6 +42,14 @@ var (
 // превращает утёкшую ссылку в ключ от аккаунта.
 const CodeTTL = 15 * time.Minute
 
+// TicketTTL — сколько живёт билет привязки из мини-аппа.
+//
+// Дольше кода: между «нажал я здесь впервые» и «закончил анкету»
+// человек успевает придумать название, загрузить пример работы и
+// сходить за почтой для подтверждения. Пятнадцати минут на это мало,
+// а полчаса — обычный такой заход.
+const TicketTTL = 45 * time.Minute
+
 // Link — привязка человека к боту.
 type Link struct {
 	UserID     uuid.UUID  `json:"user_id"`
@@ -109,6 +117,109 @@ VALUES ($1, $2, $3, $4)`, hashCode(code), userID, bot, now.Add(CodeTTL)); err !=
 		return "", err
 	}
 	return code, nil
+}
+
+// NewTicket — билет привязки для человека, у которого аккаунта ещё
+// нет.
+//
+// Отличается от кода из кабинета тем, что известно на момент выдачи:
+// там — человек, здесь — телеграм. Гасится он в тот момент, когда
+// аккаунт появится: мини-апп кладёт билет в адрес анкеты, браузер
+// предъявляет его сразу после регистрации.
+//
+// Прежние невыданные билеты этого телеграма гасим: две живые ссылки
+// на одну привязку — это две двери, а нужна одна.
+func (r *Repo) NewTicket(
+	ctx context.Context, bot string, tgUserID, tgChatID int64, username string, now time.Time,
+) (string, error) {
+	if !KnownBot(bot) {
+		return "", ErrUnknownBot
+	}
+	if tgUserID == 0 {
+		return "", fmt.Errorf("%w: пустой tg_user_id", ErrNotFound)
+	}
+	if tgChatID == 0 {
+		tgChatID = tgUserID
+	}
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("random: %w", err)
+	}
+	code := base64.RawURLEncoding.EncodeToString(raw)
+
+	err := r.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+UPDATE telegram_link_codes SET used_at = $3
+WHERE tg_user_id = $1 AND bot = $2 AND used_at IS NULL`, tgUserID, bot, now); err != nil {
+			return fmt.Errorf("expire old tickets: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO telegram_link_codes
+    (code_hash, bot, expires_at, tg_user_id, tg_chat_id, tg_username)
+VALUES ($1, $2, $3, $4, $5, $6)`,
+			hashCode(code), bot, now.Add(TicketTTL), tgUserID, tgChatID, username); err != nil {
+			return fmt.Errorf("insert ticket: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// ClaimTicket — человек зарегистрировался, гасим билет и привязываем.
+func (r *Repo) ClaimTicket(
+	ctx context.Context, userID uuid.UUID, code string, now time.Time,
+) (Link, error) {
+	var link Link
+	err := r.inTx(ctx, func(tx pgx.Tx) error {
+		var (
+			bot        string
+			expiresAt  time.Time
+			usedAt     *time.Time
+			tgUserID   *int64
+			tgChatID   *int64
+			tgUsername string
+		)
+		err := tx.QueryRow(ctx, `
+SELECT bot, expires_at, used_at, tg_user_id, tg_chat_id, tg_username
+FROM telegram_link_codes WHERE code_hash = $1 FOR UPDATE`, hashCode(code)).
+			Scan(&bot, &expiresAt, &usedAt, &tgUserID, &tgChatID, &tgUsername)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("load ticket: %w", err)
+		}
+		if tgUserID == nil {
+			// Это код из кабинета, а не билет: его гасит бот по
+			// /start, и предъявлять его здесь нечем.
+			return ErrNotFound
+		}
+		if usedAt != nil || now.After(expiresAt) {
+			return ErrCodeExpired
+		}
+		if err := assertFree(ctx, tx, bot, *tgUserID, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE telegram_link_codes SET used_at = $2, user_id = $3 WHERE code_hash = $1`,
+			hashCode(code), now, userID); err != nil {
+			return fmt.Errorf("burn ticket: %w", err)
+		}
+		chat := *tgUserID
+		if tgChatID != nil {
+			chat = *tgChatID
+		}
+		l, err := upsertLink(ctx, tx, userID, bot, *tgUserID, chat, tgUsername, now)
+		if err != nil {
+			return err
+		}
+		link = l
+		return rememberTelegramID(ctx, tx, userID, *tgUserID)
+	})
+	return link, err
 }
 
 // LinkByCode — погасить код и записать привязку.
