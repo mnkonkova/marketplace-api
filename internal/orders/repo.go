@@ -193,13 +193,16 @@ func (r *Repo) Create(
 	var o Order
 	err = tx.QueryRow(ctx, `
 INSERT INTO creator_orders
-    (client_user_id, start_month, needed, videos_count, terms_version_id, project_id, status)
-VALUES ($1, $2, $3, $4, $5, NULLIF($6, '00000000-0000-0000-0000-000000000000'::uuid), 'submitted')
-RETURNING id, client_user_id, start_month, needed, videos_count, status,
+    (client_user_id, project_kind, start_month, needed, videos_count,
+     terms_version_id, project_id, status)
+VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '00000000-0000-0000-0000-000000000000'::uuid),
+        'submitted')
+RETURNING id, client_user_id, project_kind, start_month, needed, videos_count, status,
           terms_version_id, project_id, paid_at, created_at, updated_at`,
-		in.ClientUserID, month, in.Needed, in.VideosCount, termsID, projectID).Scan(
-		&o.ID, &o.ClientUserID, &o.StartMonth, &o.Needed, &o.VideosCount, &o.Status,
-		&o.TermsVersionID, &o.ProjectID, &o.PaidAt, &o.CreatedAt, &o.UpdatedAt)
+		in.ClientUserID, string(in.ProjectKind), month, in.Needed, in.VideosCount,
+		termsID, projectID).Scan(
+		&o.ID, &o.ClientUserID, &o.ProjectKind, &o.StartMonth, &o.Needed, &o.VideosCount,
+		&o.Status, &o.TermsVersionID, &o.ProjectID, &o.PaidAt, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return Order{}, fmt.Errorf("insert order: %w", err)
 	}
@@ -282,6 +285,10 @@ WHERE u.id = $1`, o.ClientUserID).Scan(&name, &contact)
 		"videos_count": o.VideosCount,
 		"preferred":    preferred,
 		"title":        projectTitle(in.Brief),
+		// Ветка воронки: у проекта без креаторов другой разговор —
+		// снимаем мы, состав собирать не надо, и менеджер должен
+		// понять это из сообщения, а не открыв карточку.
+		"project_kind": string(o.ProjectKind),
 	}
 	if o.ProjectID != nil {
 		payload["project_id"] = *o.ProjectID
@@ -380,11 +387,11 @@ func (r *Repo) InviteNext(ctx context.Context, orderID uuid.UUID, now time.Time)
 func (r *Repo) Get(ctx context.Context, orderID uuid.UUID) (Order, error) {
 	var o Order
 	err := r.db.QueryRow(ctx, `
-SELECT id, client_user_id, start_month, needed, videos_count, status,
+SELECT id, client_user_id, project_kind, start_month, needed, videos_count, status,
        terms_version_id, project_id, paid_at, created_at, updated_at
 FROM creator_orders WHERE id = $1`, orderID).Scan(
-		&o.ID, &o.ClientUserID, &o.StartMonth, &o.Needed, &o.VideosCount, &o.Status,
-		&o.TermsVersionID, &o.ProjectID, &o.PaidAt, &o.CreatedAt, &o.UpdatedAt)
+		&o.ID, &o.ClientUserID, &o.ProjectKind, &o.StartMonth, &o.Needed, &o.VideosCount,
+		&o.Status, &o.TermsVersionID, &o.ProjectID, &o.PaidAt, &o.CreatedAt, &o.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Order{}, ErrNotFound
 	}
@@ -930,7 +937,7 @@ func (r *Repo) getMany(ctx context.Context, ids []uuid.UUID) ([]Order, error) {
 	byID := make(map[uuid.UUID]*Order, len(ids))
 
 	rows, err := r.db.Query(ctx, `
-SELECT id, client_user_id, start_month, needed, videos_count, status,
+SELECT id, client_user_id, project_kind, start_month, needed, videos_count, status,
        terms_version_id, project_id, paid_at, created_at, updated_at
 FROM creator_orders WHERE id = ANY($1)`, ids)
 	if err != nil {
@@ -938,9 +945,9 @@ FROM creator_orders WHERE id = ANY($1)`, ids)
 	}
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.ClientUserID, &o.StartMonth, &o.Needed, &o.VideosCount,
-			&o.Status, &o.TermsVersionID, &o.ProjectID, &o.PaidAt,
-			&o.CreatedAt, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.ClientUserID, &o.ProjectKind, &o.StartMonth,
+			&o.Needed, &o.VideosCount, &o.Status, &o.TermsVersionID, &o.ProjectID,
+			&o.PaidAt, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan order: %w", err)
 		}

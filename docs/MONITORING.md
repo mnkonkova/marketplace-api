@@ -63,7 +63,23 @@ nano .env.prod
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d alloy node-exporter
 ```
 
-(или просто `make redeploy` — он переподнимет всё, включая alloy.)
+**`make redeploy` сам alloy НЕ перезапускает** — он пересоздаёт только
+api, worker и web: агент наблюдения не должен уезжать вместе с каждой
+выкаткой кода. Исключение одно и оно автоматическое: если в этом пулле
+поменялся `alloy/config.alloy` или описание сервиса в compose, скрипт
+пересоздаст alloy сам (см. шаг «4b» в `scripts/redeploy.sh`).
+
+Если правили конфиг руками, мимо git, — перезапустите явно:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  up -d --force-recreate alloy
+```
+
+Простого `up -d alloy` тут мало: конфиг — бинд-моунт, описание сервиса
+не изменилось, и compose честно ничего не сделает. Правка файла при
+этом лежит на диске, а работает старая — так 27.09.2026 исправление
+cAdvisor «не помогло» ещё сутки.
 
 Проверка что пишет в облако:
 ```bash
@@ -189,7 +205,18 @@ docker inspect <name> --format '{{.HostConfig.Memory}}'
 Дальше либо поднять лимит в `docker-compose.prod.yml` (для JVM-сервисов —
 вместе с heap), либо искать утечку, если рост монотонный и без нагрузки.
 Метрики приходят от cAdvisor-экспортера внутри Alloy — если алерт «No data»,
-проверь моунты сервиса `alloy` в compose и `docker compose logs alloy`.
+проверь моунты сервиса `alloy` в compose и логи:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod logs --tail=50 alloy
+```
+
+Именно с `-f docker-compose.prod.yml`: в обычном `docker-compose.yml`
+сервиса alloy нет вовсе, и короткое `docker compose logs alloy`
+отвечает «no such service» — это про файл, а не про упавший агент.
+
+И проверь, что агент перезапускался ПОСЛЕ правки конфига: `up -d alloy`
+на изменившемся бинд-моунте — no-op, нужен `--force-recreate`.
 
 ---
 

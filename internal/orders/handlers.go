@@ -239,6 +239,9 @@ type createOrderReq struct {
 	// Brief — первый шаг воронки. Необязателен: заявка без брифа лучше
 	// формы, которую бросили на полпути, а дописать его можно потом.
 	Brief OrderBrief `json:"brief"`
+	// ProjectKind — ветка воронки: creators_turnkey (по умолчанию) или
+	// brand_turnkey. Во второй креаторов не выбирают.
+	ProjectKind ProjectKind `json:"project_kind"`
 	// Ceiling — потолок в копейках, который заказчику показали на баре.
 	// Идёт в сообщение менеджеру: разговор начинается с той суммы,
 	// которую человек видел, а не с пересчитанной на сервере.
@@ -297,7 +300,7 @@ func (h *Handler) ClientCreateOrder(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.Create(r.Context(), CreateOrderInput{
 		ClientUserID: uid, StartMonth: month, Needed: needed,
 		VideosCount: req.VideosCount, CreatorIDs: req.CreatorIDs,
-		Brief: req.Brief, Ceiling: req.Ceiling,
+		Brief: req.Brief, Ceiling: req.Ceiling, ProjectKind: req.ProjectKind,
 	}, time.Now())
 	if err != nil {
 		writeErr(w, err)

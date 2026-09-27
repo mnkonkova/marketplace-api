@@ -1553,9 +1553,21 @@ UPDATE terms_versions SET salary_per_month = 6000000, rate_per_1000_views = 9000
 	if _, err := svc.EstimateDraft(ctx, 1, -1, nil); err == nil {
 		t.Error("отрицательный videos_count прошёл")
 	}
-	// И ноль людей: без них не посчитать даже оклады.
-	if _, err := svc.EstimateDraft(ctx, 0, 10, creators[:1]); err == nil {
-		t.Error("needed = 0 прошёл")
+	// А ноль людей — законный вопрос, и это не послабление.
+	//
+	// Во второй ветке воронки («видео под ключ») креаторов нет вовсе:
+	// снимаем мы, ролики выходят с аккаунтов бренда, и цена там —
+	// ролики × фикс. Отказ означал бы пустое место на экране, где
+	// сервер отвечает точно. Отрицательное по-прежнему ошибка.
+	noCrew, err := svc.EstimateDraft(ctx, 0, 10, nil)
+	if err != nil {
+		t.Fatalf("смета без людей: %v", err)
+	}
+	if noCrew.Creators != 0 {
+		t.Errorf("в смете без людей креаторов %d", noCrew.Creators)
+	}
+	if _, err := svc.EstimateDraft(ctx, -1, 10, nil); err == nil {
+		t.Error("отрицательный needed прошёл")
 	}
 }
 
