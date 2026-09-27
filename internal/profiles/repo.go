@@ -1348,6 +1348,7 @@ LIMIT 20`, userID)
 //   - portfolio_items.animated_thumb_url (animated WebP «гифка» — §11 docs)
 //   - portfolio_images.image_url
 //   - project_materials.url           (бриф и референсы проекта)
+//   - order_candidate_responses.file_url (проба работы к заявке, orders/)
 //
 // project_materials сегодня хранит только внешние ссылки, и KeyFromURL
 // их отсекает — то есть строка ничего не меняет ровно до того дня,
@@ -1370,6 +1371,9 @@ SELECT url FROM (
   SELECT image_url           AS url FROM portfolio_images    WHERE image_url          IS NOT NULL AND image_url          <> ''
   UNION ALL
   SELECT url                 AS url FROM project_materials   WHERE url                IS NOT NULL AND url                <> ''
+  UNION ALL
+  SELECT file_url            AS url FROM order_candidate_responses
+                                                              WHERE file_url           IS NOT NULL AND file_url           <> ''
 ) t`)
 	if err != nil {
 		return nil, fmt.Errorf("load referenced media: %w", err)

@@ -749,6 +749,59 @@ func (h *Handler) ManagerAddChecklistItem(w http.ResponseWriter, r *http.Request
 	httpx.WriteJSON(w, http.StatusCreated, it)
 }
 
+type checklistRequiredReq struct {
+	IsRequired *bool `json:"is_required"`
+}
+
+// ManagerSetChecklistItemRequired godoc
+// @Summary  Сделать пункт чек-листа обязательным или необязательным (менеджер)
+// @Description Чек-лист прицепился к проекту шаблоном, и менеджер его ПРАВИТ,
+// @Description а не собирает заново: «обложка вертикальная» в одном проекте
+// @Description обязательна, а в другом — пожелание. Отметки проверки при этом
+// @Description сохраняются — в отличие от «удалить и завести заново».
+// @Tags     manager-publications
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Param    itemId path string true "checklist item id"
+// @Param    body body checklistRequiredReq true "обязательность"
+// @Success  200 {object} ChecklistItem
+// @Failure      400  {object}  errorResponse  "bad_id; bad_json; invalid_input — не указано, обязателен пункт или нет"
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — проект или пункт не найден"
+// @Router   /manager/projects/{id}/checklist/items/{itemId} [patch]
+func (h *Handler) ManagerSetChecklistItemRequired(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireFeature(w, r, projectID, hasChecklist, whyNoChecklist) {
+		return
+	}
+	itemID, err := pathUUID(r, "itemId")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id пункта.")
+		return
+	}
+	var req checklistRequiredReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
+		return
+	}
+	if req.IsRequired == nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input",
+			"Укажите, обязателен пункт или нет.")
+		return
+	}
+	it, err := h.svc.SetChecklistItemRequired(r.Context(), projectID, itemID, *req.IsRequired)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, it)
+}
+
 // ManagerDeleteChecklistItem godoc
 // @Summary  Убрать пункт из чек-листа проекта (менеджер)
 // @Description Пункт, по которому уже отчитывались, не удаляется: вместе с ним исчез бы след проверки.

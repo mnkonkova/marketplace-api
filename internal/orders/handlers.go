@@ -64,6 +64,15 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNotInvited):
 		httpx.WriteErrMsg(w, http.StatusConflict, "not_invited",
 			"Активного приглашения нет: возможно, оно сгорело или место уже занято.")
+	case errors.Is(err, ErrNothingAttached):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "nothing_attached",
+			"Приложите ролик или выберите его из своих — иначе показывать менеджеру нечего.")
+	case errors.Is(err, ErrNotYourPortfolio):
+		httpx.WriteErrMsg(w, http.StatusForbidden, "not_your_portfolio",
+			"В отклик можно приложить только свои ролики.")
+	case errors.Is(err, ErrNoProject):
+		httpx.WriteErrMsg(w, http.StatusConflict, "no_project",
+			"У заявки нет проекта — добавлять людей некуда. Заведите проект вручную.")
 	case errors.Is(err, ErrNoFreeSlot):
 		httpx.WriteErrMsg(w, http.StatusConflict, "no_free_slot",
 			"Звать некого: свободных мест нет или резерв кончился.")
@@ -230,6 +239,10 @@ type createOrderReq struct {
 	// Brief — первый шаг воронки. Необязателен: заявка без брифа лучше
 	// формы, которую бросили на полпути, а дописать его можно потом.
 	Brief OrderBrief `json:"brief"`
+	// Ceiling — потолок в копейках, который заказчику показали на баре.
+	// Идёт в сообщение менеджеру: разговор начинается с той суммы,
+	// которую человек видел, а не с пересчитанной на сервере.
+	Ceiling int64 `json:"ceiling"`
 }
 
 // briefReq — правка брифа после отправки. Половина заказчиков
@@ -284,7 +297,7 @@ func (h *Handler) ClientCreateOrder(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.Create(r.Context(), CreateOrderInput{
 		ClientUserID: uid, StartMonth: month, Needed: needed,
 		VideosCount: req.VideosCount, CreatorIDs: req.CreatorIDs,
-		Brief: req.Brief,
+		Brief: req.Brief, Ceiling: req.Ceiling,
 	}, time.Now())
 	if err != nil {
 		writeErr(w, err)
@@ -450,8 +463,29 @@ func (h *Handler) CreatorInvitations(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, invitationsResp{Items: items})
 }
 
+// respondReq — ответ креатора на приглашение.
+//
+// Два способа в одном теле, и это не неряшливость. Старый — accept:
+// именное приглашение с очередью и сроком ответа; он остаётся, пока
+// живы заказы, собранные по старой логике. Новый — mode: отклик на
+// рассылку, где отвечают работой, а не галочкой «согласен».
 type respondReq struct {
+	// Accept — старый путь: согласие или отказ по именному приглашению.
 	Accept bool `json:"accept"`
+	// Mode — новый путь: attach | upload | from_portfolio | decline.
+	// Пусто — значит пришли по старому.
+	Mode string `json:"mode"`
+	// FileURL — ссылка на загруженный ролик (attach, upload).
+	FileURL string `json:"file_url"`
+	// PortfolioItems — что показать из уже загруженного
+	// (from_portfolio).
+	PortfolioItems []uuid.UUID `json:"portfolio_items"`
+	// Note — пара слов менеджеру. Необязательно.
+	Note string `json:"note"`
+}
+
+type responsesResp struct {
+	Items []Response `json:"items"`
 }
 
 // CreatorRespond godoc
@@ -485,6 +519,26 @@ func (h *Handler) CreatorRespond(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
 		return
 	}
+	// Новый путь: отклик на рассылку. Он не «занимает место» и не
+	// требует именного приглашения — рассылка ушла всем, и ответить
+	// может кто угодно, включая тех, кого заказчик не отмечал.
+	if req.Mode != "" {
+		resp, err := h.svc.SaveResponse(r.Context(), ResponseInput{
+			OrderID:        orderID,
+			CreatorUserID:  uid,
+			Mode:           ResponseMode(req.Mode),
+			FileURL:        req.FileURL,
+			PortfolioItems: req.PortfolioItems,
+			Note:           req.Note,
+		}, time.Now())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, resp)
+		return
+	}
+
 	// Права проверяются самим запросом: обновляется строка именно этого
 	// креатора и только в статусе invited. Чужое приглашение или
 	// сгоревшее дают ErrNotInvited, а не доступ.
@@ -960,6 +1014,86 @@ func (h *Handler) ManagerRemoveCandidate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	out, err := h.svc.RemoveCandidate(r.Context(), id, creatorID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}
+
+// ManagerResponses godoc
+// @Summary  Кто откликнулся на заявку (менеджер)
+// @Description Главный экран шага «собрать состав»: приглашение ушло всем
+// @Description известным креаторам, и здесь видно, кто ответил работой.
+// @Description Отмеченные заказчиком — сверху.
+// @Tags     manager-orders
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "order id"
+// @Success  200 {object} responsesResp
+// @Failure  400 {object} errorResponse "bad_id"
+// @Failure  401 {object} errorResponse "no_user"
+// @Router   /manager/orders/{id}/responses [get]
+func (h *Handler) ManagerResponses(w http.ResponseWriter, r *http.Request) {
+	id, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id заявки.")
+		return
+	}
+	items, err := h.svc.Responses(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, responsesResp{Items: items})
+}
+
+// finalizeReq — что утверждает менеджер.
+type finalizeReq struct {
+	// CreatorIDs — состав. Может быть пустым: «утверждаю объём, людей
+	// добавлю позже» — это тоже решение.
+	CreatorIDs []uuid.UUID `json:"creator_ids"`
+	// MonthlyPlan — сколько роликов в месяц по договорённости. Ноль —
+	// не трогать: значит, о числе не договаривались.
+	MonthlyPlan int `json:"monthly_plan"`
+}
+
+// ManagerFinalize godoc
+// @Summary  Утвердить состав и объём заявки (менеджер)
+// @Description Проект, чеклист и условия оплаты уже есть — заявка их не
+// @Description создаёт. Здесь только то, что решается по телефону: кого
+// @Description берём и сколько роликов в месяце. Добавленные получают
+// @Description задание проекта — договор, ТЗ и чеклист, — поэтому
+// @Description материалы должны быть на месте ДО финализации.
+// @Tags     manager-orders
+// @Accept   json
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "order id"
+// @Param    body body finalizeReq true "состав и объём"
+// @Success  200 {object} FinalizeResult
+// @Failure  400 {object} errorResponse "bad_id; bad_json; invalid_input; duplicate_candidate"
+// @Failure  401 {object} errorResponse "no_user"
+// @Failure  404 {object} errorResponse "not_found"
+// @Failure  409 {object} errorResponse "wrong_status — заявка отменена; no_project — у заявки нет проекта"
+// @Router   /manager/orders/{id}/finalize [post]
+func (h *Handler) ManagerFinalize(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	id, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id заявки.")
+		return
+	}
+	var req finalizeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	out, err := h.svc.Finalize(r.Context(), id, req.CreatorIDs, req.MonthlyPlan, uid, time.Now())
 	if err != nil {
 		writeErr(w, err)
 		return

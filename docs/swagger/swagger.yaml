@@ -3478,6 +3478,21 @@ definitions:
       month:
         type: string
     type: object
+  internal_orders.BroadcastResult:
+    properties:
+      preferred:
+        description: Preferred — сколько из них заказчик отметил «хочу особенно».
+        type: integer
+      recipients:
+        description: |-
+          Recipients — скольким ушло. Ноль — не ошибка: известных креаторов
+          может не быть вовсе, — но и не то, о чём стоит узнать через
+          неделю, поэтому событие пишется и с нулём.
+        type: integer
+      skipped_over_limit:
+        description: SkippedOverLimit — сколько пропущено по дневному лимиту.
+        type: integer
+    type: object
   internal_orders.Candidate:
     properties:
       creator_name:
@@ -3491,9 +3506,20 @@ definitions:
         type: string
       invited_at:
         type: string
+      is_preferred:
+        description: |-
+          IsPreferred — заказчик отметил этого человека: «хочу особенно
+          его». Это НЕ приоритет очереди — очереди больше нет, приглашение
+          уходит всем сразу. Отметка идёт в текст приглашения и в список у
+          менеджера, когда он собирает состав из откликнувшихся.
+        type: boolean
       order_id:
         type: string
       priority:
+        description: |-
+          Priority — порядок строк, в котором заказчик их отметил. Смысла
+          очереди у него больше нет; оставлен как устойчивая сортировка,
+          чтобы список не прыгал между запросами.
         type: integer
       responded_at:
         type: string
@@ -3518,6 +3544,13 @@ definitions:
     - CandidateResponded
   internal_orders.CreateResult:
     properties:
+      broadcast:
+        allOf:
+        - $ref: '#/definitions/internal_orders.BroadcastResult'
+        description: |-
+          Broadcast — скольким креаторам ушла заявка. Отдаётся наружу, а не
+          пишется только в лог: заказчик видит на экране «заявка ушла
+          креаторам», и число за этой фразой обязано существовать.
       busy_creators:
         description: |-
           BusyCreators — кого из отмеченных мы всё равно взяли в заявку,
@@ -3529,20 +3562,55 @@ definitions:
       order:
         $ref: '#/definitions/internal_orders.Order'
     type: object
+  internal_orders.FinalizeResult:
+    properties:
+      added:
+        description: |-
+          Added — кого добавили в состав этим вызовом. Уже стоявшие в
+          составе сюда не попадают: повторная финализация не должна
+          выглядеть как второй набор людей.
+        items:
+          type: string
+        type: array
+      order:
+        $ref: '#/definitions/internal_orders.Order'
+    type: object
   internal_orders.Invitation:
     properties:
+      brief:
+        type: string
+      broadcast_at:
+        description: |-
+          BroadcastAt — когда заявка ушла рассылкой. Отличает «позвали
+          лично» от «получил вместе со всеми», и это разные разговоры.
+        type: string
       client_user_id:
         type: string
       expires_at:
         type: string
       invited_at:
         type: string
+      is_preferred:
+        description: |-
+          IsPreferred — заказчик отметил этого человека: «хочу особенно
+          вас». Приписка в том же приглашении, а не отдельное письмо: два
+          сообщения одному человеку про одну заявку выглядят беспорядком.
+        type: boolean
       order_id:
         type: string
+      responded:
+        allOf:
+        - $ref: '#/definitions/internal_orders.ResponseMode'
+        description: Responded — человек уже ответил, и вот как. Пусто — ещё нет.
       start_month:
         type: string
       status:
         $ref: '#/definitions/internal_orders.CandidateStatus'
+      title:
+        description: |-
+          Title и Brief — о чём заявка. Без них приглашение выглядит как
+          «30 роликов в октябре», и решать по нему нечего.
+        type: string
       videos_count:
         type: integer
     type: object
@@ -3632,6 +3700,65 @@ definitions:
     - StatusFinalized
     - StatusPaid
     - StatusCancelled
+  internal_orders.Response:
+    properties:
+      avatar_url:
+        type: string
+      created_at:
+        type: string
+      creator_name:
+        type: string
+      creator_user_id:
+        type: string
+      file_url:
+        type: string
+      in_crew:
+        description: |-
+          InCrew — человек уже в составе проекта. Без этого менеджер жмёт
+          «Взять в проект» второй раз и получает отказ вместо ответа.
+        type: boolean
+      is_preferred:
+        description: |-
+          IsPreferred — заказчик отметил этого человека «хочу особенно».
+          В списке откликов это главный признак: из двадцати согласных
+          начинают с тех, кого просили.
+        type: boolean
+      items:
+        items:
+          $ref: '#/definitions/internal_orders.ResponseItem'
+        type: array
+      mode:
+        $ref: '#/definitions/internal_orders.ResponseMode'
+      note:
+        type: string
+      order_id:
+        type: string
+    type: object
+  internal_orders.ResponseItem:
+    properties:
+      id:
+        type: string
+      preview_url:
+        type: string
+      thumbnail_url:
+        type: string
+      title:
+        type: string
+      video_url:
+        type: string
+    type: object
+  internal_orders.ResponseMode:
+    enum:
+    - attach
+    - upload
+    - from_portfolio
+    - decline
+    type: string
+    x-enum-varnames:
+    - ModeAttach
+    - ModeUpload
+    - ModeFromPortfolio
+    - ModeDecline
   internal_orders.Terms:
     properties:
       body:
@@ -3748,6 +3875,12 @@ definitions:
         description: |-
           Brief — первый шаг воронки. Необязателен: заявка без брифа лучше
           формы, которую бросили на полпути, а дописать его можно потом.
+      ceiling:
+        description: |-
+          Ceiling — потолок в копейках, который заказчику показали на баре.
+          Идёт в сообщение менеджеру: разговор начинается с той суммы,
+          которую человек видел, а не с пересчитанной на сервере.
+        type: integer
       creator_ids:
         description: |-
           CreatorIDs — кого заказчик отметил. Порядка в списке больше нет:
@@ -3769,6 +3902,21 @@ definitions:
         type: string
       message:
         type: string
+    type: object
+  internal_orders.finalizeReq:
+    properties:
+      creator_ids:
+        description: |-
+          CreatorIDs — состав. Может быть пустым: «утверждаю объём, людей
+          добавлю позже» — это тоже решение.
+        items:
+          type: string
+        type: array
+      monthly_plan:
+        description: |-
+          MonthlyPlan — сколько роликов в месяц по договорённости. Ноль —
+          не трогать: значит, о числе не договаривались.
+        type: integer
     type: object
   internal_orders.invitationsResp:
     properties:
@@ -3831,7 +3979,33 @@ definitions:
   internal_orders.respondReq:
     properties:
       accept:
+        description: 'Accept — старый путь: согласие или отказ по именному приглашению.'
         type: boolean
+      file_url:
+        description: FileURL — ссылка на загруженный ролик (attach, upload).
+        type: string
+      mode:
+        description: |-
+          Mode — новый путь: attach | upload | from_portfolio | decline.
+          Пусто — значит пришли по старому.
+        type: string
+      note:
+        description: Note — пара слов менеджеру. Необязательно.
+        type: string
+      portfolio_items:
+        description: |-
+          PortfolioItems — что показать из уже загруженного
+          (from_portfolio).
+        items:
+          type: string
+        type: array
+    type: object
+  internal_orders.responsesResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_orders.Response'
+        type: array
     type: object
   internal_orders.termsResp:
     properties:
@@ -6856,6 +7030,11 @@ definitions:
         type: string
       text:
         type: string
+    type: object
+  internal_publications.checklistRequiredReq:
+    properties:
+      is_required:
+        type: boolean
     type: object
   internal_publications.checklistResp:
     properties:
@@ -10246,6 +10425,100 @@ paths:
       summary: Добрать людей в подборку (менеджер)
       tags:
       - manager-orders
+  /manager/orders/{id}/candidates/{creator_id}:
+    delete:
+      description: |-
+        Только пока он не согласился: согласившийся уже в составе проекта,
+        и его выводят оттуда, а не отсюда.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: creator user id
+        in: path
+        name: creator_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.Order'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found — такого в заявке нет
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: wrong_status — человек уже согласился
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Убрать человека из заявки (менеджер)
+      tags:
+      - manager-orders
+  /manager/orders/{id}/finalize:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Проект, чеклист и условия оплаты уже есть — заявка их не
+        создаёт. Здесь только то, что решается по телефону: кого
+        берём и сколько роликов в месяце. Добавленные получают
+        задание проекта — договор, ТЗ и чеклист, — поэтому
+        материалы должны быть на месте ДО финализации.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: состав и объём
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_orders.finalizeReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.FinalizeResult'
+        "400":
+          description: bad_id; bad_json; invalid_input; duplicate_candidate
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "409":
+          description: wrong_status — заявка отменена; no_project — у заявки нет проекта
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Утвердить состав и объём заявки (менеджер)
+      tags:
+      - manager-orders
   /manager/orders/{id}/invite:
     post:
       description: |-
@@ -10328,6 +10601,38 @@ paths:
       security:
       - BearerAuth: []
       summary: Отметить оплату (менеджер)
+      tags:
+      - manager-orders
+  /manager/orders/{id}/responses:
+    get:
+      description: |-
+        Главный экран шага «собрать состав»: приглашение ушло всем
+        известным креаторам, и здесь видно, кто ответил работой.
+        Отмеченные заказчиком — сверху.
+      parameters:
+      - description: order id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_orders.responsesResp'
+        "400":
+          description: bad_id
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_orders.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Кто откликнулся на заявку (менеджер)
       tags:
       - manager-orders
   /manager/projects:
@@ -11284,6 +11589,56 @@ paths:
       security:
       - BearerAuth: []
       summary: Убрать пункт из чек-листа проекта (менеджер)
+      tags:
+      - manager-publications
+    patch:
+      consumes:
+      - application/json
+      description: |-
+        Чек-лист прицепился к проекту шаблоном, и менеджер его ПРАВИТ,
+        а не собирает заново: «обложка вертикальная» в одном проекте
+        обязательна, а в другом — пожелание. Отметки проверки при этом
+        сохраняются — в отличие от «удалить и завести заново».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: checklist item id
+        in: path
+        name: itemId
+        required: true
+        type: string
+      - description: обязательность
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.checklistRequiredReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.ChecklistItem'
+        "400":
+          description: bad_id; bad_json; invalid_input — не указано, обязателен пункт
+            или нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект или пункт не найден
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Сделать пункт чек-листа обязательным или необязательным (менеджер)
       tags:
       - manager-publications
   /manager/projects/{id}/claim:
@@ -14066,6 +14421,45 @@ paths:
       summary: «Да, мой» — привязать найденный ролик (креатор)
       tags:
       - creator-publications
+  /me/creator/uploads/work-sample:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Креатор отвечает на рассылку роликом. Ролик ложится под
+        префикс orders/ и на потолок портфолио не влияет: человек
+        с полным портфолио обязан иметь возможность ответить.
+      parameters:
+      - description: content_type/size
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_profiles.PortfolioUploadURLInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_profiles.PortfolioUploadURL'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/internal_profiles.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Presigned PUT URL для пробы работы к заявке
+      tags:
+      - creator-orders
   /me/general-projects:
     get:
       produces:

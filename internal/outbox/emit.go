@@ -198,4 +198,37 @@ const (
 	// EventOrderNeedMore — резерв кончился, а состав не собран.
 	// Дальше без менеджера не обойтись.
 	EventOrderNeedMore = "order.need_more"
+
+	// EventOrderSubmitted — заявка «под ключ» отправлена: заказ и проект
+	// заведены в одну секунду, и дальше считает менеджер. payload:
+	// {order_id, project_id, client_name, client_contact, videos_count,
+	// preferred, ceiling, brief}.
+	//
+	// Уходит В ЧАТ, и это единственное событие подбора, которое туда
+	// уходит. Причина простая: между «нажал отправить» и «менеджер
+	// позвонил» нет ничего, что заметило бы заявку само. В CRM она
+	// видна проектом — то есть тому, кто и так туда зашёл, а повод
+	// появился снаружи и ждать не умеет.
+	EventOrderSubmitted = "order.submitted"
+
+	// EventOrderBroadcastSent — рассылка по заявке ушла известным
+	// креаторам. payload: {order_id, project_id, recipients, preferred,
+	// skipped_over_limit}.
+	//
+	// Ноль получателей — не ошибка (никто ещё не подключил бота), но и
+	// не то, о чём стоит узнать через неделю: событие пишется всегда, и
+	// по нему видно, что рассылка вообще была.
+	EventOrderBroadcastSent = "order.broadcast_sent"
+
+	// EventOrderResponseReceived — креатор откликнулся на рассылку:
+	// прислал файл, показал свои ролики или отказался. payload:
+	// {order_id, project_id, creator_id, mode}. В чат не идёт: отклик
+	// — это ход работы, а не повод бросить дела; список откликов
+	// менеджер видит в карточке проекта.
+	EventOrderResponseReceived = "order.response_received"
+
+	// EventOrderFinalized — менеджер утвердил состав, цену и даты.
+	// payload: {order_id, project_id, creators, monthly_plan}. Дальше
+	// живёт проект, а заказ становится историей сделки.
+	EventOrderFinalized = "order.finalized"
 )

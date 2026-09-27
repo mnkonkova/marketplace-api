@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,10 @@ type Service struct {
 	// projects — кто заводит проект под заявку. Может быть пустым: см.
 	// WithProjects.
 	projects ProjectStarter
+	// crew — кто добавляет людей в состав проекта. Пустой до вызова
+	// WithCrew: финализация без него откажется работать, а всё
+	// остальное живёт как жило.
+	crew CrewKeeper
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -35,6 +40,10 @@ type CreateResult struct {
 	// хотя он отметил себя занятым на этот месяц. Это предупреждение, а
 	// не отказ: приглашение ему уйдёт, а решать будет он сам.
 	BusyCreators []uuid.UUID `json:"busy_creators,omitempty"`
+	// Broadcast — скольким креаторам ушла заявка. Отдаётся наружу, а не
+	// пишется только в лог: заказчик видит на экране «заявка ушла
+	// креаторам», и число за этой фразой обязано существовать.
+	Broadcast BroadcastResult `json:"broadcast"`
 }
 
 // ProjectStarter — кто умеет завести проект под заявку.
@@ -54,6 +63,28 @@ type ProjectStarter interface {
 	// UpdateProjectNotes — бриф дописали: менеджер читает его в
 	// заметках проекта, и два текста расходиться не должны.
 	UpdateProjectNotes(ctx context.Context, projectID uuid.UUID, notes string) error
+	// SetMonthlyPlan — сколько роликов в месяц по договорённости.
+	// Проставляется на финализации: в заявке лежит пожелание, а в
+	// проекте — то, о чём договорились по телефону.
+	SetMonthlyPlan(ctx context.Context, projectID uuid.UUID, plan int) error
+}
+
+// CrewKeeper — кто добавляет людей в состав проекта.
+//
+// Тот же интерфейс, которым менеджер добавляет креатора руками, и это
+// важно: вместе с составом человеку уходит задание проекта — договор,
+// ТЗ и чеклист. Своя вставка в project_creators оставила бы
+// уведомление за бортом.
+type CrewKeeper interface {
+	AddCreator(ctx context.Context, projectID, creatorID, addedBy uuid.UUID) error
+}
+
+// WithCrew — подключить состав проекта. Без него финализация заявки
+// откажется добавлять людей: тихо принять запрос и никого не добавить
+// хуже отказа.
+func (s *Service) WithCrew(c CrewKeeper) *Service {
+	s.crew = c
+	return s
 }
 
 // WithProjects — подключить заведение проектов. Без него заявка
@@ -172,6 +203,23 @@ func (s *Service) Create(ctx context.Context, in CreateOrderInput, now time.Time
 		return out, err
 	}
 	out.Order = order
+
+	// Рассылка — сразу, тем же запросом. Отдельной кнопки у неё нет:
+	// «Отправить» в воронке и значит «позовите людей», а заявка,
+	// которая ждёт, пока кто-то нажмёт вторую кнопку, — это та же
+	// тишина, от которой мы уходим.
+	//
+	// Ошибка рассылки НЕ роняет заявку: заказ и проект уже есть, в чат
+	// менеджерам ушёл пинг, и человек всё равно позвонит. Разослать
+	// можно и второй раз — Broadcast идемпотентна.
+	res, err := s.repo.Broadcast(ctx, order.ID, now)
+	if err != nil {
+		slog.Error("order broadcast failed", "order_id", order.ID, "err", err)
+	}
+	out.Broadcast = res
+	slog.Info("order broadcast",
+		"order_id", order.ID, "recipients", res.Recipients,
+		"preferred", res.Preferred, "skipped_over_limit", res.SkippedOverLimit)
 	return out, nil
 }
 
@@ -340,6 +388,18 @@ func (s *Service) SaveBrief(
 		}
 	}
 	return b, nil
+}
+
+// SaveResponse — отклик креатора на рассылку.
+func (s *Service) SaveResponse(
+	ctx context.Context, in ResponseInput, now time.Time,
+) (Response, error) {
+	return s.repo.SaveResponse(ctx, in, now)
+}
+
+// Responses — кто откликнулся на заявку.
+func (s *Service) Responses(ctx context.Context, orderID uuid.UUID) ([]Response, error) {
+	return s.repo.ListResponses(ctx, orderID)
 }
 
 // RemoveCandidate — менеджер убирает человека из заявки: не подходит, и

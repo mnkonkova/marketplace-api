@@ -245,8 +245,13 @@ func main() {
 	// Самостоятельный подбор креаторов клиентом. Заявка заводит проект
 	// сразу — заказчику есть куда прийти и где написать, пока менеджер
 	// считает; без этого он уходит в тишину на несколько дней.
+	// Состав проекта — через publications: финализация заявки добавляет
+	// людей тем же путём, каким менеджер добавляет их руками, и вместе
+	// с составом человеку уходит задание — договор, ТЗ и чеклист.
 	ordersHandler := orders.NewHandler(
-		orders.NewService(orders.NewRepo(pool)).WithProjects(projectsSvc))
+		orders.NewService(orders.NewRepo(pool)).
+			WithProjects(projectsSvc).
+			WithCrew(publicationsSvc))
 
 	// Деньги: условия, платежи заказчика и начисления креаторам.
 	billingHandler := billing.NewHandler(billing.NewService(billing.NewRepo(pool)))

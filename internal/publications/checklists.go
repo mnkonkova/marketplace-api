@@ -385,6 +385,48 @@ SELECT (SELECT COUNT(*) FROM publication_checklist_marks WHERE item_id = $1)
 	return r.notifyChecklist(ctx, projectID)
 }
 
+// SetChecklistItemRequired — переключить обязательность пункта.
+//
+// Добавить и удалить пункт менеджер мог, а сделать уже стоящий пункт
+// обязательным — нет, и это ровно тот шаг, на котором он собирает
+// проект: чеклист прицепился к проекту сам, шаблоном, и «обложка
+// вертикальная» в одном проекте обязательна, а в другом — пожелание.
+// Без этой ручки менеджер удалял пункт и заводил его заново, теряя
+// вместе с ним отметки проверки.
+//
+// Пункт, по которому уже отчитывались, трогать МОЖНО: менять
+// обязательность — не то же, что удалять. Прежние отметки остаются,
+// меняется только требование к следующим сдачам.
+func (r *Repo) SetChecklistItemRequired(
+	ctx context.Context, projectID, itemID uuid.UUID, required bool,
+) (ChecklistItem, error) {
+	var it ChecklistItem
+	err := r.db.QueryRow(ctx, `
+UPDATE project_checklist_items SET is_required = $3
+WHERE id = $2 AND project_id = $1
+RETURNING id, project_id, text, platform, is_required, sort_order, added_for_project`,
+		projectID, itemID, required).
+		Scan(&it.ID, &it.ProjectID, &it.Text, &it.Platform, &it.IsRequired, &it.SortOrder,
+			&it.AddedForProject)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChecklistItem{}, ErrNotFound
+	}
+	if err != nil {
+		return ChecklistItem{}, fmt.Errorf("set checklist item required: %w", err)
+	}
+	if err := r.notifyChecklist(ctx, projectID); err != nil {
+		return ChecklistItem{}, err
+	}
+	return it, nil
+}
+
+// SetChecklistItemRequired — переключить обязательность пункта.
+func (s *Service) SetChecklistItemRequired(
+	ctx context.Context, projectID, itemID uuid.UUID, required bool,
+) (ChecklistItem, error) {
+	return s.repo.SetChecklistItemRequired(ctx, projectID, itemID, required)
+}
+
 func (s *Service) AddChecklistItem(ctx context.Context, projectID uuid.UUID, text, platform string, required bool) (ChecklistItem, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {

@@ -3496,6 +3496,141 @@
                 }
             }
         },
+        "/manager/orders/{id}/candidates/{creator_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только пока он не согласился: согласившийся уже в составе проекта,\nи его выводят оттуда, а не отсюда.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Убрать человека из заявки (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator user id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — такого в заявке нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — человек уже согласился",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/finalize": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проект, чеклист и условия оплаты уже есть — заявка их не\nсоздаёт. Здесь только то, что решается по телефону: кого\nберём и сколько роликов в месяце. Добавленные получают\nзадание проекта — договор, ТЗ и чеклист, — поэтому\nматериалы должны быть на месте ДО финализации.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Утвердить состав и объём заявки (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "состав и объём",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.finalizeReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.FinalizeResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_json; invalid_input; duplicate_candidate",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — заявка отменена; no_project — у заявки нет проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/orders/{id}/invite": {
             "post": {
                 "security": [
@@ -3605,6 +3740,52 @@
                     },
                     "409": {
                         "description": "wrong_status — оплатить можно только укомплектованный заказ",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/responses": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Главный экран шага «собрать состав»: приглашение ушло всем\nизвестным креаторам, и здесь видно, кто ответил работой.\nОтмеченные заказчиком — сверху.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Кто откликнулся на заявку (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.responsesResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
                         "schema": {
                             "$ref": "#/definitions/internal_orders.errorResponse"
                         }
@@ -5033,6 +5214,75 @@
                     },
                     "409": {
                         "description": "item_used — по пункту уже отчитывались",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Чек-лист прицепился к проекту шаблоном, и менеджер его ПРАВИТ,\nа не собирает заново: «обложка вертикальная» в одном проекте\nобязательна, а в другом — пожелание. Отметки проверки при этом\nсохраняются — в отличие от «удалить и завести заново».",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Сделать пункт чек-листа обязательным или необязательным (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "checklist item id",
+                        "name": "itemId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "обязательность",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.checklistRequiredReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ChecklistItem"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_json; invalid_input — не указано, обязателен пункт или нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект или пункт не найден",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
                         }
@@ -9136,6 +9386,63 @@
                         "description": "checklist_incomplete",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/uploads/work-sample": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Креатор отвечает на рассылку роликом. Ролик ложится под\nпрефикс orders/ и на потолок портфолио не влияет: человек\nс полным портфолио обязан иметь возможность ответить.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-orders"
+                ],
+                "summary": "Presigned PUT URL для пробы работы к заявке",
+                "parameters": [
+                    {
+                        "description": "content_type/size",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioUploadURLInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioUploadURL"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
                         }
                     }
                 }
@@ -16959,6 +17266,23 @@
                 }
             }
         },
+        "internal_orders.BroadcastResult": {
+            "type": "object",
+            "properties": {
+                "preferred": {
+                    "description": "Preferred — сколько из них заказчик отметил «хочу особенно».",
+                    "type": "integer"
+                },
+                "recipients": {
+                    "description": "Recipients — скольким ушло. Ноль — не ошибка: известных креаторов\nможет не быть вовсе, — но и не то, о чём стоит узнать через\nнеделю, поэтому событие пишется и с нулём.",
+                    "type": "integer"
+                },
+                "skipped_over_limit": {
+                    "description": "SkippedOverLimit — сколько пропущено по дневному лимиту.",
+                    "type": "integer"
+                }
+            }
+        },
         "internal_orders.Candidate": {
             "type": "object",
             "properties": {
@@ -16975,10 +17299,15 @@
                 "invited_at": {
                     "type": "string"
                 },
+                "is_preferred": {
+                    "description": "IsPreferred — заказчик отметил этого человека: «хочу особенно\nего». Это НЕ приоритет очереди — очереди больше нет, приглашение\nуходит всем сразу. Отметка идёт в текст приглашения и в список у\nменеджера, когда он собирает состав из откликнувшихся.",
+                    "type": "boolean"
+                },
                 "order_id": {
                     "type": "string"
                 },
                 "priority": {
+                    "description": "Priority — порядок строк, в котором заказчик их отметил. Смысла\nочереди у него больше нет; оставлен как устойчивая сортировка,\nчтобы список не прыгал между запросами.",
                     "type": "integer"
                 },
                 "responded_at": {
@@ -17011,8 +17340,31 @@
         "internal_orders.CreateResult": {
             "type": "object",
             "properties": {
+                "broadcast": {
+                    "description": "Broadcast — скольким креаторам ушла заявка. Отдаётся наружу, а не\nпишется только в лог: заказчик видит на экране «заявка ушла\nкреаторам», и число за этой фразой обязано существовать.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.BroadcastResult"
+                        }
+                    ]
+                },
                 "busy_creators": {
                     "description": "BusyCreators — кого из отмеченных мы всё равно взяли в заявку,\nхотя он отметил себя занятым на этот месяц. Это предупреждение, а\nне отказ: приглашение ему уйдёт, а решать будет он сам.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "order": {
+                    "$ref": "#/definitions/internal_orders.Order"
+                }
+            }
+        },
+        "internal_orders.FinalizeResult": {
+            "type": "object",
+            "properties": {
+                "added": {
+                    "description": "Added — кого добавили в состав этим вызовом. Уже стоявшие в\nсоставе сюда не попадают: повторная финализация не должна\nвыглядеть как второй набор людей.",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -17026,6 +17378,13 @@
         "internal_orders.Invitation": {
             "type": "object",
             "properties": {
+                "brief": {
+                    "type": "string"
+                },
+                "broadcast_at": {
+                    "description": "BroadcastAt — когда заявка ушла рассылкой. Отличает «позвали\nлично» от «получил вместе со всеми», и это разные разговоры.",
+                    "type": "string"
+                },
                 "client_user_id": {
                     "type": "string"
                 },
@@ -17035,14 +17394,30 @@
                 "invited_at": {
                     "type": "string"
                 },
+                "is_preferred": {
+                    "description": "IsPreferred — заказчик отметил этого человека: «хочу особенно\nвас». Приписка в том же приглашении, а не отдельное письмо: два\nсообщения одному человеку про одну заявку выглядят беспорядком.",
+                    "type": "boolean"
+                },
                 "order_id": {
                     "type": "string"
+                },
+                "responded": {
+                    "description": "Responded — человек уже ответил, и вот как. Пусто — ещё нет.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.ResponseMode"
+                        }
+                    ]
                 },
                 "start_month": {
                     "type": "string"
                 },
                 "status": {
                     "$ref": "#/definitions/internal_orders.CandidateStatus"
+                },
+                "title": {
+                    "description": "Title и Brief — о чём заявка. Без них приглашение выглядит как\n«30 роликов в октябре», и решать по нему нечего.",
+                    "type": "string"
                 },
                 "videos_count": {
                     "type": "integer"
@@ -17156,6 +17531,84 @@
                 "StatusFinalized",
                 "StatusPaid",
                 "StatusCancelled"
+            ]
+        },
+        "internal_orders.Response": {
+            "type": "object",
+            "properties": {
+                "avatar_url": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "file_url": {
+                    "type": "string"
+                },
+                "in_crew": {
+                    "description": "InCrew — человек уже в составе проекта. Без этого менеджер жмёт\n«Взять в проект» второй раз и получает отказ вместо ответа.",
+                    "type": "boolean"
+                },
+                "is_preferred": {
+                    "description": "IsPreferred — заказчик отметил этого человека «хочу особенно».\nВ списке откликов это главный признак: из двадцати согласных\nначинают с тех, кого просили.",
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.ResponseItem"
+                    }
+                },
+                "mode": {
+                    "$ref": "#/definitions/internal_orders.ResponseMode"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "order_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.ResponseItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "preview_url": {
+                    "type": "string"
+                },
+                "thumbnail_url": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "video_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.ResponseMode": {
+            "type": "string",
+            "enum": [
+                "attach",
+                "upload",
+                "from_portfolio",
+                "decline"
+            ],
+            "x-enum-varnames": [
+                "ModeAttach",
+                "ModeUpload",
+                "ModeFromPortfolio",
+                "ModeDecline"
             ]
         },
         "internal_orders.Terms": {
@@ -17310,6 +17763,10 @@
                         }
                     ]
                 },
+                "ceiling": {
+                    "description": "Ceiling — потолок в копейках, который заказчику показали на баре.\nИдёт в сообщение менеджеру: разговор начинается с той суммы,\nкоторую человек видел, а не с пересчитанной на сервере.",
+                    "type": "integer"
+                },
                 "creator_ids": {
                     "description": "CreatorIDs — кого заказчик отметил. Порядка в списке больше нет:\nочередь приглашений ушла, приглашение уходит всем известным\nкреаторам, а отмеченные получают его с пометкой «хотят особенно».",
                     "type": "array",
@@ -17336,6 +17793,22 @@
                 },
                 "message": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_orders.finalizeReq": {
+            "type": "object",
+            "properties": {
+                "creator_ids": {
+                    "description": "CreatorIDs — состав. Может быть пустым: «утверждаю объём, людей\nдобавлю позже» — это тоже решение.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "monthly_plan": {
+                    "description": "MonthlyPlan — сколько роликов в месяц по договорённости. Ноль —\nне трогать: значит, о числе не договаривались.",
+                    "type": "integer"
                 }
             }
         },
@@ -17412,7 +17885,38 @@
             "type": "object",
             "properties": {
                 "accept": {
+                    "description": "Accept — старый путь: согласие или отказ по именному приглашению.",
                     "type": "boolean"
+                },
+                "file_url": {
+                    "description": "FileURL — ссылка на загруженный ролик (attach, upload).",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode — новый путь: attach | upload | from_portfolio | decline.\nПусто — значит пришли по старому.",
+                    "type": "string"
+                },
+                "note": {
+                    "description": "Note — пара слов менеджеру. Необязательно.",
+                    "type": "string"
+                },
+                "portfolio_items": {
+                    "description": "PortfolioItems — что показать из уже загруженного\n(from_portfolio).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_orders.responsesResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.Response"
+                    }
                 }
             }
         },
@@ -21386,6 +21890,14 @@
                 },
                 "text": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_publications.checklistRequiredReq": {
+            "type": "object",
+            "properties": {
+                "is_required": {
+                    "type": "boolean"
                 }
             }
         },

@@ -240,10 +240,69 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		}
 	}
 
+	// Пинг менеджерам — в той же транзакции, что и сама заявка.
+	//
+	// Иначе появляется третье состояние: заявка есть, сообщения нет.
+	// Именно оно и было до сих пор — человек нажимал «Отправить»,
+	// читал «мы вам напишем» и уходил в тишину, потому что о заявке
+	// никто не узнавал, пока кто-нибудь не открывал CRM.
+	if err := emitSubmitted(ctx, tx, o, in, len(in.CreatorIDs)); err != nil {
+		return Order{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Order{}, fmt.Errorf("commit: %w", err)
 	}
 	return r.Get(ctx, o.ID)
+}
+
+// emitSubmitted — сообщение в общий чат менеджеров: заявку завели.
+//
+// Собирает то, с чего начнётся звонок: кто заказчик и как с ним
+// связаться, сколько роликов, скольких отметили, какую сумму человек
+// видел на баре и что написал в брифе. Всё в payload, а не ссылкой на
+// заказ: n8n не ходит к нам обратно, и сообщение, в котором один
+// идентификатор, значит «откройте CRM и разберитесь сами».
+func emitSubmitted(
+	ctx context.Context, tx pgx.Tx, o Order, in CreateOrderInput, preferred int,
+) error {
+	var name, contact string
+	// Имя и почта — не критичны: заявка важнее подписи под ней, и
+	// молчаливый пропуск здесь честнее отката всей транзакции.
+	_ = tx.QueryRow(ctx, `
+SELECT COALESCE(NULLIF(cp.display_name, ''), split_part(u.email, '@', 1), ''),
+       COALESCE(u.email, '')
+FROM users u
+LEFT JOIN client_profiles cp ON cp.user_id = u.id
+WHERE u.id = $1`, o.ClientUserID).Scan(&name, &contact)
+
+	payload := map[string]any{
+		"order_id":     o.ID,
+		"start_month":  o.StartMonth.Format("2006-01"),
+		"videos_count": o.VideosCount,
+		"preferred":    preferred,
+		"title":        projectTitle(in.Brief),
+	}
+	if o.ProjectID != nil {
+		payload["project_id"] = *o.ProjectID
+	}
+	if name != "" {
+		payload["client_name"] = name
+	}
+	if contact != "" {
+		payload["client_contact"] = contact
+	}
+	if in.Ceiling > 0 {
+		payload["ceiling"] = in.Ceiling
+	}
+	if txt := in.Brief.Text(); txt != "" {
+		payload["brief"] = txt
+	}
+	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, o.ID.String(),
+		outbox.EventOrderSubmitted, payload); err != nil {
+		return fmt.Errorf("emit submitted: %w", err)
+	}
+	return nil
 }
 
 // GetByProject — заказ, из которого вырос проект.
@@ -614,9 +673,17 @@ WHERE id = $1 AND status = 'inviting'`, orderID); err != nil {
 func (r *Repo) ExpireAndAdvance(ctx context.Context, now time.Time) (expired, pinged int, err error) {
 	// 1. Сгоревшие приглашения. Собираем заказы, которых это коснулось:
 	// в каждом освободилось место, и его надо кому-то отдать.
+	//
+	// Только по заказам в статусе inviting — то есть по старой очереди
+	// приглашений. Заявка «под ключ» живёт в submitted, приглашение в
+	// ней уходит рассылкой ВСЕМ и отвечать на него никто не обязан:
+	// без этой оговорки через трое суток каждая заявка сожгла бы
+	// десятки «приглашений» и завалила чат пингами «креатор молчит».
 	rows, err := r.db.Query(ctx, `
 UPDATE order_candidates SET status = 'expired', responded_at = $1
 WHERE status = 'invited' AND expires_at IS NOT NULL AND expires_at <= $1
+  AND EXISTS (SELECT 1 FROM creator_orders o
+               WHERE o.id = order_id AND o.status = 'inviting')
 RETURNING order_id, creator_user_id`, now)
 	if err != nil {
 		return 0, 0, fmt.Errorf("expire invitations: %w", err)
@@ -684,6 +751,8 @@ WHERE status = 'invited'
   AND manager_pinged_at IS NULL
   AND invited_at IS NOT NULL
   AND invited_at <= $2
+  AND EXISTS (SELECT 1 FROM creator_orders o
+               WHERE o.id = order_id AND o.status = 'inviting')
 RETURNING order_id, creator_user_id,
           (SELECT o.project_id FROM creator_orders o WHERE o.id = order_id)`,
 		now, now.Add(-ManagerPingAfter))
@@ -973,32 +1042,69 @@ type Invitation struct {
 	Status       CandidateStatus `json:"status"`
 	InvitedAt    *time.Time      `json:"invited_at,omitempty"`
 	ExpiresAt    *time.Time      `json:"expires_at,omitempty"`
+	// IsPreferred — заказчик отметил этого человека: «хочу особенно
+	// вас». Приписка в том же приглашении, а не отдельное письмо: два
+	// сообщения одному человеку про одну заявку выглядят беспорядком.
+	IsPreferred bool `json:"is_preferred"`
+	// BroadcastAt — когда заявка ушла рассылкой. Отличает «позвали
+	// лично» от «получил вместе со всеми», и это разные разговоры.
+	BroadcastAt *time.Time `json:"broadcast_at,omitempty"`
+	// Title и Brief — о чём заявка. Без них приглашение выглядит как
+	// «30 роликов в октябре», и решать по нему нечего.
+	Title string `json:"title,omitempty"`
+	Brief string `json:"brief,omitempty"`
+	// Responded — человек уже ответил, и вот как. Пусто — ещё нет.
+	Responded ResponseMode `json:"responded,omitempty"`
 }
 
-// InvitationsFor — приглашения креатора: активные сверху.
+// InvitationsFor — приглашения креатора: неотвеченные сверху.
 //
-// Отдаётся месяц, объём и срок ответа — то, чего достаточно для решения.
-// Что именно показывать о клиенте до согласия — открытый вопрос, поэтому
-// пока только его идентификатор, без контактов.
+// Сюда попадают и строки рассылки (broadcast_at), и старые именные
+// приглашения. Резерв без рассылки — нет: это подборка заказчика, о
+// которой человеку знать нечего, пока ему не написали.
+//
+// Отдаётся месяц, объём, бриф и отметка «хотят особенно» — то, чего
+// достаточно для решения. Контактов заказчика нет: до согласия они не
+// нужны, а после — есть проект и переписка в нём.
 func (r *Repo) InvitationsFor(ctx context.Context, creatorID uuid.UUID) ([]Invitation, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT o.id, o.client_user_id, o.start_month, o.videos_count,
-       c.status, c.invited_at, c.expires_at
+       c.status, c.invited_at, c.expires_at, c.is_preferred, c.broadcast_at,
+       COALESCE(NULLIF(b.product, ''), NULLIF(b.goal, ''), ''),
+       COALESCE(b.goal, ''), COALESCE(b.product, ''), COALESCE(b.audience, ''),
+       COALESCE(b.tone, ''), COALESCE(b.refs, ''),
+       COALESCE(resp.mode, '')
 FROM order_candidates c
-JOIN creator_orders o ON o.id = c.order_id
-WHERE c.creator_user_id = $1 AND c.status <> 'reserve'
-ORDER BY (c.status = 'invited') DESC, c.invited_at DESC NULLS LAST`, creatorID)
+JOIN creator_orders o        ON o.id = c.order_id
+LEFT JOIN order_briefs b     ON b.order_id = o.id
+LEFT JOIN order_candidate_responses resp
+       ON resp.order_id = c.order_id AND resp.creator_user_id = c.creator_user_id
+WHERE c.creator_user_id = $1
+  AND (c.status <> 'reserve' OR c.broadcast_at IS NOT NULL)
+  AND o.status <> 'cancelled'
+ORDER BY (resp.mode IS NULL) DESC,
+         COALESCE(c.broadcast_at, c.invited_at, c.created_at) DESC`, creatorID)
 	if err != nil {
 		return nil, fmt.Errorf("list invitations: %w", err)
 	}
 	defer rows.Close()
 	out := make([]Invitation, 0, 8)
 	for rows.Next() {
-		var iv Invitation
+		var (
+			iv                                  Invitation
+			goal, product, audience, tone, refs string
+			mode                                string
+		)
 		if err := rows.Scan(&iv.OrderID, &iv.ClientUserID, &iv.StartMonth,
-			&iv.VideosCount, &iv.Status, &iv.InvitedAt, &iv.ExpiresAt); err != nil {
+			&iv.VideosCount, &iv.Status, &iv.InvitedAt, &iv.ExpiresAt,
+			&iv.IsPreferred, &iv.BroadcastAt, &iv.Title,
+			&goal, &product, &audience, &tone, &refs, &mode); err != nil {
 			return nil, fmt.Errorf("scan invitation: %w", err)
 		}
+		iv.Brief = OrderBrief{
+			Goal: goal, Product: product, Audience: audience, Tone: tone, Refs: refs,
+		}.Text()
+		iv.Responded = ResponseMode(mode)
 		out = append(out, iv)
 	}
 	return out, rows.Err()

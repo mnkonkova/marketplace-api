@@ -26,11 +26,19 @@ const (
 	AudienceClient = "client"
 )
 
-// Виды материала. Совпадают с CHECK в 00032.
+// Виды материала. Совпадают с CHECK в 00032 и 00071.
 const (
 	MaterialDoc   = "doc"
 	MaterialVideo = "video"
 	MaterialLink  = "link"
+	// MaterialContract — договор с креатором.
+	//
+	// Отдельный вид, а не документ с названием «Договор»: он уходит
+	// человеку вместе с добавлением в проект, отдаётся первым в списке
+	// и выделяется в кабинете плашкой. Искать его подстрокой в
+	// названии — значит однажды не найти, а «первый по порядку»
+	// ломается на второй же перестановке материалов.
+	MaterialContract = "contract"
 )
 
 const (
@@ -79,7 +87,10 @@ WHERE project_id = $1
   -- Материалы конкретной сдачи живут в карточке сдачи, а не в общем
   -- списке материалов проекта.
   AND delivery_id IS NULL
-ORDER BY sort_order, created_at`, projectID, audience)
+-- Договор — первым, каким бы ни был его порядковый номер. Это первое,
+-- что человек ищет, когда его добавили в проект, и последнее, что он
+-- хочет искать глазами в списке из тридцати референсов.
+ORDER BY (kind <> 'contract'), sort_order, created_at`, projectID, audience)
 	if err != nil {
 		return nil, fmt.Errorf("list materials: %w", err)
 	}
@@ -202,9 +213,10 @@ func (s *Service) AddMaterial(ctx context.Context, in AddMaterialInput) (Materia
 	in.Kind = strings.TrimSpace(in.Kind)
 
 	switch in.Kind {
-	case MaterialDoc, MaterialVideo, MaterialLink:
+	case MaterialDoc, MaterialVideo, MaterialLink, MaterialContract:
 	default:
-		return Material{}, fmt.Errorf("%w: kind must be doc, video or link", ErrInvalidInput)
+		return Material{}, fmt.Errorf("%w: kind must be doc, video, link or contract",
+			ErrInvalidInput)
 	}
 	switch in.Audience {
 	case "":

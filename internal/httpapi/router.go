@@ -276,6 +276,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/me/portfolio/multipart/start", d.Profiles.PortfolioMultipartStart)
 				r.Post("/me/portfolio/multipart/part-url", d.Profiles.PortfolioMultipartPartURL)
 				r.Post("/me/uploads/image", d.Profiles.ImageUploadURL)
+				// Проба работы к заявке «под ключ»: лимит тот же, что у
+				// портфолио, — каждый вызов разрешает положить в бакет
+				// ещё один объект.
+				r.Post("/me/creator/uploads/work-sample", d.Profiles.WorkSampleUploadURL)
 			})
 			r.Post("/me/portfolio/multipart/complete", d.Profiles.PortfolioMultipartComplete)
 			r.Post("/me/portfolio/multipart/abort", d.Profiles.PortfolioMultipartAbort)
@@ -523,6 +527,8 @@ func NewRouter(d Deps) http.Handler {
 					// правило снимка — про то, что правка библиотеки не
 					// доезжает до идущих проектов, а не про запрет уточнять.
 					r.Post("/manager/projects/{id}/checklist/items", d.Publications.ManagerAddChecklistItem)
+					r.Patch("/manager/projects/{id}/checklist/items/{itemId}",
+						d.Publications.ManagerSetChecklistItemRequired)
 					r.Delete("/manager/projects/{id}/checklist/items/{itemId}", d.Publications.ManagerDeleteChecklistItem)
 					r.Get("/manager/checklist_templates", d.Publications.ManagerChecklistTemplates)
 					// Переключатели проекта: этап черновика и показ
@@ -575,6 +581,10 @@ func NewRouter(d Deps) http.Handler {
 					// состава, а не отсюда.
 					r.Delete("/manager/orders/{id}/candidates/{creator_id}",
 						d.Orders.ManagerRemoveCandidate)
+					// Кто откликнулся и утверждение состава — шаг
+					// «менеджер собирает проект» из воронки «под ключ».
+					r.Get("/manager/orders/{id}/responses", d.Orders.ManagerResponses)
+					r.Post("/manager/orders/{id}/finalize", d.Orders.ManagerFinalize)
 					r.Post("/manager/orders/{id}/invite", d.Orders.ManagerInvite)
 					r.Post("/manager/orders/{id}/paid", d.Orders.ManagerMarkPaid)
 				}

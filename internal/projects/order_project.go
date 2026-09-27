@@ -65,6 +65,21 @@ func (s *Service) CancelOrderProject(ctx context.Context, projectID, clientID uu
 		"заявка не записалась — проект отменён автоматически")
 }
 
+// SetMonthlyPlan — сколько роликов в месяц по договорённости.
+//
+// Проставляется на финализации, а не при заведении проекта: число из
+// заявки — это пожелание заказчика, а в проект попадает то, о чём
+// договорились по телефону, и расходятся они чаще, чем совпадают.
+//
+// Ноль и отрицательное молча пропускаем: CHECK в БД требует > 0, и
+// падать на «менеджер не назвал число» незачем — плана просто нет.
+func (s *Service) SetMonthlyPlan(ctx context.Context, projectID uuid.UUID, plan int) error {
+	if plan <= 0 {
+		return nil
+	}
+	return s.repo.SetMonthlyPlan(ctx, projectID, plan)
+}
+
 // UpdateProjectNotes — переписать заметки проекта брифом заявки.
 //
 // Заметки — то место, где менеджер читает бриф: отдельного экрана под

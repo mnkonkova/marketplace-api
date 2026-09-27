@@ -28,6 +28,25 @@ type Repo struct{ db *pgxpool.Pool }
 
 func NewRepo(db *pgxpool.Pool) *Repo { return &Repo{db: db} }
 
+// SetMonthlyPlan — сколько роликов в месяц по договорённости.
+//
+// Своим UPDATE, а не через PatchProject: тот собирает патч карточки
+// менеджера (название, бюджет, заметки) и тянет за собой проверку
+// updated_at на конфликт правок. Здесь правка приезжает из финализации
+// заявки, где спорить не с кем.
+func (r *Repo) SetMonthlyPlan(ctx context.Context, projectID uuid.UUID, plan int) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE projects SET monthly_plan = $2, updated_at = now() WHERE id = $1`,
+		projectID, plan)
+	if err != nil {
+		return fmt.Errorf("set monthly plan: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // AssertUserCanBeClient — проверяет, что userID существует и НЕ является
 // менеджером/админом. Возвращает ErrInvalidClientUser, если юзер с такими
 // флагами, и ErrNotFound, если юзера нет. См. data-sec D5: эта проверка
