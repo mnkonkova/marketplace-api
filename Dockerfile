@@ -2,6 +2,12 @@
 # Multi-stage Go build для api/worker/seed (один образ, разные команды)
 # и goose-CLI для миграций. CGO выключен — статический бинарь, мелкий
 # alpine-runtime.
+#
+# Версия goose прибита гвоздём и обязана жить рядом с версией golang
+# выше. С @latest выкатка ломается в день, когда goose поднимает свою
+# директиву go: v3.28.0 потребовала go 1.26, образ даёт 1.25.14, и
+# `go install` упал посреди прод-деплоя. Тот же номер продублирован в
+# Makefile (GOOSE_VERSION) — меняете здесь, меняйте и там.
 
 FROM golang:1.25-alpine AS build
 WORKDIR /src
@@ -20,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/api    
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/backfill-aspect    ./cmd/backfill-aspect && \
     CGO_ENABLED=0 GOOS=linux go install \
         -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' \
-        github.com/pressly/goose/v3/cmd/goose@latest
+        github.com/pressly/goose/v3/cmd/goose@v3.27.3
 
 FROM alpine:3.20
 # ca-certificates + tzdata — общие для api/worker.

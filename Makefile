@@ -64,18 +64,32 @@ prod-backfill-previews:
 # раздувать Docker-образ и module cache.
 GOOSE_TAGS := no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb
 
+# Версия goose ПРИБИТА, и это не педантизм.
+#
+# С @latest прод-сборка ломается в тот день, когда goose поднимает свою
+# директиву go: 27 сентября 2026 вышла v3.28.0 с `go >= 1.26`, а
+# builder-образ у нас golang:1.25-alpine — docker build упал на
+# `go install` посреди выкатки, и виноватым выглядел наш коммит.
+# v3.27.3 требует 1.25.7 и с этим образом собирается.
+#
+# Поднимаете версию — поднимите сперва golang в Dockerfile и держите
+# оба числа рядом: цена рассинхрона — сломанный деплой, а не красный
+# тест.
+GOOSE_VERSION := v3.27.3
+GOOSE := github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
+
 migrate-up:
-	go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" up
+	go run -tags='$(GOOSE_TAGS)' $(GOOSE) -dir migrations postgres "$(DSN)" up
 
 migrate-down:
-	go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" down
+	go run -tags='$(GOOSE_TAGS)' $(GOOSE) -dir migrations postgres "$(DSN)" down
 
 migrate-status:
-	go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "$(DSN)" status
+	go run -tags='$(GOOSE_TAGS)' $(GOOSE) -dir migrations postgres "$(DSN)" status
 
 migrate-create:
 	@test -n "$(name)" || (echo "Usage: make migrate-create name=add_xxx"; exit 1)
-	go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations -s create $(name) sql
+	go run $(GOOSE) -dir migrations -s create $(name) sql
 
 test:
 	go test ./...
@@ -89,7 +103,7 @@ test-db-up:
 		|| docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c \
 			"CREATE DATABASE $(TEST_DB_NAME);"
 	@TEST_DSN_FOR_MIGRATE="$(TEST_DSN)"; \
-		go run -tags='$(GOOSE_TAGS)' github.com/pressly/goose/v3/cmd/goose@latest \
+		go run -tags='$(GOOSE_TAGS)' $(GOOSE) \
 			-dir migrations postgres "$$TEST_DSN_FOR_MIGRATE" up
 	@echo "test-db ready: $(TEST_DSN)"
 
