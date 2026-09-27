@@ -50,13 +50,27 @@
 
 ## Выкатка
 
-```bash
-# Railway: новый проект → Deploy from repo → корень deploy/telegram-bot
-# Переменные — из таблицы выше.
+Сервис уже поднят: Railway, проект `illustrious-renewal`, сервис
+`telegram-bots`, адрес
+`https://telegram-bots-production-b666.up.railway.app`. Вебхуки обоих
+ботов прописаны на него.
 
-# После первого деплоя прописать вебхуки (адрес содержит секрет,
-# поэтому в лог он не печатается):
-PUBLIC_URL=https://<ваш-сервис>.up.railway.app npm run set-webhook
+Повторная выкатка — из этой папки, и только из неё: `railway up`
+загружает текущий каталог, а не репозиторий целиком.
+
+```bash
+cd deploy/telegram-bot
+railway up --service telegram-bots
+```
+
+Если когда-нибудь подключите Railway к GitHub вместо `railway up` —
+обязательно задайте **Root Directory = `deploy/telegram-bot`**. Без
+этого он возьмёт `Dockerfile` из корня и соберёт Go-API вместо бота.
+
+Вебхуки перепрописываются после смены адреса сервиса:
+
+```bash
+PUBLIC_URL=https://telegram-bots-production-b666.up.railway.app npm run set-webhook
 ```
 
 Проверка живости: `GET /health` отвечает `{"ok":true,"bots":[...]}`.
@@ -98,3 +112,18 @@ PUBLIC_URL=https://<ваш-сервис>.up.railway.app npm run set-webhook
 - `GET /api/v1/bot/users/by-telegram/{tg_user_id}?bot=` — «кто это»;
   `404` значит «не привязан», и это нормальное состояние;
 - `POST /api/v1/bot/blocked` — человек заблокировал бота.
+
+## Аватарки
+
+`assets/avatar-creator.png` и `assets/avatar-client.png`, 512×512.
+Одна геометрия и одна сетка на двоих, разный цвет и разный знак: у
+креаторского — видоискатель с точкой записи (бот про съёмку), у
+клиентского — растущая линия с точкой (бот про просмотры). По
+картинкам должно быть видно, что это пара от одного продукта, и при
+этом сразу понятно, который из них чей.
+
+Ставятся **только через @BotFather** — Bot API менять аватар бота не
+умеет: `/setuserpic` → выбрать бота → отправить файл.
+
+Рисует их `scripts/avatars.py` в этой же папке: править цвет или знак
+проще в коде, чем в редакторе, и результат воспроизводим.
