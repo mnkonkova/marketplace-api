@@ -29,6 +29,61 @@ const day = (iso) => {
 const money = (kopecks) => `${Math.round(Number(kopecks || 0) / 100).toLocaleString('ru-RU')} ₽`;
 
 /**
+ * Кнопка «Открыть» — она же вход в мини-апп.
+ *
+ * Обычная ссылка в сообщении открывает сайт во внешнем браузере: там
+ * нет сессии, и человек упирается в форму входа — ради того, чтобы
+ * посмотреть свою же выкладку. Кнопка web_app открывает мини-апп
+ * внутри Telegram, вход в него делает подпись initData, и человек
+ * сразу оказывается на нужном экране.
+ *
+ * Адрес ведёт на /tg, а не прямо в кабинет: сессии в мини-аппе ещё
+ * нет, её выдаёт именно этот экран, а `to` говорит ему, куда идти
+ * дальше.
+ *
+ * web_app-кнопки живут только в личке. Для группы менеджеров —
+ * обычная ссылка (см. managerMessageFor): там Telegram их не
+ * принимает вовсе.
+ */
+export function openButton(app, bot, path, label = 'Открыть') {
+  if (!app || !path) return undefined;
+  const url = `${app}/tg/${bot}?to=${encodeURIComponent(path)}`;
+  return { inline_keyboard: [[{ text: label, web_app: { url } }]] };
+}
+
+/**
+ * Куда ведёт кнопка у этого события. null — кнопки нет: экран, на
+ * который нечего открывать, лучше без неё, чем с ведущей «куда-то».
+ */
+export function targetFor(eventType, d = {}) {
+  const project = d.project_id;
+  switch (eventType) {
+    case 'project.publication_due_tomorrow':
+    case 'project.publication_due_today':
+    case 'project.publication_incomplete':
+    case 'project.publication_manual':
+    case 'project.publication_returned':
+    case 'project.publication_accepted':
+    case 'project.publication_moved':
+    case 'project.publication_cancelled':
+    case 'project.project_creator_briefed':
+    case 'project.project_materials_updated':
+    case 'project.project_checklist_updated':
+      return project ? { bot: 'creator', path: `/me/creator/projects/${project}` } : null;
+    case 'order.invitation_sent':
+    case 'order.broadcast_sent':
+      return { bot: 'creator', path: '/me/creator/invitations' };
+    case 'project.client_new_video':
+    case 'project.client_views_threshold':
+    case 'project.client_date_shift':
+    case 'project.client_weekly_digest':
+      return project ? { bot: 'client', path: `/me/projects/${project}` } : null;
+    default:
+      return null;
+  }
+}
+
+/**
  * Текст по событию. Возвращает null, если писать нечего: неизвестный
  * тип — это не повод отправить человеку «событие project.foo».
  *

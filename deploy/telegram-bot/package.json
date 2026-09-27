@@ -7,6 +7,8 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/server.js",
-    "set-webhook": "node src/set-webhook.js"
+    "set-webhook": "node src/set-webhook.js",
+    "set-menu": "node src/set-menu.js",
+    "set-profile": "node src/set-profile.js"
   }
 }

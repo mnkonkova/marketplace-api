@@ -76,6 +76,17 @@ railway up --service telegram-bots
 PUBLIC_URL=https://telegram-bots-production-b666.up.railway.app npm run set-webhook
 ```
 
+Ещё два разовых скрипта — имя, описание, команды и кнопка меню:
+
+```bash
+npm run set-profile   # имена «PrMarket · креаторы/заказчики», описания, /start
+npm run set-menu      # кнопка «Мои проекты» → мини-апп вместо списка команд
+```
+
+Оба идемпотентны и переживают перевыкатку: Telegram хранит это у себя,
+а не в нашем сервисе. Аватар так поставить нельзя — только через
+@BotFather (`/setuserpic`).
+
 Проверка живости: `GET /health` отвечает `{"ok":true,"bots":[...]}`.
 
 ## Чат менеджеров
