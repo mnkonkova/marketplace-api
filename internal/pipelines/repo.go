@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("pipeline entity not found")
+	ErrNotFound          = errors.New("pipeline entity not found")
 	ErrHasActiveProjects = errors.New("pipeline has active projects")
 )
 
@@ -39,18 +39,28 @@ func (r *Repo) CreatePipeline(ctx context.Context, in CreatePipelineInput) (Pipe
 }
 
 // ListPipelines — для админ-обзора. Возвращает все, в т.ч. неактивные.
-func (r *Repo) ListPipelines(ctx context.Context) ([]Pipeline, error) {
+//
+// Вместе со счётчиком активных проектов: воронку правят и выключают, а
+// без этого числа непонятно, сколько проектов сейчас идёт по ней. Проекты
+// работают по своей копии стадий (StartProject копирует воронку), так что
+// правка их не ломает — но выключать воронку, по которой идут двадцать
+// проектов, всё равно надо с открытыми глазами.
+func (r *Repo) ListPipelines(ctx context.Context) ([]PipelineListItem, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, name, description, version, is_active, is_default, revisions_included, created_at, updated_at
-		 FROM pipelines ORDER BY created_at DESC`)
+		`SELECT p.id, p.name, p.description, p.version, p.is_active, p.is_default,
+		        p.revisions_included, p.created_at, p.updated_at,
+		        (SELECT COUNT(*) FROM projects pr
+		         WHERE pr.pipeline_id = p.id AND pr.is_test = FALSE
+		           AND pr.status IN ('draft','active','on_hold','dispute'))
+		 FROM pipelines p ORDER BY p.created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list pipelines: %w", err)
 	}
 	defer rows.Close()
-	out := make([]Pipeline, 0)
+	out := make([]PipelineListItem, 0)
 	for rows.Next() {
-		var p Pipeline
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.IsDefault, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var p PipelineListItem
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.IsActive, &p.IsDefault, &p.RevisionsIncluded, &p.CreatedAt, &p.UpdatedAt, &p.ActiveProjects); err != nil {
 			return nil, fmt.Errorf("scan pipeline: %w", err)
 		}
 		out = append(out, p)

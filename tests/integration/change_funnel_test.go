@@ -55,8 +55,10 @@ func TestChangeFunnelHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChangeFunnel: %v", err)
 	}
-	if updated.PipelineID != newPID {
-		t.Errorf("pipeline_id: want %s, got %s", newPID, updated.PipelineID)
+	// pipeline_id стал необязательным (у общего проекта воронки нет),
+	// поэтому здесь указатель.
+	if updated.PipelineID == nil || *updated.PipelineID != newPID {
+		t.Errorf("pipeline_id: want %s, got %v", newPID, updated.PipelineID)
 	}
 	if updated.RevisionsUsed != 0 {
 		t.Errorf("revisions_used: want 0, got %d", updated.RevisionsUsed)

@@ -26,12 +26,12 @@ func FeedVideoMapping() map[string]any {
 				// сохранены (индекс называется feed_videos), семантически —
 				// item_id / item_url. Для kind='image' video_url пустой,
 				// карусель живёт в images[].
-				"kind":             map[string]any{"type": "keyword"},
-				"video_id":         map[string]any{"type": "keyword"},
-				"video_url":        map[string]any{"type": "keyword", "index": false},
-				"thumb_url":        map[string]any{"type": "keyword", "index": false},
+				"kind":      map[string]any{"type": "keyword"},
+				"video_id":  map[string]any{"type": "keyword"},
+				"video_url": map[string]any{"type": "keyword", "index": false},
+				"thumb_url": map[string]any{"type": "keyword", "index": false},
 				"images": map[string]any{
-					"type": "object",
+					"type":    "object",
 					"enabled": false, // не индексируем, только хранение
 				},
 				"title":            map[string]any{"type": "text", "analyzer": "ru_en"},
@@ -41,9 +41,9 @@ func FeedVideoMapping() map[string]any {
 				"video_created_at": map[string]any{"type": "date"},
 				// Порядок специалиста и закреплённая работа — по ним
 				// сортируется лента, отфильтрованная по одному спецу.
-				"sort_order":       map[string]any{"type": "integer"},
-				"is_featured":      map[string]any{"type": "boolean"},
-				"category_codes":   map[string]any{"type": "keyword"},
+				"sort_order":     map[string]any{"type": "integer"},
+				"is_featured":    map[string]any{"type": "boolean"},
+				"category_codes": map[string]any{"type": "keyword"},
 
 				// денормализованный специалист (для фильтрации/отображения)
 				"user_id":          map[string]any{"type": "keyword"},

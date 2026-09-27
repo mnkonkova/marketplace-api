@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -59,6 +60,20 @@ type Service struct {
 	// Пусто = вход через Яндекс выключен: локальный запуск без ключей это
 	// нормальный режим, а не поломка.
 	yandex YandexConfig
+	// yandexOnce — клиент к Яндексу создаём один раз на сервис, а не на
+	// каждый вход. Свой http.Client на запрос — это свой пул соединений
+	// на запрос: TLS-рукопожатие заново каждый раз и ни одного
+	// переиспользованного соединения.
+	yandexOnce   sync.Once
+	yandexClient *yandexClient
+}
+
+// yandexAPI — ленивый общий клиент. Ленивый, потому что конфигурация
+// проверяется вызывающим: до первого входа его может не понадобиться
+// вовсе.
+func (s *Service) yandexAPI() *yandexClient {
+	s.yandexOnce.Do(func() { s.yandexClient = newYandexClient(s.yandex) })
+	return s.yandexClient
 }
 
 // ProviderYandex — идентификатор провайдера в user_identities.
@@ -262,7 +277,21 @@ func (s *Service) Login(ctx context.Context, login, password string) (TokenPair,
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
 		return TokenPair{}, ErrBadCredentials
 	}
-	return s.tokens.Issue(u.ID, s.now())
+	pair, err := s.tokens.Issue(u.ID, s.now())
+	if err != nil {
+		return TokenPair{}, err
+	}
+	s.touchLastLogin(ctx, u.ID)
+	return pair, nil
+}
+
+// touchLastLogin — отметка о входе, best-effort. Вход уже состоялся, и
+// падать на записи отметки нельзя: человек остался бы без сессии из-за
+// строки в админском списке команды.
+func (s *Service) touchLastLogin(ctx context.Context, userID uuid.UUID) {
+	if err := s.repo.TouchLastLogin(ctx, userID); err != nil {
+		slog.Warn("auth: touch last_login_at failed", "user_id", userID.String(), "err", err)
+	}
 }
 
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {
@@ -288,7 +317,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	if c.IssuedAt != nil && c.IssuedAt.Time.Add(1500*time.Millisecond).Before(u.PasswordChangedAt) {
 		return TokenPair{}, ErrInvalidToken
 	}
-	return s.tokens.Issue(u.ID, s.now())
+	pair, err := s.tokens.Issue(u.ID, s.now())
+	if err != nil {
+		return TokenPair{}, err
+	}
+	s.touchLastLogin(ctx, u.ID)
+	return pair, nil
 }
 
 // EmailTaken — свободен ли адрес для регистрации.
@@ -322,7 +356,7 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 		kind = KindClient
 	}
 
-	client := newYandexClient(s.yandex)
+	client := s.yandexAPI()
 	token, err := client.exchange(ctx, code)
 	if err != nil {
 		return RegisterResult{}, err
@@ -336,6 +370,9 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 	// 1. Уже входил через Яндекс.
 	if id, have, err := s.repo.FindByIdentity(ctx, ProviderYandex, profile.ID); err == nil {
 		pair, err := s.tokens.Issue(id, s.now())
+		if err == nil {
+			s.touchLastLogin(ctx, id)
+		}
 		return RegisterResult{UserID: id, Tokens: pair, Kind: have}, err
 	} else if !errors.Is(err, ErrNotFound) {
 		return RegisterResult{}, err
@@ -351,6 +388,9 @@ func (s *Service) LoginWithYandex(ctx context.Context, code, kind string) (Regis
 				return RegisterResult{}, err
 			}
 			pair, err := s.tokens.Issue(id, s.now())
+			if err == nil {
+				s.touchLastLogin(ctx, id)
+			}
 			// Аккаунт был раньше — это вход, а не регистрация.
 			return RegisterResult{UserID: id, Tokens: pair, Kind: have}, err
 		} else if !errors.Is(err, ErrNotFound) {

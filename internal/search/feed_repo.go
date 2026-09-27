@@ -23,31 +23,31 @@ type FeedImageDoc struct {
 type FeedVideoDoc struct {
 	// Kind — 'video' | 'image'. Для image: VideoURL/PreviewURL/AnimatedThumb
 	// будут "", Images содержит карусель.
-	Kind           string    `json:"kind"`
-	VideoID        string    `json:"video_id"`
-	VideoURL       string    `json:"video_url"`
+	Kind     string `json:"kind"`
+	VideoID  string `json:"video_id"`
+	VideoURL string `json:"video_url"`
 	// PreviewURL — маленький 480p ~500KB вариант для autoplay в фиде.
 	// Пусто, если preview_status != 'ready' (фронт фолбэчит на VideoURL).
-	PreviewURL     string    `json:"preview_url,omitempty"`
+	PreviewURL string `json:"preview_url,omitempty"`
 	// AnimatedThumbURL — animated WebP «гифка» (~50-150KB) для autoplay
 	// на главной через <img>. Решает iOS LPM-блокировку. См. §11 docs.
-	AnimatedThumbURL string  `json:"animated_thumb_url,omitempty"`
-	ThumbURL       string    `json:"thumb_url,omitempty"`
-	Title          string    `json:"title,omitempty"`
-	Description    string    `json:"description,omitempty"`
-	DurationSec    *int      `json:"duration_sec,omitempty"`
-	Aspect         string    `json:"aspect,omitempty"`
-	VideoCreatedAt time.Time `json:"video_created_at"`
+	AnimatedThumbURL string    `json:"animated_thumb_url,omitempty"`
+	ThumbURL         string    `json:"thumb_url,omitempty"`
+	Title            string    `json:"title,omitempty"`
+	Description      string    `json:"description,omitempty"`
+	DurationSec      *int      `json:"duration_sec,omitempty"`
+	Aspect           string    `json:"aspect,omitempty"`
+	VideoCreatedAt   time.Time `json:"video_created_at"`
 	// SortOrder / IsFeatured — порядок, который специалист выставил у себя в
 	// портфолио, и закреплённая промо-работа. Нужны, чтобы лента одного
 	// специалиста листалась так же, как выглядит его страница: сначала
 	// закреплённая, дальше по его порядку. В общей ленте-дискавери
 	// сортировка остаётся своя (рейтинг + свежесть), эти поля туда не лезут.
-	SortOrder      int       `json:"sort_order"`
-	IsFeatured     bool      `json:"is_featured"`
-	CategoryCodes  []string  `json:"category_codes"`
+	SortOrder     int      `json:"sort_order"`
+	IsFeatured    bool     `json:"is_featured"`
+	CategoryCodes []string `json:"category_codes"`
 	// Images — для Kind='image' карусель кадров, упорядочена по sort_order.
-	Images         []FeedImageDoc `json:"images,omitempty"`
+	Images []FeedImageDoc `json:"images,omitempty"`
 
 	UserID          string   `json:"user_id"`
 	DisplayName     string   `json:"display_name"`
@@ -64,8 +64,8 @@ type FeedVideoDoc struct {
 	IsPublished     bool     `json:"is_published"`
 	// ProductionName — название студии или "" (фрилансер / не выбрал /
 	// студия деактивирована). IsFreelance — флаг фрилансера.
-	ProductionName  string   `json:"production_name,omitempty"`
-	IsFreelance     bool     `json:"is_freelance"`
+	ProductionName string `json:"production_name,omitempty"`
+	IsFreelance    bool   `json:"is_freelance"`
 }
 
 // LoadFeedVideoDocs — собирает все feed-доки одного спеца: видео + photo-сеты.

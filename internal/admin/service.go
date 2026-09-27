@@ -10,12 +10,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"marketpclce/internal/audit"
 	"marketpclce/internal/auth"
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/profiles"
+	"marketpclce/internal/publications"
 )
 
 var ErrInvalidInput = errors.New("invalid input")
+
+// wrapInvalid — repo отдаёт «invalid ...» обычной ошибкой; заворачиваем в
+// ErrInvalidInput, чтобы хендлер ответил 400, а не 500.
+func wrapInvalid(err error) error {
+	return fmt.Errorf("%w: %s", ErrInvalidInput, err.Error())
+}
 
 // ErrModerationReasonRequired — reject без причины запрещён: спец должен
 // видеть, что именно поправить.
@@ -24,11 +32,17 @@ var ErrModerationReasonRequired = errors.New("moderation reason required")
 const moderationReasonMaxLen = 500
 
 type Service struct {
-	repo            *Repo
-	profiles        *profiles.Repo // для очереди модерации специалистов
-	appBaseURL      string
-	inviteTTL       time.Duration
-	tokens          *auth.TokenIssuer
+	repo     *Repo
+	profiles *profiles.Repo // для очереди модерации специалистов
+	// audit — чтение журнала админских действий. Пишут в него сами
+	// домены из своих транзакций, здесь только читаем.
+	audit *audit.Repo
+	// pubs — выкладки: отсюда берётся медиана просмотров креатора.
+	// Необязательна, см. WithPublicationsRepo.
+	pubs       *publications.Repo
+	appBaseURL string
+	inviteTTL  time.Duration
+	tokens     *auth.TokenIssuer
 }
 
 // NewService — admin-сервис. tokens — для выдачи JWT при redeem_invite.
@@ -55,7 +69,40 @@ func (s *Service) ListManagers(ctx context.Context, approved *bool) ([]ManagerIn
 // SearchUsers — лукап юзеров для admin/manager UI. Прокидывается в repo
 // как есть. Возвращает [] для коротких q (< 2 символов), чтобы не нагружать.
 func (s *Service) SearchUsers(ctx context.Context, q, kind string) ([]UserSearchResult, error) {
-	return s.repo.SearchUsers(ctx, q, kind)
+	items, err := s.repo.SearchUsers(ctx, q, kind)
+	if err != nil {
+		return nil, err
+	}
+	return s.withCreatorMedians(ctx, items), nil
+}
+
+// withCreatorMedians — дописать «сколько обычно даёт за ролик».
+//
+// Этим поиском менеджер подбирает креатора в проект (см. состав
+// проекта), и без этой цифры выбор идёт по почте — то есть вслепую. У
+// заказчиков поле просто не заполнится: роликов они не сдают.
+//
+// best-effort: поиск без подписи работает, поиск, не отдавший ничего
+// из-за подписи, — нет.
+func (s *Service) withCreatorMedians(ctx context.Context, items []UserSearchResult) []UserSearchResult {
+	if s.pubs == nil || len(items) == 0 {
+		return items
+	}
+	ids := make([]uuid.UUID, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.UserID)
+	}
+	medians, err := s.pubs.CreatorMedians(ctx, ids)
+	if err != nil || len(medians) == 0 {
+		return items
+	}
+	for i := range items {
+		if m, ok := medians[items[i].UserID]; ok {
+			v := m
+			items[i].Median = &v
+		}
+	}
+	return items
 }
 
 // ListAllUsers — полный листинг всех юзеров с пагинацией. Для /admin/users.
@@ -81,28 +128,32 @@ func (s *Service) ListAllUsers(ctx context.Context, p ListAllUsersParams) (UserL
 	return UserListResult{Items: items, Total: total, Limit: limit, Offset: offset}, nil
 }
 
-func (s *Service) ApproveManager(ctx context.Context, userID uuid.UUID) error {
-	return s.repo.SetApproved(ctx, userID, true)
+func (s *Service) ApproveManager(ctx context.Context, userID, actorID uuid.UUID) error {
+	return s.repo.SetApproved(ctx, userID, true, actorID)
 }
 
 // RevokeManager — полностью снимает роль менеджера. is_manager=FALSE,
 // is_approved=FALSE. Role() после этого вернёт client/specialist по kind.
-func (s *Service) RevokeManager(ctx context.Context, userID uuid.UUID) error {
-	return s.repo.DemoteFromManager(ctx, userID)
+//
+// Если на человеке висят незавершённые проекты — возвращает
+// *ActiveProjectsError, и хендлер отдаёт 409 со списком. Снять роль
+// молча нельзя: проекты остались бы за тем, кто их больше не видит.
+func (s *Service) RevokeManager(ctx context.Context, userID, actorID uuid.UUID) error {
+	return s.repo.DemoteFromManager(ctx, userID, actorID)
 }
 
 // VerifyEmail — админский bypass email-верификации. Используется для
 // ручного заноса клиента (когда у клиента нет доступа к ящику или
 // уже сверены контакты офлайн). Идемпотентно.
-func (s *Service) VerifyEmail(ctx context.Context, userID uuid.UUID) error {
-	return s.repo.VerifyEmail(ctx, userID)
+func (s *Service) VerifyEmail(ctx context.Context, userID, actorID uuid.UUID) error {
+	return s.repo.VerifyEmail(ctx, userID, actorID)
 }
 
 // SetActive — деактивировать/реактивировать юзера. Repo возвращает
 // ErrInvalidInputRepo если попали на админа — оборачиваем в admin
 // ErrInvalidInput, чтобы handler отдал 400.
-func (s *Service) SetActive(ctx context.Context, userID uuid.UUID, active bool) error {
-	err := s.repo.SetActive(ctx, userID, active)
+func (s *Service) SetActive(ctx context.Context, userID uuid.UUID, active bool, actorID uuid.UUID) error {
+	err := s.repo.SetActive(ctx, userID, active, actorID)
 	if errors.Is(err, ErrInvalidInputRepo) {
 		return fmt.Errorf("%w: %s", ErrInvalidInput, strings.TrimPrefix(err.Error(), "invalid input: "))
 	}
@@ -158,7 +209,7 @@ func (s *Service) PromoteToManager(
 	userID, createdBy uuid.UUID,
 	sendInvite bool,
 ) (InviteGenerateResult, error) {
-	if err := s.repo.PromoteToManager(ctx, userID); err != nil {
+	if err := s.repo.PromoteToManager(ctx, userID, createdBy); err != nil {
 		return InviteGenerateResult{}, err
 	}
 	if !sendInvite {
@@ -178,6 +229,14 @@ func (s *Service) PromoteToManager(
 // WithProfilesRepo подключает profiles.Repo для модерационных endpoint'ов
 // (см. docs/SPECIALIST_MODERATION.md). nil-safe: без вызова админские
 // /admin/moderation/* ручки отдают 503/пустоту.
+// WithPublicationsRepo — источник медиан просмотров. Необязательная
+// зависимость: без неё поиск людей работает, просто без подписи
+// «медиана столько-то».
+func (s *Service) WithPublicationsRepo(p *publications.Repo) *Service {
+	s.pubs = p
+	return s
+}
+
 func (s *Service) WithProfilesRepo(p *profiles.Repo) *Service {
 	s.profiles = p
 	return s
@@ -227,6 +286,10 @@ func (s *Service) ApproveSpecialist(ctx context.Context, userID, actorID uuid.UU
 		if err := s.profiles.SetModerationDecisionInTx(ctx, tx, userID, "approved", "", actorID, expectedUpdatedAt); err != nil {
 			return err
 		}
+		if err := audit.Write(ctx, tx, actorID, audit.ActionModerationApprove,
+			audit.ObjectUser, userID.String(), nil); err != nil {
+			return err
+		}
 		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),
 			outbox.EventSpecialistUpserted, map[string]any{"user_id": userID.String(), "version_micro": time.Now().UnixMicro()})
 	})
@@ -248,6 +311,13 @@ func (s *Service) RejectSpecialist(ctx context.Context, userID, actorID uuid.UUI
 	}
 	return s.profiles.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := s.profiles.SetModerationDecisionInTx(ctx, tx, userID, "rejected", reason, actorID, expectedUpdatedAt); err != nil {
+			return err
+		}
+		// Причина отказа — в журнале: «почему спеца завернули полгода
+		// назад» иначе восстанавливается только из профиля, который спец
+		// с тех пор переписал.
+		if err := audit.Write(ctx, tx, actorID, audit.ActionModerationReject,
+			audit.ObjectUser, userID.String(), map[string]any{"reason": reason}); err != nil {
 			return err
 		}
 		return outbox.Emit(ctx, tx, outbox.AggregateSpecialist, userID.String(),

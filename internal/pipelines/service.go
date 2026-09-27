@@ -28,7 +28,7 @@ func (s *Service) CreatePipeline(ctx context.Context, in CreatePipelineInput) (P
 	return s.repo.CreatePipeline(ctx, in)
 }
 
-func (s *Service) ListPipelines(ctx context.Context) ([]Pipeline, error) {
+func (s *Service) ListPipelines(ctx context.Context) ([]PipelineListItem, error) {
 	return s.repo.ListPipelines(ctx)
 }
 
@@ -201,6 +201,6 @@ func ValidateStep(name, owner string, duration, weight, sortOrder int) error {
 	return nil
 }
 
-func validateName(name string) error                                 { return ValidateName(name) }
-func validateOwner(owner string) error                               { return ValidateOwner(owner) }
-func validateStep(n, o string, d, w, so int) error                   { return ValidateStep(n, o, d, w, so) }
+func validateName(name string) error               { return ValidateName(name) }
+func validateOwner(owner string) error             { return ValidateOwner(owner) }
+func validateStep(n, o string, d, w, so int) error { return ValidateStep(n, o, d, w, so) }

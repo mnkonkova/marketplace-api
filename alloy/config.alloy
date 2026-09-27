@@ -55,6 +55,32 @@ prometheus.scrape "n8n_metrics" {
 	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// ── Метрики instacurl (отдельная VDS, приватная сеть) ──────────────
+// Instacurl живёт не в этой docker-сети, а на своей машине — ходим к нему
+// по приватной сети Timeweb, тому же адресу, по которому api зовёт
+// /collect. Поэтому адрес не имя контейнера, а IP:порт из переменной.
+//
+// bearer_token, а не X-API-Key: произвольные заголовки Alloy слать не
+// умеет, и ради этого /metrics научили принимать оба варианта.
+//
+// Если INSTACURL_HOST пуст, неработающим окажется только этот скрейп —
+// остальные компоненты Alloy независимы и продолжат пушить.
+prometheus.scrape "instacurl" {
+	targets = [
+		{
+			__address__ = sys.env("INSTACURL_HOST"),
+			service     = "instacurl",
+			job         = "instacurl",
+		},
+	]
+	metrics_path = "/metrics"
+	// Реже, чем остальные: метрики тут медленные (остаток кредитов,
+	// отставание сбора), а лишние серии стоят денег в Grafana Cloud.
+	scrape_interval = "60s"
+	bearer_token    = sys.env("INSTACURL_API_KEY")
+	forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
 // ── Хост-метрики (CPU/RAM/диск/сеть VDS) ───────────────────────────
 prometheus.scrape "node" {
 	targets = [
@@ -79,21 +105,34 @@ prometheus.scrape "node" {
 // Встроенный экспортер Alloy — отдельный контейнер поднимать не нужно, но
 // нужны host-моунты (см. docker-compose.prod.yml, сервис alloy).
 prometheus.exporter.cadvisor "containers" {
-	// docker_host НЕ задаём намеренно. На этом хосте Docker работает с
-	// containerd-снапшоттером (storage driver = overlayfs), а docker-обработчик
-	// cAdvisor ищет метаданные слоёв в /var/lib/docker/image/overlayfs/layerdb/
-	// — каталога при таком драйвере не существует, метаданные живут в
-	// containerd. Итог: на каждый контейнер сыпалась ошибка «failed to
-	// identify the read-write layer ID», а имена контейнеров всё равно
-	// приходили пустыми (name="").
+	// Docker-обработчик выключаем ЯВНО, несуществующим адресом сокета.
 	//
-	// Без docker.sock cAdvisor читает статистику прямо из cgroup: ошибок ноль,
-	// метрики те же. Проверено на этом хосте: 56 серий памяти, 55 лимитов,
-	// 0 ошибок в логе (с сокетом было 18-21 ошибка и те же метрики).
+	// Раньше здесь стояло «docker_host не задаём намеренно» — в расчёте на
+	// то, что без него обработчик не поднимется. Это неверно: у cAdvisor
+	// адрес по умолчанию `unix:///var/run/docker.sock`, а этот сокет в
+	// контейнер Alloy смонтирован (он нужен discovery.docker для меток
+	// логов). Обработчик поднимался, ЗАБИРАЛ себе контейнерные cgroup'ы и
+	// тут же падал на их опознании:
 	//
-	// Плата — контейнер опознаётся по cgroup-пути в метке id, а не по имени.
-	// Ниже вытаскиваем из него короткий id, чтобы алерт был читаемым.
-	enabled_metrics = ["cpu", "memory", "network"]
+	//   failed to identify the read-write layer ID … open
+	//   /rootfs/var/lib/docker/image/overlayfs/layerdb/mounts/<id>/mount-id:
+	//   no such file or directory
+	//
+	// Причины две и обе неустранимы на этом хосте: Docker работает через
+	// containerd-снапшоттер, и каталога layerdb не существует вовсе; плюс
+	// моунт /rootfs убран ради безопасности. А контейнер, который забрал
+	// docker-обработчик и не смог опознать, не достаётся уже никому —
+	// поэтому в Grafana приходили только системные слайсы, ни одного ряда
+	// с container_id, и алерт ContainerMemoryNearLimit молчал не потому,
+	// что всё хорошо, а потому, что сравнивать было не с чем (26.09.2026).
+	//
+	// С заведомо мёртвым адресом фабрика docker не регистрируется вовсе, и
+	// cgroup'ы достаются containerd-обработчику (его сокет отдан только на
+	// чтение) и сырому cgroup-обходчику. Имя контейнера при этом не
+	// приходит — опознаём по cgroup-пути, см. relabel ниже.
+	docker_host = "unix:///var/lib/alloy/docker-handler-disabled.sock"
+
+	enabled_metrics  = ["cpu", "memory", "network"]
 	storage_duration = "5m"
 }
 

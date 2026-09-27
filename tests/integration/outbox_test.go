@@ -251,3 +251,69 @@ func TestDecodePayload_BadJSON_Error(t *testing.T) {
 		t.Errorf("ожидаем ошибку на невалидный JSON")
 	}
 }
+
+// ---- Cleanup: у мёртвых записей тоже есть срок ----
+
+// Мёртвая запись живёт долго, но не вечно.
+//
+// Раньше cleanup их не трогал вовсе: их разбирают руками, и терять
+// контекст происшествия нельзя. Верхней границы при этом не было ни
+// какой, и таблица росла бесконечно — на стенде с неотвечающим вебхуком
+// за три с половиной месяца накопилось 1310 мёртвых записей при 219
+// живых, 84% таблицы. Захват на обработку от этого не страдает (идёт по
+// индексу), а COUNT(*) для метрик раз в полминуты начинает перебирать
+// таблицу целиком.
+//
+// Сторожим обе половины правила сразу, потому что их легко разменять:
+// свежая мёртвая обязана остаться (иначе инцидент нечем разбирать),
+// старая — уйти.
+func TestCleanupRemovesOldDeadKeepsFresh(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	old := emitOne(t, "test-dead-old", uuid.NewString(), "dead.old", "v")
+	fresh := emitOne(t, "test-dead-fresh", uuid.NewString(), "dead.fresh", "v")
+	done := emitOne(t, "test-done", uuid.NewString(), "done.old", "v")
+	defer cleanupOutbox(t, old, fresh, done)
+
+	// Состояние кладём данными: дожидаться десяти неудачных попыток и
+	// полугода тест не может — время не перемотать.
+	prep := []struct {
+		sql string
+		id  int64
+	}{
+		{`UPDATE outbox SET dead_at = now() - interval '200 days' WHERE id = $1`, old},
+		{`UPDATE outbox SET dead_at = now() - interval '3 days' WHERE id = $1`, fresh},
+		{`UPDATE outbox SET processed_at = now() - interval '30 days' WHERE id = $1`, done},
+	}
+	for _, p := range prep {
+		if _, err := pool.Exec(ctx, p.sql, p.id); err != nil {
+			t.Fatalf("подготовка записи %d: %v", p.id, err)
+		}
+	}
+
+	w := outbox.NewWorker(pool, quietLogger(), map[string]outbox.Handler{}, outbox.Config{
+		CleanupInterval: 50 * time.Millisecond,
+	})
+	runCtx, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	defer cancel()
+	_ = w.Run(runCtx)
+
+	alive := func(id int64) bool {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE id = $1`, id).Scan(&n); err != nil {
+			t.Fatalf("проверка записи %d: %v", id, err)
+		}
+		return n > 0
+	}
+
+	if alive(old) {
+		t.Error("мёртвая запись двухсотдневной давности осталась — таблица растёт без потолка")
+	}
+	if !alive(fresh) {
+		t.Error("свежая мёртвая запись удалена — разбирать происшествие стало нечем")
+	}
+	if alive(done) {
+		t.Error("обработанная запись старше срока хранения осталась")
+	}
+}

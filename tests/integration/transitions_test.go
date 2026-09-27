@@ -140,3 +140,58 @@ SELECT id FROM project_steps WHERE project_id=$1 AND owner='team' LIMIT 1`,
 		t.Errorf("want ErrNotClientStep, got %v", err)
 	}
 }
+
+// Правки должны вернуть предыдущий шаг команды в работу.
+//
+// Клиент нажимает «правки», его шаг уходит в rejected — и на этом всё бы
+// закончилось, если бы работа не возвращалась исполнителю. Ответ 200
+// приходит в любом случае: возврат сделан «best-effort», и его неудача
+// не считается ошибкой. Снаружи это выглядит как «отправлено на
+// доработку», хотя ни один шаг не в работе и над проектом никто не
+// работает — узнать об этом неоткуда.
+func TestRequestRevisionReturnsPreviousTeamStep(t *testing.T) {
+	pool := integration.Pool(t)
+	clientID, _, pid, cleanup := setupPipelineAndProject(t, pool)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Команда сдала работу, клиент смотрит.
+	if _, err := pool.Exec(ctx,
+		`UPDATE project_steps SET status='done' WHERE project_id=$1 AND owner='team'`, pid); err != nil {
+		t.Fatalf("подготовка шагов: %v", err)
+	}
+	var clientStep uuid.UUID
+	if err := pool.QueryRow(ctx, `
+WITH t AS (SELECT id FROM project_steps WHERE project_id=$1 AND owner='client' ORDER BY sort_order LIMIT 1)
+UPDATE project_steps SET status='waiting_client' WHERE id IN (SELECT id FROM t) RETURNING id`,
+		pid).Scan(&clientStep); err != nil {
+		t.Fatalf("подготовка клиентского шага: %v", err)
+	}
+
+	svc := projects.NewService(projects.NewRepo(pool))
+	if _, err := svc.RequestRevision(ctx, pid, clientStep, clientID, "переснять первый кадр"); err != nil {
+		t.Fatalf("request revision: %v", err)
+	}
+
+	// Клиентский шаг отклонён — это видно.
+	var clientStatus string
+	if err := pool.QueryRow(ctx,
+		`SELECT status::text FROM project_steps WHERE id = $1`, clientStep).Scan(&clientStatus); err != nil {
+		t.Fatalf("статус клиентского шага: %v", err)
+	}
+	if clientStatus != "rejected" {
+		t.Errorf("шаг клиента после правок: %s, ожидали rejected", clientStatus)
+	}
+
+	// А работа обязана вернуться команде: без этого «на доработке» —
+	// пустые слова.
+	var inProgress int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM project_steps
+WHERE project_id = $1 AND owner = 'team' AND status = 'in_progress'`, pid).Scan(&inProgress); err != nil {
+		t.Fatalf("подсчёт шагов в работе: %v", err)
+	}
+	if inProgress == 0 {
+		t.Error("после запроса правок ни один шаг команды не в работе — над проектом никто не работает")
+	}
+}

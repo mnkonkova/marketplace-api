@@ -34,7 +34,7 @@ type Review struct {
 }
 
 type PortfolioItem struct {
-	ID            uuid.UUID `json:"id"`
+	ID uuid.UUID `json:"id"`
 	// Kind — 'video' | 'image' | 'external'. Фронт по нему выбирает рендер:
 	// video — плеер; image — карусель из Images; external — внешняя ссылка.
 	Kind          string    `json:"kind"`
@@ -86,13 +86,13 @@ type PortfolioImage struct {
 // поля опускаются из JSON через omitempty.
 //
 // Семантика значений:
-//   • telegram — "@username" или "https://t.me/username"
-//   • whatsapp — телефон в международном формате или wa.me-ссылка
-//   • vk       — "https://vk.com/handle"
-//   • youtube  — channel/handle URL
-//   • instagram, tiktok — handle / URL (* запрещ. в РФ — фронт показывает)
-//   • behance, dribbble — портфолио-ссылки для дизайнеров
-//   • website  — произвольный URL личного сайта
+//   - telegram — "@username" или "https://t.me/username"
+//   - whatsapp — телефон в международном формате или wa.me-ссылка
+//   - vk       — "https://vk.com/handle"
+//   - youtube  — channel/handle URL
+//   - instagram, tiktok — handle / URL (* запрещ. в РФ — фронт показывает)
+//   - behance, dribbble — портфолио-ссылки для дизайнеров
+//   - website  — произвольный URL личного сайта
 type SocialLinks struct {
 	Telegram  string `json:"telegram,omitempty"`
 	WhatsApp  string `json:"whatsapp,omitempty"`
@@ -106,7 +106,7 @@ type SocialLinks struct {
 }
 
 type PublicProfile struct {
-	UserID       uuid.UUID       `json:"user_id"`
+	UserID uuid.UUID `json:"user_id"`
 	// Username — публичный handle для красивого URL /specialist/<username>.
 	// Пусто, если спец ещё не выбрал — фронт фолбэчит на user_id.
 	Username     string          `json:"username,omitempty"`
@@ -132,7 +132,7 @@ type PublicProfile struct {
 	// IsPreview=true означает что профиль возвращён в owner-preview режиме —
 	// спец сам смотрит свой профиль ещё до publish/approval, фронт показывает
 	// баннер «Это превью — клиенты увидят после публикации».
-	IsPreview      bool   `json:"is_preview,omitempty"`
+	IsPreview bool `json:"is_preview,omitempty"`
 	// IsPublished — фактический статус. Нужен фронту в preview-режиме чтобы
 	// различить «черновик» (false) от «на модерации» (true + not approved).
 	IsPublished      bool   `json:"is_published"`
@@ -143,26 +143,26 @@ type PublicProfile struct {
 }
 
 type Profile struct {
-	UserID        uuid.UUID `json:"user_id"`
+	UserID uuid.UUID `json:"user_id"`
 	// Username — публичный handle. Пусто = не выбрал. См. PublicProfile.Username.
-	Username      string    `json:"username,omitempty"`
-	DisplayName   string    `json:"display_name"`
-	Bio           string    `json:"bio"`
-	AvatarURL     string    `json:"avatar_url,omitempty"`
-	City          string    `json:"city,omitempty"`
-	RateMin       *int      `json:"rate_min,omitempty"`
-	RateMax       *int      `json:"rate_max,omitempty"`
-	Currency      string    `json:"currency"`
-	IsPublished   bool      `json:"is_published"`
-	RatingAvg     float64   `json:"rating_avg"`
-	ReviewsCount  int       `json:"reviews_count"`
-	Categories    []string  `json:"categories"`
-	PrimaryCategory string  `json:"primary_category,omitempty"`
-	SkillIDs      []string  `json:"skill_ids"`
+	Username        string   `json:"username,omitempty"`
+	DisplayName     string   `json:"display_name"`
+	Bio             string   `json:"bio"`
+	AvatarURL       string   `json:"avatar_url,omitempty"`
+	City            string   `json:"city,omitempty"`
+	RateMin         *int     `json:"rate_min,omitempty"`
+	RateMax         *int     `json:"rate_max,omitempty"`
+	Currency        string   `json:"currency"`
+	IsPublished     bool     `json:"is_published"`
+	RatingAvg       float64  `json:"rating_avg"`
+	ReviewsCount    int      `json:"reviews_count"`
+	Categories      []string `json:"categories"`
+	PrimaryCategory string   `json:"primary_category,omitempty"`
+	SkillIDs        []string `json:"skill_ids"`
 	// UpdatedAt — версия профиля для optimistic locking.
 	// Клиент должен прислать это значение обратно в PatchInput.UpdatedAt,
 	// чтобы защититься от lost-update при параллельных PATCH'ах.
-	UpdatedAt     time.Time `json:"updated_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// Контакты для прямой связи. Возвращаются только владельцу профиля
 	// (через /me/profile) и менеджеру после создания заявки (см. /leads).
 	// В публичные DTO (PublicProfile, search.IndexDoc, feed.Specialist) НЕ
@@ -187,25 +187,25 @@ type Profile struct {
 }
 
 type PatchInput struct {
-	DisplayName  *string `json:"display_name"`
+	DisplayName *string `json:"display_name"`
 	// Username — публичный handle. nil = не трогать; "" = сбросить в NULL;
 	// "newname" = валидируем (lowercase, a-z0-9_-, 3-30, unique) и ставим.
-	Username     *string `json:"username,omitempty"`
+	Username *string `json:"username,omitempty"`
 	// SocialLinks — nil = не трогать; не-nil = полная замена. Frontend
 	// собирает текущее состояние всех 9 полей перед PATCH'ем.
 	SocialLinks  *SocialLinks `json:"social_links,omitempty"`
-	Bio          *string `json:"bio"`
-	AvatarURL    *string `json:"avatar_url"`
-	City         *string `json:"city"`
-	RateMin      *int    `json:"rate_min"`
-	RateMax      *int    `json:"rate_max"`
-	Currency     *string `json:"currency"`
-	ContactEmail *string `json:"contact_email"`
-	ContactPhone *string `json:"contact_phone"`
+	Bio          *string      `json:"bio"`
+	AvatarURL    *string      `json:"avatar_url"`
+	City         *string      `json:"city"`
+	RateMin      *int         `json:"rate_min"`
+	RateMax      *int         `json:"rate_max"`
+	Currency     *string      `json:"currency"`
+	ContactEmail *string      `json:"contact_email"`
+	ContactPhone *string      `json:"contact_phone"`
 	// UpdatedAt — если задан, в UPDATE добавляется AND updated_at = $X.
 	// Несовпадение → 409 conflict (кто-то параллельно отредактировал).
 	// Без поля — старый небезопасный поведение для обратной совместимости.
-	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
 	// SetProduction / ProductionID — пара bool+value для возможности
 	// явно выставить production_id в NULL. Если SetProduction=true и
@@ -241,19 +241,19 @@ type SkillsPart struct {
 // в транзакции); последующие правки идут под уже взятым row-lock без
 // повторных проверок.
 type PatchFullInput struct {
-	DisplayName  *string `json:"display_name"`
+	DisplayName *string `json:"display_name"`
 	// Username — публичный handle. nil = не трогать; "" = сбросить в NULL;
 	// валидируется сервисом, см. ValidateUsername.
 	Username     *string      `json:"username,omitempty"`
 	SocialLinks  *SocialLinks `json:"social_links,omitempty"`
-	Bio          *string `json:"bio"`
-	AvatarURL    *string `json:"avatar_url"`
-	City         *string `json:"city"`
-	RateMin      *int    `json:"rate_min"`
-	RateMax      *int    `json:"rate_max"`
-	Currency     *string `json:"currency"`
-	ContactEmail *string `json:"contact_email"`
-	ContactPhone *string `json:"contact_phone"`
+	Bio          *string      `json:"bio"`
+	AvatarURL    *string      `json:"avatar_url"`
+	City         *string      `json:"city"`
+	RateMin      *int         `json:"rate_min"`
+	RateMax      *int         `json:"rate_max"`
+	Currency     *string      `json:"currency"`
+	ContactEmail *string      `json:"contact_email"`
+	ContactPhone *string      `json:"contact_phone"`
 
 	// Выбор работодателя специалиста (XOR). См. ProductionID/IsFreelance
 	// в Profile. Семантика поля:

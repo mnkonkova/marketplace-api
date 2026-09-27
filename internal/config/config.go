@@ -33,6 +33,12 @@ type Config struct {
 	RedisPassword string `env:"REDIS_PASSWORD"`
 	RedisDB       int    `env:"REDIS_DB" envDefault:"0"`
 
+	// ACCOUNTS_SECRET_KEY — ключ шифрования паролей от аккаунтов бренда
+	// (base64, 32 байта). Пусто — пароли не хранятся вовсе, ручки
+	// отвечают 501. В базе ключа нет намеренно: иначе шифрование не
+	// отличается от хранения текстом.
+	AccountsSecretKey string `env:"ACCOUNTS_SECRET_KEY"`
+
 	S3Endpoint  string `env:"S3_ENDPOINT" envDefault:"http://localhost:9000"`
 	S3AccessKey string `env:"S3_ACCESS_KEY"`
 	S3SecretKey string `env:"S3_SECRET_KEY"`
@@ -129,11 +135,14 @@ type Config struct {
 
 	// Outbox-воркер. MaxAttempts/BackoffCap определяют поведение ретраев и
 	// порог для DLQ (dead_at). Retention/CleanupInterval — TTL на обработанные
-	// записи (dead-записи cleanup не трогает). WorkerMetricsAddr — отдельный
+	// записи, OutboxDeadRetention — отдельный, намного больший срок на
+	// мёртвые: они описывают происшествие и разбираются руками, но без
+	// верхней границы таблица растёт бесконечно. WorkerMetricsAddr — отдельный
 	// HTTP-listener у воркера для /metrics (alloy скрейпит worker:9090/metrics).
 	OutboxMaxAttempts     int           `env:"OUTBOX_MAX_ATTEMPTS" envDefault:"10"`
 	OutboxBackoffCap      time.Duration `env:"OUTBOX_BACKOFF_CAP" envDefault:"10m"`
 	OutboxRetention       time.Duration `env:"OUTBOX_RETENTION" envDefault:"168h"`
+	OutboxDeadRetention   time.Duration `env:"OUTBOX_DEAD_RETENTION" envDefault:"4320h"`
 	OutboxCleanupInterval time.Duration `env:"OUTBOX_CLEANUP_INTERVAL" envDefault:"1h"`
 	WorkerMetricsAddr     string        `env:"WORKER_METRICS_ADDR" envDefault:":9090"`
 
@@ -151,15 +160,88 @@ type Config struct {
 	ReviewDeadline      time.Duration `env:"REVIEW_DEADLINE" envDefault:"168h"`
 	ReviewCheckInterval time.Duration `env:"REVIEW_CHECK_INTERVAL" envDefault:"1h"`
 
-	// ProjectRetention — через сколько после completed_at done-проект
-	// физически удаляется из БД (вместе со снэпшотом стадий/шагов,
-	// событиями, комментариями — все каскады). По умолчанию 7 дней:
-	// клиент ещё может вернуться, скачать что-то, потом убираем.
-	ProjectRetention time.Duration `env:"PROJECT_RETENTION" envDefault:"168h"`
-	// ProjectCancelledRetention — для cancelled больше: история диспа может
-	// понадобиться разобраться с клиентом, поэтому 30 дней по умолчанию.
-	ProjectCancelledRetention time.Duration `env:"PROJECT_CANCELLED_RETENTION" envDefault:"720h"`
-	ProjectCleanupInterval    time.Duration `env:"PROJECT_CLEANUP_INTERVAL" envDefault:"1h"`
+	// PublicationRemindersInterval — как часто воркер проверяет, кому пора
+	// напомнить о выкладке. Час: отправка всё равно дедуплицируется по
+	// дате, поэтому частый тик не приводит к повторным сообщениям, а
+	// только сокращает задержку после рестарта.
+	PublicationRemindersInterval time.Duration `env:"PUBLICATION_REMINDERS_INTERVAL" envDefault:"1h"`
+	// PublicationRemindersAfterHour — час местного времени, с которого
+	// можно писать креаторам. До него проход выполняется вхолостую.
+	PublicationRemindersAfterHour int `env:"PUBLICATION_REMINDERS_AFTER_HOUR" envDefault:"9"`
+
+	// Сбор статистики по сданным роликам (instacurl). Без URL и ключа
+	// сбор не запускается вовсе: пустой отчёт читается как «ролики никто
+	// не смотрит», и это худшая из подмен.
+	InstacurlURL     string        `env:"INSTACURL_URL"`
+	InstacurlAPIKey  string        `env:"INSTACURL_API_KEY"`
+	InstacurlTimeout time.Duration `env:"INSTACURL_TIMEOUT" envDefault:"60s"`
+	// StatsCollectInterval — как часто воркер проверяет, кого пора
+	// обойти. Частый тик безопасен: правило «раз в сутки на ролик»
+	// держится в выборке, а не расписанием тикера.
+	StatsCollectInterval time.Duration `env:"STATS_COLLECT_INTERVAL" envDefault:"1h"`
+	// StatsCollectBatch — сколько ссылок за ОДИН поход в instacurl.
+	//
+	// Десять, а не сорок: обход одной ссылки VK занимает ~3,5 секунды
+	// (замер на живом клипе) и они идут последовательно — внутри
+	// instacurl Chromium запускается по одному. Сорок ссылок, из которых
+	// восемь-десять на VK, не укладывались в таймаут клиента в 60 секунд,
+	// и такая пачка не собиралась никогда.
+	StatsCollectBatch int `env:"STATS_COLLECT_BATCH" envDefault:"10"`
+	// StatsCollectBatchesPerTick — сколько пачек прогонять за один тик.
+	//
+	// Нужен именно потому, что пачка стала мелкой: при часовом тике
+	// десять ссылок за проход — это 240 в сутки, чего не хватит уже на
+	// одного креатора с шестьюдесятью роликами на пяти площадках.
+	// Прогоняем пачки подряд, пока есть что собирать, но не больше этого
+	// числа — чтобы один тик не работал бесконечно.
+	StatsCollectBatchesPerTick int `env:"STATS_COLLECT_BATCHES_PER_TICK" envDefault:"20"`
+
+	// Обход аккаунтов креаторов: сервис сам находит новые ролики на
+	// площадках и кладёт их в «это ваш ролик?».
+	//
+	// ВЫКЛЮЧЕН ПО УМОЛЧАНИЮ, и это не осторожность ради осторожности.
+	// Обход стоит кредит на аккаунт в сутки НЕЗАВИСИМО от того, вышло
+	// там что-нибудь или нет, и в отличие от сбора по ссылкам он не
+	// затихает со временем: проект с тремя креаторами на пяти площадках
+	// — это пятнадцать обходов каждый день, пока проект жив. Включать
+	// его должен тот, кто посмотрел на остаток кредитов (см.
+	// docs/MONITORING.md, «Сколько сбор статистики стоит в обходах»).
+	AccountScanEnabled bool `env:"ACCOUNT_SCAN_ENABLED" envDefault:"false"`
+	// AccountScanInterval — как часто воркер проверяет, кого пора
+	// обойти. Шесть часов: правило «аккаунт не чаще раза в сутки» держит
+	// выборка, а не тикер, поэтому частый тик безопасен — он лишь
+	// сокращает задержку после рестарта и после того, как креатор завёл
+	// себе новый аккаунт.
+	AccountScanInterval time.Duration `env:"ACCOUNT_SCAN_INTERVAL" envDefault:"6h"`
+	// AccountScanBatch — сколько аккаунтов за ОДИН поход в instacurl.
+	//
+	// Пять, а не десять, как у ссылок: разбор профиля тяжелее разбора
+	// одного ролика (у VK это страница со списком постов через
+	// Chromium), а таймаут клиента общий — шестьдесят секунд. Пачка, не
+	// уложившаяся в таймаут, не собирается никогда.
+	AccountScanBatch int `env:"ACCOUNT_SCAN_BATCH" envDefault:"5"`
+	// AccountScanBatchesPerTick — сколько пачек за тик. По умолчанию
+	// 5 × 5 × 4 тика = 100 аккаунтов в сутки: с запасом на текущий
+	// объём и одновременно потолок, за который расход не уйдёт молча.
+	AccountScanBatchesPerTick int `env:"ACCOUNT_SCAN_BATCHES_PER_TICK" envDefault:"5"`
+
+	// BillingPeriodLockDelay — через сколько после конца периода он
+	// подытоживается сам. Четырнадцать дней — правило площадки: за две
+	// недели ролик набирает основную массу просмотров, дальше счёт почти
+	// не меняется. До появления этого срока правило нигде не
+	// исполнялось — всё держалось на том, что менеджер вовремя нажал
+	// «Пересчитать».
+	BillingPeriodLockDelay time.Duration `env:"BILLING_PERIOD_LOCK_DELAY" envDefault:"336h"`
+	// BillingPeriodLockInterval — как часто искать периоды, которым пора
+	// закрыться. Час: опоздание на час после двухнедельной отсрочки
+	// никого не трогает, а проход по пустой выборке ничего не стоит.
+	BillingPeriodLockInterval time.Duration `env:"BILLING_PERIOD_LOCK_INTERVAL" envDefault:"1h"`
+
+	// OrderExpiryInterval — как часто проверять протухшие приглашения.
+	// Приглашение живёт трое суток, но место надо отдавать следующему
+	// быстро: час — компромисс между «клиент ждёт зря» и лишними
+	// проходами по пустой выборке.
+	OrderExpiryInterval time.Duration `env:"ORDER_EXPIRY_INTERVAL" envDefault:"1h"`
 
 	// CRM v5: n8n webhook для нотификаций по project.* событиям. Пусто →
 	// диспатч выключен (события успешно обрабатываются как no-op, не

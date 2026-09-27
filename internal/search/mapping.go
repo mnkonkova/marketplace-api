@@ -222,13 +222,13 @@ func IndexMapping() map[string]any {
 				// с category_code='motion' — категории в keyword ищутся
 				// только точным матчем по slug.
 				"category_titles": map[string]any{"type": "text", "analyzer": "ru_en"},
-				"rate_min":         map[string]any{"type": "integer"},
-				"rate_max":         map[string]any{"type": "integer"},
-				"currency":         map[string]any{"type": "keyword"},
-				"rating_avg":       map[string]any{"type": "float"},
-				"reviews_count":    map[string]any{"type": "integer"},
-				"is_published":     map[string]any{"type": "boolean"},
-				"updated_at":       map[string]any{"type": "date"},
+				"rate_min":        map[string]any{"type": "integer"},
+				"rate_max":        map[string]any{"type": "integer"},
+				"currency":        map[string]any{"type": "keyword"},
+				"rating_avg":      map[string]any{"type": "float"},
+				"reviews_count":   map[string]any{"type": "integer"},
+				"is_published":    map[string]any{"type": "boolean"},
+				"updated_at":      map[string]any{"type": "date"},
 				// last_video_at — MAX(created_at) опубликованных видео спеца.
 				// Денормализовано из portfolio_items, чтобы /feed мог
 				// ранжировать без N запросов в PG. null если у спеца нет видео.
@@ -237,8 +237,8 @@ func IndexMapping() map[string]any {
 				// последнего опубликованного видео спеца (для карточки в
 				// SearchResultsPage). index: false — только display, не
 				// участвует в поиске/сортировке.
-				"preview_video_url":  map[string]any{"type": "keyword", "index": false},
-				"preview_thumb_url":  map[string]any{"type": "keyword", "index": false},
+				"preview_video_url":    map[string]any{"type": "keyword", "index": false},
+				"preview_thumb_url":    map[string]any{"type": "keyword", "index": false},
 				"preview_animated_url": map[string]any{"type": "keyword", "index": false},
 				// production_name — название студии или пусто (фрилансер / не выбрал).
 				// Денормализовано из productions, чтобы карточка спеца в поиске

@@ -47,6 +47,9 @@ func writeServiceErr(w http.ResponseWriter, err error) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrStepNotFound):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект или шаг не найден.")
+	case errors.Is(err, ErrCommentEmpty):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "empty_comment",
+			"Сообщение пустое.")
 	case errors.Is(err, ErrNotClientStep):
 		httpx.WriteErrMsg(w, http.StatusForbidden, "not_client_step",
 			"Это действие доступно только на клиентских шагах.")
@@ -59,6 +62,23 @@ func writeServiceErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrRevisionsExhausted):
 		httpx.WriteErrMsg(w, http.StatusConflict, "revisions_exhausted",
 			"Лимит правок исчерпан — проект ушёл к менеджеру.")
+	// Общий проект: своих ошибок пять, и все они — про состояние, а не
+	// про запрос. Клиенту по ним понятно, что делать дальше.
+	case errors.Is(err, ErrSpecialistUnavailable):
+		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "specialist_unavailable",
+			"Этот исполнитель сейчас не принимает заказы.")
+	case errors.Is(err, ErrDeliveryPending):
+		httpx.WriteErrMsg(w, http.StatusConflict, "delivery_pending",
+			"Работа сдана и ждёт ответа — примите её или верните на доработку.")
+	case errors.Is(err, ErrNoPendingDelivery):
+		httpx.WriteErrMsg(w, http.StatusConflict, "no_pending_delivery",
+			"Исполнитель ещё ничего не сдал.")
+	case errors.Is(err, ErrProjectClosed):
+		httpx.WriteErrMsg(w, http.StatusConflict, "project_closed",
+			"Проект уже принят или отменён.")
+	case errors.Is(err, ErrReworkLimit):
+		httpx.WriteErrMsg(w, http.StatusConflict, "rework_limit",
+			"Правки по этому проекту закончились.")
 	default:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
 	}
@@ -145,4 +165,7 @@ type clientListResp struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// отдаёт ошибку без текста (httpx.WriteErr).
+	Message string `json:"message,omitempty"`
 }

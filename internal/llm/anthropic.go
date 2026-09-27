@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+// llmMaxResponse — потолок ответа, который читаем в память.
+//
+// Ответ модели. Восемь мегабайт на текст — заведомо больше любого
+// разумного ответа.
+// Таймаут клиента ограничивает время, но не размер: сервер может
+// отдавать байты сколь угодно долго и сколь угодно много.
+const llmMaxResponse = 8 << 20
+
 const (
 	anthropicVersion = "2023-06-01"
 	defaultModel     = "claude-sonnet-4-6"
@@ -83,12 +91,12 @@ type OutputConfig struct {
 }
 
 type MessagesRequest struct {
-	Model        string         `json:"model"`
-	MaxTokens    int            `json:"max_tokens"`
-	System       []SystemBlock  `json:"system,omitempty"`
-	Messages     []Message      `json:"messages"`
-	Thinking     *Thinking      `json:"thinking,omitempty"`
-	OutputConfig *OutputConfig  `json:"output_config,omitempty"`
+	Model        string        `json:"model"`
+	MaxTokens    int           `json:"max_tokens"`
+	System       []SystemBlock `json:"system,omitempty"`
+	Messages     []Message     `json:"messages"`
+	Thinking     *Thinking     `json:"thinking,omitempty"`
+	OutputConfig *OutputConfig `json:"output_config,omitempty"`
 }
 
 type ContentBlock struct {
@@ -151,7 +159,7 @@ func (a *Anthropic) Messages(ctx context.Context, req MessagesRequest) (*Message
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, llmMaxResponse))
 	if resp.StatusCode >= 400 {
 		return nil, &APIError{Status: resp.StatusCode, Body: string(respBody)}
 	}

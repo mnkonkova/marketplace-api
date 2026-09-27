@@ -78,4 +78,3 @@ func cacheKey(q Query) string {
 	sum := sha256.Sum256(b)
 	return "feed:cache:" + hex.EncodeToString(sum[:])
 }
-

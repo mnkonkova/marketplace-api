@@ -25,22 +25,22 @@ const (
 type StepStatus string
 
 const (
-	StepStatusPending        StepStatus = "pending"
-	StepStatusInProgress     StepStatus = "in_progress"
-	StepStatusWaitingClient  StepStatus = "waiting_client"
-	StepStatusDone           StepStatus = "done"
-	StepStatusRejected       StepStatus = "rejected"
-	StepStatusSkipped        StepStatus = "skipped"
+	StepStatusPending       StepStatus = "pending"
+	StepStatusInProgress    StepStatus = "in_progress"
+	StepStatusWaitingClient StepStatus = "waiting_client"
+	StepStatusDone          StepStatus = "done"
+	StepStatusRejected      StepStatus = "rejected"
+	StepStatusSkipped       StepStatus = "skipped"
 )
 
 // ProjectSource — откуда пришёл проект (для аналитики и UI-меток).
 type ProjectSource string
 
 const (
-	SourceMarketplace      ProjectSource = "marketplace"
-	SourceManual           ProjectSource = "manual"
-	SourceReferral         ProjectSource = "referral"
-	SourceReturningClient  ProjectSource = "returning_client"
+	SourceMarketplace     ProjectSource = "marketplace"
+	SourceManual          ProjectSource = "manual"
+	SourceReferral        ProjectSource = "referral"
+	SourceReturningClient ProjectSource = "returning_client"
 )
 
 // Owner шага. Дублируется из pipelines, но проект — самостоятельный домен.
@@ -74,36 +74,62 @@ const (
 	StageDisplayCompleted  StageDisplayStatus = "completed"
 )
 
+// ProjectKind — вид проекта (enum project_kind в 00032). Определяет, что
+// у проекта вообще есть: воронка, выкладки или один срок и сдача.
+type ProjectKind string
+
+const (
+	// KindCreatorsTurnkey — креаторы под ключ: выкладки, пять площадок,
+	// ежедневная статистика.
+	KindCreatorsTurnkey ProjectKind = "creators_turnkey"
+	// KindBrandTurnkey — бренд под ключ: те же выкладки и та же
+	// статистика, но без людей — ролики выходят с аккаунтов бренда.
+	// Состава, проверки, чек-листов и начислений у него нет.
+	KindBrandTurnkey ProjectKind = "brand_turnkey"
+	// KindProductionTurnkey — продакшн под ключ: воронка pipelines.
+	KindProductionTurnkey ProjectKind = "production_turnkey"
+	// KindGeneral — общий проект: исполнитель и один срок.
+	KindGeneral ProjectKind = "general"
+)
+
 // ---- entities ----
 
 // Project — основа. Записи в БД. Без вложенных стадий/шагов.
 type Project struct {
-	ID                uuid.UUID  `json:"id"`
-	LeadID            *uuid.UUID `json:"lead_id,omitempty"`
-	LeadRecipientSpecialistID   *uuid.UUID `json:"lead_recipient_specialist_id,omitempty"`
+	ID                        uuid.UUID  `json:"id"`
+	LeadID                    *uuid.UUID `json:"lead_id,omitempty"`
+	LeadRecipientSpecialistID *uuid.UUID `json:"lead_recipient_specialist_id,omitempty"`
 	// ClientUserID — клиент с аккаунтом. nil если проект заведён менеджером/
 	// админом для клиента без регистрации; тогда контакты в ClientName/
 	// ClientContact. CHECK constraint гарантирует одно из двух.
-	ClientUserID      *uuid.UUID `json:"client_user_id,omitempty"`
+	ClientUserID *uuid.UUID `json:"client_user_id,omitempty"`
 	// ClientName / ClientContact — заполняется когда client_user_id=NULL.
 	// Для зарегистрированных клиентов остаются пустыми (берём из
 	// client_profiles по client_user_id).
-	ClientName        string     `json:"client_name,omitempty"`
-	ClientContact     string     `json:"client_contact,omitempty"`
-	SpecialistUserID  *uuid.UUID `json:"specialist_user_id,omitempty"`
-	AssignedToUserID  *uuid.UUID `json:"assigned_to_user_id,omitempty"`
-	PipelineID        uuid.UUID  `json:"pipeline_id"`
-	Title             string     `json:"title"`
+	ClientName       string     `json:"client_name,omitempty"`
+	ClientContact    string     `json:"client_contact,omitempty"`
+	SpecialistUserID *uuid.UUID `json:"specialist_user_id,omitempty"`
+	AssignedToUserID *uuid.UUID `json:"assigned_to_user_id,omitempty"`
+	// PipelineID — воронка. nil у общего проекта: воронки у него нет
+	// вовсе, и отдавать нулевой uuid значило бы врать, что она есть.
+	PipelineID *uuid.UUID `json:"pipeline_id,omitempty"`
+	// Kind — вид проекта. Без него фронт отличал проект с креаторами от
+	// воронки по наличию выкладок, то есть догадкой.
+	Kind ProjectKind `json:"kind"`
+	// IsTest — проект заведён для проверки стенда. Админский список такие
+	// прячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».
+	IsTest            bool          `json:"is_test"`
+	Title             string        `json:"title"`
 	Source            ProjectSource `json:"source"`
 	Status            ProjectStatus `json:"status"`
-	RevisionsIncluded int        `json:"revisions_included"`
-	RevisionsUsed     int        `json:"revisions_used"`
-	Budget            *int       `json:"budget,omitempty"`
-	Notes             string     `json:"notes,omitempty"`
-	StartedAt         *time.Time `json:"started_at,omitempty"`
-	CompletedAt       *time.Time `json:"completed_at,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	RevisionsIncluded int           `json:"revisions_included"`
+	RevisionsUsed     int           `json:"revisions_used"`
+	Budget            *int          `json:"budget,omitempty"`
+	Notes             string        `json:"notes,omitempty"`
+	StartedAt         *time.Time    `json:"started_at,omitempty"`
+	CompletedAt       *time.Time    `json:"completed_at,omitempty"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // Stage — снэпшот стадии для конкретного проекта.
@@ -167,7 +193,12 @@ type ProjectClientView struct {
 	// («Видеооператор», «Дизайнер»). Опознавательный знак карточки
 	// проекта когда у клиента их несколько.
 	SpecialistPrimaryCategory string `json:"specialist_primary_category,omitempty"`
-	DisplayStatus ProjectDisplayStatus `json:"display_status"`
+	// ManagerDisplayName — имя менеджера проекта. Заказчик пишет не «в
+	// поддержку», а конкретному человеку: у вкладки переписки в кабинете
+	// стоит его имя, и брать это имя больше неоткуда. Пусто, пока
+	// менеджер не назначен.
+	ManagerDisplayName string               `json:"manager_display_name,omitempty"`
+	DisplayStatus      ProjectDisplayStatus `json:"display_status"`
 	// Progress — взвешенный % выполнения по видимым клиенту шагам.
 	Progress float64 `json:"progress"`
 	// CurrentStep* — пришедший на «передовую» шаг (см. DeriveCurrentStep).
@@ -190,20 +221,30 @@ type ProjectClientView struct {
 //   - ClientUserID (зарегистрированный клиент);
 //   - ClientName + ClientContact (no-account клиент: менеджер/админ
 //     ведёт проект для контакта, который не зарегистрировался).
+//
 // Service.StartProject валидирует это; миграция 00016 поддерживает
 // то же на DB-level через CHECK constraint.
 type StartProjectInput struct {
-	ClientUserID     *uuid.UUID
-	ClientName       string
-	ClientContact    string
-	SpecialistUserID *uuid.UUID
-	AssignedToUserID *uuid.UUID
-	LeadID           *uuid.UUID
-	LeadRecipientSpecialistID  *uuid.UUID
-	PipelineID       uuid.UUID
-	Title            string
-	Source           ProjectSource
-	Budget           *int
-	Notes            string
-	StartedAt        *time.Time
+	ClientUserID              *uuid.UUID
+	ClientName                string
+	ClientContact             string
+	SpecialistUserID          *uuid.UUID
+	AssignedToUserID          *uuid.UUID
+	LeadID                    *uuid.UUID
+	LeadRecipientSpecialistID *uuid.UUID
+	// PipelineID — воронка. uuid.Nil означает «воронки нет»: она бывает
+	// только у продакшна. У креаторов вместо неё выкладки, у общего
+	// проекта — один срок.
+	PipelineID uuid.UUID
+	// Kind — вид проекта. Пусто = production_turnkey: все проекты до
+	// появления видов создавались из воронки и ведутся менеджером.
+	Kind ProjectKind
+	// IsTest — см. Project.IsTest. Ставится только при создании руками:
+	// проекты, пришедшие из лида, тестовыми не бывают.
+	IsTest    bool
+	Title     string
+	Source    ProjectSource
+	Budget    *int
+	Notes     string
+	StartedAt *time.Time
 }

@@ -1336,13 +1336,25 @@ LIMIT 20`, userID)
 // URL (youtube и т.п.) тоже в выдаче — каллер их отфильтрует через
 // s3.Client.KeyFromURL → "".
 //
-// ВАЖНО: при добавлении нового медиа-поля в portfolio_items / specialist_profiles
-// нужно добавить его сюда, иначе sweep сожрёт продакшен-файлы. Сейчас покрыты:
+// ВАЖНО: при добавлении нового медиа-поля КУДА УГОДНО нужно добавить его
+// сюда, иначе sweep сожрёт продакшен-файлы. Не только в профиль и
+// портфолио: подметальщик ходит по всему бакету, а не по «профильной»
+// его части, и любой наш файл, на который нет строки в этом запросе,
+// для него сирота. Сейчас покрыты:
 //   - specialist_profiles.avatar_url
 //   - portfolio_items.video_url       (оригинал)
 //   - portfolio_items.thumbnail_url   (превью-картинка)
 //   - portfolio_items.preview_url     (480p MP4 — docs/VIDEO_TRANSCODING.md)
 //   - portfolio_items.animated_thumb_url (animated WebP «гифка» — §11 docs)
+//   - portfolio_images.image_url
+//   - project_materials.url           (бриф и референсы проекта)
+//   - order_candidate_responses.file_url (проба работы к заявке, orders/)
+//
+// project_materials сегодня хранит только внешние ссылки, и KeyFromURL
+// их отсекает — то есть строка ничего не меняет ровно до того дня,
+// когда менеджер сможет приложить файл. В тот день она перестанет быть
+// бесплатной: без неё бриф проекта тихо исчезнет из бакета через
+// S3_ORPHAN_MIN_AGE, и виноватым будет выглядеть S3.
 func (r *Repo) LoadReferencedMediaURLs(ctx context.Context) ([]string, error) {
 	rows, err := r.db.Query(ctx, `
 SELECT url FROM (
@@ -1357,6 +1369,11 @@ SELECT url FROM (
   SELECT animated_thumb_url AS url FROM portfolio_items     WHERE animated_thumb_url IS NOT NULL AND animated_thumb_url <> ''
   UNION ALL
   SELECT image_url           AS url FROM portfolio_images    WHERE image_url          IS NOT NULL AND image_url          <> ''
+  UNION ALL
+  SELECT url                 AS url FROM project_materials   WHERE url                IS NOT NULL AND url                <> ''
+  UNION ALL
+  SELECT file_url            AS url FROM order_candidate_responses
+                                                              WHERE file_url           IS NOT NULL AND file_url           <> ''
 ) t`)
 	if err != nil {
 		return nil, fmt.Errorf("load referenced media: %w", err)

@@ -15,6 +15,258 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/audit": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Фильтры: actor (uuid сотрудника), action (точный код,\nнапример user.revoke_manager), object_type (user | project |\nterms_version | checklist_template), object_id, from/to\n(RFC3339, полуинтервал). Свежие сверху.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-audit"
+                ],
+                "summary": "Журнал админских действий",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "uuid сотрудника",
+                        "name": "actor",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "код действия",
+                        "name": "action",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "user | project | terms_version | checklist_template",
+                        "name": "object_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "id объекта",
+                        "name": "object_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339, включительно",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339, не включая",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "1-200, default 50",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "default 0",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.AuditResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_actor | bad_time | invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/checklist_templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-publications"
+                ],
+                "summary": "Библиотека чеклистов (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.templatesResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Правки на месте нет намеренно: шаблон уходит в проекты снимком,\nи подмена пунктов под идущими проектами означала бы, что креатор\nотмечал одно, а спросят с него другое. Прежняя версия гасится.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-publications"
+                ],
+                "summary": "Выпустить версию шаблона чеклиста (админ)",
+                "parameters": [
+                    {
+                        "description": "шаблон целиком",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.saveTemplateReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ChecklistTemplateFull"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; invalid_input — пустое название, нет пунктов, неизвестная площадка",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заменяемой версии нет или она уже погашена",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/checklist_templates/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-publications"
+                ],
+                "summary": "Шаблон чеклиста целиком (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "template id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ChecklistTemplateFull"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проекты, куда он уже подключён, не меняются: у них свой снимок.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-publications"
+                ],
+                "summary": "Убрать шаблон из библиотеки (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "template id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — шаблона нет или он уже погашен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/managers": {
             "get": {
                 "security": [
@@ -123,13 +375,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Если на человеке есть незавершённые проекты — 409 со\nсписком: сначала передайте их другому менеджеру\n(POST /admin/managers/{id}/transfer_projects), потом снимайте роль.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "admin-users"
                 ],
-                "summary": "Снять аппрув с менеджера",
+                "summary": "Снять роль менеджера",
                 "parameters": [
                     {
                         "type": "string",
@@ -142,6 +395,64 @@ const docTemplate = `{
                 "responses": {
                     "204": {
                         "description": "No Content"
+                    },
+                    "409": {
+                        "description": "has_active_projects",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.activeProjectsResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/managers/{id}/transfer_projects": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Одна транзакция: либо переезжают все проекты, либо никто.\nНа каждый проект — своё событие и запись в outbox, как при\nодиночном назначении. project_ids пусто = все незавершённые.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Передать проекты менеджера другому менеджеру",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id менеджера, с которого снимаем",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "to_user_id + опционально project_ids",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.transferReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.transferResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_user_id | invalid_input — передача самому себе или принимающий не менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
                     }
                 }
             }
@@ -350,6 +661,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "У каждой воронки — сколько незавершённых проектов сейчас по ней идёт.",
                 "produces": [
                     "application/json"
                 ],
@@ -847,6 +1159,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "У каждой строки — сколько специалистов состоит в продакшене\nи сколько незавершённых проектов за ними числится.",
                 "produces": [
                     "application/json"
                 ],
@@ -858,7 +1171,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_productions.listResp"
+                            "$ref": "#/definitions/internal_productions.usageListResp"
                         }
                     }
                 }
@@ -1017,6 +1330,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Поиск, фильтры, сортировка и пагинация считаются на сервере.\nq — ILIKE по названию проекта и по клиенту (имя в профиле,\nимя на проекте у клиента без аккаунта, почта), мин 2 символа.\nmanager — uuid ответственного либо \"none\" (без ответственного).\nstatus — точный статус проекта либо unfinished: «в работе»,\nто есть draft, active, on_hold и dispute разом. Именно это\nзначение даёт тот же набор, что nav_counts.projects_active в\nсводке; пустой status отдаёт всё, кроме отменённых, то есть\nвместе с завершёнными.\ninclude_test=true показывает проекты, помеченные как тестовые\n(по умолчанию скрыты). kind — вид проекта. sort: updated_asc |\nupdated_desc | created_asc | created_desc, default updated_desc.\nУ каждой карточки прогресс ещё и числом: progress_done /\nprogress_total, единица в progress_unit (publications у\nкреаторов, steps у продакшна).",
                 "produces": [
                     "application/json"
                 ],
@@ -1027,8 +1341,50 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "filter by status",
+                        "description": "часть названия проекта или имени клиента, мин 2 симв",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "точный статус проекта | unfinished (в работе: draft, active, on_hold, dispute); пусто = всё кроме cancelled, включая завершённые",
                         "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "uuid менеджера | none",
+                        "name": "manager",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "показать тестовые проекты, default false",
+                        "name": "include_test",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "creators_turnkey | production_turnkey | general",
+                        "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "updated_asc | updated_desc | created_asc | created_desc",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "1-1000, default 20",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "default 0",
+                        "name": "offset",
                         "in": "query"
                     }
                 ],
@@ -1036,7 +1392,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/internal_projects.managerListResp"
+                            "$ref": "#/definitions/internal_projects.AdminListResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_manager_id | invalid_input — незнакомое значение status, kind или sort; сообщение перечисляет допустимые",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -1125,7 +1487,7 @@ const docTemplate = `{
                 "tags": [
                     "admin-projects"
                 ],
-                "summary": "Удалить проект (soft-delete, физически чистится через 30д)",
+                "summary": "Отменить проект (soft-delete, обратимо через /restore)",
                 "parameters": [
                     {
                         "type": "string",
@@ -1308,13 +1670,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Все ветки сразу; thread сужает до одной.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "admin-projects"
                 ],
-                "summary": "Комментарии любого проекта (админ)",
+                "summary": "Переписка любого проекта (админ)",
                 "parameters": [
                     {
                         "type": "string",
@@ -1322,6 +1685,18 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "client | creator | internal",
+                        "name": "thread",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "чья ветка, при thread=creator",
+                        "name": "creator_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1329,6 +1704,18 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.commentsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_thread; bad_creator_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden_role — нужна роль админа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -1348,7 +1735,7 @@ const docTemplate = `{
                 "tags": [
                     "admin-projects"
                 ],
-                "summary": "Комментировать любой проект (админ)",
+                "summary": "Написать в переписку любого проекта (админ)",
                 "parameters": [
                     {
                         "type": "string",
@@ -1372,6 +1759,24 @@ const docTemplate = `{
                         "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.Comment"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; bad_creator_id; empty_comment; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden_role — нужна роль админа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_a_project_creator — creator_id не в составе проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -1405,6 +1810,67 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.eventsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden_role — нужна роль админа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/projects/{id}/mark_test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Тестовые проекты по умолчанию скрыты из админских выдач\n(include_test=true показывает их).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Пометить проект тестовым (или снять пометку)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "is_test",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.markTestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -1506,6 +1972,374 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/projects/{id}/restore": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проект возвращается в тот статус, в котором был до отмены —\nон сохранён в payload события project_cancelled. Если такого\nсобытия нет (отмена до появления ручки или правка статуса\nруками), отвечаем 409: угаданный статус молча меняет, кого\nпроект ждёт.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-projects"
+                ],
+                "summary": "Вернуть отменённый проект",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.restoreResp"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "not_cancelled | no_cancel_event",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/rating_scales": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Версия не правится — выпускается следующая. У каждой видно,\nсколько проектов сняли с неё копию и сколько подытоженных\nпериодов ею оценены: это и означает, что версию нельзя\nсчитать черновиком.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-ratings"
+                ],
+                "summary": "Справочник порогов оценок: все версии (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.scalesResp"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Существующая версия не переписывается: на ней живут проекты\nи подытоженные периоды, и правка задним числом переписала бы\nто, что клиент уже видел. В ответе — разница с прежней\nверсией и сколько проектов на ней остались: за новой они не\nпоследуют, копия снимается один раз.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-ratings"
+                ],
+                "summary": "Выпустить версию справочника порогов (админ)",
+                "parameters": [
+                    {
+                        "description": "версия целиком",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.publishReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.PublishResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; invalid_input — границы не растут, доли не сходятся в 100%, нет площадки, у ориентира нет источника или даты",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/rating_scales/current": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-ratings"
+                ],
+                "summary": "Действующая версия справочника порогов (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.Scale"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — справочник пуст",
+                        "schema": {
+                            "$ref": "#/definitions/internal_ratings.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/search": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Одна строка ищется и по названию проекта с именем клиента,\nи по почте, телефону и имени человека. Короче двух символов —\nпустой ответ. Тестовые записи не показываются.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-search"
+                ],
+                "summary": "Быстрый поиск по проектам и людям (⌘K)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "строка поиска, мин 2 символа",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.GlobalSearchResult"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/summary": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пункты считаются на сервере по единым правилам и приходят\nвсегда, в том числе нулевыми — решает фронт. Тестовые\nпроекты и пользователи не учитываются нигде.\nВ nav_counts — цифры у пунктов бокового меню: отдельными\nручками это было бы восемь запросов на каждый заход в CRM.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-summary"
+                ],
+                "summary": "Сводка: что требует внимания",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.Summary"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/tariff/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Строка — проект. Прайс площадки один на всех, а\nдоговариваются с каждым заказчиком отдельно: вопрос к этому\nразделу звучит не «какой у нас прайс», а «по каким условиям\nидёт вот этот проект и чем он отличается от соседнего».\nВидно и худшее состояние — проект без тарифа: он считается\nпо нулям, а экран денег показывает ровные нули, и выглядит\nэто как «ещё не начислили».",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-billing"
+                ],
+                "summary": "Тарифы всех проектов одной таблицей (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.tariffRegistryResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/team": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "У каждого — сколько незавершённых проектов он ведёт,\nсколько из них просрочено (прошёл срок проекта либо дата\nневыложенной выкладки) и когда он последний раз входил.\nlast_login_at отсутствует = не входил ни разу.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Команда: админы и менеджеры с нагрузкой",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.teamResp"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/terms": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-billing"
+                ],
+                "summary": "Прайс площадки: все версии (админ)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.termsVersionsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Существующая версия не переписывается: под ней стоит согласие клиентов, а проекты сняли с неё числа снимком.\nВ ответе — разница с прежней действующей версией (changes) и\nсколько клиентов должны согласиться заново (consents_required).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-billing"
+                ],
+                "summary": "Выпустить новую версию прайса (админ)",
+                "parameters": [
+                    {
+                        "description": "ставки и текст условий",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.publishTermsReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "версия + разница с прежней + сколько клиентов должны согласиться заново",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.TermsPublishResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json, invalid_input — текст пуст или доля креатора больше цены клиента",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — нужна роль admin",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/users": {
             "get": {
                 "security": [
@@ -1513,7 +2347,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),\nkind (client|specialist), role (manager|admin|regular).\nСортировка created_at DESC. limit 1..100, default 20.",
+                "description": "Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),\nkind (client|specialist), role (manager|admin|regular),\ninclude_test (по умолчанию тестовые скрыты).\nСортировка created_at DESC. limit 1..100, default 20.",
                 "produces": [
                     "application/json"
                 ],
@@ -1538,6 +2372,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "manager | admin | regular",
                         "name": "role",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "показать тестовых пользователей, default false",
+                        "name": "include_test",
                         "in": "query"
                     },
                     {
@@ -1640,6 +2480,46 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/users/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проекты — во всех ролях сразу (заказчик, исполнитель,\nответственный менеджер). last_login_at отсутствует =\nне входил ни разу.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Карточка человека: профиль, роли, модерация, проекты, журнал",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.UserCard"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/users/{id}/activate": {
             "post": {
                 "security": [
@@ -1734,6 +2614,113 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/users/{id}/login_link": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Действует 72 часа и гасит предыдущую невостребованную\nссылку этого человека. В отличие от\n/admin/users/{id}/generate_invite, цель может быть\nменеджером или админом — поэтому ручка смонтирована только\nв админской секции и отдельно перепроверяет, что просит\nдействительно админ (роль могли снять после выдачи токена).\nПрава при входе берутся из базы в момент обмена ссылки, а\nне из неё самой: ссылка не носит в себе никакой роли.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Одноразовая ссылка для входа сотруднику (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id сотрудника",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.InviteGenerateResult"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden_actor — роль админа снята",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "inactive_user — аккаунт отключён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/users/{id}/mark_test": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Тестовые пользователи по умолчанию скрыты из админских\nвыдач (include_test=true показывает их). Админа пометить\nнельзя — он пропал бы из списка команды.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-users"
+                ],
+                "summary": "Пометить пользователя тестовым (или снять пометку)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "user id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "is_test",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.markUserTestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "invalid_input — попытка пометить админа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_admin.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/users/{id}/verify_email": {
             "post": {
                 "security": [
@@ -1761,6 +2748,31 @@ const docTemplate = `{
                 "responses": {
                     "204": {
                         "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/auth/email-available": {
+            "get": {
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Свободен ли email для регистрации",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Проверяемый адрес",
+                        "name": "email",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.emailAvailableResp"
+                        }
                     }
                 }
             }
@@ -1793,6 +2805,12 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.TokenPair"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input — в теле нет login или password",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
                         }
                     },
                     "401": {
@@ -2084,6 +3102,46 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/yandex": {
+            "post": {
+                "description": "Принимает одноразовый code из redirect'а Яндекса, обменивает\nего на профиль и выдаёт пару токенов. Регистрация и вход —\nодна ручка: человек не должен помнить, заводил ли аккаунт.",
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Вход и регистрация через Яндекс",
+                "parameters": [
+                    {
+                        "description": "code из redirect_uri",
+                        "name": "input",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.yandexReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.registerResp"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/categories": {
             "get": {
                 "produces": [
@@ -2313,6 +3371,435 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/checklist_templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Из чего выбирать при подключении чеклиста к проекту.\nВыключенные шаблоны не показываются: подключить их нельзя.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Библиотека чеклистов (менеджер)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.templatesResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Резерв кончился, а состав не собран — дальше автоматика\nсделать ничего не может.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Заказы, где нужен менеджер",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.ordersListResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/candidates": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Приоритеты продолжают существующие. Если место свободно,\nприглашение уходит немедленно.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Добрать людей в подборку (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "кого добавить в резерв",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.addCandidatesReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не найден",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — заказ уже укомплектован, оплачен или отменён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/candidates/{creator_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только пока он не согласился: согласившийся уже в составе проекта,\nи его выводят оттуда, а не отсюда.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Убрать человека из заявки (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator user id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — такого в заявке нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — человек уже согласился",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/finalize": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проект, чеклист и условия оплаты уже есть — заявка их не\nсоздаёт. Здесь только то, что решается по телефону: кого\nберём и сколько роликов в месяце. Добавленные получают\nзадание проекта — договор, ТЗ и чеклист, — поэтому\nматериалы должны быть на месте ДО финализации.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Утвердить состав и объём заявки (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "состав и объём",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.finalizeReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.FinalizeResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_json; invalid_input; duplicate_candidate",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — заявка отменена; no_project — у заявки нет проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/invite": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Обычно очередь двигается сама: отказ и сгоревшее\nприглашение сразу отдают место следующему. Ручка нужна там,\nгде автоматике нечего было двигать — например, заказ остался\nчерновиком и приглашения не ушли вовсе.\nПриглашение уходит только на реально свободное место\n(needed − accepted − invited); если звать некого, это 409, а\nне тихий успех.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Позвать следующих по приоритету (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не найден",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — заказ собран, оплачен или отменён; no_free_slot — свободных мест нет или резерв кончился",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/paid": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Платежей в системе нет, отметка ручная. Проект после этого\nменеджер создаёт сам — авто-создания нет намеренно.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Отметить оплату (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не найден",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — оплатить можно только укомплектованный заказ",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/orders/{id}/responses": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Главный экран шага «собрать состав»: приглашение ушло всем\nизвестным креаторам, и здесь видно, кто ответил работой.\nОтмеченные заказчиком — сверху.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Кто откликнулся на заявку (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.responsesResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects": {
             "get": {
                 "security": [
@@ -2342,7 +3829,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Создаёт проект с указанным pipeline_id. Если client_user_id\nне передан, требуется client_name+client_contact (no-account\nклиент). assigned_to_user_id принудительно ставится в текущего\nменеджера — менеджер не может вешать чужой проект на коллегу.",
+                "description": "kind задаёт вид проекта: creators_turnkey (выкладки),\nproduction_turnkey (воронка, по умолчанию) или general.\npipeline_id обязателен только для production_turnkey — у\nдвух других видов воронки нет.\nЕсли client_user_id\nне передан, требуется client_name+client_contact (no-account\nклиент). assigned_to_user_id принудительно ставится в текущего\nменеджера — менеджер не может вешать чужой проект на коллегу.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2486,6 +3973,505 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/accounts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Логины, ссылки и заметки. Пароли в списке не отдаются — только признак has_password.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Доступы к аккаунтам бренда (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Завести доступ к аккаунту бренда (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "доступ",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "too_many_accounts",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled — пароль прислали, а ключа шифрования нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/accounts/{account_id}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пароль не прислали — остаётся прежний: чтобы поправить логин, знать пароль не нужно. Прислали пустым — пароль стирается.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Править доступ (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "доступ",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш или доступа нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Удалить доступ (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/accounts/{account_id}/secret": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отдельная ручка: пароль не ездит в списке проекта, его запрашивают явно — и запрос видно в логах.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Показать пароль доступа (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.secretResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — доступа нет или пароль не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/accruals/recalc": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Считается по фактам: выкладки месяца, их статус и просмотры\nиз ежедневного сбора. Недосданные ролики не оплачиваются —\nвычет пропорционален недостаче. Бонус идёт только с роликов,\nперешагнувших порог просмотров. Утверждённые и выплаченные\nстроки не трогаются.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Пересчитать начисления за месяц (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.accrualsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/accruals/{accrual_id}/approve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "После утверждения строка не пересчитывается.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Утвердить период (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "accrual id",
+                        "name": "accrual_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.Accrual"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — начисление не найдено",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_accrual_status — период уже утверждён или выплачен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/accruals/{accrual_id}/paid": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только после утверждения: между «посчитали» и «отправили\nденьги» проходит время, и путать их нельзя.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Отметить выплату (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "accrual id",
+                        "name": "accrual_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.Accrual"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — начисление не найдено",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_accrual_status — период не утверждён или уже выплачен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/advance_stage": {
             "post": {
                 "security": [
@@ -2614,6 +4600,703 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/autoping": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Четыре выключателя по четырём видам напоминаний. Проект, где\nничего не трогали, пингуется полностью — отсутствие настроек\nозначает «всё включено».",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Настройки автопинга проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ReminderPrefs"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Поля необязательные: не переданное остаётся как было.\nВыключенное напоминание не откладывается, а не отправляется;\nкнопка «напомнить» руками автопингом не управляется.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Изменить автопинг проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "выключатели",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.autopingReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ReminderPrefs"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/billing": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Условия, платежи заказчика, начисления креаторам за месяц,\nUTM-метки и итог периода — одним ответом: по частям это\nпять запросов на один экран. Все суммы в копейках.\nВ каждой строке начисления две суммы: total — счёт\nзаказчику за этого креатора, payout_total — выплата\nсамому креатору. В totals они сведены: total, payouts и\nmargin (что остаётся платформе).\nТариф ступенчатый: до порога на ролик — полная ставка,\nсвыше — пониженная.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Деньги проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.ProjectBilling"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period — номер периода не целое число",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Условия — снимок, а не ссылка на действующий прайс: правка\nпрайса не переписывает историю уже идущего проекта.\nУ тарифа две стороны: что платит клиент и что получает\nкреатор. Креаторские ставки null означают «столько же» —\nтогда выплата равна счёту и маржи у платформы нет.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Задать условия проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "ставки в копейках",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.termsReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.Terms"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — отрицательная ставка",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/billing/adopt": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Взять условия из действующего прайса (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.Terms"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден, или прайс ещё не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/billing/confirm_period_end": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Менеджер подтверждает, каким числом кончается период.\nГраницу считает автомат — месяц от первой выкладки, — и он\nостаётся главным путём. Но подтверждённая дата СИЛЬНЕЕ\nвычисленной: план знает человек, а календарь только считает\nмесяцы.\n\nДата та же — это отметка «проверил», она гасит тревогу и\nбольше ничего не меняет. Другая — граница переезжает, и\nвместе с ней вся цепочка дальше: начало следующего периода,\nего конец, отсечка.\n\nПодытоженный период не подтверждают: под ним уже стоит счёт.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Подтвердить конец периода",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода, по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    },
+                    {
+                        "description": "дата конца",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.confirmPeriodEndReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.periodResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period; bad_date; bad_range",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "period_locked — период подытожен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/billing/periods": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Периоды катятся от даты первой публикации: вышел первый\nролик 15-го — периоды идут с 15-го по 14-е. Пока не вышло\nничего, периодов нет — и это не ошибка.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Периоды проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.periodsResp"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/checklist": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Снимок, подключённый к проекту. Правки в нём остаются внутри\nпроекта: библиотека шаблонов живёт отдельно.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Чеклист проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.managerChecklistResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Снимок: последующая правка библиотеки не меняет этот проект.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Скопировать чеклист из библиотеки в проект (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "шаблон чек-листа",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.snapshotReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.snapshotResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json — нужен template_id; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/checklist/items": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пункт живёт только в этом проекте: в библиотеку не попадает.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Добавить пункт в чек-лист проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "пункт",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.checklistItemReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ChecklistItem"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; invalid_input — пустой или слишком длинный текст",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/checklist/items/{itemId}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пункт, по которому уже отчитывались, не удаляется: вместе с ним исчез бы след проверки.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Убрать пункт из чек-листа проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "checklist item id",
+                        "name": "itemId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект или пункт не найден",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "item_used — по пункту уже отчитывались",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Чек-лист прицепился к проекту шаблоном, и менеджер его ПРАВИТ,\nа не собирает заново: «обложка вертикальная» в одном проекте\nобязательна, а в другом — пожелание. Отметки проверки при этом\nсохраняются — в отличие от «удалить и завести заново».",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Сделать пункт чек-листа обязательным или необязательным (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "checklist item id",
+                        "name": "itemId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "обязательность",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.checklistRequiredReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ChecklistItem"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_json; invalid_input — не указано, обязателен пункт или нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект или пункт не найден",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/claim": {
             "post": {
                 "security": [
@@ -2663,13 +5346,14 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Без параметров — вся переписка: клиентская ветка, ветки\nкреаторов и внутренние заметки. thread сужает до одной ветки;\nдля thread=creator нужен creator_id.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "manager-projects"
                 ],
-                "summary": "Комментарии проекта (менеджер)",
+                "summary": "Переписка проекта (менеджер)",
                 "parameters": [
                     {
                         "type": "string",
@@ -2677,6 +5361,18 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "client | creator | internal",
+                        "name": "thread",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "чья ветка, при thread=creator",
+                        "name": "creator_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -2684,6 +5380,24 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.commentsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_thread — неизвестное значение; bad_creator_id — не uuid или не задан при thread=creator",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -2694,6 +5408,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "thread выбирает ветку: client (по умолчанию), creator (нужен\ncreator_id) или internal. Прежнее поле is_internal=true\nравнозначно thread=internal.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2703,7 +5418,7 @@ const docTemplate = `{
                 "tags": [
                     "manager-projects"
                 ],
-                "summary": "Добавить комментарий (менеджер)",
+                "summary": "Написать в переписку проекта (менеджер)",
                 "parameters": [
                     {
                         "type": "string",
@@ -2727,6 +5442,478 @@ const docTemplate = `{
                         "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.Comment"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; bad_creator_id; empty_comment — пустое сообщение; invalid_input — превышена длина или неизвестный body_format",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер; not_a_project_creator — creator_id не в составе проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/comments/participants": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-projects"
+                ],
+                "summary": "Кого можно упомянуть в ветке (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "client (по умолчанию) | creator | internal",
+                        "name": "thread",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "чья ветка, при thread=creator",
+                        "name": "creator_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.participantsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_thread; bad_creator_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/creators": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Действующие креаторы с именами и ссылками на аккаунты по\nпяти площадкам — чтобы проверить выкладку глазами, не\nспрашивая креатора. Выбывшие из состава не показываются.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Состав проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.personsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Добавить креатора в проект (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "кого добавляем",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.creatorReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_json — нужен creator_user_id; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект или пользователь не найден",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "not_a_creator — не специалист либо аккаунт отключён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/creators/{creator_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Мягкое удаление: сданные выкладки и цифры в отчёте остаются.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Убрать креатора из проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator user id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_id — неверный id проекта или креатора",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "creator_not_in_project — этого креатора нет в составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/creators/{creator_id}/reminders": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Колокольчик в плане выкладок — напротив каждого креатора\nсвой. Сильнее настройки проекта: напоминание включают тому,\nкто забывает, а не всем восьмерым разом. «Завтра срок» —\nещё рабочее напоминание, в отличие от «сегодня срок».",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Напоминать креатору накануне срока (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator user id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "day_before",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.creatorRemindReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.CreatorReminderPref"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; bad_creator_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/creators/{creator_id}/subscribers": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Число вводится руками: сборщика подписчиков нет, а KPI по\nним в тарифе объявлен. Так же заведены переходы по UTM.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Вписать подписчиков за период (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "подписчики",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.subscribersReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.CreatorSubscribers"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — отрицательное число",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/creators/{creator_id}/utm": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Метку ставит менеджер, креатор её только видит. Переходы\nзаполняются снаружи; бонус за них пока выключен (BETA) и\nсчитается, только если задать ставку в условиях.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Поставить UTM-метку креатору (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "ссылка",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.utmReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.UTMLink"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — пустая ссылка или не http(s)",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
                         }
                     }
                 }
@@ -2772,6 +5959,350 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.eventsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/link-suggestions": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Точка входа для того, кто находит ролики на площадках: обхода\nаккаунтов, бота или менеджера, наткнувшегося на ролик руками.\nСама находка ничего не меняет — её подтверждает креатор.\nПовторная находка того же адреса не плодит карточку: обход\nидёт каждый день, а «не мой» не должен возвращаться завтра.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Положить найденный ролик (менеджер / обход аккаунтов)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "находка",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.addSuggestionReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.LinkSuggestion"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; unknown_platform",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/materials": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Все материалы обеих аудиторий. Приложенное к сдаче сюда не\nпопадает — оно живёт в карточке сдачи.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Материалы проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.materialsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Добавить материал в проект (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "материал",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.materialReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Material"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — неизвестный kind или audience, пустое название, ссылка не http(s)",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "too_many_materials — в проекте уже сто материалов",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/materials/{material_id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Убрать материал из проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "material id",
+                        "name": "material_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "удалено"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — материал не найден или он из другого проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/month-request": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Заявка заказчика на следующий месяц (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "request = null, если заявки нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — проект чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/month-request/handled": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Плашка гаснет, строка остаётся историей разговора. Идемпотентно.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Отметить заявку разобранной (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "заявка разобрана"
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "forbidden — проект чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
                         }
                     }
                 }
@@ -2879,6 +6410,516 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/order": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Экран проекта показывает состав, но не показывает, как он\nсобирался: клиент присылал ПРИОРИТЕТ, а не список, и место\nосвобождается отказом или молчанием. Менеджеру нужна вся\nочередь целиком, включая отказавшихся, — иначе непонятно,\nпочему в проекте четвёртый по счёту.\n\nОтдельной ручкой, а не фильтром /manager/orders: тот список\nотдаёт только застрявшие заказы, а у проекта заказ давно\nоплачен и туда не попадает.\nПроект, заведённый руками, заказа не имеет — 404 здесь\nозначает «его и не было», а не сбой.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-orders"
+                ],
+                "summary": "Заказ, из которого вырос проект (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект вырос не из заказа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/payments/{kind}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Видов два: prepayment и final — половина вперёд, половина по\nзавершении. Подтверждённый платёж не переписывается.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Сколько ждём от заказчика (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "prepayment или final",
+                        "name": "kind",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "сумма в копейках",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.paymentReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.Payment"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — неизвестный вид платежа или отрицательная сумма",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "already_confirmed — платёж подтверждён, сумму задним числом не меняем",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/payments/{kind}/confirm": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Платёжного провайдера нет: деньги приходят мимо системы, а\nменеджер подтверждает получение — поэтому подтверждение\nименное и заносится в журнал.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Подтвердить платёж (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "prepayment или final",
+                        "name": "kind",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.Payment"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; invalid_input — неизвестный вид платежа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — платёж не заведён или проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "already_confirmed — платёж уже подтверждён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/publications": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Все выкладки проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.listResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id — неверный id проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше состав и даты меняются поштучно.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Поставить одну выкладку на дату (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "кому и на когда",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.addPubReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_date — дата не в формате ГГГГ-ММ-ДД; invalid_input — дата в прошлом или дальше чем на год",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_project_kind; creator_not_in_project; day_taken — на этот день у креатора уже есть выкладка; period_locked",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/publications/batch": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Проставить даты выкладок пачкой (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "параметры пачки",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.batchReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.BatchResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_date — дата не в формате ГГГГ-ММ-ДД; bad_schedule; invalid_input — не выбраны креаторы или даты, пачка больше 500; nothing_to_create",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_project_kind — выкладки бывают только у «креаторы под ключ»; creator_not_in_project — креатора нет в составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/publications/cancel_batch": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отменяются только те выкладки, по которым ещё ничего не сдано.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Отменить пачку выкладок (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "id пачки",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.cancelBatchReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.cancelBatchResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json — нужен batch_id отменяемой пачки; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/publications/preview": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Показывает, какие даты будут созданы, до создания. Массовая\nпростановка — единственное место, где одна ошибка стоит ручной\nчистки десятков строк.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Предпросмотр пачки выкладок (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "параметры пачки",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.batchReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.previewResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json — не удалось разобрать тело; invalid_input — дата не в формате ГГГГ-ММ-ДД; bad_schedule — неизвестная схема или слишком большой диапазон",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или назначен другому менеджеру",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/reject_specialist": {
             "post": {
                 "security": [
@@ -2916,6 +6957,217 @@ const docTemplate = `{
                 "responses": {
                     "204": {
                         "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/report": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Итоги, накопительный график, сравнение креаторов и площадок,\nтаблица роликов. Заменяет ручную таблицу.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Отчёт по проекту (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Report"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/report.csv": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Для тех, кому нужен файл, а не страница.",
+                "produces": [
+                    "text/csv"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Выгрузка отчёта в CSV (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "CSV",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/settings": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Настройки проекта: этап черновика и показ статистики (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ProjectSettings"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Этап черновика добавляет каждой НОВОЙ выкладке второй срок;\nуже проставленные сроки выключение не стирает — по ним креатор\nуже сдаёт. Показ статистики закрывает заказчику и отчёт, и цифры\nв ленте роликов.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Изменить настройки проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "переключатели",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ProjectSettings"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.ProjectSettings"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
                     }
                 }
             }
@@ -3053,6 +7305,545 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/subscribers": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Сколько подписчиков записано креаторам проекта за период.\nАвтоматического источника у этого числа нет: сборщика по\nподписчикам в продукте не существует, и ставка в тарифе\nобъявляется под число, которое вписывает менеджер.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Подписчики за период (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.subscribersResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или ведёт другой менеджер",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publication_date_requests/{req_id}/decide": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Решение по просьбе о переносе даты (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "date request id",
+                        "name": "req_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "решение по переносу",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.decideReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id — неверный id просьбы",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — просьба не найдена, уже рассмотрена или в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Не то же, что «закрыть неполную»: там ролик вышел не везде, здесь выкладки не будет вовсе. Сданное не снимается.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Снять запланированную выкладку (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "причина",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.closeReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — причина длиннее 300 символов",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_started — по выкладке уже сдавали ссылки",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/close": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Исключение из правила «закрыто на пяти ссылках». Причина обязательна.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Закрыть неполную выкладку вручную (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "причина закрытия",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.closeReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — закрытие неполной выкладки требует причины",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed — выкладка уже закрыта или отменена",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/due_date": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только по плановой выкладке, по которой ещё не сдавали ссылки. Открытая просьба креатора о переносе закрывается этим же действием.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Перенести дату выкладки (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новая дата",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.dueDateReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_date; bad_id; invalid_input — дата в прошлом или дальше чем на год",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_started — по выкладке уже сдавали ссылки; day_taken; period_locked",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/links/{platform}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ссылку сдаёт креатор, и ошибается в ней тоже он. Менеджер правит адрес на месте; пустой url снимает ссылку с площадки, и выкладка снова становится неполной. Если ролик другой — ежедневные замеры этой ссылки удаляются, иначе история двух разных видео склеилась бы в одну линию.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Исправить сданную ссылку (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "площадка: tiktok|instagram|youtube|vk|likee",
+                        "name": "platform",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новый адрес",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.editLinkReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — неизвестная площадка, нераспознанная ссылка или ссылка другой площадки",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка в чужом проекте либо ссылки на этой площадке нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed — выкладка отменена или закрыта руками",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/remind": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Не дожидаясь утренней рассылки. Второе нажатие в тот же день\nничего не отправит: креатор не должен получать два одинаковых\nсообщения подряд.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Напомнить о выкладке сейчас (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.remindResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id — неверный id выкладки",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "already_reminded — сегодня по этой выкладке напоминание уже отправляли",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/publications/{pub_id}/review": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Менеджер отмечает по каждому пункту «да» или «нет» и выносит решение: вернуть с замечанием или принять. Принять нельзя, пока хоть один обязательный пункт сданных площадок не отмечен «да» — непроверенное считается непройденным. Пустое decision сохраняет ход проверки, не вынося решения: ролик смотрят частями. Новая сдача ссылок отменяет прежнее решение и стирает вердикты — они относились к другому ролику.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Проверка ролика: вердикты по чек-листу и решение (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "вердикты и решение",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.reviewReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — возврат без замечания или неизвестное решение; foreign_checklist_item",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка в чужом проекте",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed; nothing_to_review — ссылок нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "review_blocked — обязательные пункты не пройдены",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me": {
             "get": {
                 "security": [
@@ -3144,6 +7935,1851 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.ClientProfile"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/availability": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отдаёт только те месяцы, которые вы отмечали. Не отмеченный\nмесяц в выдачу не попадает: «не отмечал» и «занят» — разные\nвещи, и склеивать их в false нельзя.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-orders"
+                ],
+                "summary": "Моя занятость по месяцам (креатор)",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "сколько месяцев вперёд, 1-24, по умолчанию 12",
+                        "name": "months",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.myAvailabilityResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Клиент видит занятость ещё при расстановке приоритета —\nиначе первым в списке окажется тот, кто взять не может.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-orders"
+                ],
+                "summary": "Отметить занятость в месяце (креатор)",
+                "parameters": [
+                    {
+                        "description": "занятость по месяцам",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.availabilityReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_json; bad_month; invalid_input — не указано, свободны вы или нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/invitations": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-orders"
+                ],
+                "summary": "Мои приглашения (креатор)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.invitationsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/invitations/{order_id}/respond": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отказ не штраф и на место в выдаче не влияет. При отказе\nприглашение немедленно уходит следующему по приоритету.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-orders"
+                ],
+                "summary": "Ответить на приглашение (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "order_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "согласие или отказ",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.respondReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "not_invited — активного приглашения нет: сгорело, отозвано или адресовано другому",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Проекты, где я в действующем составе, со счётчиками только\nпо своим выкладкам: сколько всего, сколько не сдано и\nсколько горит. Просьба о переносе снимает просрочку — так же,\nкак в напоминаниях.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Мои проекты (креатор)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.creatorProjectsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Шапка страницы выкладок: название, бриф, период, месячный\nплан, нужен ли черновик, кому писать и счётчики по своим\nвыкладкам. Раньше всё это фронт собирал из списка выкладок,\nа брифа и плана там взять было неоткуда.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Карточка проекта (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.CreatorProjectCard"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/accounts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Аккаунты ЭТОГО проекта, а не личная страница из профиля: под\nпроект креатор заводит отдельные, и ведёт их сам. Чужие и\nбрендовые доступы сюда не попадают — в них пароли заказчика.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Мои аккаунты в проекте (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — вы не в составе проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Владелец проставляется сам — завести строку от чужого имени нельзя.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Завести свой аккаунт в проекте (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "аккаунт",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — вы не в составе проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "too_many_accounts",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled — пароль прислали, а ключа шифрования нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/accounts/{account_id}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Пароль не прислали — остаётся прежний; прислали пустым — стирается.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Править свой аккаунт (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "аккаунт",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Account"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — аккаунт не ваш или его нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Снять свой аккаунт с проекта (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "удалён"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — аккаунт не ваш или его нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/accounts/{account_id}/secret": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Свой пароль забывают так же, как все — он его и вписывал.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Показать пароль своего аккаунта (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.secretResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — аккаунт не ваш, его нет или пароль не записан",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/checklist": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Чеклист проекта (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.checklistResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — вы не участник этого проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/comments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Креатор «под ключ» видит только свою ветку с менеджером:\nни переписки клиента, ни веток других креаторов. В общем\nпроекте это переписка с клиентом.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-projects"
+                ],
+                "summary": "Моя переписка по проекту (креатор/исполнитель)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-projects"
+                ],
+                "summary": "Написать в переписку по проекту (креатор/исполнитель)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.commentReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Comment"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; empty_comment — пустое сообщение; invalid_input — превышена длина или неизвестный body_format",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/comments/participants": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-projects"
+                ],
+                "summary": "Кого можно упомянуть в переписке (креатор/исполнитель)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.participantsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/earnings": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "По каким условиям и сколько вышло по месяцам. Показывается\nкреаторская сторона тарифа и его собственные выплаты: что\nза него платит клиент — не его данные.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-billing"
+                ],
+                "summary": "Мой заработок по проекту (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.CreatorEarnings"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/materials": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Бренд-гайд, обучение и прочее, что открывается в момент\nдобавления в проект.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Материалы проекта (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.materialsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/publications": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только свои: чужие выкладки не попадают в выдачу, а не прячутся\nна фронте.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Мои выкладки в проекте (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.listResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id — неверный id проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "План периода выполнен, а до ступени просмотров не хватает —\nкреатор заводит себе ролик сам, без согласования с менеджером.\nДальше выкладка живёт как обычная: пять площадок, чеклист проекта,\nсбор статистики. В знаменатель недосдачи она не попадает.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Добавить себе выкладку (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "дата выхода",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.addSelfReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; bad_date — дата не в формате YYYY-MM-DD; invalid_input — дата в прошлом",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не в его составе",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "day_taken — на эту дату у вас уже есть выкладка; period_locked — период подытожен; wrong_project_kind",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/projects/{id}/report": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только свои ролики: чужие цифры не попадают в выдачу.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Отчёт по своим роликам (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Report"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — вы не участник этого проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "collapsed_no_detail — проект закрыт, подробная статистика по роликам больше не хранится",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/publications/{pub_id}/date_request": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Дедлайн ставит менеджер; креатор может только попросить.\nПока просьба не рассмотрена, выкладка не считается просроченной.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Попросить перенос дедлайна (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новая дата и причина",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.dateRequestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.DateRequest"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; bad_date — дата не в формате ГГГГ-ММ-ДД; invalid_input — нужна причина, перенос в прошлое",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или чужая",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "already_requested — непринятая просьба уже висит",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/publications/{pub_id}/links": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ссылки принимаются в любом виде — площадка распознаётся сама.\nПришли все пять — выкладка закрыта, одна-четыре — сдана частично.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Сдать ролик ссылками (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "ссылки на выкладку",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.submitReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; no_links — не передано ни одной ссылки; duplicate_platform — две ссылки на одну площадку; unknown_platform — ссылка не с одной из пяти площадок",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или заведена на другого креатора",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed — досылать ссылки нельзя",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "checklist_incomplete — не отмечены обязательные пункты, в message перечислены какие",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/publications/{pub_id}/links/{platform}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ролик удаляют с площадки, аккаунт перевыкладывают, короткая\nссылка протухает — и новый адрес есть ровно у автора. Раньше\nон писал его в переписку, а переносил менеджер.\nСнять площадку креатор не может: пустой адрес означает «ролика\nне было», и это решение о работе, а не о ссылке.\nЕсли ролик другой — ежедневные замеры этой ссылки удаляются, а\nпроверка открывается заново: проверяли не его.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Переслать свою ссылку (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "площадка: tiktok|instagram|youtube|vk|likee",
+                        "name": "platform",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новый адрес",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.editLinkReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input; link_remove_denied — пустой адрес",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или заведена на другого креатора",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "publication_closed; period_locked — период уже подытожен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/suggestions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Сервис находит ролик на аккаунте креатора раньше, чем тот\nуспевает вставить ссылку, — но ничего не привязывает сам:\nподтверждает человек. К какой выкладке предложить привязку,\nсчитается при чтении, поэтому перенос срока подсказку не ломает.\nНаходки по всем проектам сразу: карточка приходит от площадки,\nа не от проекта.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Найденные ролики, ждущие подтверждения (креатор)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.suggestionsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/suggestions/{id}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отказ хранится, а не забывается: обход аккаунта идёт каждый\nдень, и удалённая находка вернулась бы завтра той же карточкой.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "«Не мой» — отклонить находку (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "suggestion id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "отклонено"
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — находка не найдена или чужая",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "suggestion_decided — по находке уже ответили",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/suggestions/{id}/link": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Находка становится обычной сданной ссылкой: те же проверки\nчеклиста, то же закрытие выкладки при пятой площадке.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "«Да, мой» — привязать найденный ролик (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "suggestion id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "куда привязать",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.linkSuggestionReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — находка не найдена или чужая",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "suggestion_decided — по находке уже ответили",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "checklist_incomplete",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/uploads/work-sample": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Креатор отвечает на рассылку роликом. Ролик ложится под\nпрефикс orders/ и на потолок портфолио не влияет: человек\nс полным портфолио обязан иметь возможность ответить.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-orders"
+                ],
+                "summary": "Presigned PUT URL для пробы работы к заявке",
+                "parameters": [
+                    {
+                        "description": "content_type/size",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioUploadURLInput"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.PortfolioUploadURL"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/general-projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Мои общие проекты (клиент)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.generalListResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Клиент сам выбирает исполнителя и ставит один срок. Ни\nворонки, ни выкладок, ни менеджера: задача уходит\nисполнителю уведомлением, дальше сдача и приёмка.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Завести общий проект",
+                "parameters": [
+                    {
+                        "description": "body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.generalCreateReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.GeneralProject"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_specialist_id — не uuid; bad_due_date — не дата в формате YYYY-MM-DD; invalid_input — пустое название, срок в прошлом или дальше года, заказ у самого себя",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "specialist_unavailable — профиль не опубликован, аккаунт выключен или это сотрудник",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/general-projects/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Вместе с журналом сдач: что и когда сдавали, что принято,\nчто вернули и почему.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Карточка общего проекта (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.GeneralProject"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/general-projects/{id}/accept": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Принятие закрывает проект: другого конца у общего проекта нет.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Принять работу (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.GeneralProject"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "no_pending_delivery — исполнитель ещё ничего не сдал; project_closed — проект уже принят или отменён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/general-projects/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Отменить проект со сданной и неразобранной работой нельзя —\nсначала примите её или верните на доработку.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Отменить общий проект (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "причина",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.generalReasonReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "отменено"
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "delivery_pending — работа сдана и ждёт вашего ответа; project_closed — проект уже принят или отменён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/general-projects/{id}/rework": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Вернуть работу на доработку (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "что не так",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.generalReasonReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.GeneralProject"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — не указано, что доработать",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "no_pending_delivery — исполнитель ещё ничего не сдал; project_closed — проект уже принят или отменён; rework_limit — правки по проекту закончились",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -3269,6 +9905,769 @@ const docTemplate = `{
                         "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/internal_leads.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Мои заказы на подбор (заказчик)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.ordersListResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Заявка заводит ПРОЕКТ сразу: он виден в кабинете, и в нём работает\nпереписка, пока менеджер считает. project_id приходит в ответе.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Создать заказ на подбор (заказчик)",
+                "parameters": [
+                    {
+                        "description": "состав заказа",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.createOrderReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.CreateResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_month; invalid_input — объём, месяц в прошлом, пустой id; not_enough_candidates — в подборке меньше, чем нужно взять; duplicate_candidate",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "no_consent — не приняты условия работы",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "not_a_creator — в пакет берутся только блогеры и авторы UGC",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/availability": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Занятость нужна на карточке в выдаче: иначе первым в списке\nокажется тот, кто взять не может, и заказ провисит трое суток\nвпустую.\n\nОтдельной ручкой, а не полем в поиске: поиск живёт в\nOpenSearch и обновляется через outbox, а занятость меняется\nкаждый день и от месяца к месяцу. Держать её в индексе значило\nбы переиндексировать каталог на каждую отметку креатора.\nФильтр по категориям при этом отдельной ручки не требует —\nу /search он уже есть: ?category=blogger,ugc.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Кто из выбранных занят в месяце (заказчик)",
+                "parameters": [
+                    {
+                        "description": "месяцы, на которые смотрим",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.availabilityQueryReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.availabilityQueryResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_month — месяц не в формате ГГГГ-ММ; too_many_ids — больше 200 человек за раз",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/estimate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Сумма для страницы подбора: клиент собирает состав, и она\nпересчитывается на каждое изменение. Оклады известны точно,\nбонус — прогноз по истории выбранных людей, разложенный по\nступеням тарифа. Кто без истории, тот в среднее не входит и\nпосчитан в without_history: считать новичка нулём значит\nзанизить смету ровно настолько, насколько подборка новая.\nhas_forecast=false означает «бонус неизвестен», а не «ноль».\nУсловия берутся действующие — те, с которыми клиент и\nсогласится при оформлении.\nОбязателен только needed: смету спрашивают и до того, как\nнабран состав и решён объём. Без них приходят точные\nоклады и has_forecast=false.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-billing"
+                ],
+                "summary": "Сколько будет стоить пакет (заказчик, до создания заказа)",
+                "parameters": [
+                    {
+                        "description": "состав",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.draftEstimateReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.OrderEstimate"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; invalid_input — needed меньше единицы, отрицательный videos_count или больше 50 человек",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — прайс ещё не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/limit": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Первый месяц — один креатор: клиент проверяет формат на\nнебольшой сумме, платформа проверяет, что клиент платит и\nадекватно даёт обратную связь. Дальше 2–3.\nМесяц важен: клиент берёт команду с конкретного месяца, и\nк декабрю у него может быть закрыто больше месяцев, чем к\nсентябрю — лимит на сегодня показывал бы не то число, по\nкоторому потом создастся заказ.\nКлиент видит ограничение ДО подбора, а не при попытке\nдобавить второго: запрет посреди работы читается как поломка.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Сколько креаторов доступно на месяц (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "ГГГГ-ММ, по умолчанию текущий",
+                        "name": "month",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.limitResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_month — месяц не в формате ГГГГ-ММ",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/terms": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Действующие условия работы (заказчик)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.termsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — версия правил ещё не опубликована",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/terms/consent": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Согласие фиксируется с конкретной версией: правила меняются —\nстарые заказы остаются на своей.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Принять условия работы (заказчик)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Terms"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — версия правил ещё не опубликована",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Заказ на подбор (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id — неверный id заказа",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не ваш или не существует",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/{id}/brief": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Бриф заявки (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.briefResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заявка не ваша",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Бриф правят ПОСЛЕ отправки: половина заказчиков вспоминает про\nреференсы уже потом. Текст переписывается целиком — стёртая\nстрока должна исчезать и из задания креатора.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Дописать бриф заявки (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "бриф",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.briefReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.briefResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id, bad_json",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заявка не ваша",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/{id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Приглашения отзываются, приглашённые получают уведомление.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Распустить состав (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — заказ уже оплачен или отменён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/{id}/estimate": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Оклады известны точно, бонус — прогноз: он зависит от\nпросмотров, которых ещё нет. Прогноз строится по истории\nтех самых людей, что в подборке — по их сданным роликам в\nлюбых проектах. По кому истории нет, тот в среднее не\nвходит и посчитан в without_history: считать новичка нулём\nзначит занизить смету ровно настолько, насколько подборка\nновая. Если истории нет ни у кого, has_forecast=false и\nпоказывать надо только оклады — бонус не ноль, а неизвестен.\nУсловия берутся той версии, с которой клиент согласился при\nсоздании заказа, а не действующей на сегодня.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-billing"
+                ],
+                "summary": "Во сколько обойдётся заказ (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.OrderEstimate"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/{id}/invite": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Приглашения уходят первым по приоритету и только на свободные\nместа. Откажется или промолчит — подключится следующий.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Отправить приглашения (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "wrong_status — приглашения уже отправлены",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/orders/{id}/priority": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Приглашения уходят по порядку, и передумать после «отправить» —\nнормальная просьба. Переставить можно только тех, кого ещё не\nзвали: у приглашённого уже тикает срок ответа. Занятые места\nдостаются тем же людям в новом порядке, поэтому перестановка\nне задевает приглашённых, стоящих между ними.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-orders"
+                ],
+                "summary": "Переставить приоритет в заказе (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "order id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "новый порядок",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.reorderReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.Order"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — пустой список; priority_set_mismatch — прислан не тот набор людей",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — заказ не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "priority_locked — заказ уже собран, оплачен или отменён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/overview": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Кросс-проектный срез: просмотры по пяти площадкам и всего,\nсчёт по подытоженным периодам и по текущим, сколько уже\nпереведено, стоимость тысячи просмотров и разбивка по\nпроектам. Стоимость считается из фактических сумм и\nпросмотров, а не из ставки тарифа: у проектов бывают\nразные версии условий.\nПодытоженные периоды дают числа из среза, текущие — живые.\nsnapshot_approx означает, что часть чисел подтянута:\nподенную статистику к моменту подытога уже удалили.\nТестовые проекты не учитываются.\n\nДашборд считается за СКОЛЬЗЯЩЕЕ окно от сегодня: week — 7 дней,\nmonth — 30, quarter — 90. Итоги (просмотры, взаимодействия, ER,\nплощадки) — за всё время; приросты — окно против предыдущего\nокна такой же длины. Если сравнивать не с чем, поля прироста\nнет вовсе: ноль означал бы «не выросло».",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-billing"
+                ],
+                "summary": "Сводка по всем моим проектам (заказчик)",
+                "parameters": [
+                    {
+                        "enum": [
+                            "week",
+                            "month",
+                            "quarter"
+                        ],
+                        "type": "string",
+                        "description": "окно дашборда: week | month | quarter (по умолчанию month)",
+                        "name": "range",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.ClientOverview"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input — неизвестное окно",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
                         }
                     }
                 }
@@ -4352,7 +11751,53 @@ const docTemplate = `{
                 }
             }
         },
-        "/me/projects/{id}/comments": {
+        "/me/projects/{id}/accounts": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Это аккаунты заказчика: он вправе видеть, где и под каким логином выходят его ролики. Пароли — отдельной ручкой.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Доступы к аккаунтам бренда (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.accountsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/accounts/{account_id}/secret": {
             "get": {
                 "security": [
                     {
@@ -4363,9 +11808,190 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
+                    "client-publications"
+                ],
+                "summary": "Показать пароль доступа (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "account id",
+                        "name": "account_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.secretResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — доступа нет или пароль не заведён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "secrets_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/billing": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Что подписано, что оплачено и состав месяца: кто сколько\nроликов сдал и во сколько это обошлось. Заказчик за эту\nкоманду платит, поэтому строки начислений — его счёт.\nUTM-метки ему не отдаются: это инструмент менеджера.\nВыплат креаторам, маржи площадки и креаторской стороны\nтарифа в ответе нет — ответ собирается отдельным типом,\nа не чисткой менеджерской структуры.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-billing"
+                ],
+                "summary": "Условия и оплата по проекту (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода проекта, по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.ClientBillingView"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period — номер периода не целое число",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/calendar": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Что уже вышло и что запланировано, с отметкой креатора.\nПросрочек в календаре нет: выкладка с прошедшей датой без\nссылок остаётся «запланированной».\nВ ответе рядом с днями идёт список months — месяцы, в которых у\nпроекта вообще есть выкладки. Календарь показывает один месяц, и\nбез этого списка пустой месяц неотличим от потерянных данных.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Календарь месяца (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "месяц в виде ГГГГ-ММ, по умолчанию текущий",
+                        "name": "month",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.calendarResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_month — месяц не в формате ГГГГ-ММ",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/comments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только клиентская ветка: переписку менеджера с креаторами и\nвнутренние заметки клиент не видит.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
                     "client-projects"
                 ],
-                "summary": "Комментарии моего проекта (клиент)",
+                "summary": "Переписка по моему проекту (клиент)",
                 "parameters": [
                     {
                         "type": "string",
@@ -4381,6 +12007,24 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/internal_projects.commentsResp"
                         }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
                     }
                 }
             },
@@ -4390,6 +12034,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "Сообщение уходит в клиентскую ветку. Креаторы её не видят.\nbody_format=html — разметка чистится на сервере: остаются\nжирный, курсив, списки, ссылки и упоминания, остальное\nвыбрасывается. Упомянуть можно только участника ветки.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4399,7 +12044,7 @@ const docTemplate = `{
                 "tags": [
                     "client-projects"
                 ],
-                "summary": "Клиент добавляет комментарий к своему проекту",
+                "summary": "Клиент пишет в переписку по своему проекту",
                 "parameters": [
                     {
                         "type": "string",
@@ -4423,6 +12068,76 @@ const docTemplate = `{
                         "description": "Created",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.Comment"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; empty_comment — пустое сообщение; invalid_input — превышена длина или неизвестный body_format",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/comments/participants": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Список для выпадашки @. Он же — множество, по которому\nупоминания проверяются на записи.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-projects"
+                ],
+                "summary": "Кого можно упомянуть в переписке (клиент)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.participantsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -4467,6 +12182,383 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/projects/{id}/materials": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только помеченные как клиентские. Обучение и бренд-гайд для\nкреаторов заказчику не показываются.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Материалы проекта (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.materialsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или он не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/month-request": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Нужна экрану, чтобы вместо кнопки показать «заявка у менеджера»:\nиначе человек жмёт её второй раз, не понимая, ушло ли первое.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Открытая заявка на месяц (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "request = null, если заявки нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Прикидка «во сколько обойдётся месяц» превращается в заявку:\nу менеджера в проекте загорается плашка, в общий чат уходит\nсообщение. Это ещё не заказ — цену и состав финализирует менеджер.\nПовторный запрос до разбора уточняет ту же заявку, а не заводит вторую.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Заказать следующий месяц (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "ползунки и показанный потолок",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.monthRequestResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id, bad_json, invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/notifications": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Настройки уведомлений (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.NotificationPrefs"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Незаданные поля не меняются. views_threshold = 0 или null\nозначает «не уведомлять о просмотрах».",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Изменить настройки уведомлений (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "настройки уведомлений",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.prefsReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.NotificationPrefs"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/report": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Те же цифры, что у менеджера, без внутренней кухни.\nДоступен, только если у проекта включён показ статистики.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Отчёт по проекту (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Report"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш либо показ статистики отключён (ответ одинаковый намеренно)",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/report.csv": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Та же таблица, что у менеджера. Доступна по тому же правилу,\nчто и сам отчёт: при выключенном показе статистики — 404,\nкак и «не ваш проект».",
+                "produces": [
+                    "text/csv"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Выгрузка отчёта в CSV (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "CSV",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш или показ статистики выключен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/projects/{id}/steps/{step_id}/submit_review": {
             "post": {
                 "security": [
@@ -4502,6 +12594,209 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_projects.Step"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/projects/{id}/videos": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ролик появляется в ленте, когда его можно посмотреть, — то есть\nкогда креатор сдал ссылки, а не когда стоит дата в плане.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "client-publications"
+                ],
+                "summary": "Вышедшие ролики проекта (заказчик)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.clientFeedResp"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не ваш",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/specialist/general-projects": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "specialist-projects"
+                ],
+                "summary": "Общие проекты, где я исполнитель",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.generalListResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/specialist/general-projects/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "specialist-projects"
+                ],
+                "summary": "Карточка общего проекта (исполнитель)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.GeneralProject"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не его исполнитель",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/specialist/general-projects/{id}/deliver": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Материалы — ссылки на результат, до 20 штук. Пока клиент не\nответил, сдать второй раз нельзя.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "specialist-projects"
+                ],
+                "summary": "Сдать работу (исполнитель)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.generalDeliverReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.Delivery"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; bad_id; invalid_input — нет ни ссылки, ни комментария; больше 20 материалов; ссылка не http(s); неизвестный kind материала",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или вы не его исполнитель",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "delivery_pending — предыдущая сдача ещё не разобрана; project_closed — проект принят или отменён",
+                        "schema": {
+                            "$ref": "#/definitions/internal_projects.errorResponse"
                         }
                     }
                 }
@@ -4972,8 +13267,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "type": "string",
-                        "description": "Код категории из /categories — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы при фильтре по категории не возвращаются.",
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "Коды категорий из /categories (можно несколько или через запятую) — отфильтровать навыки, релевантные категории (см. skill_categories). Платформы при фильтре по категории не возвращаются.",
                         "name": "category",
                         "in": "query"
                     }
@@ -5083,6 +13382,143 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "internal_admin.ActiveProjectRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.Attention": {
+            "type": "object",
+            "properties": {
+                "managers_unapproved": {
+                    "description": "ManagersUnapproved — менеджеры, которым не выдали доступ.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "moderation": {
+                    "description": "Moderation — специалисты, ждущие решения о публикации.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.ModerationBlock"
+                        }
+                    ]
+                },
+                "projects_stale": {
+                    "description": "ProjectsStale — идущие проекты, которые не двигались неделю.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "projects_unassigned": {
+                    "description": "ProjectsUnassigned — проекты без ответственного менеджера.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "publications_overdue": {
+                    "description": "PublicationsOverdue — выкладки, у которых прошла дата.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "revisions_exceeded": {
+                    "description": "RevisionsExceeded — правок использовано больше, чем включено в\nусловия: дальше либо доплата, либо разговор с клиентом.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "specialist_not_confirmed": {
+                    "description": "SpecialistNotConfirmed — клиент выбрал специалиста в брифе, а\nменеджер не подтвердил: работа не начнётся, пока не подтвердят.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                },
+                "work_without_prepayment": {
+                    "description": "WorkWithoutPrepayment — проект в работе, а предоплата не\nподтверждена. Самый дорогой пункт списка: работу уже делают.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.AttentionBlock"
+                        }
+                    ]
+                }
+            }
+        },
+        "internal_admin.AttentionBlock": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "description": "Items — первые несколько строк, не весь набор. Никогда не null:\nпустой список фронт рисует как «чисто», отсутствующий — никак.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.AttentionItem"
+                    }
+                }
+            }
+        },
+        "internal_admin.AttentionItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "description": "ID — проект или пользователь, смотря по пункту. Фронт по нему\nоткрывает карточку.",
+                    "type": "string"
+                },
+                "note": {
+                    "description": "Note — чем строка провинилась: «12 дн. без движения», «правок 5\nиз 2». Пусто, если название уже всё сказало.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.AuditResult": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_audit.Entry"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_admin.CreateClientResult": {
             "type": "object",
             "properties": {
@@ -5094,6 +13530,23 @@ const docTemplate = `{
                 },
                 "user_id": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_admin.GlobalSearchResult": {
+            "type": "object",
+            "properties": {
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.SearchProjectHit"
+                    }
+                },
+                "users": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.SearchUserHit"
+                    }
                 }
             }
         },
@@ -5135,6 +13588,313 @@ const docTemplate = `{
                 "is_approved": {
                     "type": "boolean"
                 },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil = не входил ни разу.",
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.ModerationBlock": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "items": {
+                    "description": "Items — первые несколько строк, не весь набор. Никогда не null:\nпустой список фронт рисует как «чисто», отсутствующий — никак.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.AttentionItem"
+                    }
+                },
+                "over_day": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_admin.ModerationInfo": {
+            "type": "object",
+            "properties": {
+                "is_published": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "reviewed_at": {
+                    "type": "string"
+                },
+                "reviewed_by": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.NavCounts": {
+            "type": "object",
+            "properties": {
+                "checklists": {
+                    "description": "Checklists/Pipelines/Productions — только действующие. Архивные\nверсии шаблонов и выключенные воронки в меню не считаем: их нельзя\nподключить, и цифра у пункта означала бы объём мусора.",
+                    "type": "integer"
+                },
+                "clients": {
+                    "type": "integer"
+                },
+                "moderation_pending": {
+                    "description": "ModerationPending — заявки специалистов, ждущие решения. Это число\nфронт красит отдельно: оно означает, что кого-то держат в очереди.",
+                    "type": "integer"
+                },
+                "pipelines": {
+                    "type": "integer"
+                },
+                "productions": {
+                    "type": "integer"
+                },
+                "projects_active": {
+                    "description": "ProjectsActive — незавершённые и неотменённые проекты.\n\nВнимание: список /admin/projects по умолчанию прячет только\nотменённые, а завершённые показывает, поэтому его total бывает\nбольше этого числа ровно на количество done. Здесь намеренно\n«сколько в работе» — цифра у пункта меню отвечает на этот вопрос,\nа не «сколько строк в таблице».",
+                    "type": "integer"
+                },
+                "specialists": {
+                    "description": "Specialists/Clients — по users.kind, как в фильтре /admin/users.\nПользователь с kind='both' не попадает ни в один из двух: фильтр\nсписка тоже сверяет kind точным совпадением, и счётчик обязан\nсходиться со списком, который откроют по клику.",
+                    "type": "integer"
+                },
+                "team": {
+                    "description": "Team — админы и менеджеры вместе, как в /admin/team.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_admin.PlatformHandle": {
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "description": "Handle — ник или ссылка. Пусто = площадка не заполнена.",
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.SearchProjectHit": {
+            "type": "object",
+            "properties": {
+                "client_name": {
+                    "description": "ClientName — по чьему имени проект чаще всего и ищут.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_test": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.SearchUserHit": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_admin": {
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.Summary": {
+            "type": "object",
+            "properties": {
+                "attention": {
+                    "$ref": "#/definitions/internal_admin.Attention"
+                },
+                "generated_at": {
+                    "description": "GeneratedAt — момент расчёта. Сводку держат открытой часами, и без\nотметки непонятно, насколько она устарела.",
+                    "type": "string"
+                },
+                "managers": {
+                    "description": "Managers — нагрузка команды: те же числа, что в /admin/team.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.TeamMember"
+                    }
+                },
+                "nav_counts": {
+                    "description": "NavCounts — счётчики у пунктов бокового меню.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_admin.NavCounts"
+                        }
+                    ]
+                },
+                "projects_by_kind": {
+                    "description": "ProjectsByKind/ProjectsByStatus — распределение всех нетестовых\nпроектов. Ключи присутствуют всегда, включая нулевые: иначе\nпропавший столбец диаграммы читается как сбой, а не как ноль.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "projects_by_status": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "internal_admin.TeamMember": {
+            "type": "object",
+            "properties": {
+                "active_projects": {
+                    "description": "ActiveProjects — незавершённые проекты, где человек ответственный.",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_admin": {
+                    "type": "boolean"
+                },
+                "is_approved": {
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "type": "boolean"
+                },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil означает «не входил ни разу», а не «давно»:\nсотрудника, который так и не зашёл, надо позвать.",
+                    "type": "string"
+                },
+                "overdue_projects": {
+                    "description": "OverdueProjects — из них те, где сроки уже сорваны.",
+                    "type": "integer"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_admin.UserCard": {
+            "type": "object",
+            "properties": {
+                "audit": {
+                    "description": "Audit — записи журнала: и те, где он объект, и его собственные\nдействия. Пустой список, если журнал по нему молчит.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/marketpclce_internal_audit.Entry"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "email_verified": {
+                    "type": "boolean"
+                },
+                "email_verified_at": {
+                    "description": "EmailVerifiedAt — когда подтверждена почта. Сам факт лежит в\nUserListItem.EmailVerified; дата нужна там, где выясняют,\nподтверждал ли человек почту сам или это сделал админ.",
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_admin": {
+                    "type": "boolean"
+                },
+                "is_approved": {
+                    "type": "boolean"
+                },
+                "is_manager": {
+                    "type": "boolean"
+                },
+                "is_published": {
+                    "description": "IsPublished — флаг is_published у specialist_profile. Нужен фронту\nчтобы отличить «pending_review до клика \"Опубликовать\"» (= черновик,\nмодерации не ждёт) от «pending_review после публикации» (= висит в\nочереди /admin/moderation).",
+                    "type": "boolean"
+                },
+                "is_test": {
+                    "description": "IsTest — пользователь заведён для проверки. По умолчанию такие\nв выдаче скрыты.",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil означает «не входил ни разу», а не «давно».\nРазница важная: сотрудника, который так и не зашёл, надо позвать,\nа не ждать.",
+                    "type": "string"
+                },
+                "moderation": {
+                    "$ref": "#/definitions/internal_admin.ModerationInfo"
+                },
+                "moderation_status": {
+                    "description": "ModerationStatus — pending_review|approved|rejected. NULL для клиентов\n(у них нет specialist_profile). omitempty в JSON: пустая строка =\n«нет статуса» (клиент или спец без профиля).",
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                },
+                "platforms": {
+                    "description": "Platforms — пять площадок в фиксированном порядке (он же порядок\nколонок в интерфейсе). Пусто у тех, у кого нет профиля\nспециалиста: площадок у них не бывает, и блок рисовать нечем.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.PlatformHandle"
+                    }
+                },
+                "projects": {
+                    "description": "Projects — участие во всех ролях, свежие сверху. Никогда не null.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.UserProjectRef"
+                    }
+                },
                 "user_id": {
                     "type": "string"
                 }
@@ -5171,7 +13931,15 @@ const docTemplate = `{
                     "description": "IsPublished — флаг is_published у specialist_profile. Нужен фронту\nчтобы отличить «pending_review до клика \"Опубликовать\"» (= черновик,\nмодерации не ждёт) от «pending_review после публикации» (= висит в\nочереди /admin/moderation).",
                     "type": "boolean"
                 },
+                "is_test": {
+                    "description": "IsTest — пользователь заведён для проверки. По умолчанию такие\nв выдаче скрыты.",
+                    "type": "boolean"
+                },
                 "kind": {
+                    "type": "string"
+                },
+                "last_login_at": {
+                    "description": "LastLoginAt — nil означает «не входил ни разу», а не «давно».\nРазница важная: сотрудника, который так и не зашёл, надо позвать,\nа не ждать.",
                     "type": "string"
                 },
                 "moderation_status": {
@@ -5206,6 +13974,33 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_admin.UserProjectRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "is_test": {
+                    "type": "boolean"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "role": {
+                    "description": "Role — кем он в этом проекте: client | specialist | manager. Один и\nтот же человек бывает и заказчиком, и исполнителем, поэтому проект\nможет попасть в список дважды с разными ролями.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_admin.UserSearchResult": {
             "type": "object",
             "properties": {
@@ -5218,11 +14013,36 @@ const docTemplate = `{
                 "kind": {
                     "type": "string"
                 },
+                "median": {
+                    "description": "Median — сколько просмотров человек обычно даёт за ролик. Этим же\nпоиском менеджер подбирает креатора в проект, и выбирать по одной\nпочте — значит выбирать вслепую. nil у тех, кто роликов не сдавал\nили сдал слишком мало, чтобы медиана что-то значила.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/marketpclce_internal_publications.CreatorMedian"
+                        }
+                    ]
+                },
                 "phone": {
                     "type": "string"
                 },
                 "user_id": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_admin.activeProjectsResp": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.ActiveProjectRef"
+                    }
                 }
             }
         },
@@ -5254,6 +14074,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nотдаёт ошибку без текста (через httpx.WriteErr).",
+                    "type": "string"
                 }
             }
         },
@@ -5265,6 +14089,14 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_admin.ManagerInfo"
                     }
+                }
+            }
+        },
+        "internal_admin.markUserTestReq": {
+            "type": "object",
+            "properties": {
+                "is_test": {
+                    "type": "boolean"
                 }
             }
         },
@@ -5323,6 +14155,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_admin.teamResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_admin.TeamMember"
+                    }
+                }
+            }
+        },
         "internal_admin.userSearchResp": {
             "type": "object",
             "properties": {
@@ -5345,10 +14188,22 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_auth.emailAvailableResp": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                }
+            }
+        },
         "internal_auth.errorResponse": {
             "type": "object",
             "properties": {
                 "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nзовёт httpx.WriteErr без текста, и в ответе поля тогда нет.",
                     "type": "string"
                 }
             }
@@ -5367,6 +14222,10 @@ const docTemplate = `{
         "internal_auth.meResp": {
             "type": "object",
             "properties": {
+                "display_name": {
+                    "description": "DisplayName — имя аккаунта. Заказчику показывать больше нечего:\nпрофиля у него нет, а раньше кабинет встречал его пустотой.",
+                    "type": "string"
+                },
                 "email": {
                     "type": "string"
                 },
@@ -5446,6 +14305,14 @@ const docTemplate = `{
         "internal_auth.registerResp": {
             "type": "object",
             "properties": {
+                "is_new": {
+                    "description": "IsNew — аккаунт создан этим запросом. Фронт по нему решает, вести ли\nв мастер профиля или сразу в кабинет.",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — настоящая роль аккаунта. Фронт ведёт по ней, а не по той, что\nсам запросил: иначе заказчик попадал в кабинет специалиста.",
+                    "type": "string"
+                },
                 "tokens": {
                     "$ref": "#/definitions/internal_auth.TokenPair"
                 },
@@ -5458,6 +14325,2469 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.yandexReq": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "Kind — роль для НОВОГО пользователя. Для существующего игнорируется:\nзаказчик, вошедший через Яндекс, не должен вдруг стать специалистом.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.Accrual": {
+            "type": "object",
+            "properties": {
+                "approved_at": {
+                    "type": "string"
+                },
+                "calculated_at": {
+                    "type": "string"
+                },
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "clicks": {
+                    "description": "Clicks — переходы по метке, зачтённые ИМЕННО в этом периоде:\nсчётчик метки накопительный, и прошлые периоды из него вычтены.",
+                    "type": "integer"
+                },
+                "creator_avatar_url": {
+                    "description": "CreatorAvatarURL/CreatorUsername — чем подписан человек в составе\nпериода. Имени мало: в списке, за который заказчик платит, стоят\nживые люди, и открыть страницу исполнителя он должен оттуда же, где\nувидел строку. Пусто у того, кто аватар не поставил или ещё не\nвыбрал адрес, — тогда ссылка идёт по uuid, а вместо портрета\nостаётся буква.",
+                    "type": "string"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_profile_public": {
+                    "description": "CreatorProfilePublic — открывается ли страница этого человека\nснаружи. Публичная карточка специалиста живёт только при\nis_published AND moderation_status='approved'; на всё остальное она\nотвечает 404. Без этого признака экран не мог отличить человека, к\nкоторому можно перейти, от человека, чья страница ещё на модерации,\nи ставил ссылку всем одинаково — половина вела в «не найдено».",
+                    "type": "boolean"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "creator_username": {
+                    "type": "string"
+                },
+                "deduction": {
+                    "description": "Deduction — вычет за недосданное: недосданные ролики не оплачиваются.",
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_preview": {
+                    "description": "IsPreview — строка посчитана на лету и в базе её нет. Так выглядит\nмесяц, который ещё не пересчитывали: цифры по фактам уже есть, и\nпрятать их за кнопкой «Пересчитать» значит показывать заказчику\nноль там, где на самом деле счёт. Утвердить и выплатить такую\nстроку нельзя — сперва её сохраняет пересчёт.",
+                    "type": "boolean",
+                    "x-omitempty": true
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "payout_click_bonus": {
+                    "type": "integer"
+                },
+                "payout_deduction": {
+                    "type": "integer"
+                },
+                "payout_salary": {
+                    "description": "Payout* — что получает сам креатор. Считается теми же правилами, но\nпо его ставкам; при незаданной креаторской стороне тарифа совпадает\nсо счётом. Раскладка своя, потому что объяснять «почему вышло\nстолько» креатору надо его числами, а не клиентскими.",
+                    "type": "integer"
+                },
+                "payout_subscriber_bonus": {
+                    "type": "integer"
+                },
+                "payout_total": {
+                    "type": "integer"
+                },
+                "payout_views_bonus": {
+                    "type": "integer"
+                },
+                "period_start": {
+                    "description": "PeriodStart — начало периода, которому принадлежит начисление.\nПериоды катятся от первой публикации проекта, а не по календарю,\nпоэтому это не первое число месяца (см. billing.ProjectPeriod).",
+                    "type": "string"
+                },
+                "priority": {
+                    "description": "Priority — каким по приоритету человек попал в подборку. Поля нет\nвовсе, если проект заведён руками, а не вырос из заказа: «команда\nсобрана по вашему приоритету» — это про него. Отсюда omitempty:\nприоритета «ноль» не бывает, бывает его отсутствие.",
+                    "type": "integer",
+                    "x-omitempty": true
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "salary": {
+                    "type": "integer"
+                },
+                "status": {
+                    "enum": [
+                        "draft",
+                        "approved",
+                        "paid"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.AccrualStatus"
+                        }
+                    ]
+                },
+                "subscriber_bonus": {
+                    "type": "integer"
+                },
+                "subscribers": {
+                    "description": "Subscribers/SubscriberBonus — KPI по подписчикам за период.\nПодписчиков никто не собирает: число вписывает менеджер руками, как\nпереходы по UTM. Отдельной парой, а не внутри бонуса за просмотры:\nначисление объясняет, почему вышла такая сумма, и слитые в одно\nчисло просмотры с подписчиками этого больше не объясняют.",
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total — счёт заказчику за этого креатора.",
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "videos_planned": {
+                    "description": "VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько\nзакрыто. Разница — недостача.",
+                    "type": "integer"
+                },
+                "views_base": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                },
+                "views_over": {
+                    "type": "integer"
+                },
+                "views_total": {
+                    "description": "Просмотры по ступеням тарифа: ViewsBase — то, что попало под полную\nставку (до порога на каждом ролике), ViewsOver — то, что сверх и\nсчитается по пониженной. Обе части, потому что по одному итогу\nпотом не разобрать, почему бонус именно такой.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.AccrualStatus": {
+            "type": "string",
+            "enum": [
+                "draft",
+                "approved",
+                "paid"
+            ],
+            "x-enum-varnames": [
+                "AccrualDraft",
+                "AccrualApproved",
+                "AccrualPaid"
+            ]
+        },
+        "internal_billing.ClientAccrual": {
+            "type": "object",
+            "properties": {
+                "approved_at": {
+                    "type": "string"
+                },
+                "calculated_at": {
+                    "type": "string"
+                },
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "clicks": {
+                    "type": "integer"
+                },
+                "creator_avatar_url": {
+                    "description": "CreatorAvatarURL/CreatorUsername — портрет и адрес страницы\nисполнителя. Заказчик платит за конкретных людей, и из состава\nпериода он должен уметь перейти к тому, кто ролики снимал: буква в\nкружке на это не отвечает. Ставок креатора здесь по-прежнему нет —\nэто его сторона сделки, а не клиентская.",
+                    "type": "string"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_profile_public": {
+                    "description": "CreatorProfilePublic — есть ли по этому адресу открытая страница.\nПубличная карточка специалиста живёт только при is_published AND\nmoderation_status='approved', на всё прочее отдаёт 404. Признак\nнужен экрану, чтобы не ставить ссылку туда, где её некуда вести:\nмёртвая ссылка в составе, за который заказчик платит, читается как\n«человека у вас нет», а человек есть — просто его страница ещё на\nмодерации.",
+                    "type": "boolean"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "creator_username": {
+                    "type": "string"
+                },
+                "deduction": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "period_start": {
+                    "type": "string"
+                },
+                "priority": {
+                    "description": "Priority — каким по приоритету человек попал в подборку. Поля\nнет, если проект заведён руками, а не вырос из заказа.",
+                    "type": "integer",
+                    "x-omitempty": true
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "salary": {
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "Status/ApprovedAt/PaidAt — в каком состоянии расчёт за месяц.\nСумм в них нет, а заказчику видно, посчитан месяц или ещё нет.",
+                    "enum": [
+                        "draft",
+                        "approved",
+                        "paid"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.AccrualStatus"
+                        }
+                    ]
+                },
+                "total": {
+                    "description": "Total — счёт заказчику за этого человека.",
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "videos_planned": {
+                    "description": "VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько\nзакрыто; разница объясняет вычет.",
+                    "type": "integer"
+                },
+                "views_base": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                },
+                "views_over": {
+                    "type": "integer"
+                },
+                "views_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.ClientBillingView": {
+            "type": "object",
+            "properties": {
+                "accruals": {
+                    "description": "Accruals — за запрошенный месяц. Пусто, пока не считали.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.ClientAccrual"
+                    }
+                },
+                "payments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.Payment"
+                    }
+                },
+                "period": {
+                    "description": "Period — какой период показан и в каком он состоянии. Заказчику\nэто нужно по той же причине, что и менеджеру: пока период идёт,\nчисла ещё изменятся, и счёт нельзя считать окончательным.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ClientPeriod"
+                        }
+                    ]
+                },
+                "tariff": {
+                    "description": "Tariff — из чего сложился этот счёт: первые просмотры каждого\nролика по стартовой ставке, всё сверх — по пониженной, плюс работа\nкоманды. То же разложение, что в сводке, и тем же кодом.\n\nnil, когда разложение не сошлось бы с итогом рядом: ступенчатая\nверсия условий, порога нет вовсе или в счёте есть слагаемое,\nкоторого в лесенке не бывает. Лесенка, не делящаяся в стоящую\nрядом цену тысячи, хуже отсутствующей — её проверяют\nкалькулятором. См. tariffLadder.result.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.OverviewTariff"
+                        }
+                    ]
+                },
+                "terms": {
+                    "$ref": "#/definitions/internal_billing.SideTerms"
+                },
+                "totals": {
+                    "$ref": "#/definitions/internal_billing.ClientPeriodTotals"
+                }
+            }
+        },
+        "internal_billing.ClientOverview": {
+            "type": "object",
+            "properties": {
+                "collected_at": {
+                    "description": "CollectedAt — когда последний раз собирали статистику по проектам\nэтого заказчика. Подпись «данные на такое-то время» обязана быть\nправдой, поэтому nil, пока не собирали ни разу.",
+                    "type": "string"
+                },
+                "cost_per_1000": {
+                    "description": "CostPer1000 — стоимость тысячи просмотров по всем проектам, в\nкопейках. Считается из ФАКТИЧЕСКИХ сумм и фактических просмотров,\nа не из ставки тарифа: у разных проектов разные версии условий, и\nсредняя ставка соврала бы. nil, пока просмотров нет.",
+                    "type": "integer"
+                },
+                "engagement": {
+                    "$ref": "#/definitions/internal_billing.OverviewEngagement"
+                },
+                "er": {
+                    "$ref": "#/definitions/internal_billing.OverviewER"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "market": {
+                    "description": "Market — во сколько раз рынок дороже нас. Блока нет вовсе, пока\nнет своей цены тысячи: делить не на что.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewMarket"
+                    }
+                },
+                "market_scale_version": {
+                    "description": "MarketScaleVersion — версия справочника порогов, из которой взяты\nориентиры. Чтобы через полгода на вопрос «откуда цифры» был один и\nтот же ответ.",
+                    "type": "integer"
+                },
+                "money": {
+                    "$ref": "#/definitions/internal_billing.OverviewMoney"
+                },
+                "platforms": {
+                    "description": "Platforms — все пять площадок всегда, по убыванию просмотров.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewPlatform"
+                    }
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewProject"
+                    }
+                },
+                "projects_total": {
+                    "type": "integer"
+                },
+                "range": {
+                    "description": "Range — какое окно посчитано: week | month | quarter.",
+                    "type": "string",
+                    "enum": [
+                        "week",
+                        "month",
+                        "quarter"
+                    ]
+                },
+                "range_label": {
+                    "description": "RangeLabel — подпись окна человеку: «17 авг. — 15 сент. 2026».\nСчитается на сервере, чтобы в браузере не завелась вторая\nреализация русских сокращений месяцев.",
+                    "type": "string"
+                },
+                "series": {
+                    "description": "Series — ряд для графика, последние 90 дней.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewPoint"
+                    }
+                },
+                "snapshot_approx": {
+                    "description": "SnapshotApprox — хотя бы у одного подытоженного периода числа\nподтянуты: поденную статистику к моменту подытога уже удалили.\nСводка, часть чисел которой приблизительна, обязана сказать об\nэтом, а не выглядеть точной.",
+                    "type": "boolean"
+                },
+                "tariff": {
+                    "description": "Tariff — разложение этой цены по ступеням тарифа. nil, когда\nразложение не сошлось бы с итогом: см. OverviewTariff и tariffLadder.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.OverviewTariff"
+                        }
+                    ]
+                },
+                "top_videos": {
+                    "description": "TopVideos — три ролика с наибольшим приростом просмотров за окно.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewTopVideo"
+                    }
+                },
+                "views": {
+                    "$ref": "#/definitions/internal_billing.OverviewViews"
+                },
+                "window": {
+                    "description": "Window — числа ЗА ОКНО: главный заголовок дашборда берётся отсюда.\nПриросты живут только здесь, рядом с величинами, которые они\nописывают.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.OverviewWindow"
+                        }
+                    ]
+                }
+            }
+        },
+        "internal_billing.ClientPeriod": {
+            "type": "object",
+            "properties": {
+                "carry_in_client": {
+                    "description": "CarryIn/CarryOut — перенос остатка ступени, его сторона. Пока нули.",
+                    "type": "integer"
+                },
+                "carry_out_client": {
+                    "type": "integer"
+                },
+                "ends_on": {
+                    "type": "string"
+                },
+                "rating_scale_version": {
+                    "description": "RatingScaleVersion — какой версией справочника порогов оценён\nпериод. Пусто, пока период идёт: пороги замораживаются подытогом.\nНомер, а не id: человеку показывают «оценено по версии 3».",
+                    "type": "integer"
+                },
+                "seq": {
+                    "description": "Seq — какой это период по счёту.",
+                    "type": "integer"
+                },
+                "snapshot_approx": {
+                    "description": "SnapshotApprox — числам не на что опереться: поденная статистика к\nмоменту подытога уже удалена.",
+                    "type": "boolean"
+                },
+                "snapshot_as_of": {
+                    "description": "SnapshotAsOf — на какую дату сняты числа подытоженного периода.",
+                    "type": "string"
+                },
+                "starts_on": {
+                    "description": "StartsOn/EndsOn — границы, обе включительно. Считает сервер: иначе\nправило периода описано и в браузере тоже, и разъедется.",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status — open (идёт, числа ещё изменятся) | locked (подытожен).",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.ClientPeriodTotals": {
+            "type": "object",
+            "properties": {
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "cost_per_1000": {
+                    "description": "CostPer1000 — во сколько обошлась тысяча просмотров. nil, пока\nпросмотров нет — делить не на что.",
+                    "type": "integer"
+                },
+                "deductions": {
+                    "type": "integer"
+                },
+                "salaries": {
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total — сколько выставлено заказчику за месяц.",
+                    "type": "integer"
+                },
+                "videos": {
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.CreatorAccrual": {
+            "type": "object",
+            "properties": {
+                "approved_at": {
+                    "type": "string"
+                },
+                "calculated_at": {
+                    "description": "CalculatedAt — когда посчитано.",
+                    "type": "string"
+                },
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "clicks": {
+                    "type": "integer"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — он сам. Не тайна и не лишнее: строки приходят по\nмесяцам, и фронту нужно, чем их метить.",
+                    "type": "string"
+                },
+                "deduction": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "period_start": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "salary": {
+                    "description": "Salary/Deduction — оклад и вычет за недосданное, по его ставкам.",
+                    "type": "integer"
+                },
+                "status": {
+                    "enum": [
+                        "draft",
+                        "approved",
+                        "paid"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.AccrualStatus"
+                        }
+                    ]
+                },
+                "total": {
+                    "description": "Total — сколько он получит за месяц.",
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "videos_planned": {
+                    "description": "VideosPlanned/VideosDelivered — сколько выкладок стояло и сколько\nон закрыл: из них и растёт вычет.",
+                    "type": "integer"
+                },
+                "views_base": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                },
+                "views_over": {
+                    "type": "integer"
+                },
+                "views_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.CreatorEarnings": {
+            "type": "object",
+            "properties": {
+                "accruals": {
+                    "description": "Accruals — мои начисления по всем периодам проекта, свежие первыми.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.CreatorAccrual"
+                    }
+                },
+                "benchmark": {
+                    "description": "Benchmark — обезличенный ориентир проекта: медиана просмотров\nзрелых роликов и место человека относительно неё.\n\nnil, пока в проекте мало зрелых роликов или они принадлежат\nодному-двум людям: тогда «медиана проекта» — это показатель\nсоседа, а не агрегат. Своих данных у креатора может не хватать на\nрасчёт, но чужие ему видеть нечего, и второе важнее первого.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ProjectBenchmark"
+                        }
+                    ]
+                },
+                "next_step_forecast": {
+                    "description": "NextStep — что даст следующая ступень: сколько просмотров до неё и\nсколько денег они принесут. Прогноз, а не начисленное.\n\nnil, если у проекта пустой тариф (ни оклада, ни ставки) или\nпериода ещё нет: ноль читался бы как «ступень ничего не даст», а\nэто неправда.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.NextStepForecast"
+                        }
+                    ]
+                },
+                "period": {
+                    "description": "Period — текущий период проекта. nil, пока не вышел ни один ролик:\nпериоды отсчитываются от первой публикации, и до неё периода нет.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.CreatorPeriod"
+                        }
+                    ]
+                },
+                "periods": {
+                    "description": "Periods — все периоды проекта, от первого к последнему.\n\nЗдесь же, а не отдельной ручкой: строки начислений приходят по\nвсем периодам сразу, и у каждой из них фронту нужны границы. Без\nсписка он считал бы их сам — прибавлял месяц к period_start, — то\nесть держал бы второе описание правила периода.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.CreatorPeriod"
+                    }
+                },
+                "terms": {
+                    "description": "Terms — его сторона тарифа. Клиентской цены здесь нет: см.\nSideTerms в client_view.go.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.SideTerms"
+                        }
+                    ]
+                },
+                "utm": {
+                    "$ref": "#/definitions/internal_billing.UTMLink"
+                }
+            }
+        },
+        "internal_billing.CreatorForecast": {
+            "type": "object",
+            "properties": {
+                "avg_views_per_video": {
+                    "description": "AvgViewsPerVideo — среднее по его сданным роликам, суммарно по пяти\nплощадкам. 0, если сданных роликов ещё не было.",
+                    "type": "integer"
+                },
+                "based_on_videos": {
+                    "description": "BasedOnVideos — на скольких роликах основано среднее. Ноль означает\n«истории нет», и это видно в интерфейсе, а не прячется в нуле выше.",
+                    "type": "integer"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.CreatorPeriod": {
+            "type": "object",
+            "properties": {
+                "carry_in_creator": {
+                    "description": "CarryIn/CarryOut — перенос остатка ступени, ЕГО сторона: сколько\nпросмотров пришло из прошлого периода и сколько уходит в\nследующий. Пока нули — арифметику включат вместе с тарифом.",
+                    "type": "integer"
+                },
+                "carry_out_creator": {
+                    "type": "integer"
+                },
+                "ends_on": {
+                    "type": "string"
+                },
+                "rating_scale_version": {
+                    "description": "RatingScaleVersion — какой версией справочника порогов оценён\nпериод. Пусто, пока период идёт.",
+                    "type": "integer"
+                },
+                "seq": {
+                    "description": "Seq — какой это период по счёту: первый, второй, третий.",
+                    "type": "integer"
+                },
+                "snapshot_approx": {
+                    "description": "SnapshotApprox — числам не на что опереться: поденная статистика к\nмоменту подытога уже удалена. Не то же самое, что «предварительно»\nу строки начисления.",
+                    "type": "boolean"
+                },
+                "snapshot_as_of": {
+                    "description": "SnapshotAsOf — на какую дату сняты числа подытоженного периода.",
+                    "type": "string"
+                },
+                "starts_on": {
+                    "description": "StartsOn/EndsOn — границы, обе включительно. Отдаём с сервера, а\nне оставляем фронту прибавлять месяц: правило периода живёт в\nодном месте, иначе браузер продолжит рисовать старые границы после\nпервой же правки правила.",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status — open (идёт, числа ещё изменятся) | locked (подытожен).",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.CreatorSubscribers": {
+            "type": "object",
+            "properties": {
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "period_start": {
+                    "description": "PeriodStart — за какой период записано. Периоды катятся от первой\nпубликации проекта, а не по календарю.",
+                    "type": "string"
+                },
+                "subscribers": {
+                    "description": "Subscribers — сколько подписчиков прибавилось за период.",
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.NextStepForecast": {
+            "type": "object",
+            "properties": {
+                "carry_in_included": {
+                    "description": "CarryInIncluded — сколько перенесённого остатка учтено. Ноль, пока\nарифметику переноса не включили вместе со ступенчатым тарифом.",
+                    "type": "integer"
+                },
+                "forecast_payout": {
+                    "description": "ForecastPayout — сколько эти просмотры принесут ЕМУ по условиям\nэтого проекта, копейки.\n\nСчитается тем же кодом, что и само начисление: разница между\nвыплатой сейчас и выплатой при выросших просмотрах. Отдельной\nформулы «для прогноза» нет намеренно — она разошлась бы с\nфактической выплатой, и разошлась бы молча.\n\nИмя начинается с forecast, а не с payout, намеренно: payout_* в\nэтом коде — начисленное в строке расчёта, и прогноз под тем же\nпрефиксом однажды прочитали бы как заработанное. Тест приватности\nна префиксе payout_ это и поймал.",
+                    "type": "integer"
+                },
+                "step_views": {
+                    "description": "StepViews — размер ступени.",
+                    "type": "integer"
+                },
+                "views_to_go": {
+                    "description": "ViewsToGo — сколько просмотров осталось до неё. Считается от\nпросмотров периода ПЛЮС перенесённый остаток: он уже в счёте, и не\nучесть его значило бы отправить человека добирать то, что у него\nуже есть.\n\nПри ступенчатом тарифе это просмотры ВСЕГО ПЕРИОДА, а не одного\nчеловека: ступень берётся объёмом проекта, и личное расстояние до\nнеё отвечало бы не на тот вопрос. Прибавка при этом всё равно\nличная — та доля цены ступени, которая достанется ему.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OrderEstimate": {
+            "type": "object",
+            "properties": {
+                "avg_views_per_video": {
+                    "description": "AvgViewsPerVideo — среднее по подборке, из него и растёт прогноз.",
+                    "type": "integer"
+                },
+                "bonus_forecast": {
+                    "description": "BonusForecast — бонус по ступеням тарифа. Считается НА РОЛИК, а не\nна общий объём: порог стоит на ролике, и посчитанный по сумме\nпрогноз завышал бы сверхпороговую часть.",
+                    "type": "integer"
+                },
+                "creators": {
+                    "description": "Creators/Videos — из самого заказа.",
+                    "type": "integer"
+                },
+                "forecast": {
+                    "description": "Forecast — разбивка по людям.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.CreatorForecast"
+                    }
+                },
+                "has_forecast": {
+                    "description": "HasForecast — прогноз посчитан хоть по кому-то. Если false, показывать\nнужно только оклады: бонус не «ноль», а неизвестен.",
+                    "type": "boolean"
+                },
+                "salaries": {
+                    "description": "Salaries — фиксированная часть: фикс за ролик, умноженный на объём\n(у старых версий прайса — оклад за период на число людей). Точно\nизвестна, пока известен объём: бонус за просмотры — прогноз, фикс —\nнет. Имя поля осталось прежним, чтобы не ломать клиентов.",
+                    "type": "integer"
+                },
+                "terms": {
+                    "description": "Terms — версия правил, с которой клиент согласился при создании\nзаказа. Не действующая на сегодня: цену ему называли по той.\n\nСторона клиента, а не полный тариф: смета — клиентская ручка, а\nLatestTerms (смета до заказа) читает и креаторские ставки. С\nобщим типом они уезжали заказчику вместе с ценой.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.SideTerms"
+                        }
+                    ]
+                },
+                "total": {
+                    "description": "Total — оклады плюс прогноз бонуса.",
+                    "type": "integer"
+                },
+                "videos": {
+                    "type": "integer"
+                },
+                "views_forecast": {
+                    "description": "ViewsForecast — сколько просмотров ожидаем со всего заказа.",
+                    "type": "integer"
+                },
+                "without_history": {
+                    "description": "WithoutHistory — по скольким из подборки истории нет. Пока их\nмного, прогноз опирается на меньшинство, и это надо показать.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewER": {
+            "type": "object",
+            "properties": {
+                "percent": {
+                    "description": "Percent — за всё время. Изменение вовлечённости — в блоке window,\nвместе с оконной вовлечённостью, которую оно и описывает.",
+                    "type": "number"
+                },
+                "without_shares": {
+                    "description": "WithoutShares — хотя бы одна площадка не отдаёт репосты, и они в\nрасчёт не вошли. Ноль репостов и «мы их не знаем» — разные\nутверждения; на экране это звёздочка.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_billing.OverviewEngagement": {
+            "type": "object",
+            "properties": {
+                "comments": {
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total/Comments — за всё время, как и остальные итоги сводки.\nПриростов здесь нет намеренно: прирост окна рядом с итогом за всё\nвремя описывал бы не то число, возле которого стоит. Оконные\nзначения и их приросты — в блоке window.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewMarket": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "measured_on": {
+                    "type": "string"
+                },
+                "price_per_1000": {
+                    "description": "PricePer1000 — цена тысячи у ориентира, копейки.",
+                    "type": "integer"
+                },
+                "source": {
+                    "description": "Source/MeasuredOn — откуда число и когда измерено. Обязательны:\nцифра рынка без источника и даты через год начнёт врать, и\nзаметить это будет нечем.",
+                    "type": "string"
+                },
+                "times_cheaper": {
+                    "description": "TimesCheaper — во сколько раз ориентир дороже нашей фактической\nцены тысячи. Считается на сервере из cost_per_1000: второй расчёт\nв браузере разошёлся бы с первым.",
+                    "type": "number"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.OverviewMoney": {
+            "type": "object",
+            "properties": {
+                "current": {
+                    "description": "Current — по НЕПОДЫТОЖЕННЫМ периодам: идущему и тем, что уже\nкончились, но ждут отсечки. Предварительная: числа ещё вырастут.",
+                    "type": "integer"
+                },
+                "locked": {
+                    "description": "Locked — сумма по подытоженным периодам: окончательная, из срезов.",
+                    "type": "integer"
+                },
+                "paid": {
+                    "description": "Paid — сколько заказчик уже перевёл: подтверждённые платежи.\nОтдельно от Total намеренно — это разные вопросы: «сколько стоит»\nи «сколько внесено».",
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total — Locked + Current, «сколько всего стоит работа на сегодня».",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewPlatform": {
+            "type": "object",
+            "properties": {
+                "delta_pct": {
+                    "description": "DeltaPct — прирост просмотров за окно против предыдущего окна.",
+                    "type": "integer"
+                },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость площадки. nil, пока просмотров нет.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "series": {
+                    "description": "Series — прирост по дням внутри окна. Дни без сбора пропущены, а\nне отданы нулём: ноль нарисовал бы провал там, где просто не\nприходил сборщик.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.OverviewPoint"
+                    }
+                },
+                "share_pct": {
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views — за всё время; доля считается от них же, поэтому доли пяти\nплощадок дают сто процентов (с точностью до округления).",
+                    "type": "integer"
+                },
+                "window_share_pct": {
+                    "type": "integer"
+                },
+                "window_views": {
+                    "description": "WindowViews/WindowSharePct — то же за окно. Полоса состава на\nдашборде рисуется по ним, чтобы сходиться с главным числом;\nоконные доли дают сто процентов от оконной суммы.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewPoint": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "views_gained": {
+                    "description": "ViewsGained — сколько просмотров набрали за этот день, а не всего\nна эту дату. Поденный ряд накопительный, и «всего на дату»\nпришлось бы достраивать по каждой ссылке за каждый день; прирост\nпоказывает ровно то, ради чего график и смотрят.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewProject": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "description": "CompletedAt — когда проект закончили. Есть только у завершённого:\nитог без даты нечем привязать к «что мы сделали в прошлом году».",
+                    "type": "string"
+                },
+                "cost_per_1000": {
+                    "description": "CostPer1000 — стоимость тысячи просмотров по этому проекту. nil,\nпока просмотров нет: делить не на что.",
+                    "type": "integer"
+                },
+                "period": {
+                    "description": "Period — текущий период проекта. nil у не начавшегося.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ClientPeriod"
+                        }
+                    ]
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State — running | not_started | completed.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "total": {
+                    "description": "Total — счёт по проекту: подытоженные периоды плюс все ещё не\nподытоженные, включая кончившийся и ждущий отсечки.",
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewTariff": {
+            "type": "object",
+            "properties": {
+                "base_amount": {
+                    "type": "integer"
+                },
+                "fixed": {
+                    "description": "Fixed — работа команды: оклады за вычетом недосдачи. Третья\nстрока лесенки, и без неё сумма не сходится с итогом.",
+                    "type": "integer"
+                },
+                "over_amount": {
+                    "type": "integer"
+                },
+                "rate_per_1000": {
+                    "description": "RatePer1000 / RatePer1000Over — ставки за тысячу до порога и\nсверх него, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_over": {
+                    "type": "integer"
+                },
+                "threshold_views": {
+                    "description": "ThresholdViews — сколько просмотров КАЖДОГО ролика идёт по\nстартовой ставке.",
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views / Total — что разложено: ровно те просмотры и ровно та\nсумма, из которых посчитана цена тысячи рядом.",
+                    "type": "integer"
+                },
+                "views_base": {
+                    "description": "ViewsBase / ViewsOver — сколько просмотров легло на каждую\nступень, и BaseAmount / OverAmount — во сколько это обошлось.",
+                    "type": "integer"
+                },
+                "views_over": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewTopVideo": {
+            "type": "object",
+            "properties": {
+                "creator_display_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID/CreatorDisplayName — кто снял. В «лучшем за окно»\nэто половина ответа: заказчик смотрит не только что выстрелило,\nно и с кем это повторить.",
+                    "type": "string"
+                },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость ролика за то же окно, по которому он\nсюда попал. Считается от прироста, а не от накопленных итогов:\nиначе старый ролик с большим хвостом выглядел бы вовлекающим на\nнеделе, когда его никто не трогал. nil, пока прироста просмотров\nнет — делить не на что.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "description": "Platform — площадка-лидер: та, что дала больше всех просмотров за\nокно. Ссылка — на неё же.",
+                    "type": "string"
+                },
+                "publication_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел, ГГГГ-ММ-ДД. Дата выхода, а не\nсдачи ссылки: см. publications.ClientFeed.",
+                    "type": "string"
+                },
+                "title": {
+                    "description": "Title — название, которое дал креатор. Пустое отдаём как есть:\nподставлять «Без названия» — дело интерфейса, а не сервера.",
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "views": {
+                    "description": "Views — просмотры, набранные ЗА ОКНО. Показываем ту же величину,\nпо которой сортируем: иначе список едет относительно чисел.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewViews": {
+            "type": "object",
+            "properties": {
+                "by_platform": {
+                    "description": "ByPlatform — все пять площадок всегда, включая нулевые: пропавший\nстолбик читается как сбой, а не как ноль.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "total": {
+                    "description": "Total — за всё время по всем проектам заказчика. Не за окно\nдашборда: по этому же числу считается стоимость тысячи, и\nподменить его оконным значило бы тихо поменять смысл поля.\nОконные просмотры лежат отдельно, в блоке window.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.OverviewWindow": {
+            "type": "object",
+            "properties": {
+                "comments": {
+                    "type": "integer"
+                },
+                "comments_delta_pct": {
+                    "type": "integer"
+                },
+                "engagement": {
+                    "description": "Engagement — лайки + комментарии + репосты, набранные за окно.",
+                    "type": "integer"
+                },
+                "engagement_delta_pct": {
+                    "type": "integer"
+                },
+                "er_delta_pp": {
+                    "description": "ERDeltaPP — изменение в ПУНКТАХ против предыдущего окна: «было\n4,7 — стало 4,4» понятнее, чем «упало на 6%».",
+                    "type": "number"
+                },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость окна: взаимодействия окна ÷ просмотры\nокна. Ноль, пока просмотров в окне нет.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — в окне хотя бы одна площадка не отдала репосты.",
+                    "type": "boolean"
+                },
+                "from": {
+                    "description": "From/To — границы окна датами, ГГГГ-ММ-ДД.\n\nПодпись range_label рядом человеческая («26 июня — 23 сент.\n2026») и для расчётов не годится: по ней нельзя отрезать поденный\nряд. А отрезать его надо ровно там, где границу провёл сервер, —\nсвоё правило на фронте однажды с этим разойдётся, и на одном\nэкране окажутся два разных «окна».",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                },
+                "views": {
+                    "type": "integer"
+                },
+                "views_delta_pct": {
+                    "description": "ViewsDeltaPct — против предыдущего окна такой же длины. Поля нет\nвовсе, если сравнивать не с чем: ноль означал бы «не выросло».",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.Payment": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "description": "Amount — сколько ждём, копейки.",
+                    "type": "integer"
+                },
+                "confirmed_at": {
+                    "type": "string"
+                },
+                "confirmed_by": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "enum": [
+                        "prepayment",
+                        "final"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.PaymentKind"
+                        }
+                    ]
+                },
+                "note": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "enum": [
+                        "awaiting",
+                        "confirmed",
+                        "cancelled"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.PaymentStatus"
+                        }
+                    ]
+                }
+            }
+        },
+        "internal_billing.PaymentKind": {
+            "type": "string",
+            "enum": [
+                "prepayment",
+                "final"
+            ],
+            "x-enum-varnames": [
+                "PaymentPrepayment",
+                "PaymentFinal"
+            ]
+        },
+        "internal_billing.PaymentStatus": {
+            "type": "string",
+            "enum": [
+                "awaiting",
+                "confirmed",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "PaymentAwaiting",
+                "PaymentConfirmed",
+                "PaymentCancelled"
+            ]
+        },
+        "internal_billing.PeriodTotals": {
+            "type": "object",
+            "properties": {
+                "click_bonus": {
+                    "type": "integer"
+                },
+                "cost_per_1000": {
+                    "description": "CostPer1000 — во сколько обошлась тысяча просмотров: (оклады +\nбонусы) ÷ просмотры. nil, пока просмотров нет — делить не на что.",
+                    "type": "integer"
+                },
+                "deductions": {
+                    "type": "integer"
+                },
+                "margin": {
+                    "type": "integer"
+                },
+                "payouts": {
+                    "type": "integer"
+                },
+                "salaries": {
+                    "type": "integer"
+                },
+                "subscriber_bonus": {
+                    "description": "SubscriberBonus — KPI по подписчикам за период. Отдельной строкой, а\nне внутри бонуса за просмотры: это разные величины, и «почему вышло\nстолько» по их сумме уже не разобрать.",
+                    "type": "integer"
+                },
+                "subscribers": {
+                    "description": "Subscribers — сколько подписчиков вписал менеджер за период.",
+                    "type": "integer"
+                },
+                "total": {
+                    "description": "Total — сколько выставлено заказчику; Payouts — сколько должны\nкреаторам; Margin — разница, то есть что остаётся платформе.\nПри незаданной креаторской стороне тарифа Payouts равен Total, а\nMargin нулевой: платформа ничего не удерживает.",
+                    "type": "integer"
+                },
+                "videos": {
+                    "description": "Videos/VideosDelivered — сколько выкладок стояло и сколько закрыто.\n«по 6 роликам» в шапке считается отсюда.",
+                    "type": "integer"
+                },
+                "videos_delivered": {
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                },
+                "views_bonus": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.ProjectBenchmark": {
+            "type": "object",
+            "properties": {
+                "mature_videos": {
+                    "description": "MatureVideos — сколько зрелых роликов проекта вошло в расчёт.\nПусто по той же причине: ниже порога это число говорит о составе\nпроекта больше, чем следует.",
+                    "type": "integer"
+                },
+                "my_mature_videos": {
+                    "description": "MyMatureVideos — сколько зрелых роликов у него самого. Его\nсобственное число, обезличивать нечего; заодно объясняет, почему\nисточник именно такой.",
+                    "type": "integer"
+                },
+                "my_percentile": {
+                    "description": "MyPercentile — где человек относительно медианы проекта: доля\nзрелых роликов проекта, которые слабее его медианного. 0 — ниже\nвсех, 100 — выше всех. Пусто, если сравнивать не с чем или не по\nчему.",
+                    "type": "integer"
+                },
+                "project_median_views": {
+                    "description": "ProjectMedianViews — медиана просмотров зрелых роликов проекта.\nПусто, если проект не прошёл порог обезличивания.",
+                    "type": "integer"
+                },
+                "typical_video_source": {
+                    "description": "TypicalVideoSource — на чьих данных посчитано: creator | project |\ndefault.\n\nОбязателен, а не украшение: человеку говорят «до ступени двадцать\nроликов», и он вправе знать, чьи это данные. «По твоим роликам» и\n«ориентир по площадке, своих данных пока мало» — разные обещания,\nи второе не должно выдавать себя за первое.",
+                    "type": "string"
+                },
+                "typical_video_views": {
+                    "description": "TypicalVideoViews — «типичный ролик»: от него считается, сколько\nроликов осталось до следующей ступени. Лесенку выбора целиком\nпроходит сервер, фронту остаётся показать число и подпись.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.ProjectBilling": {
+            "type": "object",
+            "properties": {
+                "accruals": {
+                    "description": "Accruals — за запрошенный месяц. Пусто, пока не считали.\n\nЗаказчик их тоже видит: в макете это «Команда месяца» — кто сколько\nроликов сдал и во сколько это ему обошлось. Он за них и платит,\nпоэтому строка «60 000 + 5 850» — его счёт, а не чужие данные.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.Accrual"
+                    }
+                },
+                "payments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.Payment"
+                    }
+                },
+                "period": {
+                    "description": "Period — какой период показан и в каком он состоянии. Отсюда же\nпонятно, почему строки помечены «предварительно».",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                        }
+                    ]
+                },
+                "terms": {
+                    "$ref": "#/definitions/internal_billing.Terms"
+                },
+                "totals": {
+                    "description": "Totals — итог периода. Считается из тех же строк, но на сервере:\n«оклады 180 000 + бонус 24 678 · 746 ₽ за 1000» показывают и\nменеджеру, и заказчику, и складывать это дважды на двух экранах\nзначит получить два разных числа.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.PeriodTotals"
+                        }
+                    ]
+                },
+                "utm": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.UTMLink"
+                    }
+                }
+            }
+        },
+        "internal_billing.ProjectPeriod": {
+            "type": "object",
+            "properties": {
+                "carry_in_client": {
+                    "description": "Carry* — перенос остатка ступени тарифа, в просмотрах.\n\nСтупень — 100 000 просмотров; остаток, не добравший до полной,\nедет в следующий период и складывается с его просмотрами. Стороны\nразные: клиентская и креаторская считаются по своим ставкам и\nразъедутся, одно число на двоих скрыло бы это.\n\nСейчас нули: арифметику включат, когда утвердят тариф. Место под\nнеё — в подытоженном периоде, потому что перенос такая же\nзамороженная величина, как просмотры.",
+                    "type": "integer"
+                },
+                "carry_in_creator": {
+                    "type": "integer"
+                },
+                "carry_out_client": {
+                    "type": "integer"
+                },
+                "carry_out_creator": {
+                    "type": "integer"
+                },
+                "client_debt_in": {
+                    "description": "ClientDebtIn/ClientDebtOut — долг перед клиентом в ПРОСМОТРАХ:\nнедобрали гарантию — период оплачен как гарантия, а недостающее\nдобираем бесплатно в следующем. Не в деньгах, так в оферте.",
+                    "type": "integer"
+                },
+                "client_debt_out": {
+                    "type": "integer"
+                },
+                "ends_on": {
+                    "type": "string"
+                },
+                "ends_on_confirmed_at": {
+                    "description": "EndsOnConfirmedAt/By — менеджер подтвердил, что период кончается\nименно этой датой. Подтверждённая граница сильнее вычисленной:\nплан знает человек, а календарь только считает месяцы. Пусто —\nникто не подтверждал, работает автомат.",
+                    "type": "string"
+                },
+                "ends_on_confirmed_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "locked_at": {
+                    "type": "string"
+                },
+                "locked_by": {
+                    "description": "LockedBy — кто подытожил. nil = фоновая задача; ручного подытога\nнет вовсе, так что сейчас здесь всегда nil.",
+                    "type": "string"
+                },
+                "prev_period_id": {
+                    "description": "PrevPeriodID — предыдущий период. nil только у первого: остаток\nступени переносится по цепочке, и она должна быть явной.",
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "rating_scale_id": {
+                    "description": "RatingScaleID — какой версией справочника порогов оценивался\nпериод. Проставляется при подытоге и больше не меняется: чем\nоценивали, тем и оценивали. nil у периода, который ещё идёт.",
+                    "type": "string"
+                },
+                "rating_scale_version": {
+                    "description": "RatingScaleVersion — её номер: человеку показывают «оценено по\nверсии 3», а не uuid.",
+                    "type": "integer"
+                },
+                "seq": {
+                    "description": "Seq — какой это период по счёту: первый, второй, третий.",
+                    "type": "integer"
+                },
+                "snapshot_approx": {
+                    "description": "SnapshotApprox — числам не на что опереться: поденный ряд к моменту\nфиксации уже схлопнули.\n\nНе путать с «предварительно» (Accrual.IsPreview): то про период,\nкоторый ещё идёт, это — про период, который подытожен, но\nопирается на пустоту. Могут стоять одновременно, и в интерфейсе их\nнельзя схлопывать в одну плашку.",
+                    "type": "boolean"
+                },
+                "snapshot_as_of": {
+                    "description": "SnapshotAsOf — на какую дату сняты числа: конец периода плюс две\nнедели. Это отсечка, а не момент фиксации: воркер мог опоздать, и\nчисла всё равно должны быть теми, что были на отсечку.",
+                    "type": "string"
+                },
+                "starts_on": {
+                    "description": "StartsOn/EndsOn — границы, обе включительно.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.SideStep": {
+            "type": "object",
+            "properties": {
+                "fee": {
+                    "type": "integer"
+                },
+                "from_views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.SideTerms": {
+            "type": "object",
+            "properties": {
+                "bonus_views_threshold": {
+                    "type": "integer"
+                },
+                "click_bonus_rate": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "type": "integer"
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo — фикс ЗА РОЛИК на этой стороне. Пусто — версия\nусловий старая, фикс платится окладом за период.\n\nПоля не было вовсе, хотя корзина воронки на него уже смотрела:\nветка ` + "`" + `@if (e.terms.fee_per_video)` + "`" + ` была мёртвой, и заказчику\nпоказывался оклад за месяц там, где с него берут за ролик. Число\nпри этом считалось правильно — расходилась только подпись, то\nесть объяснение, за что он платит.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "type": "integer"
+                },
+                "steps": {
+                    "description": "Steps — лесенка ЭТОЙ стороны: пороги объёма периода и цена на\nкаждом, уже сведённая к её числам.\n\nНепустая лесенка ОТМЕНЯЕТ salary_per_month и ставку за тысячу выше:\nна ступенчатой версии условий они в расчёте не участвуют вовсе. Без\nэтого поля кабинет креатора показывал бы ему оклад, которого в его\nтарифе нет, — а на самом деле это цена клиента, и назвать её его\nзаработком нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.SideStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько стоит подписчик на этой стороне. Пусто —\nKPI по подписчикам не считается.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "terms_version_id": {
+                    "description": "TermsVersionID — с какой версии прайса сняты числа.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "videos_first_month": {
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TariffRow": {
+            "type": "object",
+            "properties": {
+                "client_name": {
+                    "type": "string"
+                },
+                "creator_fee_per_video": {
+                    "type": "integer"
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс за ролик: основная цена\nработы. Ступени и ставка за тысячу — надбавка за просмотры.",
+                    "type": "integer"
+                },
+                "guarantee_views": {
+                    "type": "integer"
+                },
+                "has_terms": {
+                    "description": "HasTerms — снимок условий заведён. false означает «проект\nсчитается по нулям», и это худшее из состояний: экран денег\nпоказывает ровные нули, и выглядит это как «ещё не начислили».",
+                    "type": "boolean"
+                },
+                "manager_name": {
+                    "type": "string"
+                },
+                "max_fee": {
+                    "type": "integer"
+                },
+                "min_fee": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth/RatePer1000Views — числа старой модели. Показываем\nих там, где ступеней нет: иначе строка выглядела бы пустой у\nпроекта, у которого тариф на самом деле задан.",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "stepped": {
+                    "description": "Stepped — тариф считается лесенкой. false при HasTerms=true\nозначает старую модель: оклад плюс ставка за тысячу.",
+                    "type": "boolean"
+                },
+                "steps_count": {
+                    "description": "StepsCount/MinFee/MaxFee — во что обходится период заказчику на\nнижней и верхней ступени. По ним видно вилку, не открывая проект.",
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.Terms": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "description": "BaseFee — фикс со второго периода.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "bonus_views_threshold": {
+                    "description": "BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.\nДо него платим полную ставку, свыше — пониженную. 0 = порога нет,\nвесь объём идёт по полной ставке.",
+                    "type": "integer"
+                },
+                "click_bonus_rate": {
+                    "description": "ClickBonusRate — ставка за переход по UTM до месячного порога,\nкопейки. nil = бонус за переходы не считается: источник кликов не\nподключён, а поля в тарифе есть.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "description": "ClickBonusRateOver — ставка за каждый следующий переход.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "description": "ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной\nставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.",
+                    "type": "integer"
+                },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_salary_per_month": {
+                    "description": "Креаторская сторона тарифа: что получает исполнитель.\n\nnil означает «столько же, сколько платит клиент»: до заполнения этих\nполей выплата равна счёту и маржи у платформы нет. Две стороны нужны\nпотому, что это разные деньги — счёт заказчику и обязательство перед\nкреатором; одно число за оба показывало креатору в личном кабинете\nцену клиента как его собственный заработок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.\n\nКлиент платит FeePerVideo за каждую вышедшую выкладку, креатор\nполучает CreatorFeePerVideo. Этим фикс и отличается от ступеней:\nступени про рост просмотров, фикс — про объём работы, и месяц с\nпятью выкладками не должен стоить как месяц с тридцатью.\n\nЗаменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):\nона и была фиксом за период. Пусто — прежнее правило, фикс\nберётся из лесенки.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "description": "GuaranteeViews — гарантия в просмотрах. Недобрали — период всё\nравно оплачивается как гарантия, а недостающие просмотры уходят в\nдолг перед клиентом и гасятся из следующего периода. Долг в\nПРОСМОТРАХ, а не в деньгах: так в оферте.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "project_cost": {
+                    "description": "ProjectCost — сколько стоит проект за период, копейки. Называет\nменеджер рукой.\n\nПоле для проектов без креаторов: там сумма не складывается из\nначислений людям — людей нет, — а вопрос «во сколько обошёлся\nпросмотр» остаётся. Лежит здесь, в снимке условий, а не в\nотдельной таблице: это такое же условие проекта, как ставка за\nтысячу, и два места для ответа «сколько стоит проект» однажды\nразошлись бы.\n\n0 означает «не назвали»: СПВ тогда не показывается вовсе (см.\npublications.Report.CostPer1000).",
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "description": "RatePer1000Views — ставка за тысячу просмотров ДО порога, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "description": "RatePer1000ViewsOver — ставка за тысячу просмотров СВЕРХ порога.\nНиже основной намеренно: так виральный ролик не съедает бюджет.",
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth — оклад креатора за месяц, копейки.",
+                    "type": "integer"
+                },
+                "step_cap_views": {
+                    "description": "StepCapViews — выше этого объёма ступени не оплачиваются.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "description": "StepFee — цена полной ступени до StepTier2From.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "description": "StepFeeOver — цена ступени после этого порога.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "description": "StepTier2From — с какого объёма ступень дешевеет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: пороги объёма и цена периода на\nкаждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они\nостались ради версий, на которых стоят действующие проекты, и\nсмешивать два правила в одном расчёте нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика, набранного\nза период, копейки. nil = KPI по подписчикам не считается.\n\nПодписчиков никто не собирает: сборщика по ним нет, и выдумывать\nего под ставку нельзя. Ставка объявляется здесь, а само число\nвводит менеджер руками — как переходы по UTM.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "terms_version_id": {
+                    "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "videos_first_month": {
+                    "description": "VideosFirstMonth/VideosNextMonths — за какой объём назван оклад.\nВ тарифе это подпись «30 видео первый месяц, 60 со второго»: без\nнеё сумма оклада ни о чём не говорит.",
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsChange": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "description": "Field — имя поля тарифа (то же, что в JSON условий).",
+                    "type": "string"
+                },
+                "from": {
+                    "description": "From/To — прежнее и новое значение. Пусто (nil) = «не задано»:\nкреаторские ставки бывают незаполненными, и 0 от «как у клиента»\nодним числом не отличить.",
+                    "type": "integer"
+                },
+                "label": {
+                    "description": "Label — человеческое название для интерфейса: админ читает\n«Ставка за 1000 просмотров», а не rate_per_1000_views.",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsMargin": {
+            "type": "object",
+            "properties": {
+                "has_margin": {
+                    "description": "HasMargin — креаторская сторона заполнена хоть где-то. Пустая\nозначает «платим креатору ровно то, что берём», то есть нули ниже —\nнастоящие нули, а не «не задано».",
+                    "type": "boolean"
+                },
+                "rate_per_1000_views": {
+                    "description": "RatePer1000Views/RatePer1000ViewsOver — маржа на ставке за тысячу\nпросмотров до порога и сверх него, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth — маржа на окладе за месяц, копейки.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsPublishResult": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "description": "BaseFee — фикс со второго периода.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "body": {
+                    "description": "Body — текст условий, с которым соглашается клиент.",
+                    "type": "string"
+                },
+                "bonus_views_threshold": {
+                    "description": "BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.\nДо него платим полную ставку, свыше — пониженную. 0 = порога нет,\nвесь объём идёт по полной ставке.",
+                    "type": "integer"
+                },
+                "changes": {
+                    "description": "Changes — разница с прежней действующей версией. Пусто у самой\nпервой версии: сравнивать не с чем.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsChange"
+                    }
+                },
+                "click_bonus_rate": {
+                    "description": "ClickBonusRate — ставка за переход по UTM до месячного порога,\nкопейки. nil = бонус за переходы не считается: источник кликов не\nподключён, а поля в тарифе есть.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "description": "ClickBonusRateOver — ставка за каждый следующий переход.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "description": "ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной\nставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.",
+                    "type": "integer"
+                },
+                "consented_clients": {
+                    "description": "ConsentedClients — сколько клиентов уже согласились именно с ней.\nПоказывает, что версию нельзя считать черновиком.",
+                    "type": "integer"
+                },
+                "consents_required": {
+                    "description": "ConsentsRequired — сколько клиентов согласились с прежней\nдействующей версией и теперь должны согласиться заново.",
+                    "type": "integer"
+                },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_salary_per_month": {
+                    "description": "Креаторская сторона тарифа: что получает исполнитель.\n\nnil означает «столько же, сколько платит клиент»: до заполнения этих\nполей выплата равна счёту и маржи у платформы нет. Две стороны нужны\nпотому, что это разные деньги — счёт заказчику и обязательство перед\nкреатором; одно число за оба показывало креатору в личном кабинете\nцену клиента как его собственный заработок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.\n\nКлиент платит FeePerVideo за каждую вышедшую выкладку, креатор\nполучает CreatorFeePerVideo. Этим фикс и отличается от ступеней:\nступени про рост просмотров, фикс — про объём работы, и месяц с\nпятью выкладками не должен стоить как месяц с тридцатью.\n\nЗаменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):\nона и была фиксом за период. Пусто — прежнее правило, фикс\nберётся из лесенки.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "description": "GuaranteeViews — гарантия в просмотрах. Недобрали — период всё\nравно оплачивается как гарантия, а недостающие просмотры уходят в\nдолг перед клиентом и гасятся из следующего периода. Долг в\nПРОСМОТРАХ, а не в деньгах: так в оферте.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "is_current": {
+                    "description": "IsCurrent — эта версия сейчас действует. Действует всегда одна:\nсамая новая.",
+                    "type": "boolean"
+                },
+                "margin": {
+                    "description": "Margin — что из уплаченного клиентом остаётся площадке. Считается,\nа не хранится: это разность двух сторон тарифа, и отдельная колонка\nразошлась бы с ними на первой же правке ставок.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.TermsMargin"
+                        }
+                    ]
+                },
+                "project_cost": {
+                    "description": "ProjectCost — сколько стоит проект за период, копейки. Называет\nменеджер рукой.\n\nПоле для проектов без креаторов: там сумма не складывается из\nначислений людям — людей нет, — а вопрос «во сколько обошёлся\nпросмотр» остаётся. Лежит здесь, в снимке условий, а не в\nотдельной таблице: это такое же условие проекта, как ставка за\nтысячу, и два места для ответа «сколько стоит проект» однажды\nразошлись бы.\n\n0 означает «не назвали»: СПВ тогда не показывается вовсе (см.\npublications.Report.CostPer1000).",
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "projects_refreshed": {
+                    "description": "ProjectsRefreshed — сколько ещё не начавшихся проектов переехало\nна эту версию. Начавшиеся не трогаются: у них снимок.",
+                    "type": "integer"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "description": "RatePer1000Views — ставка за тысячу просмотров ДО порога, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "description": "RatePer1000ViewsOver — ставка за тысячу просмотров СВЕРХ порога.\nНиже основной намеренно: так виральный ролик не съедает бюджет.",
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth — оклад креатора за месяц, копейки.",
+                    "type": "integer"
+                },
+                "step_cap_views": {
+                    "description": "StepCapViews — выше этого объёма ступени не оплачиваются.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "description": "StepFee — цена полной ступени до StepTier2From.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "description": "StepFeeOver — цена ступени после этого порога.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "description": "StepTier2From — с какого объёма ступень дешевеет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: пороги объёма и цена периода на\nкаждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они\nостались ради версий, на которых стоят действующие проекты, и\nсмешивать два правила в одном расчёте нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика, набранного\nза период, копейки. nil = KPI по подписчикам не считается.\n\nПодписчиков никто не собирает: сборщика по ним нет, и выдумывать\nего под ставку нельзя. Ставка объявляется здесь, а само число\nвводит менеджер руками — как переходы по UTM.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "terms_version_id": {
+                    "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "used_by_projects": {
+                    "description": "UsedByProjects — сколько проектов сняли с неё числа.",
+                    "type": "integer"
+                },
+                "version": {
+                    "description": "Version — номер версии; растёт на единицу.",
+                    "type": "integer"
+                },
+                "videos_first_month": {
+                    "description": "VideosFirstMonth/VideosNextMonths — за какой объём назван оклад.\nВ тарифе это подпись «30 видео первый месяц, 60 со второго»: без\nнеё сумма оклада ни о чём не говорит.",
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsStep": {
+            "type": "object",
+            "properties": {
+                "client_fee": {
+                    "description": "ClientFee — сколько стоит период заказчику на этой ступени, копейки.",
+                    "type": "integer"
+                },
+                "creator_fee": {
+                    "description": "CreatorFee — оклад креатору на этой ступени, копейки. nil = как у\nзаказчика: то же правило, что у остальных креаторских полей.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "from_views": {
+                    "description": "FromViews — с какого объёма просмотров периода действует ступень.\nНижняя обычно с нуля: это и есть голый оклад без KPI.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.TermsVersion": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "description": "BaseFee — фикс со второго периода.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "body": {
+                    "description": "Body — текст условий, с которым соглашается клиент.",
+                    "type": "string"
+                },
+                "bonus_views_threshold": {
+                    "description": "BonusViewsThreshold — порог НА РОЛИК, суммой по пяти площадкам.\nДо него платим полную ставку, свыше — пониженную. 0 = порога нет,\nвесь объём идёт по полной ставке.",
+                    "type": "integer"
+                },
+                "click_bonus_rate": {
+                    "description": "ClickBonusRate — ставка за переход по UTM до месячного порога,\nкопейки. nil = бонус за переходы не считается: источник кликов не\nподключён, а поля в тарифе есть.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "description": "ClickBonusRateOver — ставка за каждый следующий переход.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "description": "ClickBonusThreshold — сколько переходов ЗА МЕСЯЦ идёт по полной\nставке. Порог здесь месячный, а не на ролик — в отличие от просмотров.",
+                    "type": "integer"
+                },
+                "consented_clients": {
+                    "description": "ConsentedClients — сколько клиентов уже согласились именно с ней.\nПоказывает, что версию нельзя считать черновиком.",
+                    "type": "integer"
+                },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона тех же ступеней. nil означает «столько же,\nсколько у клиента» — то же правило, что у нынешних креаторских\nставок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_salary_per_month": {
+                    "description": "Креаторская сторона тарифа: что получает исполнитель.\n\nnil означает «столько же, сколько платит клиент»: до заполнения этих\nполей выплата равна счёту и маржи у платформы нет. Две стороны нужны\nпотому, что это разные деньги — счёт заказчику и обязательство перед\nкреатором; одно число за оба показывало креатору в личном кабинете\nцену клиента как его собственный заработок.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnil = столько же, сколько платит заказчик.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo/CreatorFeePerVideo — фикс ЗА РОЛИК, а не за период.\n\nКлиент платит FeePerVideo за каждую вышедшую выкладку, креатор\nполучает CreatorFeePerVideo. Этим фикс и отличается от ступеней:\nступени про рост просмотров, фикс — про объём работы, и месяц с\nпятью выкладками не должен стоить как месяц с тридцатью.\n\nЗаменяет собой нижнюю ступень лесенки (ту, у которой порог ноль):\nона и была фиксом за период. Пусто — прежнее правило, фикс\nберётся из лесенки.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "description": "FirstPeriodFee — фикс за первый период проекта: там оплачивается\nзапуск, а не результат, и ступени не считаются вовсе.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "description": "GuaranteeViews — гарантия в просмотрах. Недобрали — период всё\nравно оплачивается как гарантия, а недостающие просмотры уходят в\nдолг перед клиентом и гасятся из следующего периода. Долг в\nПРОСМОТРАХ, а не в деньгах: так в оферте.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "is_current": {
+                    "description": "IsCurrent — эта версия сейчас действует. Действует всегда одна:\nсамая новая.",
+                    "type": "boolean"
+                },
+                "margin": {
+                    "description": "Margin — что из уплаченного клиентом остаётся площадке. Считается,\nа не хранится: это разность двух сторон тарифа, и отдельная колонка\nразошлась бы с ними на первой же правке ставок.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_billing.TermsMargin"
+                        }
+                    ]
+                },
+                "project_cost": {
+                    "description": "ProjectCost — сколько стоит проект за период, копейки. Называет\nменеджер рукой.\n\nПоле для проектов без креаторов: там сумма не складывается из\nначислений людям — людей нет, — а вопрос «во сколько обошёлся\nпросмотр» остаётся. Лежит здесь, в снимке условий, а не в\nотдельной таблице: это такое же условие проекта, как ставка за\nтысячу, и два места для ответа «сколько стоит проект» однажды\nразошлись бы.\n\n0 означает «не назвали»: СПВ тогда не показывается вовсе (см.\npublications.Report.CostPer1000).",
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "description": "RatePer1000Views — ставка за тысячу просмотров ДО порога, копейки.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "description": "RatePer1000ViewsOver — ставка за тысячу просмотров СВЕРХ порога.\nНиже основной намеренно: так виральный ролик не съедает бюджет.",
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth — оклад креатора за месяц, копейки.",
+                    "type": "integer"
+                },
+                "step_cap_views": {
+                    "description": "StepCapViews — выше этого объёма ступени не оплачиваются.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "description": "StepFee — цена полной ступени до StepTier2From.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "description": "StepFeeOver — цена ступени после этого порога.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "description": "StepTier2From — с какого объёма ступень дешевеет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "StepViews — размер ступени в просмотрах. Раньше сто тысяч были\nконстантой в коде.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: пороги объёма и цена периода на\nкаждом. Непустая лесенка ОТМЕНЯЕТ двухступенчатые поля выше — они\nостались ради версий, на которых стоят действующие проекты, и\nсмешивать два правила в одном расчёте нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика, набранного\nза период, копейки. nil = KPI по подписчикам не считается.\n\nПодписчиков никто не собирает: сборщика по ним нет, и выдумывать\nего под ставку нельзя. Ставка объявляется здесь, а само число\nвводит менеджер руками — как переходы по UTM.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "terms_version_id": {
+                    "description": "TermsVersionID — с какой версии сняты числа. Только для истории.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "used_by_projects": {
+                    "description": "UsedByProjects — сколько проектов сняли с неё числа.",
+                    "type": "integer"
+                },
+                "version": {
+                    "description": "Version — номер версии; растёт на единицу.",
+                    "type": "integer"
+                },
+                "videos_first_month": {
+                    "description": "VideosFirstMonth/VideosNextMonths — за какой объём назван оклад.\nВ тарифе это подпись «30 видео первый месяц, 60 со второго»: без\nнеё сумма оклада ни о чём не говорит.",
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.UTMLink": {
+            "type": "object",
+            "properties": {
+                "clicks": {
+                    "description": "Clicks — заполняется снаружи, из аналитики. Пока бонус за переходы\nвыключен, число справочное.",
+                    "type": "integer"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.accrualsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.Accrual"
+                    }
+                }
+            }
+        },
+        "internal_billing.confirmPeriodEndReq": {
+            "description": "Срез просмотров удаляется, период снова считается на лету. Действие пишется в журнал админских действий: переоткрытие переписывает историю расчёта, и след обязателен. Идемпотентно: период, который и так идёт, ручка оставляет как есть.  ПОСЛЕДСТВИЕ: у следующего периода вход (carry_in_*) посчитан от выхода этого, и после переоткрытия он недостоверен — как и вся цепочка дальше. Пока арифметики переноса нет, это предупреждение; в ответе видно, сколько подытоженных периодов идёт следом.",
+            "type": "object",
+            "properties": {
+                "ends_on": {
+                    "description": "EndsOn — ГГГГ-ММ-ДД. Пусто — подтверждаем ту дату, что стоит:\nэто отметка «я проверил», а не правка.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.draftEstimateReq": {
+            "type": "object",
+            "properties": {
+                "creator_ids": {
+                    "description": "CreatorIDs — кого выбрал клиент. Порядок здесь не важен: на сумму\nвлияет состав, а не приоритет. Пусто — состав ещё не набран, и\nпрогноз бонуса не считается.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "needed": {
+                    "description": "Needed — сколько креаторов нужно. Единственное обязательное поле:\nбез него не посчитать даже оклады.",
+                    "type": "integer"
+                },
+                "videos_count": {
+                    "description": "VideosCount — объём роликов. Ноль значит «ещё не знаю»: смету\nспрашивают и до того, как решили, сколько роликов в месяц.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message пустой у ручек, отдающих ошибку без текста.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.paymentReq": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "integer"
+                },
+                "note": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_billing.periodResp": {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                }
+            }
+        },
+        "internal_billing.periodsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.ProjectPeriod"
+                    }
+                }
+            }
+        },
+        "internal_billing.publishTermsReq": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "body": {
+                    "type": "string"
+                },
+                "bonus_views_threshold": {
+                    "type": "integer"
+                },
+                "click_bonus_rate": {
+                    "description": "null в ставке — это «переходы не считаем», в отличие от нуля,\nкоторый значил бы заданную нулевую ставку. Помечено для спеки:\nбез пометки читающий только swagger отправит 0.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "type": "integer"
+                },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона ступеней. null = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_salary_per_month": {
+                    "description": "Креаторская сторона: что получает исполнитель. null = «столько же,\nсколько платит клиент», то есть платформа ничего не удерживает.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnull = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "---- фикс за РОЛИК ----\n\nЦена одной вышедшей выкладки, а не месяца: месяц с пятью роликами\nне должен стоить как месяц с тридцатью. Заменяет собой нижнюю\nступень лесенки — там и был фикс за период. null = фикса за ролик\nнет, версия считается прежней моделью (оклад за период).",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "project_cost": {
+                    "description": "ProjectCost — стоимость проекта за период, копейки. Единственное\nденежное поле проекта без креаторов: там начислений по людям нет,\nа СПВ считать надо, и делимое называет менеджер.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views": {
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "type": "integer"
+                },
+                "step_cap_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "---- ступенчатый тариф ----\n\nЗаполненный step_views означает, что версия считается ступенями, а\nоклад и ставка за тысячу в расчёт не идут — кроме вирального\nхвоста, который считается по rate_per_1000_views_over и порогу на\nролик выше. null во всех этих полях = версия по старой модели;\nпоэтому именно null, а не 0: ноль значил бы «ступень нулевого\nразмера».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: порог объёма и цена периода на\nнём. Приходит целиком и целиком же заменяет прежнюю: ступень\nудаляют не реже, чем добавляют, и «обнови присланное» оставило бы\nудалённую ступень жить в расчёте.\n\nНепустая лесенка отменяет step_views и цену ступени выше: это\nдругое правило счёта, и смешивать их в одном периоде нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика за период.\nnull = KPI по подписчикам не считаем вовсе (в отличие от нуля,\nкоторый значил бы объявленную нулевую ставку). Само число\nподписчиков вписывает менеджер: сборщика по ним нет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "videos_first_month": {
+                    "description": "За какой объём назван оклад: «30 видео первый месяц, 60 со второго».",
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.subscribersReq": {
+            "type": "object",
+            "properties": {
+                "period": {
+                    "description": "Period — номер периода проекта. 0 = текущий: менеджер вписывает\nчисло по ходу периода, а не разыскивает его номер.",
+                    "type": "integer"
+                },
+                "subscribers": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.subscribersResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.CreatorSubscribers"
+                    }
+                }
+            }
+        },
+        "internal_billing.tariffRegistryResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TariffRow"
+                    }
+                }
+            }
+        },
+        "internal_billing.termsReq": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "bonus_views_threshold": {
+                    "type": "integer"
+                },
+                "click_bonus_rate": {
+                    "description": "null в ставке — это «переходы не считаем», в отличие от нуля,\nкоторый значил бы заданную нулевую ставку. Помечено для спеки:\nбез пометки читающий только swagger отправит 0.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_rate_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "click_bonus_threshold": {
+                    "type": "integer"
+                },
+                "creator_base_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_fee_per_video": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_first_period_fee": {
+                    "description": "Креаторская сторона ступеней. null = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_rate_per_1000_views_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_salary_per_month": {
+                    "description": "Креаторская сторона: что получает исполнитель. null = «столько же,\nсколько платит клиент», то есть платформа ничего не удерживает.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "creator_subscriber_rate": {
+                    "description": "CreatorSubscriberRate — сколько из этого получает креатор.\nnull = «как у клиента».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "fee_per_video": {
+                    "description": "---- фикс за РОЛИК ----\n\nЦена одной вышедшей выкладки, а не месяца: месяц с пятью роликами\nне должен стоить как месяц с тридцатью. Заменяет собой нижнюю\nступень лесенки — там и был фикс за период. null = фикса за ролик\nнет, версия считается прежней моделью (оклад за период).",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "first_period_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "guarantee_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "project_cost": {
+                    "description": "ProjectCost — стоимость проекта за период, копейки. Единственное\nденежное поле проекта без креаторов: там начислений по людям нет,\nа СПВ считать надо, и делимое называет менеджер.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views": {
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "type": "integer"
+                },
+                "step_cap_views": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_fee_over": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_tier2_from": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "step_views": {
+                    "description": "---- ступенчатый тариф ----\n\nЗаполненный step_views означает, что версия считается ступенями, а\nоклад и ставка за тысячу в расчёт не идут — кроме вирального\nхвоста, который считается по rate_per_1000_views_over и порогу на\nролик выше. null во всех этих полях = версия по старой модели;\nпоэтому именно null, а не 0: ноль значил бы «ступень нулевого\nразмера».",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "steps": {
+                    "description": "Steps — лесенка произвольной длины: порог объёма и цена периода на\nнём. Приходит целиком и целиком же заменяет прежнюю: ступень\nудаляют не реже, чем добавляют, и «обнови присланное» оставило бы\nудалённую ступень жить в расчёте.\n\nНепустая лесенка отменяет step_views и цену ступени выше: это\nдругое правило счёта, и смешивать их в одном периоде нельзя.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsStep"
+                    }
+                },
+                "subscriber_rate": {
+                    "description": "SubscriberRate — сколько платит заказчик за подписчика за период.\nnull = KPI по подписчикам не считаем вовсе (в отличие от нуля,\nкоторый значил бы объявленную нулевую ставку). Само число\nподписчиков вписывает менеджер: сборщика по ним нет.",
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "videos_first_month": {
+                    "description": "За какой объём назван оклад: «30 видео первый месяц, 60 со второго».",
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_billing.termsVersionsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_billing.TermsVersion"
+                    }
+                }
+            }
+        },
+        "internal_billing.utmReq": {
+            "type": "object",
+            "properties": {
+                "url": {
                     "type": "string"
                 }
             }
@@ -5529,6 +16859,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nотдаёт ошибку без текста (httpx.WriteErr).",
+                    "type": "string"
                 }
             }
         },
@@ -5590,6 +16924,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nотдаёт ошибку без текста (httpx.WriteErr).",
                     "type": "string"
                 }
             }
@@ -5883,6 +17221,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nзовёт httpx.WriteErr без текста, и в ответе поля тогда нет.",
+                    "type": "string"
                 }
             }
         },
@@ -5914,6 +17256,685 @@ const docTemplate = `{
             "properties": {
                 "status": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_orders.Availability": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "is_available": {
+                    "type": "boolean"
+                },
+                "month": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.BroadcastResult": {
+            "type": "object",
+            "properties": {
+                "preferred": {
+                    "description": "Preferred — сколько из них заказчик отметил «хочу особенно».",
+                    "type": "integer"
+                },
+                "recipients": {
+                    "description": "Recipients — скольким ушло. Ноль — не ошибка: известных креаторов\nможет не быть вовсе, — но и не то, о чём стоит узнать через\nнеделю, поэтому событие пишется и с нулём.",
+                    "type": "integer"
+                },
+                "skipped_over_limit": {
+                    "description": "SkippedOverLimit — сколько пропущено по дневному лимиту.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_orders.Candidate": {
+            "type": "object",
+            "properties": {
+                "creator_name": {
+                    "description": "CreatorName — человеческое имя вместо uuid: та же лесенка\nspecialist → client → префикс email, что в остальной выдаче.",
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "invited_at": {
+                    "type": "string"
+                },
+                "is_preferred": {
+                    "description": "IsPreferred — заказчик отметил этого человека: «хочу особенно\nего». Это НЕ приоритет очереди — очереди больше нет, приглашение\nуходит всем сразу. Отметка идёт в текст приглашения и в список у\nменеджера, когда он собирает состав из откликнувшихся.",
+                    "type": "boolean"
+                },
+                "order_id": {
+                    "type": "string"
+                },
+                "priority": {
+                    "description": "Priority — порядок строк, в котором заказчик их отметил. Смысла\nочереди у него больше нет; оставлен как устойчивая сортировка,\nчтобы список не прыгал между запросами.",
+                    "type": "integer"
+                },
+                "responded_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_orders.CandidateStatus"
+                }
+            }
+        },
+        "internal_orders.CandidateStatus": {
+            "type": "string",
+            "enum": [
+                "reserve",
+                "invited",
+                "accepted",
+                "declined",
+                "expired",
+                "responded"
+            ],
+            "x-enum-varnames": [
+                "CandidateReserve",
+                "CandidateInvited",
+                "CandidateAccepted",
+                "CandidateDeclined",
+                "CandidateExpired",
+                "CandidateResponded"
+            ]
+        },
+        "internal_orders.CreateResult": {
+            "type": "object",
+            "properties": {
+                "broadcast": {
+                    "description": "Broadcast — скольким креаторам ушла заявка. Отдаётся наружу, а не\nпишется только в лог: заказчик видит на экране «заявка ушла\nкреаторам», и число за этой фразой обязано существовать.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.BroadcastResult"
+                        }
+                    ]
+                },
+                "busy_creators": {
+                    "description": "BusyCreators — кого из отмеченных мы всё равно взяли в заявку,\nхотя он отметил себя занятым на этот месяц. Это предупреждение, а\nне отказ: приглашение ему уйдёт, а решать будет он сам.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "order": {
+                    "$ref": "#/definitions/internal_orders.Order"
+                }
+            }
+        },
+        "internal_orders.FinalizeResult": {
+            "type": "object",
+            "properties": {
+                "added": {
+                    "description": "Added — кого добавили в состав этим вызовом. Уже стоявшие в\nсоставе сюда не попадают: повторная финализация не должна\nвыглядеть как второй набор людей.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "order": {
+                    "$ref": "#/definitions/internal_orders.Order"
+                }
+            }
+        },
+        "internal_orders.Invitation": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "type": "string"
+                },
+                "broadcast_at": {
+                    "description": "BroadcastAt — когда заявка ушла рассылкой. Отличает «позвали\nлично» от «получил вместе со всеми», и это разные разговоры.",
+                    "type": "string"
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "invited_at": {
+                    "type": "string"
+                },
+                "is_preferred": {
+                    "description": "IsPreferred — заказчик отметил этого человека: «хочу особенно\nвас». Приписка в том же приглашении, а не отдельное письмо: два\nсообщения одному человеку про одну заявку выглядят беспорядком.",
+                    "type": "boolean"
+                },
+                "order_id": {
+                    "type": "string"
+                },
+                "responded": {
+                    "description": "Responded — человек уже ответил, и вот как. Пусто — ещё нет.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.ResponseMode"
+                        }
+                    ]
+                },
+                "start_month": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_orders.CandidateStatus"
+                },
+                "title": {
+                    "description": "Title и Brief — о чём заявка. Без них приглашение выглядит как\n«30 роликов в октябре», и решать по нему нечего.",
+                    "type": "string"
+                },
+                "videos_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_orders.Order": {
+            "type": "object",
+            "properties": {
+                "accepted": {
+                    "description": "Accepted — сколько уже согласилось. Считается, а не хранится.",
+                    "type": "integer"
+                },
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.Candidate"
+                    }
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "need_more": {
+                    "description": "NeedMore — сколько ещё не хватает до укомплектованного состава.",
+                    "type": "integer"
+                },
+                "needed": {
+                    "type": "integer"
+                },
+                "paid_at": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "reserve_left": {
+                    "description": "ReserveLeft — сколько людей ещё можно позвать без участия клиента.\nНоль при NeedMore \u003e 0 — это и есть момент «добрать», когда\nподключается менеджер.",
+                    "type": "integer"
+                },
+                "start_month": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_orders.OrderStatus"
+                },
+                "terms_version_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "videos_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_orders.OrderBrief": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — кому.",
+                    "type": "string"
+                },
+                "goal": {
+                    "description": "Goal — зачем снимаем: «продажи», «узнаваемость», «прогрев к\nзапуску». С этого менеджер начинает разговор.",
+                    "type": "string"
+                },
+                "platforms": {
+                    "description": "Platforms — площадки. Пусто = все пять: так работает пакет по\nумолчанию, и заставлять отмечать их ради этого незачем.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "product": {
+                    "description": "Product — что продвигаем.",
+                    "type": "string"
+                },
+                "refs": {
+                    "description": "Refs — на что равняться: ссылки на ролики, которые нравятся.",
+                    "type": "string"
+                },
+                "tone": {
+                    "description": "Tone — каким тоном: «по-дружески», «экспертно», «без юмора».",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.OrderStatus": {
+            "type": "string",
+            "enum": [
+                "draft",
+                "submitted",
+                "inviting",
+                "staffed",
+                "finalized",
+                "paid",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "StatusDraft",
+                "StatusSubmitted",
+                "StatusInviting",
+                "StatusStaffed",
+                "StatusFinalized",
+                "StatusPaid",
+                "StatusCancelled"
+            ]
+        },
+        "internal_orders.Response": {
+            "type": "object",
+            "properties": {
+                "avatar_url": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "file_url": {
+                    "type": "string"
+                },
+                "in_crew": {
+                    "description": "InCrew — человек уже в составе проекта. Без этого менеджер жмёт\n«Взять в проект» второй раз и получает отказ вместо ответа.",
+                    "type": "boolean"
+                },
+                "is_preferred": {
+                    "description": "IsPreferred — заказчик отметил этого человека «хочу особенно».\nВ списке откликов это главный признак: из двадцати согласных\nначинают с тех, кого просили.",
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.ResponseItem"
+                    }
+                },
+                "mode": {
+                    "$ref": "#/definitions/internal_orders.ResponseMode"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "order_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.ResponseItem": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "preview_url": {
+                    "type": "string"
+                },
+                "thumbnail_url": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "video_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.ResponseMode": {
+            "type": "string",
+            "enum": [
+                "attach",
+                "upload",
+                "from_portfolio",
+                "decline"
+            ],
+            "x-enum-varnames": [
+                "ModeAttach",
+                "ModeUpload",
+                "ModeFromPortfolio",
+                "ModeDecline"
+            ]
+        },
+        "internal_orders.Terms": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "bonus_views_threshold": {
+                    "type": "integer"
+                },
+                "click_bonus_rate": {
+                    "description": "Переходы: порог месячный. nil в ставке = не считаем.",
+                    "type": "integer"
+                },
+                "click_bonus_rate_over": {
+                    "type": "integer"
+                },
+                "click_bonus_threshold": {
+                    "type": "integer"
+                },
+                "fee_per_video": {
+                    "description": "FeePerVideo — фикс за ВЫШЕДШИЙ РОЛИК. nil = версия старая, фикс\nплатится окладом за период.\n\nЭто экран, на котором человек НАЖИМАЕТ «согласен», и цена здесь\nобязана быть той, по которой ему выставят счёт. Без этого поля\nусловия показывали оклад за месяц, а счёт приходил за ролики —\nпричём числа расходились вдвое.",
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "rate_per_1000_views": {
+                    "description": "Ставка ступенчатая: до порога на ролик — полная, свыше — пониженная.",
+                    "type": "integer"
+                },
+                "rate_per_1000_views_over": {
+                    "type": "integer"
+                },
+                "salary_per_month": {
+                    "description": "SalaryPerMonth — оклад за месяц; VideosFirstMonth/VideosNextMonths —\nза какой объём он назван.",
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                },
+                "videos_first_month": {
+                    "type": "integer"
+                },
+                "videos_next_months": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_orders.addCandidatesReq": {
+            "type": "object",
+            "properties": {
+                "creator_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_orders.availabilityQueryReq": {
+            "type": "object",
+            "properties": {
+                "creator_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "month": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.availabilityQueryResp": {
+            "type": "object",
+            "properties": {
+                "busy": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "month": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.availabilityReq": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "month": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.briefReq": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — кому.",
+                    "type": "string"
+                },
+                "goal": {
+                    "description": "Goal — зачем снимаем: «продажи», «узнаваемость», «прогрев к\nзапуску». С этого менеджер начинает разговор.",
+                    "type": "string"
+                },
+                "platforms": {
+                    "description": "Platforms — площадки. Пусто = все пять: так работает пакет по\nумолчанию, и заставлять отмечать их ради этого незачем.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "product": {
+                    "description": "Product — что продвигаем.",
+                    "type": "string"
+                },
+                "refs": {
+                    "description": "Refs — на что равняться: ссылки на ролики, которые нравятся.",
+                    "type": "string"
+                },
+                "tone": {
+                    "description": "Tone — каким тоном: «по-дружески», «экспертно», «без юмора».",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.briefResp": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "$ref": "#/definitions/internal_orders.OrderBrief"
+                }
+            }
+        },
+        "internal_orders.createOrderReq": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "description": "Brief — первый шаг воронки. Необязателен: заявка без брифа лучше\nформы, которую бросили на полпути, а дописать его можно потом.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.OrderBrief"
+                        }
+                    ]
+                },
+                "ceiling": {
+                    "description": "Ceiling — потолок в копейках, который заказчику показали на баре.\nИдёт в сообщение менеджеру: разговор начинается с той суммы,\nкоторую человек видел, а не с пересчитанной на сервере.",
+                    "type": "integer"
+                },
+                "creator_ids": {
+                    "description": "CreatorIDs — кого заказчик отметил. Порядка в списке больше нет:\nочередь приглашений ушла, приглашение уходит всем известным\nкреаторам, а отмеченные получают его с пометкой «хотят особенно».",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "needed": {
+                    "type": "integer"
+                },
+                "start_month": {
+                    "type": "string"
+                },
+                "videos_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_orders.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.finalizeReq": {
+            "type": "object",
+            "properties": {
+                "creator_ids": {
+                    "description": "CreatorIDs — состав. Может быть пустым: «утверждаю объём, людей\nдобавлю позже» — это тоже решение.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "monthly_plan": {
+                    "description": "MonthlyPlan — сколько роликов в месяц по договорённости. Ноль —\nне трогать: значит, о числе не договаривались.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_orders.invitationsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.Invitation"
+                    }
+                }
+            }
+        },
+        "internal_orders.limitResp": {
+            "type": "object",
+            "properties": {
+                "allowed": {
+                    "description": "Allowed — верхняя граница: сколько креаторов можно взять на этот\nмесяц. MinAllowed — нижняя, для подписи «доступно 2–3». Взять\nменьше нижней границы не запрещено.",
+                    "type": "integer"
+                },
+                "completed_months": {
+                    "description": "CompletedMonths — сколько оплаченных месяцев будет закрыто к его\nначалу. Отдаётся, чтобы «доступен один креатор» не выглядело\nпроизволом: видно, что месяцев работы пока ноль.",
+                    "type": "integer"
+                },
+                "first_month": {
+                    "description": "FirstMonth — это первый месяц клиента. В нём берут одного креатора:\nклиент проверяет формат на небольшой сумме, платформа — что клиент\nплатит и даёт обратную связь.",
+                    "type": "boolean"
+                },
+                "min_allowed": {
+                    "type": "integer"
+                },
+                "month": {
+                    "description": "Month — месяц, на который посчитан лимит, ГГГГ-ММ.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_orders.myAvailabilityResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.Availability"
+                    }
+                }
+            }
+        },
+        "internal_orders.ordersListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.Order"
+                    }
+                }
+            }
+        },
+        "internal_orders.reorderReq": {
+            "type": "object",
+            "properties": {
+                "creator_ids": {
+                    "description": "CreatorIDs — новый порядок неприглашённых кандидатов, целиком.\nИменно порядок, а не состав: добавить или убрать человека здесь\nнельзя, для этого есть свои ручки со своими проверками.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_orders.respondReq": {
+            "type": "object",
+            "properties": {
+                "accept": {
+                    "description": "Accept — старый путь: согласие или отказ по именному приглашению.",
+                    "type": "boolean"
+                },
+                "file_url": {
+                    "description": "FileURL — ссылка на загруженный ролик (attach, upload).",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode — новый путь: attach | upload | from_portfolio | decline.\nПусто — значит пришли по старому.",
+                    "type": "string"
+                },
+                "note": {
+                    "description": "Note — пара слов менеджеру. Необязательно.",
+                    "type": "string"
+                },
+                "portfolio_items": {
+                    "description": "PortfolioItems — что показать из уже загруженного\n(from_portfolio).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_orders.responsesResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_orders.Response"
+                    }
+                }
+            }
+        },
+        "internal_orders.termsResp": {
+            "type": "object",
+            "properties": {
+                "consented": {
+                    "type": "boolean"
+                },
+                "terms": {
+                    "$ref": "#/definitions/internal_orders.Terms"
                 }
             }
         },
@@ -5978,6 +17999,41 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_pipelines.StageFull"
                     }
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_pipelines.PipelineListItem": {
+            "type": "object",
+            "properties": {
+                "active_projects": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "is_default": {
+                    "type": "boolean"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "revisions_included": {
+                    "type": "integer"
                 },
                 "updated_at": {
                     "type": "string"
@@ -6169,6 +18225,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nотдаёт ошибку без текста (httpx.WriteErr).",
+                    "type": "string"
                 }
             }
         },
@@ -6235,7 +18295,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/internal_pipelines.Pipeline"
+                        "$ref": "#/definitions/internal_pipelines.PipelineListItem"
                     }
                 }
             }
@@ -6263,6 +18323,37 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_productions.ProductionListItem": {
+            "type": "object",
+            "properties": {
+                "active_projects": {
+                    "description": "ActiveProjects — незавершённые проекты, где исполнитель из этого\nпродакшена.",
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_active": {
+                    "type": "boolean"
+                },
+                "members": {
+                    "description": "Members — сколько специалистов указали этот продакшен в профиле.",
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_productions.createReq": {
             "type": "object",
             "properties": {
@@ -6278,6 +18369,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nзовёт httpx.WriteErr без текста, и в ответе поля тогда нет.",
                     "type": "string"
                 }
             }
@@ -6304,6 +18399,17 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_productions.usageListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_productions.ProductionListItem"
+                    }
                 }
             }
         },
@@ -6356,6 +18462,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nотдаёт ошибку без текста (httpx.WriteErr).",
                     "type": "string"
                 }
             }
@@ -7125,6 +19235,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nзовёт httpx.WriteErr без текста, и в ответе поля тогда нет.",
+                    "type": "string"
                 }
             }
         },
@@ -7139,6 +19253,26 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.AdminListResult": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.ProjectManagerView"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_projects.Comment": {
             "type": "object",
             "properties": {
@@ -7146,12 +19280,18 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "author_name": {
+                    "description": "AuthorName — display_name автора: specialist_profile → client_profile →\nпрефикс email. Считается в запросе, в таблице комментариев его нет.",
                     "type": "string"
                 },
                 "body": {
+                    "description": "Body — тело в формате BodyFormat. Для html здесь уже очищенная\nразметка: чистка происходит на записи, читателю отдаётся готовое.",
                     "type": "string"
                 },
                 "body_format": {
+                    "type": "string"
+                },
+                "body_text": {
+                    "description": "BodyText — то же без разметки. Фронту нужен там, где HTML не к месту:\nзаголовок уведомления, превью в списке, поиск по переписке.",
                     "type": "string"
                 },
                 "created_at": {
@@ -7164,12 +19304,65 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "is_internal": {
+                    "description": "IsInternal — то же, что Thread == ThreadInternal. Остаётся в ответе:\nна него смотрит уже написанный фронт.",
                     "type": "boolean"
+                },
+                "mentions": {
+                    "description": "Mentions — кого упомянули. Пусто, если никого.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "project_id": {
                     "type": "string"
                 },
+                "thread": {
+                    "description": "Thread/ThreadUserID — ветка. ThreadUserID заполнен только у creator.",
+                    "type": "string"
+                },
+                "thread_user_id": {
+                    "type": "string"
+                },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.Delivery": {
+            "type": "object",
+            "properties": {
+                "attempt": {
+                    "description": "Attempt — номер попытки, 1 для первой сдачи.",
+                    "type": "integer"
+                },
+                "decided_at": {
+                    "type": "string"
+                },
+                "decision": {
+                    "description": "Decision — pending, пока клиент не ответил.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "materials": {
+                    "description": "Materials — что приложено именно к этой сдаче.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.Material"
+                    }
+                },
+                "note": {
+                    "type": "string"
+                },
+                "rework_reason": {
+                    "type": "string"
+                },
+                "submitted_at": {
+                    "type": "string"
+                },
+                "submitted_by": {
                     "type": "string"
                 }
             }
@@ -7218,6 +19411,68 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.GeneralProject": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "description": "Brief — что нужно сделать. Лежит в projects.notes.",
+                    "type": "string"
+                },
+                "budget": {
+                    "type": "integer"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "client_user_id": {
+                    "type": "string"
+                },
+                "completed_at": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deliveries": {
+                    "description": "Deliveries — журнал сдач, от первой к последней. Пусто, пока\nисполнитель ничего не сдал.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.Delivery"
+                    }
+                },
+                "due_date": {
+                    "description": "DueDate — единственный срок проекта.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "overdue": {
+                    "description": "Overdue — срок прошёл, а работа не принята. Считается на сервере,\nчтобы клиент и исполнитель видели одно и то же независимо от\nчасового пояса браузера.",
+                    "type": "boolean"
+                },
+                "revisions_included": {
+                    "description": "RevisionsIncluded/Used — сколько раз работу можно вернуть на\nдоработку и сколько раз уже возвращали.",
+                    "type": "integer"
+                },
+                "revisions_used": {
+                    "type": "integer"
+                },
+                "specialist_name": {
+                    "type": "string"
+                },
+                "specialist_user_id": {
+                    "description": "SpecialistID — исполнитель, которого выбрал клиент.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_projects.ManagerPatchInput": {
             "type": "object",
             "properties": {
@@ -7231,6 +19486,52 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.Material": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.MaterialInput": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.Participant": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "role": {
+                    "description": "Role — client | creator | specialist | manager | admin. Нужна фронту,\nчтобы показать, кто есть кто в выпадашке @.",
+                    "type": "string"
+                },
+                "user_id": {
                     "type": "string"
                 }
             }
@@ -7281,6 +19582,18 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "is_test": {
+                    "description": "IsTest — проект заведён для проверки стенда. Админский список такие\nпрячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — вид проекта. Без него фронт отличал проект с креаторами от\nворонки по наличию выкладок, то есть догадкой.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_projects.ProjectKind"
+                        }
+                    ]
+                },
                 "lead_id": {
                     "type": "string"
                 },
@@ -7291,6 +19604,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "pipeline_id": {
+                    "description": "PipelineID — воронка. nil у общего проекта: воронки у него нет\nвовсе, и отдавать нулевой uuid значило бы врать, что она есть.",
                     "type": "string"
                 },
                 "revisions_included": {
@@ -7364,16 +19678,33 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "is_test": {
+                    "description": "IsTest — проект заведён для проверки стенда. Админский список такие\nпрячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — вид проекта. Без него фронт отличал проект с креаторами от\nворонки по наличию выкладок, то есть догадкой.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_projects.ProjectKind"
+                        }
+                    ]
+                },
                 "lead_id": {
                     "type": "string"
                 },
                 "lead_recipient_specialist_id": {
                     "type": "string"
                 },
+                "manager_display_name": {
+                    "description": "ManagerDisplayName — имя менеджера проекта. Заказчик пишет не «в\nподдержку», а конкретному человеку: у вкладки переписки в кабинете\nстоит его имя, и брать это имя больше неоткуда. Пусто, пока\nменеджер не назначен.",
+                    "type": "string"
+                },
                 "notes": {
                     "type": "string"
                 },
                 "pipeline_id": {
+                    "description": "PipelineID — воронка. nil у общего проекта: воронки у него нет\nвовсе, и отдавать нулевой uuid значило бы врать, что она есть.",
                     "type": "string"
                 },
                 "progress": {
@@ -7490,6 +19821,18 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "is_test": {
+                    "description": "IsTest — проект заведён для проверки стенда. Админский список такие\nпрячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — вид проекта. Без него фронт отличал проект с креаторами от\nворонки по наличию выкладок, то есть догадкой.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_projects.ProjectKind"
+                        }
+                    ]
+                },
                 "lead_id": {
                     "type": "string"
                 },
@@ -7500,6 +19843,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "pipeline_id": {
+                    "description": "PipelineID — воронка. nil у общего проекта: воронки у него нет\nвовсе, и отдавать нулевой uuid значило бы врать, что она есть.",
                     "type": "string"
                 },
                 "progress": {
@@ -7547,6 +19891,21 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "internal_projects.ProjectKind": {
+            "type": "string",
+            "enum": [
+                "creators_turnkey",
+                "brand_turnkey",
+                "production_turnkey",
+                "general"
+            ],
+            "x-enum-varnames": [
+                "KindCreatorsTurnkey",
+                "KindBrandTurnkey",
+                "KindProductionTurnkey",
+                "KindGeneral"
+            ]
         },
         "internal_projects.ProjectManagerView": {
             "type": "object",
@@ -7608,20 +19967,48 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "is_test": {
+                    "description": "IsTest — проект заведён для проверки стенда. Админский список такие\nпрячет по умолчанию: иначе половина строк в нём — «тест т8т 1234».",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — вид проекта. Без него фронт отличал проект с креаторами от\nворонки по наличию выкладок, то есть догадкой.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_projects.ProjectKind"
+                        }
+                    ]
+                },
                 "lead_id": {
                     "type": "string"
                 },
                 "lead_recipient_specialist_id": {
                     "type": "string"
                 },
+                "manager_display_name": {
+                    "description": "ManagerDisplayName — ответственный менеджер. Без него по списку не\nответить на вторую половину вопроса «что не двигалось» — «и кто за\nэто отвечает»: assigned_to_user_id сам по себе ничего не говорит.",
+                    "type": "string"
+                },
                 "notes": {
                     "type": "string"
                 },
                 "pipeline_id": {
+                    "description": "PipelineID — воронка. nil у общего проекта: воронки у него нет\nвовсе, и отдавать нулевой uuid значило бы врать, что она есть.",
                     "type": "string"
                 },
                 "progress": {
                     "type": "number"
+                },
+                "progress_done": {
+                    "description": "Прогресс числом, а не только процентом.\n\n«62%» в списке не отвечает на вопрос, с которым в него смотрят:\nсколько роликов ещё выложить и сколько шагов осталось пройти.\nЕдиница измерения у видов проектов разная, поэтому рядом с числами\nлежит ProgressUnit — иначе «3 из 5» читалось бы как что угодно.",
+                    "type": "integer"
+                },
+                "progress_total": {
+                    "type": "integer"
+                },
+                "progress_unit": {
+                    "description": "ProgressUnit — publications у креаторов, steps у продакшна.\nПусто означает, что мерить нечего: ни выкладок, ни шагов.",
+                    "type": "string"
                 },
                 "revisions_included": {
                     "type": "integer"
@@ -7904,10 +20291,19 @@ const docTemplate = `{
                     "description": "ClientUserID — для зарегистрированного клиента. Если пусто,\nнужно client_name + client_contact (no-account клиент).",
                     "type": "string"
                 },
+                "is_test": {
+                    "description": "IsTest — пометить проект как тестовый: в админском списке такие\nскрыты по умолчанию. Ставится здесь, а не выводится из данных —\n«тест» в названии пишут не всегда.",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — вид проекта. Пусто = production_turnkey.",
+                    "type": "string"
+                },
                 "notes": {
                     "type": "string"
                 },
                 "pipeline_id": {
+                    "description": "PipelineID — необязателен: воронку продакшну подставляем по\nумолчанию, а креаторам и общему проекту она не нужна вовсе.",
                     "type": "string"
                 },
                 "source": {
@@ -7970,8 +20366,21 @@ const docTemplate = `{
                 "body": {
                     "type": "string"
                 },
+                "body_format": {
+                    "description": "Format — plain (по умолчанию) или html. Для html разметка чистится на\nсервере: см. internal/richtext.",
+                    "type": "string"
+                },
+                "creator_id": {
+                    "description": "CreatorID — чья креаторская ветка. Обязателен при thread=\"creator\".",
+                    "type": "string"
+                },
                 "is_internal": {
+                    "description": "IsInternal — прежнее поле. Оставлено для уже написанного фронта:\ntrue равнозначно thread=\"internal\".",
                     "type": "boolean"
+                },
+                "thread": {
+                    "description": "Thread — client | creator | internal. Пусто = client (или internal,\nесли выставлен is_internal).",
+                    "type": "string"
                 }
             }
         },
@@ -7991,6 +20400,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nотдаёт ошибку без текста (httpx.WriteErr).",
+                    "type": "string"
                 }
             }
         },
@@ -8002,6 +20415,62 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_projects.Event"
                     }
+                }
+            }
+        },
+        "internal_projects.generalCreateReq": {
+            "type": "object",
+            "properties": {
+                "brief": {
+                    "description": "Brief — что нужно сделать.",
+                    "type": "string"
+                },
+                "budget": {
+                    "type": "integer"
+                },
+                "due_date": {
+                    "description": "DueDate — срок, YYYY-MM-DD. Единственный срок проекта.",
+                    "type": "string"
+                },
+                "specialist_user_id": {
+                    "description": "SpecialistID — кого выбрал клиент. Обязателен.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.generalDeliverReq": {
+            "type": "object",
+            "properties": {
+                "materials": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.MaterialInput"
+                    }
+                },
+                "note": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.generalListResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.GeneralProject"
+                    }
+                }
+            }
+        },
+        "internal_projects.generalReasonReq": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
                 }
             }
         },
@@ -8021,10 +20490,19 @@ const docTemplate = `{
                     "description": "ClientUserID — для зарегистрированного клиента. Если пусто,\nнужно client_name+client_contact (no-account клиент).",
                     "type": "string"
                 },
+                "is_test": {
+                    "description": "IsTest — пометить проект как тестовый: админский список такие\nскрывает по умолчанию.",
+                    "type": "boolean"
+                },
+                "kind": {
+                    "description": "Kind — вид проекта: creators_turnkey | production_turnkey | general.\nПусто = production_turnkey, как все проекты до появления видов.",
+                    "type": "string"
+                },
                 "notes": {
                     "type": "string"
                 },
                 "pipeline_id": {
+                    "description": "PipelineID — воронка. Обязателен только для production_turnkey:\nу креаторов вместо воронки выкладки, у общего проекта — один срок.",
                     "type": "string"
                 },
                 "specialist_user_id": {
@@ -8043,6 +20521,14 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/internal_projects.ProjectManagerView"
                     }
+                }
+            }
+        },
+        "internal_projects.markTestReq": {
+            "type": "object",
+            "properties": {
+                "is_test": {
+                    "type": "boolean"
                 }
             }
         },
@@ -8068,6 +20554,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.participantsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_projects.Participant"
+                    }
+                }
+            }
+        },
         "internal_projects.rejectSpecReq": {
             "type": "object",
             "properties": {
@@ -8076,11 +20573,1958 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_projects.restoreResp": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "$ref": "#/definitions/internal_projects.ProjectStatus"
+                }
+            }
+        },
         "internal_projects.skipReq": {
             "type": "object",
             "properties": {
                 "comment": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_projects.transferReq": {
+            "type": "object",
+            "properties": {
+                "project_ids": {
+                    "description": "ProjectIDs — что передаём. Пусто = все незавершённые проекты\nменеджера: это основной сценарий (сотрудник уходит).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "to_user_id": {
+                    "description": "ToUserID — кому передаём. Обязателен.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_projects.transferResp": {
+            "type": "object",
+            "properties": {
+                "project_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "transferred": {
+                    "description": "Transferred — сколько проектов переехало.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.Account": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "creator_name": {
+                    "description": "CreatorName — подпись владельца. Считается в запросе, в таблице\nдоступов её нет.",
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — чей это аккаунт. Ролики выходят С АККАУНТОВ\nКРЕАТОРОВ, и список без владельца читается как чужая связка\nключей: пять строк, и неясно, с кого спрашивать, когда ссылка\nперестала отвечать. Пусто у настоящих брендовых доступов —\nпочты, рекламного кабинета, аккаунта самого бренда.",
+                    "type": "string"
+                },
+                "has_password": {
+                    "description": "HasPassword — пароль заведён. Само значение отдаётся отдельной\nручкой: пароль не должен ездить в каждом списке проекта.",
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "login": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.BatchResult": {
+            "type": "object",
+            "properties": {
+                "batch_id": {
+                    "type": "string"
+                },
+                "created": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.Publication"
+                    }
+                }
+            }
+        },
+        "internal_publications.CalendarDay": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.CalendarItem"
+                    }
+                },
+                "planned": {
+                    "type": "integer"
+                },
+                "published": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.CalendarItem": {
+            "type": "object",
+            "properties": {
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — см. ClientVideo: пусто у ролика проекта.",
+                    "type": "string"
+                },
+                "publication_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_publications.ClientVideoStatus"
+                }
+            }
+        },
+        "internal_publications.ChecklistItem": {
+            "type": "object",
+            "properties": {
+                "added_for_project": {
+                    "description": "AddedForProject — пункт завёл менеджер под этот проект, а не\nскопирован из библиотеки. Обновление шаблона такие пункты не\nтрогает, и на экране они отличаются: иначе менеджер не знает, что\nуцелеет при обновлении версии.",
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_required": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.ChecklistSnapshotMeta": {
+            "type": "object",
+            "properties": {
+                "connected_at": {
+                    "type": "string"
+                },
+                "latest_version": {
+                    "description": "LatestVersion — какая версия этого шаблона в библиотеке сейчас.\nБольше подключённой — значит вышло обновление.",
+                    "type": "integer"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "template_name": {
+                    "type": "string"
+                },
+                "template_version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.ChecklistTemplate": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "items_count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "projects_count": {
+                    "description": "ProjectsCount — на скольких проектах эта версия подключена.\nОтвечает на вопрос, который возникает перед правкой шаблона:\nновая версия не тронет уже подключённые снимки, и знать, сколько\nпроектов останутся на старых пунктах, нужно ДО выпуска.",
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.ChecklistTemplateFull": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ChecklistTemplateItem"
+                    }
+                },
+                "items_count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "projects_count": {
+                    "description": "ProjectsCount — на скольких проектах эта версия подключена.\nОтвечает на вопрос, который возникает перед правкой шаблона:\nновая версия не тронет уже подключённые снимки, и знать, сколько\nпроектов останутся на старых пунктах, нужно ДО выпуска.",
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.ChecklistTemplateItem": {
+            "type": "object",
+            "properties": {
+                "is_required": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "description": "Platform — площадка пункта; пусто означает «для всех».",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.ClientVideo": {
+            "type": "object",
+            "properties": {
+                "collected_at": {
+                    "type": "string"
+                },
+                "comments": {
+                    "type": "integer"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — чей ролик. Пусто у проекта без креаторов: ролик\nпроекта, а не человека, и колонка «Креатор» у него не пустая по\nнедосмотру, а отсутствует по устройству.",
+                    "type": "string"
+                },
+                "likes": {
+                    "type": "integer"
+                },
+                "links": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "platforms": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "publication_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "stats_hidden": {
+                    "description": "StatsHidden — цифры скрыты настройкой проекта. Отдельное поле, а не\nмолчаливые нули: ноль читается как «никто не смотрел».",
+                    "type": "boolean"
+                },
+                "title": {
+                    "description": "Title — название ролика, которое дал креатор при сдаче. Пусто у\nроликов, сданных до того, как название начали спрашивать.",
+                    "type": "string"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.ClientVideoStatus": {
+            "type": "string",
+            "enum": [
+                "published",
+                "planned"
+            ],
+            "x-enum-varnames": [
+                "ClientStatusPublished",
+                "ClientStatusPlanned"
+            ]
+        },
+        "internal_publications.CreatorMedian": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "description": "Basis — сколько роликов легло в расчёт. Идёт вместе с числом:\n«медиана 190 тыс. по 12 роликам» и «по 3» — разной силы\nутверждения, и читателю нужно их различать.",
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views — медиана просмотров одного ролика.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.CreatorProject": {
+            "type": "object",
+            "properties": {
+                "added_at": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "next_due_date": {
+                    "description": "NextDueDate — ближайший срок из несданного. nil, когда сдано всё.",
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "publications_open": {
+                    "type": "integer"
+                },
+                "publications_overdue": {
+                    "type": "integer"
+                },
+                "publications_total": {
+                    "description": "Счётчики — только по СВОИМ выкладкам. Чужие креатор не видит нигде,\nи в списке проектов тоже не должен.",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.CreatorProjectCard": {
+            "type": "object",
+            "properties": {
+                "added_at": {
+                    "type": "string"
+                },
+                "brief": {
+                    "description": "Brief — что делаем. Лежит в projects.notes.",
+                    "type": "string"
+                },
+                "draft_required": {
+                    "description": "DraftRequired — у выкладки два срока: сдать черновик и выложить.",
+                    "type": "boolean"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "manager": {
+                    "description": "Manager — кому писать. nil, пока проект никто не взял.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.Person"
+                        }
+                    ]
+                },
+                "median": {
+                    "description": "Median — медиана просмотров КРЕАТОРА по всем его проектам. Из неё\nв кабинете считается «следующий ролик добавит примерно столько\nпросмотров» — то есть обещание, поэтому число обязано быть\nтипичным, а не средним. nil, пока мерить не на чем.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.CreatorMedian"
+                        }
+                    ]
+                },
+                "monthly_plan": {
+                    "description": "MonthlyPlan — сколько роликов за месяц по договору. Из него\nсчитается «роликов 6 из 12» в шапке.",
+                    "type": "integer"
+                },
+                "next_due_date": {
+                    "description": "NextDueDate — ближайший срок из несданного. nil, когда сдано всё.",
+                    "type": "string"
+                },
+                "platforms": {
+                    "description": "Platforms — пять площадок, на которые идёт ролик. Отдаём списком,\nчтобы фронт не держал свою копию порядка колонок.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "publications_open": {
+                    "type": "integer"
+                },
+                "publications_overdue": {
+                    "type": "integer"
+                },
+                "publications_total": {
+                    "description": "Счётчики — только по СВОИМ выкладкам. Чужие креатор не видит нигде,\nи в списке проектов тоже не должен.",
+                    "type": "integer"
+                },
+                "started_at": {
+                    "description": "StartedAt/DueDate — период проекта. DueDate у проекта с креаторами\nобычно пуст: сроки стоят у выкладок, а не у проекта.",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.CreatorReminderPref": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "day_before": {
+                    "type": "boolean"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.CreatorRow": {
+            "type": "object",
+            "properties": {
+                "avg_views": {
+                    "type": "number"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "share_percent": {
+                    "description": "SharePercent — доля в общем результате проекта.",
+                    "type": "number"
+                },
+                "videos": {
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.DateRequest": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "decided_at": {
+                    "type": "string"
+                },
+                "decided_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "publication_id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "requested_date": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.DayPoint": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.LinkSuggestion": {
+            "type": "object",
+            "properties": {
+                "author_handle": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "suggested_due_date": {
+                    "type": "string"
+                },
+                "suggested_publication_id": {
+                    "description": "Suggested* — выкладка, к которой предлагаем привязать. Считается\nпри чтении, а не хранится: срок переносят, выкладку закрывают, и\nприбитая к находке ссылка протухла бы на первом же переносе.\nПусто — подходящей выкладки сейчас нет, и кнопка «Привязать»\nпоказывать некуда.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.Material": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — creators или client. Определяет, кто материал увидит.",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.MonthRequest": {
+            "type": "object",
+            "properties": {
+                "ceiling": {
+                    "description": "Ceiling — потолок, показанный заказчику, в копейках.",
+                    "type": "integer"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "creators": {
+                    "type": "integer"
+                },
+                "handled_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "month": {
+                    "description": "Month — первое число месяца, о котором просят.",
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "description": "ProjectTitle и ClientName нужны сообщению в чат: по одному\nидентификатору проекта дежурный не поймёт, о ком речь.",
+                    "type": "string"
+                },
+                "requested_by": {
+                    "type": "string"
+                },
+                "videos": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.NotificationPrefs": {
+            "type": "object",
+            "properties": {
+                "on_date_shift": {
+                    "type": "boolean"
+                },
+                "on_new_video": {
+                    "type": "boolean"
+                },
+                "on_weekly_digest": {
+                    "type": "boolean"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                },
+                "views_threshold": {
+                    "description": "ViewsThreshold — «ролик перешагнул порог просмотров». nil = не слать.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.Person": {
+            "type": "object",
+            "properties": {
+                "account_links": {
+                    "description": "AccountLinks — ссылки на аккаунты по пяти площадкам, из профиля\nспециалиста. Менеджеру они нужны, чтобы проверить выкладку глазами,\nне спрашивая креатора. Площадки, которых у человека нет, просто\nотсутствуют в карте.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "added_at": {
+                    "description": "AddedAt — когда включён в состав проекта.",
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "median": {
+                    "description": "Median — сколько просмотров этот человек обычно даёт за ролик.\nnil, пока измеренных роликов слишком мало: см. CreatorMedians.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.CreatorMedian"
+                        }
+                    ]
+                },
+                "remind_day_before": {
+                    "description": "RemindDayBefore — колокольчик в плане выкладок: писать ли этому\nчеловеку накануне срока. Разрешённое значение, а не сырая строка\nнастройки: если колокольчик не трогали, здесь стоит то, что\nдействует по проекту.",
+                    "type": "boolean"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.PlatformRow": {
+            "type": "object",
+            "properties": {
+                "comments": {
+                    "type": "integer"
+                },
+                "er_percent": {
+                    "description": "ERPercent/ERWithoutShares — вовлечённость площадки и признак, что\nона посчитана без репостов.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "type": "boolean"
+                },
+                "likes": {
+                    "type": "integer"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "shares": {
+                    "description": "Shares — репосты. Пусто, если площадка их не отдаёт: ноль означал\nбы «репостов нет», а это другое утверждение.",
+                    "type": "integer"
+                },
+                "videos": {
+                    "type": "integer"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.ProjectSettings": {
+            "type": "object",
+            "properties": {
+                "client_sees_stats": {
+                    "description": "ClientSeesStats — заказчик видит цифры.",
+                    "type": "boolean"
+                },
+                "draft_required": {
+                    "description": "DraftRequired — у выкладки два срока: сдать черновик и выложить.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.Publication": {
+            "type": "object",
+            "properties": {
+                "batch_id": {
+                    "type": "string"
+                },
+                "close_reason": {
+                    "type": "string"
+                },
+                "closed_by": {
+                    "type": "string"
+                },
+                "comments": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "creator_name": {
+                    "description": "CreatorName — человеческое имя вместо uuid. Считается в выдаче, а не\nхранится: имя живёт в профиле и меняется там.",
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — кому поручен ролик. nil означает «это ролик\nпроекта, а не чей-то»: у проекта без креаторов поручать некому, и\nподставной владелец тут же полез бы в состав, в отчёт по людям и\nв начисления как настоящий участник.",
+                    "type": "string"
+                },
+                "draft_due_date": {
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "er_percent": {
+                    "description": "ERPercent — вовлечённость: (лайки + комментарии + репосты) ÷\nпросмотры, в процентах.",
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — посчитана без репостов: их не отдала хотя бы одна\nплощадка либо ролик собирали до того, как мы начали их писать.\nПрошлое не пересчитывается, поэтому у старых роликов признак\nостанется навсегда — и это честнее скачка на графике.",
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "likes": {
+                    "type": "integer"
+                },
+                "links": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.SubmittedLink"
+                    }
+                },
+                "overdue": {
+                    "description": "Overdue — вычисляется, а не хранится: просрочка зависит от текущей\nдаты и от того, не висит ли просьба о переносе. Хранить такое поле\nзначит держать фоновую задачу, которая его переписывает каждую ночь.",
+                    "type": "boolean"
+                },
+                "pending_date_request": {
+                    "description": "PendingDateRequest — непринятая просьба о переносе. Пока она есть,\nвыкладка не считается просроченной и пинги по ней не идут.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.DateRequest"
+                        }
+                    ]
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел: самое раннее известное среди\nплощадок выкладки. Площадки выкладывают не одновременно, и «вышел»\n— это первая из них; на этой дате будет стоять возраст ролика и\nправило «зрелый» (14 дней).\n\nnil означает «не знаем»: ни одна площадка даты не отдала или ролик\nещё не собирали. Подставлять сюда дату сдачи ссылок нельзя — сдают\nи через неделю после выхода.",
+                    "type": "string"
+                },
+                "review": {
+                    "description": "Review — проверка ролика менеджером. nil означает «не смотрели», и\nэто не то же самое, что «принято» или «замечаний нет»: статус\nвыкладки говорит про ссылки, а проверка — про содержание ролика.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.PublicationReview"
+                        }
+                    ]
+                },
+                "self_added": {
+                    "description": "SelfAdded — выкладку завёл себе сам креатор, а не менеджер.\n\nМенеджеру это видно в списке и в карточке, чтобы он не искал в\nсвоих пачках ролик, которого туда не ставил. Считается признак не\nдля отчётности: самодобавленные не участвуют в знаменателе\nнедосдачи — иначе кнопка «добрать до ступени» уменьшала бы оклад\nтому, кто её нажал.",
+                    "type": "boolean",
+                    "x-omitempty": true
+                },
+                "shares": {
+                    "description": "Shares — репосты по всем площадкам выкладки. Пусто, если хоть одна\nплощадка их не отдаёт: ноль означал бы «репостов нет».",
+                    "type": "integer"
+                },
+                "stats_collected_at": {
+                    "description": "StatsCollectedAt — самый свежий сбор среди площадок выкладки.",
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/internal_publications.Status"
+                },
+                "title": {
+                    "description": "Title — название ролика. Пишет креатор в момент сдачи: он\nединственный, кто знает, что снял. У запланированной выкладки\nназвания ещё нет, и это нормально — тему задаёт дата.",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "views": {
+                    "description": "Views/Likes/Comments — сумма по всем площадкам выкладки, по\nпоследнему снимку каждой ссылки. Порог «миллион просмотров» считается\nпо ролику целиком, а не по отдельной площадке, поэтому суммой этой\nпользуются и уведомления, и интерфейс — собирать её на фронте из\nvideos_table значило бы держать вторую реализацию того же правила.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.PublicationReview": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "description": "Comment — замечание последнего решения. При возврате обязательно:\n«вернули молча» креатор всё равно придёт выяснять словами.",
+                    "type": "string"
+                },
+                "decided_at": {
+                    "type": "string"
+                },
+                "decided_by": {
+                    "type": "string"
+                },
+                "decided_by_name": {
+                    "type": "string"
+                },
+                "marks": {
+                    "description": "Marks — вердикты по пунктам; пункта без строки менеджер ещё не\nкасался.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ReviewMark"
+                    }
+                },
+                "round": {
+                    "description": "Round — какая это по счёту сдача. Больше единицы значит, что ролик\nуже возвращали.",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.ReminderPrefs": {
+            "type": "object",
+            "properties": {
+                "day_before": {
+                    "description": "DayBefore — креатору в бот НАКАНУНЕ срока. Единственный из видов,\nвыключенный по умолчанию: он появился позже остальных, и включать\nего молча всем — значит завтра утром написать каждому креатору\nкаждого проекта, никого не спросив. Колокольчик напротив креатора\nв плане выкладок сильнее этой настройки, см.\nCreatorReminderPref.",
+                    "type": "boolean"
+                },
+                "due_today": {
+                    "description": "DueToday — креатору в бот утром в день выкладки.",
+                    "type": "boolean"
+                },
+                "incomplete": {
+                    "description": "Incomplete — ролик вышел, но собраны не все пять ссылок.",
+                    "type": "boolean"
+                },
+                "manager_digest": {
+                    "description": "ManagerDigest — сводка в общий чат менеджеров. Креаторы её не видят.",
+                    "type": "boolean"
+                },
+                "overdue": {
+                    "description": "Overdue — на следующий день после просрочки и дальше раз в сутки.",
+                    "type": "boolean"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.Report": {
+            "type": "object",
+            "properties": {
+                "as_of": {
+                    "type": "string"
+                },
+                "by_creator": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.CreatorRow"
+                    }
+                },
+                "by_day": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.DayPoint"
+                    }
+                },
+                "by_platform": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.PlatformRow"
+                    }
+                },
+                "collapsed": {
+                    "type": "boolean"
+                },
+                "comments": {
+                    "type": "integer"
+                },
+                "cost": {
+                    "description": "Cost — сколько стоит проект за период, копейки. Приходит только у\nвида, где сумму называет менеджер (FeaturesOf(...).HasManualCost):\nу проекта с креаторами деньги считаются по людям, и второе число\nрядом с начислениями означало бы два разных ответа на один вопрос.\nnil — вида не того или сумму ещё не назвали.",
+                    "type": "integer"
+                },
+                "cost_per_1000": {
+                    "description": "CostPer1000 — стоимость тысячи просмотров, копейки. Та же целочисленная\nформула, что в billing.totals: сумма × 1000 ÷ просмотры.\n\nnil при нулевых просмотрах намеренно: ноль читался бы как\n«бесплатно», а «не знаем» — другое утверждение.",
+                    "type": "integer"
+                },
+                "er_percent": {
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — хоть одна площадка, вошедшая в расчёт, репостов\nне отдала. Показатель занижен, и сказать об этом обязаны.",
+                    "type": "boolean"
+                },
+                "growth_24h": {
+                    "description": "Growth24h — прирост за сутки по всем роликам. null, если хоть по\nодной ссылке вчерашнего снимка нет: сложить известные с\nнеизвестными и выдать за полное число — то же занижение, только\nспрятанное.",
+                    "type": "integer"
+                },
+                "likes": {
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "shares": {
+                    "type": "integer"
+                },
+                "videos": {
+                    "type": "integer"
+                },
+                "videos_table": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.VideoRow"
+                    }
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.ReviewMark": {
+            "type": "object",
+            "properties": {
+                "item_id": {
+                    "type": "string"
+                },
+                "passed": {
+                    "description": "Passed — «да» или «нет». Отсутствие строки означает третье\nсостояние — «ещё не смотрел», и оно не равно «нет».",
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.Scheme": {
+            "type": "string",
+            "enum": [
+                "daily",
+                "weekdays",
+                "tue_thu",
+                "every_other_day"
+            ],
+            "x-enum-comments": {
+                "SchemeDaily": "каждый день",
+                "SchemeEveryOtherDay": "через день",
+                "SchemeTueThu": "вторник и четверг",
+                "SchemeWeekdays": "будни"
+            },
+            "x-enum-descriptions": [
+                "каждый день",
+                "будни",
+                "вторник и четверг",
+                "через день"
+            ],
+            "x-enum-varnames": [
+                "SchemeDaily",
+                "SchemeWeekdays",
+                "SchemeTueThu",
+                "SchemeEveryOtherDay"
+            ]
+        },
+        "internal_publications.Status": {
+            "type": "string",
+            "enum": [
+                "planned",
+                "partial",
+                "done",
+                "closed_manually",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "StatusPlanned",
+                "StatusPartial",
+                "StatusDone",
+                "StatusClosedManually",
+                "StatusCancelled"
+            ]
+        },
+        "internal_publications.SubmittedLink": {
+            "type": "object",
+            "properties": {
+                "external_media_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_collected_at": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "publication_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел на этой площадке, по данным\nсборщика. nil, пока площадка даты не отдала.",
+                    "type": "string"
+                },
+                "submitted_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "url_canonical": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.VideoRow": {
+            "type": "object",
+            "properties": {
+                "collected_at": {
+                    "type": "string"
+                },
+                "comments": {
+                    "type": "integer"
+                },
+                "creator_name": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "description": "CreatorUserID — чей ролик. Пусто у проекта без креаторов: там\nролик принадлежит проекту, и колонки «Креатор» в таблице нет.",
+                    "type": "string"
+                },
+                "er_percent": {
+                    "type": "number"
+                },
+                "er_without_shares": {
+                    "description": "ERWithoutShares — вовлечённость посчитана без репостов: площадка\nих не отдала или ролик собирали до того, как мы начали их писать.",
+                    "type": "boolean"
+                },
+                "growth_24h": {
+                    "description": "Growth24h — прирост ЗА СУТКИ: разница с вчерашним снимком. null —\nвчерашнего снимка нет, и прирост неизвестен. Ноль здесь означал бы\n«ролик встал», а это другое утверждение: см. sharesTotal, правило\nто же.",
+                    "type": "integer"
+                },
+                "likes": {
+                    "type": "integer"
+                },
+                "link_id": {
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "publication_id": {
+                    "type": "string"
+                },
+                "shares": {
+                    "type": "integer"
+                },
+                "submitted_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.accountReq": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "description": "CreatorUserID — чей это аккаунт. Пусто — брендовый доступ без\nвладельца (почта, рекламный кабинет).",
+                    "type": "string"
+                },
+                "login": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "password": {
+                    "description": "Password: поле не прислали — пароль не трогаем; прислали пустым —\nстираем.",
+                    "type": "string"
+                },
+                "platform": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.accountsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.Account"
+                    }
+                },
+                "secrets_enabled": {
+                    "description": "SecretsEnabled — можно ли заводить пароли. Выключено, когда в\nокружении нет ключа шифрования: логины и ссылки при этом работают,\nи интерфейсу надо это показать, а не молча прятать поле.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.addPubReq": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "draft_lead_days": {
+                    "type": "integer"
+                },
+                "due_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.addSelfReq": {
+            "type": "object",
+            "properties": {
+                "due_date": {
+                    "description": "DueDate — день выхода ролика, YYYY-MM-DD. Сегодня или вперёд.",
+                    "type": "string",
+                    "example": "2026-09-20"
+                }
+            }
+        },
+        "internal_publications.addSuggestionReq": {
+            "type": "object",
+            "properties": {
+                "author_handle": {
+                    "type": "string"
+                },
+                "creator_user_id": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "description": "PublishedAt — когда ролик вышел на площадке, RFC3339. Из неё\nподбирается выкладка, к которой предложить привязку.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.autopingReq": {
+            "type": "object",
+            "properties": {
+                "day_before": {
+                    "type": "boolean"
+                },
+                "due_today": {
+                    "type": "boolean"
+                },
+                "incomplete": {
+                    "type": "boolean"
+                },
+                "manager_digest": {
+                    "type": "boolean"
+                },
+                "overdue": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.batchReq": {
+            "type": "object",
+            "properties": {
+                "creator_user_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "dates": {
+                    "description": "Dates — альтернатива схеме: произвольный список дат (YYYY-MM-DD).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "draft_lead_days": {
+                    "type": "integer"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "scheme": {
+                    "$ref": "#/definitions/internal_publications.Scheme"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.calendarResp": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.CalendarDay"
+                    }
+                },
+                "month": {
+                    "type": "string"
+                },
+                "months": {
+                    "description": "Months — месяцы (ГГГГ-ММ), в которых у проекта вообще есть\nвыкладки. Сетка показывает один месяц, и без этого списка пустой\nмесяц неотличим от «данные не доехали»: заказчик видел сентябрь с\nодной точкой и не знал, что десять остальных выкладок в августе.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_publications.cancelBatchReq": {
+            "type": "object",
+            "properties": {
+                "batch_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.cancelBatchResp": {
+            "type": "object",
+            "properties": {
+                "cancelled": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.checklistItemReq": {
+            "type": "object",
+            "properties": {
+                "is_required": {
+                    "type": "boolean"
+                },
+                "platform": {
+                    "description": "Platform пустой = пункт общий для всех площадок.",
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.checklistRequiredReq": {
+            "type": "object",
+            "properties": {
+                "is_required": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.checklistResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ChecklistItem"
+                    }
+                }
+            }
+        },
+        "internal_publications.clientFeedResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ClientVideo"
+                    }
+                }
+            }
+        },
+        "internal_publications.closeReq": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.creatorProjectsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.CreatorProject"
+                    }
+                }
+            }
+        },
+        "internal_publications.creatorRemindReq": {
+            "type": "object",
+            "properties": {
+                "day_before": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.creatorReq": {
+            "type": "object",
+            "properties": {
+                "creator_user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.dateRequestReq": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                },
+                "requested_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.decideReq": {
+            "type": "object",
+            "properties": {
+                "approve": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.dueDateReq": {
+            "type": "object",
+            "properties": {
+                "due_date": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.editLinkReq": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "description": "URL — новый адрес ролика. Пусто — снять ссылку с площадки.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.linkSuggestionReq": {
+            "type": "object",
+            "properties": {
+                "checked_item_ids": {
+                    "description": "CheckedItemIDs — пункты чеклиста: привязка идёт тем же путём, что\nи ссылка, вставленная руками, и проверяется так же.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "publication_id": {
+                    "description": "PublicationID — к какой выкладке привязать. Пусто — к той, что\nпредложил сервис.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.listResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.Publication"
+                    }
+                }
+            }
+        },
+        "internal_publications.managerChecklistResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ChecklistItem"
+                    }
+                },
+                "template": {
+                    "$ref": "#/definitions/internal_publications.ChecklistSnapshotMeta"
+                }
+            }
+        },
+        "internal_publications.materialReq": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — creators (по умолчанию) или client. Материалы для\nкреаторов заказчик не видит.",
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "Kind — doc, video или link.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.materialsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.Material"
+                    }
+                }
+            }
+        },
+        "internal_publications.monthRequestReq": {
+            "type": "object",
+            "properties": {
+                "ceiling": {
+                    "description": "Ceiling — потолок в копейках, показанный на экране. Пересчитывать\nего на сервере незачем: разговор пойдёт именно о той сумме,\nкоторую человек прочитал, а прайс к этому моменту может смениться.",
+                    "type": "integer"
+                },
+                "creators": {
+                    "type": "integer"
+                },
+                "month": {
+                    "description": "Month — «ГГГГ-ММ». Пусто — следующий месяц от сегодняшнего дня.",
+                    "type": "string"
+                },
+                "videos": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.monthRequestResp": {
+            "type": "object",
+            "properties": {
+                "request": {
+                    "$ref": "#/definitions/internal_publications.MonthRequest"
+                }
+            }
+        },
+        "internal_publications.personsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.Person"
+                    }
+                }
+            }
+        },
+        "internal_publications.prefsReq": {
+            "type": "object",
+            "properties": {
+                "on_date_shift": {
+                    "type": "boolean"
+                },
+                "on_new_video": {
+                    "type": "boolean"
+                },
+                "on_weekly_digest": {
+                    "type": "boolean"
+                },
+                "views_threshold": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.previewResp": {
+            "type": "object",
+            "properties": {
+                "dates": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.remindResp": {
+            "type": "object",
+            "properties": {
+                "sent": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.reviewReq": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "description": "Comment — замечание. Обязательно при decision=return.",
+                    "type": "string"
+                },
+                "decision": {
+                    "description": "Decision — пусто «сохранить ход проверки», return «вернуть»,\naccept «принять».",
+                    "type": "string"
+                },
+                "marks": {
+                    "description": "Marks — вердикты по пунктам целиком: что не прислали, того\nменеджер не отмечал.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ReviewMark"
+                    }
+                }
+            }
+        },
+        "internal_publications.saveTemplateReq": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ChecklistTemplateItem"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "replaces": {
+                    "description": "Replaces — id версии, которую заменяем. Пусто — новый шаблон.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.secretResp": {
+            "type": "object",
+            "properties": {
+                "password": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.snapshotReq": {
+            "type": "object",
+            "properties": {
+                "template_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.snapshotResp": {
+            "type": "object",
+            "properties": {
+                "copied": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.submitReq": {
+            "type": "object",
+            "properties": {
+                "checked_item_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "title": {
+                    "description": "Title — название ролика. Досылая площадки, поле можно не повторять:\nпустое не затирает записанное.",
+                    "type": "string"
+                },
+                "urls": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_publications.suggestionsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.LinkSuggestion"
+                    }
+                }
+            }
+        },
+        "internal_publications.templatesResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.ChecklistTemplate"
+                    }
+                }
+            }
+        },
+        "internal_ratings.Levels": {
+            "type": "object",
+            "properties": {
+                "good_from": {
+                    "type": "integer"
+                },
+                "great_from": {
+                    "type": "integer"
+                },
+                "hit_from": {
+                    "type": "integer"
+                },
+                "medium_from": {
+                    "type": "integer"
+                },
+                "viral_from": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.MarketPrice": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "measured_on": {
+                    "description": "MeasuredOn — когда измеряли. Именно дата измерения, а не выпуска\nверсии: числа переносят из версии в версию, и дата должна\nпереезжать вместе с числом.",
+                    "type": "string"
+                },
+                "price_per_1000": {
+                    "description": "PricePer1000 — копейки.",
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.PlatformLevels": {
+            "type": "object",
+            "properties": {
+                "good_from": {
+                    "type": "integer"
+                },
+                "great_from": {
+                    "type": "integer"
+                },
+                "medium_from": {
+                    "type": "integer"
+                },
+                "platform": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.PublishResult": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "description": "Changes — разница с прежней действующей версией. Пусто у самой\nпервой: сравнивать не с чем.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.ScaleChange"
+                    }
+                },
+                "projects_on_previous": {
+                    "description": "ProjectsOnPrevious — сколько проектов остались на прежней версии.\nОни за новой не последуют: копия снимается один раз.",
+                    "type": "integer"
+                },
+                "scale": {
+                    "$ref": "#/definitions/internal_ratings.Scale"
+                }
+            }
+        },
+        "internal_ratings.Relative": {
+            "type": "object",
+            "properties": {
+                "mature_age_days": {
+                    "description": "MatureAgeDays — со скольких дней ролик считается зрелым.",
+                    "type": "integer"
+                },
+                "min_mature_videos": {
+                    "description": "MinMatureVideos — меньше какого числа зрелых роликов сравнивать\nбессмысленно: перцентиль по десяти роликам — это не перцентиль.",
+                    "type": "integer"
+                },
+                "window_days": {
+                    "description": "WindowDays — за какой период берём ролики для сравнения.",
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.Scale": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "is_current": {
+                    "description": "IsCurrent — эта версия сейчас действует. Действует всегда одна:\nсамая новая.",
+                    "type": "boolean"
+                },
+                "levels": {
+                    "$ref": "#/definitions/internal_ratings.Levels"
+                },
+                "market": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.MarketPrice"
+                    }
+                },
+                "note": {
+                    "type": "string"
+                },
+                "platform_levels": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.PlatformLevels"
+                    }
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "published_by": {
+                    "type": "string"
+                },
+                "relative": {
+                    "$ref": "#/definitions/internal_ratings.Relative"
+                },
+                "shares": {
+                    "$ref": "#/definitions/internal_ratings.Shares"
+                },
+                "typical_video_views": {
+                    "type": "integer"
+                },
+                "used_by_periods": {
+                    "type": "integer"
+                },
+                "used_by_projects": {
+                    "description": "UsedByProjects/UsedByPeriods — сколько проектов сняли с неё копию\nи сколько подытоженных периодов ею оценены. Показывает, что версию\nнельзя считать черновиком.",
+                    "type": "integer"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.ScaleChange": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "integer"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.Shares": {
+            "type": "object",
+            "properties": {
+                "bad_pct": {
+                    "type": "integer"
+                },
+                "good_pct": {
+                    "type": "integer"
+                },
+                "great_pct": {
+                    "description": "GreatPct — отличные и выше: хиты и виральные тоже сюда. Отдельной\nнормы у них нет — они слишком редки, чтобы ждать их долю.",
+                    "type": "integer"
+                },
+                "medium_pct": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.marketReq": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "measured_on": {
+                    "description": "MeasuredOn — ГГГГ-ММ-ДД. Дата измерения, а не выпуска версии:\nчисло могли перенести из прошлой версии как есть.",
+                    "type": "string"
+                },
+                "price_per_1000": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_ratings.publishReq": {
+            "type": "object",
+            "properties": {
+                "levels": {
+                    "$ref": "#/definitions/internal_ratings.Levels"
+                },
+                "market": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.marketReq"
+                    }
+                },
+                "note": {
+                    "type": "string"
+                },
+                "platform_levels": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.PlatformLevels"
+                    }
+                },
+                "relative": {
+                    "$ref": "#/definitions/internal_ratings.Relative"
+                },
+                "shares": {
+                    "$ref": "#/definitions/internal_ratings.Shares"
+                },
+                "typical_video_views": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_ratings.scalesResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_ratings.Scale"
+                    }
                 }
             }
         },
@@ -8151,6 +22595,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nзовёт httpx.WriteErr без текста, и в ответе поля тогда нет.",
                     "type": "string"
                 }
             }
@@ -8320,6 +22768,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nотдаёт ошибку без текста (httpx.WriteErr).",
+                    "type": "string"
                 }
             }
         },
@@ -8391,6 +22843,10 @@ const docTemplate = `{
             "properties": {
                 "error": {
                     "type": "string"
+                },
+                "message": {
+                    "description": "Message — человеческий текст для интерфейса. omitempty: часть ручек\nзовёт httpx.WriteErr без текста, и в ответе поля тогда нет.",
+                    "type": "string"
                 }
             }
         },
@@ -8426,6 +22882,41 @@ const docTemplate = `{
                 },
                 "target_category": {
                     "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_audit.Entry": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "actor_display_name": {
+                    "type": "string"
+                },
+                "actor_email": {
+                    "description": "ActorEmail/ActorDisplayName — заполняются только на чтении (JOIN\nна users). На записи их нет: почта сотрудника может смениться, а\nжурнал должен показывать сегодняшнюю.",
+                    "type": "string"
+                },
+                "actor_user_id": {
+                    "description": "ActorUserID — кто совершил действие. Nil означает «не человек»\n(фоновая задача) либо вызов из теста мимо HTTP: такие записи\nложатся с NULL, а не с несуществующим пользователем.",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "object_id": {
+                    "type": "string"
+                },
+                "object_type": {
+                    "type": "string"
+                },
+                "payload": {
+                    "type": "object",
+                    "additionalProperties": {}
                 }
             }
         },
@@ -8749,6 +23240,19 @@ const docTemplate = `{
                 },
                 "youtube": {
                     "type": "string"
+                }
+            }
+        },
+        "marketpclce_internal_publications.CreatorMedian": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "description": "Basis — сколько роликов легло в расчёт. Идёт вместе с числом:\n«медиана 190 тыс. по 12 роликам» и «по 3» — разной силы\nутверждения, и читателю нужно их различать.",
+                    "type": "integer"
+                },
+                "views": {
+                    "description": "Views — медиана просмотров одного ролика.",
+                    "type": "integer"
                 }
             }
         },

@@ -16,19 +16,19 @@ import (
 // см. docs/VIDEO_TRANSCODING.md). При клике на «развернуть» фронт
 // переключается на url с controls.
 type Video struct {
-	ID           uuid.UUID `json:"id"`
-	URL          string    `json:"url"`
-	PreviewURL   string    `json:"preview_url,omitempty"`
+	ID         uuid.UUID `json:"id"`
+	URL        string    `json:"url"`
+	PreviewURL string    `json:"preview_url,omitempty"`
 	// AnimatedThumbURL — animated WebP для главной (hero + works grid).
 	// Autoplay через <img> даже в iOS Low Power Mode (не <video>).
 	// Если пусто — фронт фолбэчит на <video preview_url>. См. §11 docs.
-	AnimatedThumbURL string `json:"animated_thumb_url,omitempty"`
-	Thumb        string    `json:"thumb,omitempty"`
-	Title        string    `json:"title,omitempty"`
-	Description  string    `json:"description,omitempty"`
-	DurationSec  *int      `json:"duration_sec,omitempty"`
-	Aspect       string    `json:"aspect,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	AnimatedThumbURL string    `json:"animated_thumb_url,omitempty"`
+	Thumb            string    `json:"thumb,omitempty"`
+	Title            string    `json:"title,omitempty"`
+	Description      string    `json:"description,omitempty"`
+	DurationSec      *int      `json:"duration_sec,omitempty"`
+	Aspect           string    `json:"aspect,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // Specialist — компактная проекция профиля для overlay'я. Это подмножество
@@ -48,8 +48,8 @@ type Specialist struct {
 	ReviewsCount    int      `json:"reviews_count"`
 	// ProductionName — название студии или пусто. IsFreelance — флаг
 	// фрилансера. Фронт overlay: name > "Фриланс" > (ничего).
-	ProductionName  string   `json:"production_name,omitempty"`
-	IsFreelance     bool     `json:"is_freelance"`
+	ProductionName string `json:"production_name,omitempty"`
+	IsFreelance    bool   `json:"is_freelance"`
 }
 
 // Image — один кадр photo-set'а в ленте. Минимальный набор для карусели.
@@ -95,6 +95,6 @@ type Query struct {
 	SkillSlugs    []string
 	City          string
 	Cursor        string
-	PerSpecialist int          // максимум видео на одного спеца, default 5
-	UserIDs       []uuid.UUID  // если непустой — жёсткий фильтр по этим спецам
+	PerSpecialist int         // максимум видео на одного спеца, default 5
+	UserIDs       []uuid.UUID // если непустой — жёсткий фильтр по этим спецам
 }

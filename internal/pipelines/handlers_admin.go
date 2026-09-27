@@ -43,6 +43,7 @@ func writeServiceErr(w http.ResponseWriter, err error) {
 
 // AdminListPipelines godoc
 // @Summary List pipelines (admin)
+// @Description У каждой воронки — сколько незавершённых проектов сейчас по ней идёт.
 // @Tags    admin-pipelines
 // @Produce json
 // @Security BearerAuth
@@ -433,9 +434,12 @@ func (h *Handler) AdminReorder(w http.ResponseWriter, r *http.Request) {
 
 // типы для swaggo
 type pipelineListResp struct {
-	Items []Pipeline `json:"items"`
+	Items []PipelineListItem `json:"items"`
 }
 
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// отдаёт ошибку без текста (httpx.WriteErr).
+	Message string `json:"message,omitempty"`
 }

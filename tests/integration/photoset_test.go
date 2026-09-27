@@ -890,7 +890,7 @@ func TestPhotoSet_UpdateMeta_RejectsEmptyTitle(t *testing.T) {
 	ctx := context.Background()
 
 	item, err := svc.AddPortfolioPhotoSet(ctx, uid, profiles.PortfolioPhotoSetCreateInput{
-		Title:  "T", Images: []profiles.PortfolioPhotoRef{{ImageURL: bucketURL(uid, "a.jpg")}},
+		Title: "T", Images: []profiles.PortfolioPhotoRef{{ImageURL: bucketURL(uid, "a.jpg")}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -933,7 +933,7 @@ func TestPhotoSet_UpdateMeta_NoFieldsNoop(t *testing.T) {
 	ctx := context.Background()
 
 	item, err := svc.AddPortfolioPhotoSet(ctx, uid, profiles.PortfolioPhotoSetCreateInput{
-		Title:  "Same", Images: []profiles.PortfolioPhotoRef{{ImageURL: bucketURL(uid, "a.jpg")}},
+		Title: "Same", Images: []profiles.PortfolioPhotoRef{{ImageURL: bucketURL(uid, "a.jpg")}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1126,4 +1126,3 @@ func TestGetPublic_ShowsApproved(t *testing.T) {
 		t.Errorf("uid mismatch")
 	}
 }
-

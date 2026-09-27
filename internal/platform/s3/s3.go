@@ -18,19 +18,19 @@ import (
 )
 
 type Config struct {
-	Endpoint    string // напр. https://storage.yandexcloud.net (с http(s)://)
-	AccessKey   string
-	SecretKey   string
-	Bucket      string
-	Region      string // YC: ru-central1; AWS — свой
-	UseSSL      bool
-	PublicURL   string // опциональный CNAME bucket'a (origin); иначе берём ${endpoint}/${bucket}
+	Endpoint  string // напр. https://storage.yandexcloud.net (с http(s)://)
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	Region    string // YC: ru-central1; AWS — свой
+	UseSSL    bool
+	PublicURL string // опциональный CNAME bucket'a (origin); иначе берём ${endpoint}/${bucket}
 	// CDNBaseURL — публичный URL Yandex CDN resource'a, который проксирует
 	// origin (Object Storage). Пустой → читаем напрямую с PublicURL.
 	// Заполнен → PublicURL(key) возвращает CDN URL для отдачи юзерам
 	// (presigned PUT'ы всё равно идут в origin через minio-go SDK).
 	// Подробнее: docs/CDN_SETUP.md.
-	CDNBaseURL  string
+	CDNBaseURL string
 }
 
 type Client struct {
@@ -156,6 +156,14 @@ func (c *Client) Bucket() string { return c.bucket }
 // Используется sweep'ом orphan media: проходим portfolio/ и images/ под
 // тысячи объектов, нужен стрим без буферизации (память O(1)).
 func (c *Client) ListObjects(ctx context.Context, prefix string, yield func(key string, lastModified time.Time) bool) error {
+	// Свой контекст с отменой: досрочный выход из цикла обязан сообщить
+	// об этом MinIO. Иначе его горутина-поставщик остаётся стоять на
+	// записи в канал, который больше никто не читает, — вместе с
+	// открытым телом ответа. Раньше обе ветки досрочного выхода просто
+	// возвращались.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	for obj := range c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{
 		Prefix:    prefix,
 		Recursive: true,

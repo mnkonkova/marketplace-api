@@ -42,8 +42,9 @@ func NewFFmpegBin(binPath string, timeout time.Duration) (*FFmpegBin, error) {
 }
 
 // MakePreview гонит pipeline:
-//   -ss 2 -t 8 -vf scale=-2:480 -c:v libx264 -profile:v baseline -level 3.0
-//   -preset veryfast -crf 28 -c:a aac -b:a 64k -ac 1 -movflags +faststart
+//
+//	-ss 2 -t 8 -vf scale=-2:480 -c:v libx264 -profile:v baseline -level 3.0
+//	-preset veryfast -crf 28 -c:a aac -b:a 64k -ac 1 -movflags +faststart
 //
 // Битый контейнер / "Invalid data found" в stderr → ErrPermanent.
 // Сам non-zero exit ffmpeg возвращает обычной ошибкой → транзиентно
@@ -59,10 +60,10 @@ func (f *FFmpegBin) MakePreview(ctx context.Context, input, output string) error
 
 	args := []string{
 		"-y",
-		"-ss", "2",                          // skip первые 2 сек
+		"-ss", "2", // skip первые 2 сек
 		"-i", input,
-		"-t", "8",                           // длительность 8 сек
-		"-vf", "scale=-2:480,setsar=1",      // 480p, even-width
+		"-t", "8", // длительность 8 сек
+		"-vf", "scale=-2:480,setsar=1", // 480p, even-width
 		"-c:v", "libx264",
 		"-profile:v", "baseline",
 		"-level", "3.0",
@@ -75,7 +76,7 @@ func (f *FFmpegBin) MakePreview(ctx context.Context, input, output string) error
 		"-b:a", "64k",
 		"-ac", "1",
 		"-movflags", "+faststart",
-		"-fs", "1500K",                      // hard cap (если CRF дал больше)
+		"-fs", "1500K", // hard cap (если CRF дал больше)
 		// -threads 2: libx264 по дефолту цепляет все ядра CPU (на 6-vCPU
 		// VDS — это 12 потоков с lookahead'ом), spawn'ает 12 thread-pool'ов
 		// + аллоцирует context на каждый → пик памяти при инициализации
@@ -132,6 +133,14 @@ type ffprobeOutput struct {
 // всё это и делается. ffmpeg 4.x отдаёт поворот в tags.rotate, 5+ — в
 // side_data_list, читаем оба.
 func (f *FFmpegBin) Probe(ctx context.Context, input string) (VideoMeta, error) {
+	// Свой таймаут, как у остальных операций этого типа. Без него
+	// ffprobe на повреждённом потоке висит вечно, а зовут его из
+	// outbox-воркера, который отдаёт хендлерам корневой контекст без
+	// дедлайна: один битый файл останавливал единственный цикл
+	// обработки событий насовсем.
+	ctx, cancel := context.WithTimeout(ctx, f.timeout)
+	defer cancel()
+
 	ffprobe := strings.TrimSuffix(f.bin, "ffmpeg") + "ffprobe"
 	cmd := exec.CommandContext(ctx, ffprobe,
 		"-v", "error",

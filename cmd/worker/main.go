@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -18,17 +16,34 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"marketpclce/internal/billing"
 	"marketpclce/internal/config"
+	"marketpclce/internal/eventroute"
+	"marketpclce/internal/instacurl"
 	"marketpclce/internal/notifications"
+	"marketpclce/internal/orders"
 	"marketpclce/internal/outbox"
 	"marketpclce/internal/platform/db"
 	"marketpclce/internal/platform/es"
 	"marketpclce/internal/platform/s3"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
+	"marketpclce/internal/publications"
 	"marketpclce/internal/search"
 	"marketpclce/internal/transcode"
 )
+
+// dispatcherOrNil — nil-указатель, положенный в интерфейс, перестаёт
+// быть nil: проверка `d.CRM == nil` в обработчике его не поймала бы, и
+// «адрес не задан» превратилось бы в вызов метода на nil-приёмнике.
+// Send такое переживает, но полагаться на это нельзя — интерфейс должен
+// быть честно пустым.
+func dispatcherOrNil(d *notifications.WebhookDispatcher) eventroute.Dispatcher {
+	if d == nil {
+		return nil
+	}
+	return d
+}
 
 func main() {
 	_ = godotenv.Load()
@@ -114,32 +129,6 @@ func main() {
 		slog.Warn("specialists bootstrap skipped", "err", err)
 	}
 
-	specialistHandler := func(ctx context.Context, _ int64, aggregateID, eventType string, payload []byte) error {
-		uid, err := uuid.Parse(aggregateID)
-		if err != nil {
-			return err
-		}
-		// version_micro — внешняя версия (updated_at.UnixMicro() emitter'a)
-		// для external_gte OCC в OpenSearch. Старые события без поля → 0,
-		// indexer фолбэкается на безверсионный путь (как раньше).
-		var p struct {
-			VersionMicro int64 `json:"version_micro"`
-		}
-		_ = json.Unmarshal(payload, &p) // невалидный payload = version 0
-		switch eventType {
-		case outbox.EventSpecialistDeleted:
-			if err := indexer.Delete(ctx, uid, p.VersionMicro); err != nil {
-				return err
-			}
-			return feedIndexer.DeleteByUser(ctx, uid)
-		default:
-			if err := indexer.Reconcile(ctx, uid, p.VersionMicro); err != nil {
-				return err
-			}
-			return feedIndexer.ReconcileVideos(ctx, uid)
-		}
-	}
-
 	// email.* (verify_send, password_reset_send) ходят только через n8n
 	// (workflow crmEmailNotify, см. deploy/n8n/workflows/). n8n получает
 	// {event_id, event_type, data:{to,token,base_url}}, сам рендерит HTML
@@ -154,46 +143,6 @@ func main() {
 		slog.Info("n8n email webhook ready", "url", cfg.N8nEmailWebhookURL)
 	}
 
-	emailHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		if n8nEmailDispatcher != nil {
-			return n8nEmailDispatcher.Send(ctx, notifications.Payload{
-				// R4: outbox.id уникален по таблице → идемпотентность в n8n.
-				EventID:     strconv.FormatInt(outboxID, 10),
-				Aggregate:   "user",
-				AggregateID: aggregateID,
-				EventType:   eventType,
-				Data:        payload,
-				OccurredAt:  time.Now().UTC(),
-			})
-		}
-		// Fallback для локального запуска без n8n: логируем URL и квитируем.
-		switch eventType {
-		case outbox.EventEmailVerifySend:
-			var p outbox.EmailVerifyPayload
-			if err := json.Unmarshal(payload, &p); err != nil {
-				return fmt.Errorf("decode email payload: %w", err)
-			}
-			slog.Info("verify-email (n8n disabled, copy this URL manually)",
-				"to", p.To,
-				"url", p.BaseURL+"/verify?token="+p.Token,
-			)
-			return nil
-		case outbox.EventEmailPasswordResetSend:
-			var p outbox.EmailPasswordResetPayload
-			if err := json.Unmarshal(payload, &p); err != nil {
-				return fmt.Errorf("decode password reset payload: %w", err)
-			}
-			slog.Info("password-reset (n8n disabled, copy this URL manually)",
-				"to", p.To,
-				"url", p.BaseURL+"/auth/reset?token="+p.Token,
-			)
-			return nil
-		default:
-			slog.Warn("unknown email event", "type", eventType)
-			return nil
-		}
-	}
-
 	// n8n-диспатчер для CRM-событий project.*. nil = выключен (события
 	// квитируются как no-op, чтобы не зависать в outbox-ретраях).
 	n8nDispatcher := notifications.NewWebhookDispatcher(cfg.N8nWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
@@ -203,40 +152,6 @@ func main() {
 		slog.Info("n8n webhook ready", "url", cfg.N8nWebhookURL)
 	}
 
-	projectHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		// no-op если диспатчер не сконфигурирован — событие считается
-		// обработанным, чтобы не копить ретраи на проде без webhook.
-		if n8nDispatcher == nil {
-			return nil
-		}
-		return n8nDispatcher.Send(ctx, notifications.Payload{
-			// R4: outbox.id уникален по таблице → идемпотентность в n8n.
-			EventID:     strconv.FormatInt(outboxID, 10),
-			Aggregate:   outbox.AggregateProject,
-			AggregateID: aggregateID,
-			EventType:   eventType,
-			Data:        payload,
-			OccurredAt:  time.Now().UTC(),
-		})
-	}
-
-	// moderation.specialist_pending → n8n уведомление админу о новой заявке
-	// на одобрение публикации. Использует тот же CRM webhook (N8N_WEBHOOK_URL).
-	// При выключенном webhook'е — no-op (событие квитируется).
-	moderationHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		if n8nDispatcher == nil {
-			return nil
-		}
-		return n8nDispatcher.Send(ctx, notifications.Payload{
-			EventID:     strconv.FormatInt(outboxID, 10),
-			Aggregate:   outbox.AggregateModeration,
-			AggregateID: aggregateID,
-			EventType:   eventType,
-			Data:        payload,
-			OccurredAt:  time.Now().UTC(),
-		})
-	}
-
 	// support.message_received → отдельный workflow (дамп в Telegram).
 	n8nSupportDispatcher := notifications.NewWebhookDispatcher(cfg.N8nSupportWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
 	if n8nSupportDispatcher == nil {
@@ -244,20 +159,6 @@ func main() {
 	} else {
 		slog.Info("n8n support webhook ready", "url", cfg.N8nSupportWebhookURL)
 	}
-	supportHandler := func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
-		if n8nSupportDispatcher == nil {
-			return nil
-		}
-		return n8nSupportDispatcher.Send(ctx, notifications.Payload{
-			EventID:     strconv.FormatInt(outboxID, 10),
-			Aggregate:   outbox.AggregateSupport,
-			AggregateID: aggregateID,
-			EventType:   eventType,
-			Data:        payload,
-			OccurredAt:  time.Now().UTC(),
-		})
-	}
-
 	// portfolio.video_uploaded → транскодинг preview (480p, ~500KB) через
 	// локальный ffmpeg. См. docs/VIDEO_TRANSCODING.md.
 	// Условия для активации:
@@ -266,7 +167,7 @@ func main() {
 	// Если что-то из этого нет — handler стартует как no-op (логирует и
 	// квитирует событие), worker не валится. Это позволяет запускать
 	// воркер локально без ffmpeg/без S3 и видеть остальные хендлеры.
-	portfolioHandler := transcodeNoOpHandler
+	var transcoder eventroute.Transcoder
 	ffmpeg, ffmpegErr := transcode.NewFFmpegBin(cfg.FFmpegPath, cfg.TranscodeTimeout)
 	switch {
 	case ffmpegErr != nil:
@@ -276,20 +177,20 @@ func main() {
 		slog.Warn("transcode disabled (S3 creds not set) — portfolio.video_uploaded acked as no-op")
 	default:
 		s3TC, err := s3.New(s3.Config{
-			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3AccessKey,
-			SecretKey: cfg.S3SecretKey,
-			Bucket:    cfg.S3Bucket,
-			Region:    cfg.S3Region,
-			UseSSL:    cfg.S3UseSSL,
-			PublicURL: cfg.S3PublicURL,
+			Endpoint:   cfg.S3Endpoint,
+			AccessKey:  cfg.S3AccessKey,
+			SecretKey:  cfg.S3SecretKey,
+			Bucket:     cfg.S3Bucket,
+			Region:     cfg.S3Region,
+			UseSSL:     cfg.S3UseSSL,
+			PublicURL:  cfg.S3PublicURL,
 			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
 			slog.Error("transcode s3 client init failed", "err", err)
 			os.Exit(1)
 		}
-		transcoder, err := transcode.NewService(transcode.Config{
+		svc, err := transcode.NewService(transcode.Config{
 			FFmpeg:  ffmpeg,
 			Storage: s3TC,
 			TempDir: cfg.TranscodeTempDir,
@@ -299,32 +200,29 @@ func main() {
 			slog.Error("transcode service init failed", "err", err)
 			os.Exit(1)
 		}
-		portfolioHandler = func(ctx context.Context, _ int64, aggregateID, eventType string, payload []byte) error {
-			if eventType != outbox.EventPortfolioVideoUploaded {
-				return fmt.Errorf("%w: unknown portfolio event %q", outbox.ErrPermanent, eventType)
-			}
-			err := transcoder.Process(ctx, payload)
-			if err != nil && errors.Is(err, transcode.ErrPermanent) {
-				return fmt.Errorf("%w: %v", outbox.ErrPermanent, err)
-			}
-			return err
-		}
+		transcoder = svc
 		slog.Info("transcode ready", "ffmpeg_timeout", cfg.TranscodeTimeout, "tempdir", cfg.TranscodeTempDir)
 	}
 
+	// Маршрутизация событий живёт в internal/eventroute: сами
+	// обработчики и таблица «агрегат → обработчик» там же, здесь только
+	// сборка зависимостей. Замыкания посреди main() нельзя было позвать
+	// из теста, и перепутанные местами вебхуки никто бы не заметил.
 	worker := outbox.NewWorker(pool, logger,
-		map[string]outbox.Handler{
-			outbox.AggregateSpecialist:  specialistHandler,
-			outbox.AggregateEmail:       emailHandler,
-			outbox.AggregateProject:     projectHandler,
-			outbox.AggregateSupport:     supportHandler,
-			outbox.AggregatePortfolio:   portfolioHandler,
-			outbox.AggregateModeration:  moderationHandler,
-		},
+		eventroute.Handlers(eventroute.Deps{
+			CRM:        dispatcherOrNil(n8nDispatcher),
+			Email:      dispatcherOrNil(n8nEmailDispatcher),
+			Support:    dispatcherOrNil(n8nSupportDispatcher),
+			Search:     indexer,
+			Feed:       feedIndexer,
+			Transcoder: transcoder,
+			Logger:     logger,
+		}),
 		outbox.Config{
 			MaxAttempts:     cfg.OutboxMaxAttempts,
 			BackoffCap:      cfg.OutboxBackoffCap,
 			Retention:       cfg.OutboxRetention,
+			DeadRetention:   cfg.OutboxDeadRetention,
 			CleanupInterval: cfg.OutboxCleanupInterval,
 		})
 
@@ -335,11 +233,47 @@ func main() {
 	projectsSvc := projects.NewService(projectsRepo).
 		WithReviewDeadline(cfg.ReviewDeadline)
 	go runReviewAutoSkipTicker(rootCtx, projectsSvc, cfg.ReviewCheckInterval, logger)
-	// CRM v5: периодическая чистка done (через ProjectRetention) и cancelled
-	// (через ProjectCancelledRetention) проектов.
-	go runOldProjectsCleanupTicker(rootCtx, projectsSvc,
-		cfg.ProjectRetention, cfg.ProjectCancelledRetention, cfg.ProjectCleanupInterval, logger)
+	go runPublicationRemindersTicker(rootCtx,
+		publications.NewService(publications.NewRepo(pool)),
+		cfg.PublicationRemindersInterval, cfg.PublicationRemindersAfterHour, logger)
 
+	go runOrderExpiryTicker(rootCtx, orders.NewService(orders.NewRepo(pool)),
+		cfg.OrderExpiryInterval, logger)
+
+	// Подытог периодов. До него правило «через две недели после конца
+	// периода просмотры больше не меняются» не исполнялось нигде: оно
+	// держалось на том, что менеджер вовремя нажал «Пересчитать».
+	go runPeriodLockTicker(rootCtx, billing.NewService(billing.NewRepo(pool)),
+		cfg.BillingPeriodLockInterval, cfg.BillingPeriodLockDelay, logger)
+
+	go runPublicationGaugeTicker(rootCtx,
+		publications.NewService(publications.NewRepo(pool)), 5*time.Minute, logger)
+
+	// Сбор статистики. Клиент nil, если адрес или ключ не заданы — тогда
+	// тикер не поднимается и в логе один внятный warn вместо ежечасных
+	// ошибок.
+	if ic := instacurl.New(cfg.InstacurlURL, cfg.InstacurlAPIKey, cfg.InstacurlTimeout); ic != nil {
+		go runStatsCollectTicker(rootCtx,
+			publications.NewService(publications.NewRepo(pool)).WithCollector(ic),
+			billing.NewService(billing.NewRepo(pool)),
+			cfg.StatsCollectInterval, cfg.StatsCollectBatch,
+			cfg.StatsCollectBatchesPerTick, logger)
+		// Обход аккаунтов креаторов. Тот же клиент: instacurl отвечает
+		// на адрес профиля списком последних роликов. Требует ОТДЕЛЬНОГО
+		// разрешения — расход у него свой (кредит на аккаунт в сутки, не
+		// затихающий со временем), и включаться вместе со сбором он не
+		// должен.
+		if cfg.AccountScanEnabled {
+			go runAccountScanTicker(rootCtx,
+				publications.NewService(publications.NewRepo(pool)).WithAccountScanner(ic),
+				cfg.AccountScanInterval, cfg.AccountScanBatch,
+				cfg.AccountScanBatchesPerTick, logger)
+		} else {
+			logger.Info("creator account scan disabled: ACCOUNT_SCAN_ENABLED is not set")
+		}
+	} else {
+		logger.Warn("stats collection disabled: INSTACURL_URL or INSTACURL_API_KEY not set")
+	}
 	// S3 orphan sweep: presigned uploads/удалённые портфолио оставляют
 	// «осиротевшие» объекты в bucket'е. Раз в S3SweepInterval листим
 	// portfolio/ и images/, удаляем не-referenced + старше S3OrphanMinAge.
@@ -350,13 +284,13 @@ func main() {
 	// выключен (no-op), фронт-аплоад продолжает работать.
 	if cfg.S3SweepAccessKey != "" && cfg.S3SweepSecretKey != "" {
 		s3Client, err := s3.New(s3.Config{
-			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3SweepAccessKey,
-			SecretKey: cfg.S3SweepSecretKey,
-			Bucket:    cfg.S3Bucket,
-			Region:    cfg.S3Region,
-			UseSSL:    cfg.S3UseSSL,
-			PublicURL: cfg.S3PublicURL,
+			Endpoint:   cfg.S3Endpoint,
+			AccessKey:  cfg.S3SweepAccessKey,
+			SecretKey:  cfg.S3SweepSecretKey,
+			Bucket:     cfg.S3Bucket,
+			Region:     cfg.S3Region,
+			UseSSL:     cfg.S3UseSSL,
+			PublicURL:  cfg.S3PublicURL,
 			CDNBaseURL: cfg.CDNBaseURL,
 		})
 		if err != nil {
@@ -411,46 +345,6 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("worker bye")
-}
-
-// runOldProjectsCleanupTicker — периодически удаляет done-проекты старше
-// doneRetention и cancelled-проекты старше cancelledRetention.
-func runOldProjectsCleanupTicker(ctx context.Context, svc *projects.Service, doneRetention, cancelledRetention, interval time.Duration, logger *slog.Logger) {
-	if interval <= 0 || (doneRetention <= 0 && cancelledRetention <= 0) {
-		return
-	}
-	if n, err := svc.RunOldProjectsCleanup(ctx, doneRetention, cancelledRetention); err != nil {
-		logger.Warn("old projects cleanup initial run failed", "err", err)
-	} else if n > 0 {
-		logger.Info("old projects cleaned up", "count", n)
-	}
-
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			n, err := svc.RunOldProjectsCleanup(ctx, doneRetention, cancelledRetention)
-			if err != nil {
-				logger.Warn("old projects cleanup failed", "err", err)
-				continue
-			}
-			if n > 0 {
-				logger.Info("old projects cleaned up", "count", n)
-			}
-		}
-	}
-}
-
-// transcodeNoOpHandler — заглушка для portfolio.video_uploaded когда
-// ffmpeg/S3 не сконфигурены. Не делает ничего, только логирует — событие
-// квитируется как success, чтобы не висеть в outbox-ретраях.
-var transcodeNoOpHandler outbox.Handler = func(_ context.Context, _ int64, aggregateID, eventType string, _ []byte) error {
-	slog.Info("transcode no-op (handler disabled)",
-		"aggregate_id", aggregateID, "event", eventType)
-	return nil
 }
 
 // runBusinessGaugeTicker — фоновое обновление бизнес-gauge'ов проектов/
@@ -567,6 +461,335 @@ func runReviewAutoSkipTicker(ctx context.Context, svc *projects.Service, interva
 	}
 }
 
+// runPublicationRemindersTicker — напоминания креаторам о выкладках и
+// сводка менеджерам в общий чат.
+//
+// Тик частый, а рассылка — раз в день: повтор гасится уникальным индексом
+// в notification_log, а не памятью процесса. Поэтому рестарт воркера
+// безопасен, а после простоя напоминания уходят при первом же тике.
+func runPublicationRemindersTicker(ctx context.Context, svc *publications.Service,
+	interval time.Duration, afterHour int, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if afterHour < 0 || afterHour > 23 {
+		afterHour = publications.DefaultReminderHour
+	}
+
+	run := func() {
+		now := time.Now()
+		if !publications.ReminderWindowOpen(now, afterHour) {
+			return
+		}
+		st, err := svc.RunReminders(ctx, now)
+		if err != nil {
+			logger.Warn("publication reminders failed", "err", err)
+			return
+		}
+		// Ролики, которые не пошли, — тем же проходом и в то же окно:
+		// это разговор с креатором, и будить его ради него отдельно в
+		// другое время незачем.
+		if weak, err := svc.RunWeakVideos(ctx, now, 0); err != nil {
+			logger.Warn("weak video pings failed", "err", err)
+		} else if weak > 0 {
+			logger.Info("weak video pings", "sent", weak)
+		}
+		// Недельная сводка заказчику — тем же проходом. Отбор идёт по
+		// журналу отправок, а не по дню недели, поэтому частота тикера
+		// на неё не влияет: пока неделя не прошла, отбор пуст.
+		if digests, err := svc.RunClientDigests(ctx, now); err != nil {
+			logger.Warn("client digests failed", "err", err)
+		} else if digests > 0 {
+			logger.Info("client digests", "sent", digests)
+		}
+		if st.Sent > 0 || st.Failures > 0 || st.Digests > 0 {
+			logger.Info("publication reminders",
+				"considered", st.Considered, "sent", st.Sent,
+				"skipped", st.Skipped, "digests", st.Digests, "failures", st.Failures)
+		}
+	}
+
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runOrderExpiryTicker — сгорание приглашений и пинги менеджеру.
+//
+// Приглашение живёт трое суток, поэтому частый тик не нужен; но и редкий
+// плох: место освободится, а следующего позовут только на следующем
+// проходе, и клиент будет ждать зря. Час — разумная середина.
+func runOrderExpiryTicker(ctx context.Context, svc *orders.Service,
+	interval time.Duration, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	run := func() {
+		expired, pinged, err := svc.RunExpiry(ctx, time.Now())
+		if err != nil {
+			logger.Warn("order expiry failed", "err", err)
+			return
+		}
+		if expired > 0 || pinged > 0 {
+			logger.Info("order expiry", "expired", expired, "manager_pinged", pinged)
+		}
+	}
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runPeriodLockTicker — подытоживает периоды, которым пора.
+//
+// Период закрывается через delay после своего конца: просмотры
+// сохраняются срезом на отсечку, суммы пересчитываются по нему, в общий
+// чат уходит сообщение. Дальше числа периода не меняются, даже если
+// ролики продолжают набирать просмотры, — в этом и смысл.
+//
+// Ошибка на одном периоде не роняет проход: остальные проекты в ней не
+// виноваты, а следующий тик попробует снова.
+func runPeriodLockTicker(ctx context.Context, svc *billing.Service,
+	interval, delay time.Duration, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	run := func() {
+		locked, failed, err := svc.LockDuePeriods(ctx, time.Now().UTC(), delay)
+		if err != nil {
+			logger.Warn("period lock scan failed", "err", err)
+			return
+		}
+		if locked > 0 || failed > 0 {
+			logger.Info("periods locked", "locked", locked, "failed", failed)
+		}
+	}
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runPublicationGaugeTicker — обновление бизнес-gauge'ов проектной
+// страницы: просроченные выкладки, отставание сбора, застрявшие ссылки.
+//
+// Отдельно от сбора: gauge'и должны обновляться, даже когда интеграция с
+// instacurl не настроена — иначе «сбор выключен» и «сбор сломан» выглядят
+// на дашборде одинаково.
+func runPublicationGaugeTicker(ctx context.Context, svc *publications.Service,
+	interval time.Duration, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	run := func() {
+		if _, err := svc.RefreshGauges(ctx, time.Now()); err != nil {
+			logger.Warn("publication gauges refresh failed", "err", err)
+		}
+	}
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runStatsCollectTicker — ежедневный обход сданных роликов и схлопывание
+// рядов по закрытым проектам.
+//
+// Тик может быть частым: правило «один ролик не чаще раза в сутки» и
+// график 1→2→4→8 держатся в выборке DueForCollection, а не в периоде
+// тикера. Поэтому рестарт воркера не приводит к повторному обходу и не
+// жжёт кредиты.
+func runStatsCollectTicker(ctx context.Context, svc *publications.Service,
+	billingSvc *billing.Service, interval time.Duration, batch, batchesPerTick int,
+	logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if batch <= 0 {
+		batch = 10
+	}
+	if batchesPerTick <= 0 {
+		batchesPerTick = 20
+	}
+
+	run := func() {
+		now := time.Now()
+		// Пачка мелкая (см. StatsCollectBatch), поэтому за тик прогоняем
+		// несколько подряд — пока есть что собирать. Иначе часовой тик
+		// упирался бы в десять ссылок и не успевал за объёмом.
+		var total publications.CollectStats
+		// Проекты, которых коснулся сбор, копим на ВЕСЬ тик и
+		// пересчитываем один раз в конце. Пачка мелкая, и проект
+		// попадает в несколько пачек подряд: пересчёт по каждой гонял
+		// одни и те же агрегаты по всей истории проекта по два-три
+		// раза, а это самые тяжёлые запросы в тике.
+		touched := make(map[uuid.UUID]struct{}, 32)
+		for i := 0; i < batchesPerTick; i++ {
+			st, err := svc.RunCollection(ctx, time.Now(), batch)
+			total.Considered += st.Considered
+			total.Saved += st.Saved
+			total.NoData += st.NoData
+			total.ThresholdNotified += st.ThresholdNotified
+			if err != nil {
+				logger.Warn("stats collection failed", "err", err,
+					"batch", i+1, "collected_before_failure", total.Saved)
+				break
+			}
+			// Просмотры пришли — начисления по ним устарели.
+			//
+			// Перепросчёт идёт здесь, а не по кнопке: суммы считаются ИЗ
+			// просмотров, и пока никто не нажал «Пересчитать», экран
+			// менеджера показывает вчерашние деньги при сегодняшних
+			// цифрах. Подытоженные периоды пересчёт не трогает — там
+			// срез, — а утверждённые и выплаченные строки не трогает сам
+			// Recalculate.
+			for _, id := range st.Projects {
+				touched[id] = struct{}{}
+			}
+			// Собирать больше нечего — ждём следующего тика.
+			if st.Considered == 0 {
+				break
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if len(touched) > 0 {
+			ids := make([]uuid.UUID, 0, len(touched))
+			for id := range touched {
+				ids = append(ids, id)
+			}
+			recalcAfterCollect(ctx, billingSvc, ids, now, logger)
+		}
+		if total.Considered > 0 {
+			logger.Info("stats collection",
+				"considered", total.Considered, "saved", total.Saved,
+				"no_data", total.NoData, "threshold_notified", total.ThresholdNotified)
+		}
+		// Схлопывание идёт следом: проект, у которого вышел срок сбора,
+		// на этом же проходе перестаёт опрашиваться.
+		if n, err := svc.RunCollapse(ctx, now); err != nil {
+			logger.Warn("stats collapse failed", "err", err)
+		} else if n > 0 {
+			logger.Info("stats collapsed", "projects", n)
+		}
+	}
+
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// runAccountScanTicker — обход аккаунтов креаторов: что вышло на
+// площадке, но не сдано ссылкой.
+//
+// Тикер держит только частоту проверки очереди. Правило «аккаунт не
+// чаще раза в сутки» живёт в выборке DueForScan, поэтому рестарт воркера
+// (при деплое их несколько секунд живёт два) не приводит к повторному
+// обходу и не жжёт кредиты — ровно как у сбора статистики.
+//
+// Находки отсюда ничего не привязывают: они ждут ответа человека в
+// кабинете креатора. Поэтому ошибка обхода — это warn, а не остановка:
+// не нашли сегодня — найдём завтра, ничего не испортив.
+func runAccountScanTicker(ctx context.Context, svc *publications.Service,
+	interval time.Duration, batch, batchesPerTick int, logger *slog.Logger) {
+
+	if interval <= 0 {
+		interval = 6 * time.Hour
+	}
+	if batch <= 0 {
+		batch = 5
+	}
+	if batchesPerTick <= 0 {
+		batchesPerTick = 5
+	}
+
+	run := func() {
+		var total publications.AccountScanStats
+		for i := 0; i < batchesPerTick; i++ {
+			st, err := svc.RunAccountScan(ctx, time.Now(), batch)
+			total.Considered += st.Considered
+			total.Scanned += st.Scanned
+			total.NoData += st.NoData
+			total.Found += st.Found
+			total.Skipped += st.Skipped
+			if err != nil {
+				logger.Warn("account scan failed", "err", err,
+					"batch", i+1, "found_before_failure", total.Found)
+				break
+			}
+			// Очередь пуста — ждём следующего тика. Без этой проверки
+			// тик вхолостую делал бы пять запросов в базу там, где
+			// хватает одного.
+			if st.Considered == 0 {
+				break
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if total.Considered > 0 {
+			logger.Info("creator account scan",
+				"considered", total.Considered, "scanned", total.Scanned,
+				"no_data", total.NoData, "found", total.Found, "skipped", total.Skipped)
+		}
+	}
+
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
 // ensureIndexWithRetry — EnsureIndex с экспоненциальным ожиданием.
 // На холодном старте docker compose OpenSearch ещё может не принимать
 // соединения; раньше worker падал с os.Exit(1) и outbox-события копились
@@ -624,4 +847,45 @@ func ensureIndexWithRetry(ctx context.Context, esClient *es.Client, index string
 		return nil
 	}
 	return fmt.Errorf("ensure index %q after %d attempts: %w", label, maxAttempts, lastErr)
+}
+
+// recalcAfterCollect — пересчитать начисления открытого периода по
+// проектам, которым сбор только что записал новые просмотры.
+//
+// Деньги креатора считаются ИЗ просмотров, но считаются не на лету:
+// строки начислений хранятся и обновляются пересчётом. До сих пор его
+// звали только двое — менеджер кнопкой и подытог периода, — и между
+// сбором и нажатием экран показывал вчерашние суммы при сегодняшних
+// цифрах. Хуже того, подмена протухшей ссылки стирает замеры: без
+// пересчёта сумма так и оставалась посчитанной по удалённому ролику.
+//
+// Ошибки логируем и идём дальше: собранные цифры уже записаны, и терять
+// весь проход из-за одного проекта нельзя. Проект без единого ролика
+// отвечает ErrNoPeriods — это норма, а не сбой.
+func recalcAfterCollect(ctx context.Context, svc *billing.Service,
+	projects []uuid.UUID, now time.Time, logger *slog.Logger) {
+
+	if svc == nil {
+		return
+	}
+	for _, id := range projects {
+		if ctx.Err() != nil {
+			return
+		}
+		p, err := svc.Period(ctx, id, 0, now)
+		if err != nil {
+			if !errors.Is(err, billing.ErrNoPeriods) {
+				logger.Warn("recalc after collect: период", "project_id", id, "err", err)
+			}
+			continue
+		}
+		// Подытоженный период заморожен вместе со срезом: его числа — не
+		// сегодняшние просмотры, и трогать их нельзя.
+		if p.IsLocked() {
+			continue
+		}
+		if _, err := svc.Recalculate(ctx, id, p); err != nil {
+			logger.Warn("recalc after collect: начисления", "project_id", id, "err", err)
+		}
+	}
 }

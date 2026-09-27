@@ -15,25 +15,25 @@ import (
 // step_order), а не вся стадия.
 //
 // Алгоритм:
-//   1. FOR UPDATE по project_stages + project_steps глобально упорядоченных
-//      по (stage.sort_order, step.sort_order).
-//   2. Резолвим target_step_id — может быть project_steps.id (snapshot) или
-//      pipeline_steps.id (UI на канбане шлёт шаблонный id). Во втором случае
-//      ищем project_step по совпадению (stage_order, step_order) у
-//      соответствующего pipeline_step.
-//   3. Находим текущую позицию — первый шаг не в (done|skipped).
-//   4. target == current → no-op.
-//   5. target > current (вперёд): промежуточные team/system → done,
-//      промежуточные client → skipped (менеджер/админ имеют право обойти
-//      клиентский шаг; клиентский кабинет этот endpoint не вызывает).
-//      Стадии, у которых после этого все шаги в done|skipped, помечаются
-//      completed_at.
-//   6. target < current (назад): шаги target..current сбрасываются в pending,
-//      review_deadline NULL'ится. Завершённости стадий обнуляются.
-//   7. Активируем целевой шаг: owner=client → waiting_client (+ review_deadline
-//      для is_review); team/system → in_progress.
-//   8. Бамп projects.updated_at с optimistic-lock проверкой.
-//   9. Events stage_moved (если стадия сменилась) + step_transition + outbox.
+//  1. FOR UPDATE по project_stages + project_steps глобально упорядоченных
+//     по (stage.sort_order, step.sort_order).
+//  2. Резолвим target_step_id — может быть project_steps.id (snapshot) или
+//     pipeline_steps.id (UI на канбане шлёт шаблонный id). Во втором случае
+//     ищем project_step по совпадению (stage_order, step_order) у
+//     соответствующего pipeline_step.
+//  3. Находим текущую позицию — первый шаг не в (done|skipped).
+//  4. target == current → no-op.
+//  5. target > current (вперёд): промежуточные team/system → done,
+//     промежуточные client → skipped (менеджер/админ имеют право обойти
+//     клиентский шаг; клиентский кабинет этот endpoint не вызывает).
+//     Стадии, у которых после этого все шаги в done|skipped, помечаются
+//     completed_at.
+//  6. target < current (назад): шаги target..current сбрасываются в pending,
+//     review_deadline NULL'ится. Завершённости стадий обнуляются.
+//  7. Активируем целевой шаг: owner=client → waiting_client (+ review_deadline
+//     для is_review); team/system → in_progress.
+//  8. Бамп projects.updated_at с optimistic-lock проверкой.
+//  9. Events stage_moved (если стадия сменилась) + step_transition + outbox.
 func (r *Repo) MoveProjectToStep(ctx context.Context, projectID, targetStepID, actorID uuid.UUID, reviewDeadline time.Duration, expectedUpdatedAt *time.Time) (Project, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -53,6 +54,13 @@ func writeServiceErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, profiles.ErrConflict):
 		httpx.WriteErrMsg(w, http.StatusConflict, "conflict",
 			"Специалист отредактировал профиль с момента открытия — перезагрузите карточку и проверьте изменения.")
+	case errors.Is(err, ErrForbiddenActor):
+		// Не 401: сессия жива, прав больше нет.
+		httpx.WriteErrMsg(w, http.StatusForbidden, "forbidden_actor",
+			"Выписать ссылку для входа может только админ — обновите страницу, ваши права изменились.")
+	case errors.Is(err, ErrInactiveTarget):
+		httpx.WriteErrMsg(w, http.StatusConflict, "inactive_user",
+			"Аккаунт отключён — сначала включите его, иначе войти по ссылке не получится.")
 	case errors.Is(err, ErrNotManager):
 		httpx.WriteErrMsg(w, http.StatusConflict, "not_manager",
 			"Этот пользователь не имеет роли менеджера.")
@@ -92,7 +100,8 @@ func (h *Handler) AdminListManagers(w http.ResponseWriter, r *http.Request) {
 // AdminListAllUsers godoc
 // @Summary  Полный листинг всех юзеров с пагинацией (admin UI)
 // @Description Фильтры: q (поиск ILIKE по email/phone/display_name, мин 2 символа),
-// @Description kind (client|specialist), role (manager|admin|regular).
+// @Description kind (client|specialist), role (manager|admin|regular),
+// @Description include_test (по умолчанию тестовые скрыты).
 // @Description Сортировка created_at DESC. limit 1..100, default 20.
 // @Tags     admin-users
 // @Produce  json
@@ -100,6 +109,7 @@ func (h *Handler) AdminListManagers(w http.ResponseWriter, r *http.Request) {
 // @Param    q      query string false "часть email/phone/имени, мин 2 симв"
 // @Param    kind   query string false "client | specialist"
 // @Param    role   query string false "manager | admin | regular"
+// @Param    include_test query bool false "показать тестовых пользователей, default false"
 // @Param    limit  query int    false "1-100, default 20"
 // @Param    offset query int    false "default 0"
 // @Success  200 {object} UserListResult
@@ -111,11 +121,14 @@ func (h *Handler) AdminListAllUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	res, err := h.svc.ListAllUsers(r.Context(), ListAllUsersParams{
-		Q:      strings.TrimSpace(r.URL.Query().Get("q")),
-		Kind:   strings.TrimSpace(r.URL.Query().Get("kind")),
-		Role:   strings.TrimSpace(r.URL.Query().Get("role")),
-		Limit:  limit,
-		Offset: offset,
+		Q:    strings.TrimSpace(r.URL.Query().Get("q")),
+		Kind: strings.TrimSpace(r.URL.Query().Get("kind")),
+		Role: strings.TrimSpace(r.URL.Query().Get("role")),
+		// Тестовых прячем, пока явно не попросили — как и тестовые
+		// проекты в /admin/projects.
+		IncludeTest: r.URL.Query().Get("include_test") == "true",
+		Limit:       limit,
+		Offset:      offset,
 	})
 	if err != nil {
 		writeServiceErr(w, err)
@@ -207,7 +220,8 @@ func (h *Handler) AdminApproveManager(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.ApproveManager(r.Context(), id); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.ApproveManager(r.Context(), id, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -215,20 +229,45 @@ func (h *Handler) AdminApproveManager(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// activeProjectsResp — тело 409 при снятии роли с занятого менеджера.
+// Список отдаём целиком: админу нужно решить, кому передать проекты, а
+// не узнать, что их «несколько».
+type activeProjectsResp struct {
+	Error    string             `json:"error"`
+	Message  string             `json:"message"`
+	Projects []ActiveProjectRef `json:"projects"`
+}
+
 // AdminRevokeManager godoc
-// @Summary  Снять аппрув с менеджера
+// @Summary  Снять роль менеджера
+// @Description Если на человеке есть незавершённые проекты — 409 со
+// @Description списком: сначала передайте их другому менеджеру
+// @Description (POST /admin/managers/{id}/transfer_projects), потом снимайте роль.
 // @Tags     admin-users
 // @Produce  json
 // @Security BearerAuth
 // @Param    id path string true "user id"
 // @Success  204
+// @Failure  409 {object} activeProjectsResp "has_active_projects"
 // @Router   /admin/managers/{id}/revoke [post]
 func (h *Handler) AdminRevokeManager(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(w, r, "id")
 	if !ok {
 		return
 	}
-	if err := h.svc.RevokeManager(r.Context(), id); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.RevokeManager(r.Context(), id, actor); err != nil {
+		var busy *ActiveProjectsError
+		if errors.As(err, &busy) {
+			httpx.WriteJSON(w, http.StatusConflict, activeProjectsResp{
+				Error: "has_active_projects",
+				Message: fmt.Sprintf(
+					"На менеджере %d незавершённых проектов — передайте их другому менеджеру, иначе они останутся без ответственного.",
+					len(busy.Projects)),
+				Projects: busy.Projects,
+			})
+			return
+		}
 		writeServiceErr(w, err)
 		return
 	}
@@ -251,7 +290,8 @@ func (h *Handler) AdminDeactivateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.SetActive(r.Context(), id, false); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.SetActive(r.Context(), id, false, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -272,7 +312,8 @@ func (h *Handler) AdminActivateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.SetActive(r.Context(), id, true); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.SetActive(r.Context(), id, true, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -294,7 +335,8 @@ func (h *Handler) AdminVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.svc.VerifyEmail(r.Context(), id); err != nil {
+	actor, _ := auth.UserIDFrom(r.Context())
+	if err := h.svc.VerifyEmail(r.Context(), id, actor); err != nil {
 		writeServiceErr(w, err)
 		return
 	}
@@ -303,9 +345,9 @@ func (h *Handler) AdminVerifyEmail(w http.ResponseWriter, r *http.Request) {
 }
 
 type createClientReq struct {
-	Email           string `json:"email"`
-	DisplayName     string `json:"display_name"`
-	GenerateInvite  bool   `json:"generate_invite"`
+	Email          string `json:"email"`
+	DisplayName    string `json:"display_name"`
+	GenerateInvite bool   `json:"generate_invite"`
 }
 
 // AdminCreateClient godoc
@@ -558,4 +600,7 @@ type userSearchResp struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// отдаёт ошибку без текста (через httpx.WriteErr).
+	Message string `json:"message,omitempty"`
 }

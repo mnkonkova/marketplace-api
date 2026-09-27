@@ -42,12 +42,12 @@ func (s *Service) StartFromLead(ctx context.Context, clientID uuid.UUID, leadID 
 	}
 	notes := brief // полный бриф попадает в notes, чтобы менеджер сразу видел
 	return s.StartProject(ctx, StartProjectInput{
-		ClientUserID:               &clientID,
-		LeadID:                     &leadID,
-		LeadRecipientSpecialistID:  proposedSpecialistID,
-		PipelineID:                 pipelineID,
-		Title:                      title,
-		Source:                     SourceMarketplace,
-		Notes:                      notes,
+		ClientUserID:              &clientID,
+		LeadID:                    &leadID,
+		LeadRecipientSpecialistID: proposedSpecialistID,
+		PipelineID:                pipelineID,
+		Title:                     title,
+		Source:                    SourceMarketplace,
+		Notes:                     notes,
 	})
 }

@@ -4,20 +4,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"marketpclce/internal/publications"
 )
 
 // ManagerInfo — карточка менеджера в админ-списке. Поверх email/role/
 // is_approved добавляем display_name (если есть в specialist_profiles)
 // и счётчик assigned проектов для приоритизации аппрува.
 type ManagerInfo struct {
-	UserID          uuid.UUID `json:"user_id"`
-	Email           string    `json:"email,omitempty"`
-	DisplayName     string    `json:"display_name,omitempty"`
-	IsActive        bool      `json:"is_active"`
-	IsApproved      bool      `json:"is_approved"`
-	EmailVerified   bool      `json:"email_verified"`
-	AssignedProjects int      `json:"assigned_projects"`
-	CreatedAt       time.Time `json:"created_at"`
+	UserID           uuid.UUID `json:"user_id"`
+	Email            string    `json:"email,omitempty"`
+	DisplayName      string    `json:"display_name,omitempty"`
+	IsActive         bool      `json:"is_active"`
+	IsApproved       bool      `json:"is_approved"`
+	EmailVerified    bool      `json:"email_verified"`
+	AssignedProjects int       `json:"assigned_projects"`
+	CreatedAt        time.Time `json:"created_at"`
+	// LastLoginAt — nil = не входил ни разу.
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 }
 
 // CreateClientInput — админ заводит клиента вручную (kind=client, role=client).
@@ -52,23 +56,35 @@ type UserSearchResult struct {
 	Phone       string    `json:"phone,omitempty"`
 	Kind        string    `json:"kind"`
 	DisplayName string    `json:"display_name,omitempty"`
+	// Median — сколько просмотров человек обычно даёт за ролик. Этим же
+	// поиском менеджер подбирает креатора в проект, и выбирать по одной
+	// почте — значит выбирать вслепую. nil у тех, кто роликов не сдавал
+	// или сдал слишком мало, чтобы медиана что-то значила.
+	Median *publications.CreatorMedian `json:"median,omitempty"`
 }
 
 // UserListItem — строка для полного admin-листинга /admin/users.
 // Объединяет users + LEFT JOIN на оба профиля для display_name +
 // specialist_profiles.moderation_status (только для спецов).
 type UserListItem struct {
-	UserID           uuid.UUID `json:"user_id"`
-	Email            string    `json:"email,omitempty"`
-	Phone            string    `json:"phone,omitempty"`
-	DisplayName      string    `json:"display_name,omitempty"`
-	Kind             string    `json:"kind"`
-	IsAdmin          bool      `json:"is_admin"`
-	IsManager        bool      `json:"is_manager"`
-	IsApproved       bool      `json:"is_approved"`
-	IsActive         bool      `json:"is_active"`
-	EmailVerified    bool      `json:"email_verified"`
-	CreatedAt        time.Time `json:"created_at"`
+	UserID        uuid.UUID `json:"user_id"`
+	Email         string    `json:"email,omitempty"`
+	Phone         string    `json:"phone,omitempty"`
+	DisplayName   string    `json:"display_name,omitempty"`
+	Kind          string    `json:"kind"`
+	IsAdmin       bool      `json:"is_admin"`
+	IsManager     bool      `json:"is_manager"`
+	IsApproved    bool      `json:"is_approved"`
+	IsActive      bool      `json:"is_active"`
+	EmailVerified bool      `json:"email_verified"`
+	CreatedAt     time.Time `json:"created_at"`
+	// LastLoginAt — nil означает «не входил ни разу», а не «давно».
+	// Разница важная: сотрудника, который так и не зашёл, надо позвать,
+	// а не ждать.
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	// IsTest — пользователь заведён для проверки. По умолчанию такие
+	// в выдаче скрыты.
+	IsTest bool `json:"is_test"`
 	// ModerationStatus — pending_review|approved|rejected. NULL для клиентов
 	// (у них нет specialist_profile). omitempty в JSON: пустая строка =
 	// «нет статуса» (клиент или спец без профиля).
@@ -83,11 +99,14 @@ type UserListItem struct {
 // ListAllUsersParams — фильтры и пагинация для /admin/users.
 // Все поля опциональны. Limit принудительно clamp'ится 1..100.
 type ListAllUsersParams struct {
-	Q      string // поиск ILIKE по email/phone/display_name; <2 символов игнорируется
-	Kind   string // "client" | "specialist" | "" (без фильтра)
-	Role   string // "manager" | "admin" | "regular" | "" (regular = !is_manager && !is_admin)
-	Limit  int
-	Offset int
+	Q    string // поиск ILIKE по email/phone/display_name; <2 символов игнорируется
+	Kind string // "client" | "specialist" | "" (без фильтра)
+	Role string // "manager" | "admin" | "regular" | "" (regular = !is_manager && !is_admin)
+	// IncludeTest — показывать пользователей с is_test. По умолчанию
+	// скрыты: после прогонов на стенде их в базе больше, чем настоящих.
+	IncludeTest bool
+	Limit       int
+	Offset      int
 }
 
 // UserListResult — ответ пагинированного листинга. Total — общее количество

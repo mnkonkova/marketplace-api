@@ -317,9 +317,9 @@ groups:
 
       - alert: N8nWebhookFailureRate
         expr: |
-          sum(rate(outbox_handler_errors_total{aggregate=~"project|user|support"}[10m]))
+          sum(rate(outbox_handler_errors_total{aggregate=~"project|email|support|moderation"}[10m]))
           /
-          (sum(rate(outbox_handler_processed_total{aggregate=~"project|user|support"}[10m])) > 0)
+          (sum(rate(outbox_handler_success_total{aggregate=~"project|email|support|moderation"}[10m])) > 0)
           > 0.1
         for: 10m
         labels: { severity: warn, team: backend }
@@ -376,6 +376,16 @@ groups:
       # Требует инициализированного Synthetic Monitoring с HTTP-проверкой
       # на https://wayprmarket.ru. Пока проверки нет, метрики нет и правило
       # молчит (noDataState=OK по умолчанию для не-up выражений).
+      # BotrabotDown живёт ТОЛЬКО в Grafana и сюда не переносится.
+      #
+      # Он не про Prometheus: проверка ходит HTTP-датасорсом (infinity) на
+      # https://www.prmarket-botrabot.ru/api/health и смотрит поле leads в
+      # ответе — соседний сервис на своей VDS, метрик от него мы не
+      # собираем. Выразить это в promql нечем, поэтому правило заведено в
+      # интерфейсе, а здесь о нём стоит запись: без неё сверка «файл против
+      # Grafana» каждый раз показывает лишнее правило и заставляет гадать,
+      # кто его завёл.
+
       - alert: SiteUnreachableExternally
         expr: |
           max_over_time(probe_success{job=~".*wayprmarket.*"}[5m]) == 0
@@ -429,6 +439,26 @@ groups:
       # сматчилось бы никогда — тихо мёртвый алерт. container_id вытаскивается
       # из cgroup-пути в alloy/config.alloy; по нему работает
       # `docker ps --filter id=<hash>`.
+      # Проверка на саму проверку: есть ли вообще ряды по контейнерам.
+      #
+      # 26.09.2026 выяснилось, что ContainerMemoryNearLimit ниже не мог
+      # сработать никогда: cAdvisor отдавал только системные слайсы
+      # (/system.slice/*.service), ни одного docker-<hash>.scope, и
+      # container_id не появлялся ни у одного ряда. Алерт с {container_id!=""}
+      # молчал не потому, что всё хорошо, а потому, что сравнивать было не с
+      # чем — и обнаружилось это в тот день, когда графики понадобились.
+      #
+      # Отсюда правило: у каждой проверки, которая опирается на метку,
+      # должна быть парная проверка на наличие самой метки. Молчащий алерт
+      # обязан уметь сказать, что он молчит.
+      - alert: ContainerMetricsMissing
+        expr: absent(container_memory_working_set_bytes{container_id!=""})
+        for: 30m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Метрик по контейнерам нет — ContainerMemoryNearLimit слеп"
+          description: "cAdvisor не отдаёт ни одного ряда с container_id: контейнерные cgroup'ы не опознаются. Проверь моунт /run/containerd/containerd.sock в сервисе alloy и `docker compose logs alloy`. Пока ряда нет, проверка «контейнер у потолка памяти» ничего не проверяет."
+
       - alert: ContainerMemoryNearLimit
         expr: |
           container_memory_working_set_bytes{container_id!=""}
@@ -440,7 +470,7 @@ groups:
         labels: { severity: warn, team: backend }
         annotations:
           summary: "Контейнер {{ $labels.container_id }} у потолка памяти"
-          description: "working_set > 90% mem_limit больше 15 минут. Какой это контейнер: `docker ps --filter id={{ $labels.container_id }}`. Контейнеру тесно в своём cgroup — на хосте память при этом может быть свободна. Подними mem_limit в docker-compose.prod.yml (для JVM-сервисов заодно heap: правило heap ≈ треть-половина лимита) или разберись, кто течёт."
+          description: "Парная проверка ContainerMetricsMissing выше следит за тем, что этот алерт вообще способен сработать. working_set > 90% mem_limit больше 15 минут. Какой это контейнер: `docker ps --filter id={{ $labels.container_id }}`. Контейнеру тесно в своём cgroup — на хосте память при этом может быть свободна. Подними mem_limit в docker-compose.prod.yml (для JVM-сервисов заодно heap: правило heap ≈ треть-половина лимита) или разберись, кто течёт."
 
       - alert: ErrorRate5xxBurst
         # Дублирует HighErrorRate (5m), но с for=1m — для более резкой реакции.
@@ -464,3 +494,273 @@ groups:
         annotations:
           summary: "Метрика up{marketpclce-api} отсутствует 2+ мин"
           description: "Alloy не пушит scrape-метрики. Проверь `docker compose logs alloy` и GRAFANA_CLOUD_PROM_* в .env.prod."
+
+  # ── Сбор статистики по роликам ──────────────────────────────────────
+  #
+  # Эта часть системы ломается МОЛЧА: ролик не отдал просмотры — в отчёте
+  # просто ноль, и никто не узнает, пока клиент не спросит «почему цифры
+  # не растут». Ошибки в логах при этом может не быть вовсе: instacurl
+  # честно ответит ok=false, а у поставщика просто кончились кредиты.
+  #
+  # Все алерты по площадкам разрезаны через `by (platform)`: отвалившийся
+  # парсер ОДНОЙ площадки — самый вероятный отказ, и он не должен теряться
+  # в общем среднем. Пять площадок из пяти работать перестают редко, одна
+  # из пяти — регулярно.
+  #
+  # job="instacurl" — имя scrape-задания для сервиса сбора; если в Alloy
+  # оно называется иначе, поправить надо здесь.
+  - name: marketpclce-stats-collection
+    interval: 1m
+    rules:
+      - alert: PlatformCollectFailing
+        # Порог по объёму (0.2 обхода в минуту) нужен, чтобы редкая
+        # площадка с двумя ссылками не поднимала алерт на единственной
+        # неудаче.
+        expr: |
+          (
+            sum by (platform) (rate(instacurl_collect_total{result!="ok"}[30m]))
+            /
+            sum by (platform) (rate(instacurl_collect_total[30m]))
+          ) > 0.8
+          and
+          sum by (platform) (rate(instacurl_collect_total[30m])) > 0.2
+        for: 30m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Площадка {{ $labels.platform }}: сбор почти не проходит"
+          description: "Доля неудач по {{ $labels.platform }} — {{ $value | humanizePercentage }} за 30 минут. Скорее всего изменилась вёрстка (Likee) или отвалился токен (VK). Проверь instacurl_collect_total по этой площадке."
+
+      - alert: PlatformCollectSilent
+        # Площадку перестали обходить совсем, хотя вчера обходили. Ловит
+        # случай «ссылки этой площадки выпали из выборки» — молчаливее,
+        # чем ошибки, и потому опаснее.
+        expr: |
+          sum by (platform) (increase(instacurl_collect_total[6h])) == 0
+          and
+          sum by (platform) (increase(instacurl_collect_total[48h] offset 6h)) > 0
+        for: 1h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Площадка {{ $labels.platform }}: обходов нет 6 часов"
+          description: "Раньше по {{ $labels.platform }} сбор шёл, последние 6 часов — ни одного обхода. Проверь next_collect_at у ссылок этой площадки."
+
+      - alert: PlatformViewsMissing
+        # Полнота, а не доступность. Площадка отвечает, лайки и
+        # комментарии приходят, а просмотров нет — так выглядит отвалившийся
+        # разбор одного поля. Формально сбор успешен, фактически в отчёте
+        # по этой площадке нули, и без этого правила никто не узнает.
+        #
+        # Именно так ломается Likee: просмотры лежат внутри описания
+        # человеческой фразой, и достаточно смены языка страницы, чтобы
+        # разбор перестал их находить.
+        expr: |
+          (
+            sum by (platform) (rate(instacurl_collect_total{result="no_views"}[1h]))
+            /
+            sum by (platform) (rate(instacurl_collect_total{kind="media"}[1h]))
+          ) > 0.5
+          and
+          sum by (platform) (rate(instacurl_collect_total{kind="media"}[1h])) > 0.1
+        for: 1h
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Площадка {{ $labels.platform }}: приходят лайки, но не просмотры"
+          description: "Больше половины обходов по {{ $labels.platform }} вернулись без просмотров. Сбор формально успешен, но в отчёте по этой площадке будут нули. Проверь разбор страницы — скорее всего изменилась разметка или язык."
+
+      - alert: PlatformViewsRounded
+        # Не поломка, а ухудшение качества. У VK числа должны браться
+        # точными из разметки; переход на округлённые ("763K") означает,
+        # что точные пропали. Для бонуса «90 ₽ за 1000 просмотров»
+        # округление до трёх значащих цифр — это сотни рублей на ролик.
+        expr: |
+          (
+            sum by (platform) (rate(instacurl_collect_rounded_total[6h]))
+            /
+            sum by (platform) (rate(instacurl_collect_total{result="ok"}[6h]))
+          ) > 0.5
+          and
+          sum by (platform) (rate(instacurl_collect_total{result="ok"}[6h])) > 0.05
+        for: 6h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Площадка {{ $labels.platform }}: числа приходят округлёнными"
+          description: "Точные счётчики пропали из разметки, разбор свалился на видимый текст. Цифры остаются, но становятся приблизительными — это видно при ручной сверке с площадкой."
+
+      - alert: ScrapeCreatorsCreditsLow
+        # Самый тихий отказ из всех: кредиты кончились — сбор
+        # останавливается целиком и без единой ошибки в логах.
+        expr: instacurl_scrapecreators_credits < 1000
+        for: 10m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "У ScrapeCreators осталось {{ $value }} кредитов"
+          description: "Когда закончатся — Instagram и TikTok перестанут собираться молча. Пополнить до того, как отчёт покажут клиенту."
+
+      - alert: InstacurlMemoryHigh
+        # Chromium прожорлив, лимит контейнера 2 ГБ. Приближение к нему
+        # означает OOM-killer посреди обхода — сбор оборвётся на середине
+        # пачки, и это будет выглядеть как сетевой сбой.
+        #
+        # Эта же метрика отвечает на вопрос, можно ли поднять
+        # COLLECT_WORKERS до двух: если под нагрузкой потолок держится
+        # ниже половины лимита, второй слот безопасен.
+        expr: |
+          instacurl_memory_used_bytes / instacurl_memory_limit_bytes > 0.85
+        for: 10m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "instacurl занял {{ $value | humanizePercentage }} лимита памяти"
+          description: "Приближается к mem_limit контейнера. Если это повторяется под обычной нагрузкой — либо поднять лимит, либо снизить COLLECT_WORKERS."
+
+      - alert: InstacurlDown
+        expr: up{job="instacurl"} == 0
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Сервис сбора статистики не отвечает"
+          description: "Сейчас падение instacurl видно только по тому, что цифры в отчёте перестали меняться."
+
+      - alert: InstacurlUnauthorized
+        # Не ретраится и не чинится само: сломана конфигурация.
+        expr: increase(crm_stat_collect_errors_total{reason="unauthorized"}[15m]) > 0
+        for: 5m
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Ключ к instacurl отклонён"
+          description: "INSTACURL_API_KEY не принят сервисом. Сбор статистики стоит целиком."
+
+      - alert: InstacurlUnreachable
+        expr: increase(crm_stat_collect_errors_total{reason="unreachable"}[15m]) > 3
+        for: 15m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "CRM не достучалась до instacurl"
+          description: "{{ $value }} неудачных вызовов за 15 минут. Расписание при этом не двигается — ссылки дождутся следующего прохода."
+
+      - alert: StatsCollectionStalled
+        # Ссылки просрочили свой интервал больше чем на сутки. Прямая
+        # угроза приёмке «цифры сходятся с площадками».
+        expr: crm_links_stale > 0
+        for: 6h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "{{ $value }} ссылок просрочили обход"
+          description: "Сбор встал или не успевает. instacurl держит два параллельных слота — возможно, упёрлись в них."
+
+      - alert: CollectVolumeSpike
+        # РАСХОД, а не поломка. Все остальные правила этой группы ловят
+        # «сбор не работает»; это — «сбор работает слишком хорошо».
+        #
+        # Обходы стоят кредитов у поставщика, и кончаются они молча:
+        # ScrapeCreatorsCreditsLow загорится уже по факту. Внезапный рост
+        # вдвое против вчерашнего того же часа означает, что кто-то
+        # массово сбросил next_collect_at (перезалив ссылок, новый обход
+        # аккаунтов, миграция) — и за сутки это съест месячный бюджет.
+        #
+        # Сравнение с «вчера в этот же час», а не с абсолютным порогом:
+        # проектов становится больше, и любой фиксированный потолок
+        # устареет через квартал.
+        expr: |
+          sum(increase(crm_stat_collect_total[1h]))
+          >
+          2 * sum(increase(crm_stat_collect_total[1h] offset 24h))
+          and
+          sum(increase(crm_stat_collect_total[1h])) > 200
+        for: 30m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Обходов за час вдвое больше вчерашнего"
+          description: "{{ $value }} обходов за час против вчерашнего того же часа. Каждый обход — кредит у поставщика. Проверь, не сбросил ли кто next_collect_at массово: SELECT count(*) FROM publication_links WHERE next_collect_at <= now()."
+
+      - alert: AccountScanVolumeSpike
+        # РАСХОД обхода аккаунтов, а не его поломка.
+        #
+        # Обход ходит по аккаунтам креаторов раз в сутки и стоит кредит
+        # за каждый — независимо от того, вышло там что-нибудь или нет.
+        # В отличие от сбора по ссылкам он не затихает со временем,
+        # поэтому нормальный суточный объём — почти константа: столько,
+        # сколько строк в project_accounts у живых проектов.
+        #
+        # Резкий рост означает ровно одно: кто-то сбросил next_scan_at
+        # массово (миграция, ручной UPDATE, перезалив аккаунтов) — и
+        # суточное правило перестало держать расход.
+        #
+        # Окно суточное, а не часовое, как у CollectVolumeSpike: обход
+        # идёт четырьмя тиками в сутки и в часовом разрезе выглядит как
+        # редкие всплески, на которых сравнение «вдвое больше» врало бы
+        # каждый день.
+        expr: |
+          sum(increase(crm_account_scan_total[24h]))
+          >
+          2 * sum(increase(crm_account_scan_total[24h] offset 24h))
+          and
+          sum(increase(crm_account_scan_total[24h])) > 100
+        for: 1h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Обходов аккаунтов за сутки вдвое больше вчерашнего"
+          description: "{{ $value }} обходов аккаунтов за сутки против вчерашнего. Каждый — кредит у поставщика, и их число должно быть почти постоянным. Проверь: SELECT count(*) FROM project_accounts WHERE next_scan_at <= now() AND creator_user_id IS NOT NULL."
+
+      - alert: CollectNearDailyCapacity
+        # Потолок воркера: STATS_COLLECT_BATCHES_PER_TICK × STATS_COLLECT_BATCH
+        # × тиков в сутки (по умолчанию 20 × 10 × 24 = 4800). Выше него
+        # сбор физически не успеет, и ссылки начнут отставать — но
+        # crm_links_stale заметит это на сутки позже.
+        expr: sum(increase(crm_stat_collect_total[24h])) > 3600
+        for: 1h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Сбор съел {{ $value }} обходов за сутки"
+          description: "Больше трёх четвертей суточного потолка воркера (по умолчанию 4800 = 20 пачек × 10 ссылок × 24 тика). Либо поднимать STATS_COLLECT_BATCHES_PER_TICK, либо реже обходить архив — иначе свежие ролики начнут отставать."
+
+      - alert: CollectQueueSaturated
+        # Пачка заполняется целиком — значит, очередь длиннее нашей
+        # пропускной способности. Самый ранний признак: отставание
+        # (crm_links_stale) загорится через сутки, когда цифры в отчёте
+        # уже протухнут.
+        expr: increase(crm_stat_collect_saturated_total[1h]) > 20
+        for: 2h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Очередь сбора не разгребается"
+          description: "{{ $value }} проходов за час выгребли пачку целиком. Сбор упёрся в потолок — проверь STATS_COLLECT_BATCH и STATS_COLLECT_BATCHES_PER_TICK."
+
+      - alert: StatsLagHigh
+        # 48 часов: при графике 1→2→4→8 даже самый редкий обход укладывается
+        # в 8 дней, но свежие ролики должны обновляться ежедневно.
+        expr: crm_stat_lag_seconds > 172800
+        for: 1h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Самая свежая цифра старше двух суток"
+          description: "Отчёт показывает дату последнего сбора, и она уже далеко. {{ $value | humanizeDuration }}."
+
+  # ── Выкладки и напоминания ──────────────────────────────────────────
+  - name: marketpclce-publications
+    interval: 5m
+    rules:
+      - alert: RemindersNotSending
+        # Просрочки есть, а напоминания не уходят — значит сломался
+        # планировщик или доставка. Хуже отсутствия напоминаний только
+        # уверенность, что они работают.
+        expr: |
+          crm_publications_overdue > 0
+          and
+          sum(increase(crm_reminders_sent_total[24h])) == 0
+        for: 2h
+        labels: { severity: page, team: backend }
+        annotations:
+          summary: "Есть просроченные выкладки, но напоминания не уходят"
+          description: "Просрочено: {{ $value }}. За сутки не отправлено ни одного напоминания — проверь воркер и notification_log."
+
+      - alert: PublicationsOverdueHigh
+        expr: crm_publications_overdue > 10
+        for: 24h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "{{ $value }} просроченных выкладок"
+          description: "Бизнес-сигнал, а не технический: либо креаторы перестали сдавать, либо напоминания перестали доходить."
+
+      # Алерта на DLQ здесь намеренно нет: OutboxDeadLetterBacklog и
+      # OutboxDeadLetterRising в группе marketpclce-outbox уже покрывают
+      # это, и события выкладок попадут в них наравне с остальными.

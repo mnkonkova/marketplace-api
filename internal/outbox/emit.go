@@ -122,3 +122,113 @@ VALUES ($1, $2, $3, $4)`
 	}
 	return nil
 }
+
+// Проектная страница (00032). Как и остальные project.* — уходят в n8n
+// как есть, он сам решает, что слать креатору, менеджеру и клиенту.
+const (
+	// EventPublicationsCreated — менеджер проставил даты пачкой.
+	// payload: {project_id, batch_id, count, created_by}.
+	EventPublicationsCreated = "project.publications_created"
+
+	// EventPublicationMoved — менеджер перенёс дату выкладки. payload:
+	// {project_id, publication_id, creator_user_id, from, to, moved_by}.
+	// Отдельно от publications_created: для креатора это не новая
+	// работа, а сдвиг срока по уже поручённой, и бот говорит о нём
+	// другими словами.
+	EventPublicationMoved = "project.publication_moved"
+
+	// EventPublicationCancelled — менеджер снял запланированную
+	// выкладку. payload: {project_id, publication_id, reason,
+	// cancelled_by}.
+	EventPublicationCancelled = "project.publication_cancelled"
+
+	// EventPublicationSubmitted — креатор сдал ссылки. payload содержит
+	// status ("partial"|"done") и список сданных площадок: по нему n8n
+	// отличает «вышло полностью» от «вышло, но не везде».
+	EventPublicationSubmitted = "project.publication_submitted"
+
+	// EventPublicationClosed — менеджер закрыл неполную выкладку руками.
+	EventPublicationClosed = "project.publication_closed"
+
+	// EventPublicationLinkEdited — менеджер исправил сданную ссылку.
+	// payload: {project_id, publication_id, platform, url, stats_reset}.
+	// Отдельное событие, а не publication_submitted: сдал креатор, а
+	// правил менеджер, и в истории проекта это разные строки.
+	EventPublicationLinkEdited = "project.publication_link_edited"
+
+	// EventPublicationReturned — менеджер вернул ролик креатору с
+	// замечанием. payload: {project_id, publication_id, comment,
+	// failed_items, decided_by}.
+	EventPublicationReturned = "project.publication_returned"
+
+	// EventPublicationAccepted — ролик принят. Тот же payload;
+	// failed_items у принятого пуст по определению.
+	EventPublicationAccepted = "project.publication_accepted"
+
+	// EventProjectPeriodClosed — период проекта подытожен: просмотры
+	// заморожены срезом, суммы посчитаны в последний раз. payload:
+	// {project_id, title, period_seq, starts_on, ends_on, videos, views,
+	// total, snapshot_as_of, snapshot_approx}. Уходит в общий чат:
+	// это единственный момент, когда по периоду становится что
+	// обсуждать, и происходит он сам, без человека.
+	EventProjectPeriodClosed = "project.period_closed"
+)
+
+// Самостоятельный подбор креаторов клиентом (00033). Как и остальные
+// project.* — уходят в n8n как есть.
+const (
+	// EventOrderInvitationSent — приглашение ушло креатору. payload:
+	// {order_id, creator_id, priority, expires_at}.
+	EventOrderInvitationSent = "order.invitation_sent"
+
+	EventOrderInvitationAccepted = "order.invitation_accepted"
+	EventOrderInvitationDeclined = "order.invitation_declined"
+
+	// EventOrderInvitationExpired — креатор не ответил, приглашение
+	// сгорело и место освободилось.
+	EventOrderInvitationExpired = "order.invitation_expired"
+
+	// EventOrderCandidateSilent — сутки молчания. Уходит МЕНЕДЖЕРУ:
+	// самому креатору второй раз не пишем, его уже позвали.
+	EventOrderCandidateSilent = "order.candidate_silent"
+
+	// EventOrderStaffed — согласилось столько, сколько нужно.
+	EventOrderStaffed = "order.staffed"
+
+	// EventOrderNeedMore — резерв кончился, а состав не собран.
+	// Дальше без менеджера не обойтись.
+	EventOrderNeedMore = "order.need_more"
+
+	// EventOrderSubmitted — заявка «под ключ» отправлена: заказ и проект
+	// заведены в одну секунду, и дальше считает менеджер. payload:
+	// {order_id, project_id, client_name, client_contact, videos_count,
+	// preferred, ceiling, brief}.
+	//
+	// Уходит В ЧАТ, и это единственное событие подбора, которое туда
+	// уходит. Причина простая: между «нажал отправить» и «менеджер
+	// позвонил» нет ничего, что заметило бы заявку само. В CRM она
+	// видна проектом — то есть тому, кто и так туда зашёл, а повод
+	// появился снаружи и ждать не умеет.
+	EventOrderSubmitted = "order.submitted"
+
+	// EventOrderBroadcastSent — рассылка по заявке ушла известным
+	// креаторам. payload: {order_id, project_id, recipients, preferred,
+	// skipped_over_limit}.
+	//
+	// Ноль получателей — не ошибка (никто ещё не подключил бота), но и
+	// не то, о чём стоит узнать через неделю: событие пишется всегда, и
+	// по нему видно, что рассылка вообще была.
+	EventOrderBroadcastSent = "order.broadcast_sent"
+
+	// EventOrderResponseReceived — креатор откликнулся на рассылку:
+	// прислал файл, показал свои ролики или отказался. payload:
+	// {order_id, project_id, creator_id, mode}. В чат не идёт: отклик
+	// — это ход работы, а не повод бросить дела; список откликов
+	// менеджер видит в карточке проекта.
+	EventOrderResponseReceived = "order.response_received"
+
+	// EventOrderFinalized — менеджер утвердил состав, цену и даты.
+	// payload: {order_id, project_id, creators, monthly_plan}. Дальше
+	// живёт проект, а заказ становится историей сделки.
+	EventOrderFinalized = "order.finalized"
+)

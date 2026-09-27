@@ -3,6 +3,7 @@ package projects
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -37,7 +38,7 @@ type cancelReq struct {
 }
 
 // AdminCancelProject godoc
-// @Summary  Удалить проект (soft-delete, физически чистится через 30д)
+// @Summary  Отменить проект (soft-delete, обратимо через /restore)
 // @Tags     admin-projects
 // @Accept   json
 // @Produce  json
@@ -97,20 +98,74 @@ func (h *Handler) AdminAssignManager(w http.ResponseWriter, r *http.Request) {
 
 // AdminListProjects godoc
 // @Summary  Все проекты (админ — таблица и канбан)
+// @Description Поиск, фильтры, сортировка и пагинация считаются на сервере.
+// @Description q — ILIKE по названию проекта и по клиенту (имя в профиле,
+// @Description имя на проекте у клиента без аккаунта, почта), мин 2 символа.
+// @Description manager — uuid ответственного либо "none" (без ответственного).
+// @Description status — точный статус проекта либо unfinished: «в работе»,
+// @Description то есть draft, active, on_hold и dispute разом. Именно это
+// @Description значение даёт тот же набор, что nav_counts.projects_active в
+// @Description сводке; пустой status отдаёт всё, кроме отменённых, то есть
+// @Description вместе с завершёнными.
+// @Description include_test=true показывает проекты, помеченные как тестовые
+// @Description (по умолчанию скрыты). kind — вид проекта. sort: updated_asc |
+// @Description updated_desc | created_asc | created_desc, default updated_desc.
+// @Description У каждой карточки прогресс ещё и числом: progress_done /
+// @Description progress_total, единица в progress_unit (publications у
+// @Description креаторов, steps у продакшна).
 // @Tags     admin-projects
 // @Produce  json
 // @Security BearerAuth
-// @Param    status query string false "filter by status"
-// @Success  200 {object} managerListResp
+// @Param    q            query string false "часть названия проекта или имени клиента, мин 2 симв"
+// @Param    status       query string false "точный статус проекта | unfinished (в работе: draft, active, on_hold, dispute); пусто = всё кроме cancelled, включая завершённые"
+// @Param    manager      query string false "uuid менеджера | none"
+// @Param    include_test query bool   false "показать тестовые проекты, default false"
+// @Param    kind         query string false "creators_turnkey | production_turnkey | general"
+// @Param    sort         query string false "updated_asc | updated_desc | created_asc | created_desc"
+// @Param    limit        query int    false "1-1000, default 20"
+// @Param    offset       query int    false "default 0"
+// @Success  200 {object} AdminListResult
+// @Failure  400 {object} errorResponse "bad_manager_id | invalid_input — незнакомое значение status, kind или sort; сообщение перечисляет допустимые"
 // @Router   /admin/projects [get]
 func (h *Handler) AdminListProjects(w http.ResponseWriter, r *http.Request) {
-	status := strings.TrimSpace(r.URL.Query().Get("status"))
-	items, err := h.svc.ListAll(r.Context(), status)
+	qs := r.URL.Query()
+	limit, _ := strconv.Atoi(qs.Get("limit"))
+	if limit <= 0 {
+		limit = 20
+	}
+	offset, _ := strconv.Atoi(qs.Get("offset"))
+	params := AdminListParams{
+		Q:      strings.TrimSpace(qs.Get("q")),
+		Status: strings.TrimSpace(qs.Get("status")),
+		Sort:   strings.TrimSpace(qs.Get("sort")),
+		// Тестовые прячем, пока явно не попросили: вопрос «включать ли
+		// мусор» должен решаться выбором, а не молчанием.
+		IncludeTest: qs.Get("include_test") == "true",
+		Kind:        strings.TrimSpace(qs.Get("kind")),
+		Limit:       limit,
+		Offset:      offset,
+	}
+	// "none" — единственный способ спросить «проекты без ответственного»:
+	// пустой manager значит «любой», а UUID'а у «никто» не бывает.
+	if m := strings.TrimSpace(qs.Get("manager")); m != "" {
+		if m == "none" {
+			params.Unassigned = true
+		} else {
+			id, err := uuid.Parse(m)
+			if err != nil {
+				httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_manager_id",
+					"manager должен быть UUID или none.")
+				return
+			}
+			params.ManagerID = &id
+		}
+	}
+	res, err := h.svc.ListAll(r.Context(), params)
 	if err != nil {
 		writeManagerErr(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, managerListResp{Items: items})
+	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
 // AdminGetProject godoc
@@ -187,11 +242,19 @@ type adminCreateProjectReq struct {
 	ClientContact    string `json:"client_contact,omitempty"`
 	SpecialistUserID string `json:"specialist_user_id,omitempty"`
 	AssignedToUserID string `json:"assigned_to_user_id,omitempty"`
-	PipelineID       string `json:"pipeline_id"`
-	Title            string `json:"title"`
-	Budget           *int   `json:"budget,omitempty"`
-	Notes            string `json:"notes,omitempty"`
-	Source           string `json:"source,omitempty"`
+	// PipelineID — необязателен: воронку продакшну подставляем по
+	// умолчанию, а креаторам и общему проекту она не нужна вовсе.
+	PipelineID string `json:"pipeline_id,omitempty"`
+	// Kind — вид проекта. Пусто = production_turnkey.
+	Kind string `json:"kind,omitempty"`
+	// IsTest — пометить проект как тестовый: в админском списке такие
+	// скрыты по умолчанию. Ставится здесь, а не выводится из данных —
+	// «тест» в названии пишут не всегда.
+	IsTest bool   `json:"is_test,omitempty"`
+	Title  string `json:"title"`
+	Budget *int   `json:"budget,omitempty"`
+	Notes  string `json:"notes,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 // AdminCreateProject godoc
@@ -209,14 +272,28 @@ func (h *Handler) AdminCreateProject(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
 		return
 	}
-	pipelineID, err := uuid.Parse(strings.TrimSpace(in.PipelineID))
-	if err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id",
-			"pipeline_id обязателен и должен быть UUID.")
+	kind := ProjectKind(in.Kind)
+	if kind == "" {
+		kind = KindProductionTurnkey
+	} else if !IsKnownKind(kind) {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_kind",
+			"Вид проекта бывает "+KindsHint()+".")
 		return
+	}
+	var pipelineID uuid.UUID
+	if s := strings.TrimSpace(in.PipelineID); s != "" {
+		parsed, err := uuid.Parse(s)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id",
+				"pipeline_id должен быть UUID.")
+			return
+		}
+		pipelineID = parsed
 	}
 	startInput := StartProjectInput{
 		PipelineID:    pipelineID,
+		Kind:          kind,
+		IsTest:        in.IsTest,
 		Title:         in.Title,
 		Budget:        in.Budget,
 		Notes:         in.Notes,

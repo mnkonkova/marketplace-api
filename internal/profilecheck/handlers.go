@@ -25,8 +25,8 @@ type ProfileLookup interface {
 }
 
 type Handler struct {
-	svc     *Service
-	lookup  ProfileLookup
+	svc    *Service
+	lookup ProfileLookup
 }
 
 func NewHandler(svc *Service, lookup ProfileLookup) *Handler {
@@ -105,7 +105,9 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, res)
 }
 
-
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// отдаёт ошибку без текста (httpx.WriteErr).
+	Message string `json:"message,omitempty"`
 }

@@ -483,3 +483,18 @@ func (r *Repo) ConsumePasswordResetTokenAndUpdate(ctx context.Context, tokenHash
 	}
 	return userID, nil
 }
+
+// TouchLastLogin — отметить вход. Зовётся и на логине, и на обновлении
+// пары токенов: сессия живёт неделями, и без refresh'а «последний вход»
+// показывал бы дату, когда человек вводил пароль, а не когда работал.
+//
+// Ошибку возвращаем, но вызывающий её только логирует: не пустить
+// человека в систему из-за неудавшейся отметки о входе — хуже, чем
+// потерять саму отметку.
+func (r *Repo) TouchLastLogin(ctx context.Context, userID uuid.UUID) error {
+	if _, err := r.db.Exec(ctx,
+		`UPDATE users SET last_login_at = now() WHERE id = $1`, userID); err != nil {
+		return fmt.Errorf("touch last login: %w", err)
+	}
+	return nil
+}

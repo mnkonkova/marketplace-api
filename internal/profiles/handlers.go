@@ -391,6 +391,47 @@ func (h *Handler) PortfolioUploadURL(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// WorkSampleUploadURL godoc
+// @Summary      Presigned PUT URL для пробы работы к заявке
+// @Description  Креатор отвечает на рассылку роликом. Ролик ложится под
+// @Description  префикс orders/ и на потолок портфолио не влияет: человек
+// @Description  с полным портфолио обязан иметь возможность ответить.
+// @Tags         creator-orders
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body      PortfolioUploadURLInput  true  "content_type/size"
+// @Success      200   {object}  PortfolioUploadURL
+// @Failure      400   {object}  errorResponse
+// @Failure      401   {object}  errorResponse
+// @Failure      503   {object}  errorResponse
+// @Router       /me/creator/uploads/work-sample [post]
+func (h *Handler) WorkSampleUploadURL(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "no_user", msgNoUser)
+		return
+	}
+	if !h.svc.MediaAvailable() {
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "storage_disabled", msgStorageOff)
+		return
+	}
+	var in PortfolioUploadURLInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", msgBadJSON)
+		return
+	}
+	out, err := h.svc.CreateWorkSampleUploadURL(r.Context(), uid, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", httpx.InvalidInputMessage(err))
+	case err != nil:
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", msgInternal)
+	default:
+		httpx.WriteJSON(w, http.StatusOK, out)
+	}
+}
+
 // PortfolioMultipartStart godoc
 // @Summary      Старт S3 multipart upload видео (для файлов > 5 МБ)
 // @Description  Возвращает upload_id, ключ и part_size. Фронт нарезает файл на чанки по part_size и для каждой части ходит за presigned PUT в /me/portfolio/multipart/part-url. После всех PUT — /me/portfolio/multipart/complete.
@@ -896,6 +937,9 @@ func (h *Handler) PortfolioDelete(w http.ResponseWriter, r *http.Request) {
 // типы для swaggo
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
+	Message string `json:"message,omitempty"`
 }
 
 type portfolioListResponse struct {

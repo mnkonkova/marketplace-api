@@ -52,7 +52,11 @@ func (s *Service) SweepOrphanMedia(ctx context.Context, minAge time.Duration) (d
 	cutoff := time.Now().Add(-minAge)
 	// Префиксы синхронизированы с keys в CreatePortfolioUploadURL /
 	// CreateImageUploadURL. Если префикс поменяется — добавить сюда тоже.
-	prefixes := []string{"portfolio/", "images/"}
+	// orders/ — пробы работы к заявкам «под ключ» (см. work_sample.go).
+	// Их ссылки живут в order_candidate_responses.file_url и попадают
+	// в referenced через LoadReferencedMediaURLs; без строки здесь
+	// удалённые отклики оставляли бы файлы в бакете навсегда.
+	prefixes := []string{"portfolio/", "images/", "orders/"}
 	for _, prefix := range prefixes {
 		err := s.media.ListObjects(ctx, prefix, func(key string, lastModified time.Time) bool {
 			if ctx.Err() != nil {

@@ -100,9 +100,11 @@ func splitCSV(values []string) []string {
 	return out
 }
 
-
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// отдаёт ошибку без текста (httpx.WriteErr).
+	Message string `json:"message,omitempty"`
 }
 
 type categoryStatsResponse struct {

@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("production not found")
-	ErrAlreadyExists  = errors.New("active production with this name already exists")
-	ErrInUse          = errors.New("production is used by specialists")
+	ErrNotFound      = errors.New("production not found")
+	ErrAlreadyExists = errors.New("active production with this name already exists")
+	ErrInUse         = errors.New("production is used by specialists")
 )
 
 type Repo struct{ db *pgxpool.Pool }
@@ -136,4 +136,51 @@ func (r *Repo) Delete(ctx context.Context, id uuid.UUID) error {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// ProductionListItem — продакшен в админском справочнике: сам объект плюс
+// то, что делает его живым или мёртвым.
+//
+// Справочник без этих чисел не даёт ответить на единственный вопрос, с
+// которым в него приходят: можно ли выключить строку. Продакшен без
+// участников и проектов выключается свободно; продакшен с тремя идущими
+// проектами выключать нельзя, и видно это должно быть до клика.
+type ProductionListItem struct {
+	Production
+	// Members — сколько специалистов указали этот продакшен в профиле.
+	Members int `json:"members"`
+	// ActiveProjects — незавершённые проекты, где исполнитель из этого
+	// продакшена.
+	ActiveProjects int `json:"active_projects"`
+}
+
+// ListWithUsage — справочник вместе со счётчиками участников и проектов.
+func (r *Repo) ListWithUsage(ctx context.Context, activeOnly bool) ([]ProductionListItem, error) {
+	q := `
+SELECT p.id, p.name, p.description, p.is_active, p.created_at, p.updated_at,
+       (SELECT COUNT(*) FROM specialist_profiles sp WHERE sp.production_id = p.id),
+       (SELECT COUNT(*) FROM projects pr
+        JOIN specialist_profiles sp2 ON sp2.user_id = pr.specialist_user_id
+        WHERE sp2.production_id = p.id AND pr.is_test = FALSE
+          AND pr.status IN ('draft','active','on_hold','dispute'))
+FROM productions p`
+	if activeOnly {
+		q += ` WHERE p.is_active = TRUE`
+	}
+	q += ` ORDER BY LOWER(p.name)`
+	rows, err := r.db.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list productions with usage: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ProductionListItem, 0)
+	for rows.Next() {
+		var p ProductionListItem
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.IsActive,
+			&p.CreatedAt, &p.UpdatedAt, &p.Members, &p.ActiveProjects); err != nil {
+			return nil, fmt.Errorf("scan production usage: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }

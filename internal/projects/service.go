@@ -29,9 +29,10 @@ var (
 )
 
 type Service struct {
-	repo                     *Repo
-	reviewDeadlineDuration   time.Duration
-	defaultPipelineProvider  DefaultPipelineProvider
+	repo                    *Repo
+	reviewDeadlineDuration  time.Duration
+	defaultPipelineProvider DefaultPipelineProvider
+	checklistAttacher       ChecklistAttacher
 }
 
 func NewService(repo *Repo) *Service { return &Service{repo: repo} }
@@ -55,10 +56,15 @@ func (s *Service) reviewDeadline() time.Duration {
 // StartProject — публичная обёртка над repo.StartProject с валидацией DTO.
 func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUID, error) {
 	in.Title = strings.TrimSpace(in.Title)
-	if in.Title == "" {
-		return uuid.Nil, fmt.Errorf("%w: title is required", ErrInvalidInput)
-	}
-	if utf8.RuneCountInString(in.Title) > 200 {
+	// Нижняя граница — три символа, и считаем её ПОСЛЕ trim. Без неё в
+	// списке заводятся «12345675432» и «  ы  »: по такому названию проект
+	// не найти ни поиском, ни глазами, а переименовать его потом некому.
+	// Двух символов хватает разве что на инициалы — для проекта это не
+	// название.
+	if n := utf8.RuneCountInString(in.Title); n < 3 {
+		return uuid.Nil, fmt.Errorf(
+			"%w: название проекта — минимум 3 символа", ErrInvalidInput)
+	} else if n > 200 {
 		return uuid.Nil, fmt.Errorf("%w: title is too long", ErrInvalidInput)
 	}
 	// Клиент задаётся либо через client_user_id (зарегистрированный),
@@ -72,8 +78,21 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 	// видела NULL (под CHECK constraint).
 	in.ClientName = strings.TrimSpace(in.ClientName)
 	in.ClientContact = strings.TrimSpace(in.ClientContact)
-	if in.PipelineID == uuid.Nil {
-		return uuid.Nil, fmt.Errorf("%w: pipeline_id is required", ErrInvalidInput)
+	// Воронка обязательна только продакшну: у креаторов вместо неё
+	// выкладки, у общего проекта — один срок.
+	if in.Kind == "" {
+		in.Kind = KindProductionTurnkey
+	}
+	// Воронку при создании больше не выбирают: в форме выбирают вид
+	// проекта. Продакшну она всё ещё нужна как каркас шагов — берём
+	// воронку по умолчанию, а править её будут уже внутри проекта.
+	if FeaturesOf(in.Kind).HasFunnel && in.PipelineID == uuid.Nil {
+		def, err := s.repo.DefaultPipelineID(ctx)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf(
+				"%w: воронки по умолчанию нет — назначьте её в разделе «Воронки»", ErrInvalidInput)
+		}
+		in.PipelineID = def
 	}
 	if in.Source == "" {
 		in.Source = SourceManual
@@ -87,7 +106,20 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 			return uuid.Nil, err
 		}
 	}
-	return s.repo.StartProject(ctx, in)
+	id, err := s.repo.StartProject(ctx, in)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	// Чек-лист подключается сам. Менеджер заводит проект и уходит
+	// собирать команду; вспоминают о чек-листе в момент первой сдачи —
+	// то есть когда креатор уже снял ролик по своим представлениям.
+	// Кто актор: тот, на кого проект назначен, иначе — никто.
+	var actor uuid.UUID
+	if in.AssignedToUserID != nil {
+		actor = *in.AssignedToUserID
+	}
+	s.attachChecklist(ctx, id, actor, in.Kind)
+	return id, nil
 }
 
 // ---- Клиентские чтения ----
@@ -121,6 +153,26 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 	}
 	names := map[uuid.UUID]string{}
 	primaryCats := map[uuid.UUID]string{}
+	// Имена менеджеров — одним запросом на весь список, как и всё
+	// остальное здесь: у заказчика проектов бывает десяток.
+	managers := map[uuid.UUID]PartyContact{}
+	mgrSet := map[uuid.UUID]bool{}
+	for _, p := range projects {
+		if p.AssignedToUserID != nil {
+			mgrSet[*p.AssignedToUserID] = true
+		}
+	}
+	if len(mgrSet) > 0 {
+		mgrIDs := make([]uuid.UUID, 0, len(mgrSet))
+		for id := range mgrSet {
+			mgrIDs = append(mgrIDs, id)
+		}
+		// best-effort, как и имена исполнителей: без имени карточка
+		// обходится, без списка проектов — нет.
+		if m, err := s.repo.LoadPartyContacts(ctx, mgrIDs); err == nil {
+			managers = m
+		}
+	}
 	if len(specSet) > 0 {
 		specIDs := make([]uuid.UUID, 0, len(specSet))
 		for id := range specSet {
@@ -135,12 +187,24 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 			primaryCats = c
 		}
 	}
+	// Прогресс проектов с креаторами — по выкладкам, одним запросом на
+	// весь список: шагов у них нет, и прогресс по шагам всегда ноль.
+	pubProgress, err := s.repo.PublicationProgress(ctx, turnkeyIDs(projects))
+	if err != nil {
+		pubProgress = map[uuid.UUID]float64{}
+	}
 	views := make([]ProjectClientView, 0, len(projects))
 	for _, p := range projects {
 		view := buildClientView(p, stagesByProject[p.ID], stepsByProject[p.ID])
+		if pct, ok := pubProgress[p.ID]; ok {
+			view.Progress = pct
+		}
 		if p.SpecialistUserID != nil {
 			view.SpecialistDisplayName = names[*p.SpecialistUserID]
 			view.SpecialistPrimaryCategory = primaryCats[*p.SpecialistUserID]
+		}
+		if p.AssignedToUserID != nil {
+			view.ManagerDisplayName = managers[*p.AssignedToUserID].DisplayName
 		}
 		views = append(views, view)
 	}
@@ -149,7 +213,9 @@ func (s *Service) ListClientProjects(ctx context.Context, clientID uuid.UUID) ([
 
 // GetClientProject — полный проект клиента с воронкой.
 func (s *Service) GetClientProject(ctx context.Context, projectID, clientID uuid.UUID) (ProjectClientView, error) {
-	p, err := s.repo.GetByIDForClient(ctx, projectID, clientID)
+	// Глазами заказчика — но не только заказчику: менеджеру проекта и
+	// админу тоже, ради кнопки «посмотреть, как это видит клиент».
+	p, err := s.repo.GetByIDAsClientView(ctx, projectID, clientID)
 	if err != nil {
 		return ProjectClientView{}, err
 	}
@@ -168,10 +234,22 @@ func (s *Service) enrichClientView(ctx context.Context, p Project) (ProjectClien
 		return ProjectClientView{}, err
 	}
 	view := buildClientView(p, stages, steps)
+	// Заказчик проекта с креаторами меряет его выкладками, а не шагами:
+	// шагов у такого проекта нет, и прогресс по ним всегда ноль.
+	if pct, ok := s.turnkeyProgress(ctx, p); ok {
+		view.Progress = pct
+	}
 	if p.SpecialistUserID != nil {
 		// best-effort: имя specialist'а из specialist_profiles
 		if names, err := s.repo.LoadClientDisplayNames(ctx, []uuid.UUID{*p.SpecialistUserID}); err == nil {
 			view.SpecialistDisplayName = names[*p.SpecialistUserID]
+		}
+	}
+	if p.AssignedToUserID != nil {
+		// Тоже best-effort: проект без имени менеджера открывается,
+		// проект, не открывшийся из-за имени, — нет.
+		if m, err := s.repo.LoadPartyContacts(ctx, []uuid.UUID{*p.AssignedToUserID}); err == nil {
+			view.ManagerDisplayName = m[*p.AssignedToUserID].DisplayName
 		}
 	}
 	return view, nil

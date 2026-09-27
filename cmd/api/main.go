@@ -14,7 +14,9 @@ import (
 	"github.com/joho/godotenv"
 
 	"marketpclce/internal/admin"
+	"marketpclce/internal/audit"
 	"marketpclce/internal/auth"
+	"marketpclce/internal/billing"
 	"marketpclce/internal/catalog"
 	"marketpclce/internal/clarify"
 	"marketpclce/internal/config"
@@ -22,6 +24,7 @@ import (
 	"marketpclce/internal/httpapi"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/llm"
+	"marketpclce/internal/orders"
 	"marketpclce/internal/partner"
 	"marketpclce/internal/pipelines"
 	"marketpclce/internal/platform/db"
@@ -32,7 +35,9 @@ import (
 	"marketpclce/internal/profilecheck"
 	"marketpclce/internal/profiles"
 	"marketpclce/internal/projects"
+	"marketpclce/internal/publications"
 	"marketpclce/internal/ratelimit"
+	"marketpclce/internal/ratings"
 	"marketpclce/internal/reviews"
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
@@ -208,10 +213,49 @@ func main() {
 	pipelinesHandler := pipelines.NewHandler(pipelinesSvc)
 
 	projectsRepo := projects.NewRepo(pool)
+
+	// Выкладки креаторов на проектной странице (проекты creators_turnkey).
+	//
+	// Сервис выкладок заводится РАНЬШЕ проектов: из него же проекты берут
+	// действующий чек-лист при создании.
+	//
+	// Ключ шифрования паролей от аккаунтов бренда читаем здесь же. Кривой
+	// ключ — это ошибка конфигурации, и стартовать с ней нельзя: пароли
+	// молча легли бы мимо шифрования. Пустой ключ — законный режим «без
+	// паролей», ручки доступов отвечают 501.
+	accountSecrets, err := publications.NewSecrets(cfg.AccountsSecretKey)
+	if err != nil {
+		logger.Error("accounts secret key", "err", err)
+		os.Exit(1)
+	}
+	if !accountSecrets.Enabled() {
+		logger.Warn("ACCOUNTS_SECRET_KEY пуст: пароли от аккаунтов бренда не хранятся")
+	}
+	publicationsSvc := publications.NewService(publications.NewRepo(pool)).WithSecrets(accountSecrets)
+	publicationsHandler := publications.NewHandler(publicationsSvc)
+
 	projectsSvc := projects.NewService(projectsRepo).
 		WithReviewDeadline(cfg.ReviewDeadline).
-		WithDefaultPipeline(pipelinesSvc)
+		WithDefaultPipeline(pipelinesSvc).
+		// Новый проект с креаторами получает чек-лист сам. Без этого о
+		// нём вспоминали в момент первой сдачи — когда ролик уже снят.
+		WithChecklistAttacher(publicationsSvc)
 	projectsHandler := projects.NewHandler(projectsSvc)
+
+	// Самостоятельный подбор креаторов клиентом. Заявка заводит проект
+	// сразу — заказчику есть куда прийти и где написать, пока менеджер
+	// считает; без этого он уходит в тишину на несколько дней.
+	// Состав проекта — через publications: финализация заявки добавляет
+	// людей тем же путём, каким менеджер добавляет их руками, и вместе
+	// с составом человеку уходит задание — договор, ТЗ и чеклист.
+	ordersHandler := orders.NewHandler(
+		orders.NewService(orders.NewRepo(pool)).
+			WithProjects(projectsSvc).
+			WithCrew(publicationsSvc))
+
+	// Деньги: условия, платежи заказчика и начисления креаторам.
+	billingHandler := billing.NewHandler(billing.NewService(billing.NewRepo(pool)))
+	ratingsHandler := ratings.NewHandler(ratings.NewService(ratings.NewRepo(pool)))
 
 	// Привязка к «Боту Работ». Если общий секрет или адрес вебхука не заданы,
 	// ручки просто нет: неработающая привязка хуже отсутствующей — человек
@@ -232,7 +276,9 @@ func main() {
 	// для длинных временно поднимем в env.
 	adminRepo := admin.NewRepo(pool)
 	adminSvc := admin.NewService(adminRepo, tokenIssuer, cfg.AppBaseURL, cfg.EmailVerifyTokenTTL).
-		WithProfilesRepo(profilesRepo)
+		WithProfilesRepo(profilesRepo).
+		WithAuditRepo(audit.NewRepo(pool)).
+		WithPublicationsRepo(publications.NewRepo(pool))
 	adminHandler := admin.NewHandler(adminSvc)
 
 	var summarizeCache *summarize.Cache
@@ -268,9 +314,13 @@ func main() {
 		Productions:    productionsHandler,
 		Pipelines:      pipelinesHandler,
 		Projects:       projectsHandler,
+		Publications:   publicationsHandler,
+		Orders:         ordersHandler,
+		Billing:        billingHandler,
 		Support:        support.NewHandler(support.NewService(pool)),
 		Partner:        partnerHandler,
 		Admin:          adminHandler,
+		Ratings:        ratingsHandler,
 		CORSOrigins:    cfg.CORSOrigins,
 		Limiter:        limiter,
 		ReadWindows: []ratelimit.Window{
@@ -308,6 +358,14 @@ func main() {
 		Handler:      router,
 		ReadTimeout:  cfg.HTTPReadTimeout,
 		WriteTimeout: cfg.HTTPWriteTimeout,
+		// Бездействующее соединение не должно жить вечно: без этого
+		// срока открытые и молчащие соединения копятся до предела
+		// файловых дескрипторов, и никакой ReadTimeout их не трогает —
+		// он про чтение запроса, а запроса нет.
+		IdleTimeout: 120 * time.Second,
+		// Потолок заголовков. Дефолт — мегабайт на запрос ДО того, как
+		// дело дойдёт до маршрутизации и лимитов.
+		MaxHeaderBytes: 64 << 10,
 	}
 
 	go func() {

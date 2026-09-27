@@ -96,6 +96,7 @@ type loginReq struct {
 // @Produce      json
 // @Param        body  body      loginReq  true  "credentials"
 // @Success      200   {object}  TokenPair
+// @Failure      400   {object}  errorResponse  "invalid_input — в теле нет login или password"
 // @Failure      401   {object}  errorResponse
 // @Failure      403   {object}  errorResponse
 // @Router       /auth/login [post]
@@ -105,13 +106,30 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErr(w, http.StatusBadRequest, "bad_json")
 		return
 	}
+	// Пустое поле — это «в запросе не то», а не «пароль не тот».
+	//
+	// Раньше и тот, и другой случай отвечали одинаково: bad_credentials.
+	// Клиент, который назвал поле `email` вместо `login`, получал «неверный
+	// логин или пароль» — и шёл искать проблему в паролях. Один раз это
+	// стоило четырёх переписанных вслепую хешей на общем стенде, прежде
+	// чем кто-то открыл DTO ручки.
+	//
+	// Защиту от перебора это не ослабляет: логина в запросе нет, значит и
+	// подсказать по нему нечего — мы не говорим, существует ли такой
+	// пользователь.
+	if strings.TrimSpace(in.Login) == "" || in.Password == "" {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input",
+			"Укажите login и password.")
+		return
+	}
 	pair, err := h.svc.Login(r.Context(), in.Login, in.Password)
 	switch {
 	case errors.Is(err, ErrBadCredentials):
 		httpx.WriteErrMsg(w, http.StatusUnauthorized, "bad_credentials", "Неверный логин или пароль")
 		return
 	case errors.Is(err, ErrInactive):
-		httpx.WriteErr(w, http.StatusForbidden, "inactive")
+		httpx.WriteErrMsg(w, http.StatusForbidden, "inactive",
+			"Аккаунт отключён. Напишите в поддержку, если это ошибка.")
 		return
 	case err != nil:
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
@@ -166,15 +184,6 @@ type meResp struct {
 	IsApproved bool `json:"is_approved"`
 }
 
-// Me godoc
-// @Summary      Текущий пользователь
-// @Tags         auth
-// @Produce      json
-// @Security     BearerAuth
-// @Success      200  {object}  meResp
-// @Failure      401  {object}  errorResponse
-// @Failure      404  {object}  errorResponse
-// @Router       /me [get]
 type yandexReq struct {
 	Code string `json:"code"`
 	// Kind — роль для НОВОГО пользователя. Для существующего игнорируется:
@@ -243,6 +252,15 @@ type emailAvailableResp struct {
 	Available bool `json:"available"`
 }
 
+// Me godoc
+// @Summary      Текущий пользователь
+// @Tags         auth
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  meResp
+// @Failure      401  {object}  errorResponse
+// @Failure      404  {object}  errorResponse
+// @Router       /me [get]
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	uid, ok := UserIDFrom(r.Context())
 	if !ok {
@@ -397,4 +415,7 @@ func (h *Handler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 // тут, чтобы swaggo подхватил тип в @Failure.
 type errorResponse struct {
 	Error string `json:"error"`
+	// Message — человеческий текст для интерфейса. omitempty: часть ручек
+	// зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
+	Message string `json:"message,omitempty"`
 }

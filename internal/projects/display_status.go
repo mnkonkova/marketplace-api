@@ -90,6 +90,7 @@ func DeriveStageDisplayStatus(steps []StepView) (StageDisplayStatus, int, int) {
 //  2. waiting_client + owner=team (ждём что-то от студии — но клиент видит)
 //  3. in_progress
 //  4. первый pending
+//
 // Возвращает указатель на запись из steps (не аллоцирует копию) — если
 // каллер использует view, он же владеет памятью.
 func DeriveCurrentStep(steps []StepView) *StepView {
