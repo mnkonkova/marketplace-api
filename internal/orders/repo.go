@@ -341,7 +341,7 @@ SELECT c.order_id, c.creator_user_id,
          split_part(u.email, '@', 1),
          ''
        ),
-       c.priority, c.status, c.invited_at, c.expires_at, c.responded_at
+       c.priority, c.is_preferred, c.status, c.invited_at, c.expires_at, c.responded_at
 FROM order_candidates c
 LEFT JOIN users u                ON u.id = c.creator_user_id
 LEFT JOIN specialist_profiles sp ON sp.user_id = c.creator_user_id
@@ -353,7 +353,7 @@ WHERE c.order_id = $1 ORDER BY c.priority`, orderID)
 	defer rows.Close()
 	for rows.Next() {
 		var c Candidate
-		if err := rows.Scan(&c.OrderID, &c.CreatorUserID, &c.CreatorName, &c.Priority, &c.Status,
+		if err := rows.Scan(&c.OrderID, &c.CreatorUserID, &c.CreatorName, &c.Priority, &c.IsPreferred, &c.Status,
 			&c.InvitedAt, &c.ExpiresAt, &c.RespondedAt); err != nil {
 			return Order{}, fmt.Errorf("scan candidate: %w", err)
 		}
@@ -891,7 +891,7 @@ SELECT c.order_id, c.creator_user_id,
          split_part(u.email, '@', 1),
          ''
        ),
-       c.priority, c.status, c.invited_at, c.expires_at, c.responded_at
+       c.priority, c.is_preferred, c.status, c.invited_at, c.expires_at, c.responded_at
 FROM order_candidates c
 LEFT JOIN users u                ON u.id = c.creator_user_id
 LEFT JOIN specialist_profiles sp ON sp.user_id = c.creator_user_id
@@ -904,7 +904,7 @@ WHERE c.order_id = ANY($1) ORDER BY c.order_id, c.priority`, ids)
 	for crows.Next() {
 		var c Candidate
 		if err := crows.Scan(&c.OrderID, &c.CreatorUserID, &c.CreatorName, &c.Priority,
-			&c.Status, &c.InvitedAt, &c.ExpiresAt, &c.RespondedAt); err != nil {
+			&c.IsPreferred, &c.Status, &c.InvitedAt, &c.ExpiresAt, &c.RespondedAt); err != nil {
 			return nil, fmt.Errorf("scan candidate: %w", err)
 		}
 		if o := byID[c.OrderID]; o != nil {
@@ -1201,6 +1201,40 @@ SET goal = EXCLUDED.goal, product = EXCLUDED.product, audience = EXCLUDED.audien
 		orderID, b.Goal, b.Product, b.Audience, b.Tone, b.Refs, b.Platforms)
 	if err != nil {
 		return fmt.Errorf("save brief: %w", err)
+	}
+	return nil
+}
+
+// RemoveCandidate — убрать человека из заявки.
+//
+// Только пока он не согласился. Согласившийся уже в составе проекта, и
+// «убрать» для него значит другое — вывести из состава (см.
+// publications.RemoveCreator). Стереть здесь строку означало бы забыть,
+// что человек брал заявку, при том что его выкладки остались в проекте.
+func (r *Repo) RemoveCandidate(ctx context.Context, orderID, creatorID uuid.UUID) error {
+	var status CandidateStatus
+	err := r.db.QueryRow(ctx, `
+DELETE FROM order_candidates
+WHERE order_id = $1 AND creator_user_id = $2 AND status <> 'accepted'
+RETURNING status`, orderID, creatorID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Либо такого в заявке нет, либо он согласился. Второе — не
+		// ошибка данных, а другое действие, и сказать надо именно это.
+		var accepted bool
+		if err := r.db.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM order_candidates
+               WHERE order_id = $1 AND creator_user_id = $2 AND status = 'accepted')`,
+			orderID, creatorID).Scan(&accepted); err != nil {
+			return fmt.Errorf("check candidate: %w", err)
+		}
+		if accepted {
+			return fmt.Errorf("%w: человек уже согласился — выводите из состава проекта",
+				ErrWrongStatus)
+		}
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("remove candidate: %w", err)
 	}
 	return nil
 }

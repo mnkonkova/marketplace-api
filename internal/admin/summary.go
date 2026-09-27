@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"marketpclce/internal/httpx"
+	"marketpclce/internal/projects"
 )
 
 // Сводка админа: что требует внимания прямо сейчас.
@@ -298,8 +299,8 @@ LIMIT %d`, activeStatusesSQL, attentionPreview)); err != nil {
 	// Распределения. Нули проставляем сами: чего нет в GROUP BY, того
 	// в ответе иначе не будет вовсе, и фронт не отличит «ни одного» от
 	// «не посчитали».
-	for _, k := range []string{"creators_turnkey", "production_turnkey", "general"} {
-		out.ProjectsByKind[k] = 0
+	for _, k := range projects.AllKinds() {
+		out.ProjectsByKind[string(k)] = 0
 	}
 	for _, st := range []string{"draft", "active", "on_hold", "done", "cancelled", "dispute"} {
 		out.ProjectsByStatus[st] = 0

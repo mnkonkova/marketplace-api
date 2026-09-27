@@ -38,14 +38,19 @@ const (
 
 // Reminder — одно напоминание, готовое к отправке.
 type Reminder struct {
-	Kind             string    `json:"kind"`
-	ProjectID        uuid.UUID `json:"project_id"`
-	PublicationID    uuid.UUID `json:"publication_id"`
-	CreatorUserID    uuid.UUID `json:"creator_user_id"`
-	DueDate          time.Time `json:"due_date"`
-	DaysOverdue      int       `json:"days_overdue"`
-	MissingPlatforms []string  `json:"missing_platforms,omitempty"`
-	ProjectTitle     string    `json:"project_title"`
+	Kind          string    `json:"kind"`
+	ProjectID     uuid.UUID `json:"project_id"`
+	PublicationID uuid.UUID `json:"publication_id"`
+	// CreatorUserID — кому поручена выкладка. nil у проекта без
+	// креаторов: ролик принадлежит проекту, и адресата у поштучного
+	// письма нет вовсе. Указатель, а не нулевой uuid: нулевой uuid
+	// уехал бы в notification_log получателем и слепил бы там в одну
+	// строку все проекты разом.
+	CreatorUserID    *uuid.UUID `json:"creator_user_id,omitempty"`
+	DueDate          time.Time  `json:"due_date"`
+	DaysOverdue      int        `json:"days_overdue"`
+	MissingPlatforms []string   `json:"missing_platforms,omitempty"`
+	ProjectTitle     string     `json:"project_title"`
 
 	// autoping — выключатели проекта. Не экспортируется и не уезжает в
 	// payload: это настройка отправителя, получателю она ни к чему.
@@ -106,7 +111,10 @@ LEFT JOIN project_creator_reminder_prefs cp
 WHERE p.status IN ('planned', 'partial')
   AND p.due_date <= $1::date + 1
   AND p.due_date >= $1 - $2::int
-  AND pr.kind = 'creators_turnkey'
+  -- Оба вида с выкладками: у проекта без креаторов просрочки такие же
+  -- настоящие, просто писать о них некому лично — они складываются в
+  -- дневную сводку в общий чат менеджеров (см. RunReminders).
+  AND pr.kind IN ('creators_turnkey', 'brand_turnkey')
   AND NOT EXISTS (
       SELECT 1 FROM publication_date_requests dr
       WHERE dr.publication_id = p.id AND dr.status = 'pending'
@@ -308,10 +316,15 @@ func (r *Repo) Digests(ctx context.Context, reminders []Reminder) ([]ProjectDige
 		default:
 			d.DueToday++
 		}
-		key := rem.ProjectID.String() + rem.CreatorUserID.String()
-		if !seenCreator[key] {
-			seenCreator[key] = true
-			d.Creators = append(d.Creators, rem.CreatorUserID)
+		// «Кто виноват» бывает только там, где есть кому. У проекта без
+		// креаторов список остаётся пустым, и сводка говорит «по каким
+		// дням», а не «по кому».
+		if rem.CreatorUserID != nil {
+			key := rem.ProjectID.String() + rem.CreatorUserID.String()
+			if !seenCreator[key] {
+				seenCreator[key] = true
+				d.Creators = append(d.Creators, *rem.CreatorUserID)
+			}
 		}
 	}
 
@@ -369,8 +382,16 @@ func (s *Service) RunReminders(ctx context.Context, now time.Time) (RunStats, er
 			st.Skipped++
 			continue
 		}
-		recipient := rem.CreatorUserID
-		sent, err := s.repo.Send(ctx, rem, &recipient, now)
+		// Поштучное письмо без адресата не бывает. У проекта без
+		// креаторов такие напоминания не отправляются вовсе — ни в
+		// личку (некому), ни в чат (шестьдесят «просрочка» за одно
+		// утро по одному проекту). Их единственный след — строка в
+		// дневной сводке ниже, и в неё выкладка попадает отсюда же.
+		if rem.CreatorUserID == nil {
+			st.Skipped++
+			continue
+		}
+		sent, err := s.repo.Send(ctx, rem, rem.CreatorUserID, now)
 		if err != nil {
 			// Один упавший креатор не должен останавливать рассылку по
 			// остальным — считаем и идём дальше.
@@ -433,8 +454,13 @@ func (s *Service) RemindNow(ctx context.Context, pubID uuid.UUID, now time.Time)
 	if err != nil {
 		return false, err
 	}
-	recipient := rem.CreatorUserID
-	return s.repo.Send(ctx, rem, &recipient, now)
+	// Напомнить некому: у выкладки проекта без креаторов нет владельца,
+	// и кнопка напоминала бы менеджеру о самом себе. Отказываем явно, а
+	// не отправляем в никуда.
+	if rem.CreatorUserID == nil {
+		return false, ErrNoCreator
+	}
+	return s.repo.Send(ctx, rem, rem.CreatorUserID, now)
 }
 
 // DefaultReminderHour — с какого часа местного времени можно слать

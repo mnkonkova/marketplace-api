@@ -570,6 +570,11 @@ func NewRouter(d Deps) http.Handler {
 					// застрявшие, а у проекта заказ давно оплачен.
 					r.Get("/manager/projects/{id}/order", d.Orders.ManagerProjectOrder)
 					r.Post("/manager/orders/{id}/candidates", d.Orders.ManagerAddCandidates)
+					// Убрать из заявки того, кого звать не будем. Состав
+					// проекта этим не меняется: согласившегося выводят из
+					// состава, а не отсюда.
+					r.Delete("/manager/orders/{id}/candidates/{creator_id}",
+						d.Orders.ManagerRemoveCandidate)
 					r.Post("/manager/orders/{id}/invite", d.Orders.ManagerInvite)
 					r.Post("/manager/orders/{id}/paid", d.Orders.ManagerMarkPaid)
 				}

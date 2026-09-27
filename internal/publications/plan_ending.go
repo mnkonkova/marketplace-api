@@ -75,7 +75,10 @@ SELECT pr.id, COALESCE(pr.title, ''), pr.assigned_to_user_id,
        COUNT(*) FILTER (WHERE p.status IN ('planned', 'partial')) AS open_left
 FROM projects pr
 JOIN project_publications p ON p.project_id = pr.id AND p.status <> 'cancelled'
-WHERE pr.kind = 'creators_turnkey'
+-- Оба вида с выкладками: адресат этого предупреждения и так менеджер
+-- (SendPlanEnding), а у проекта без креаторов кончившийся план значит
+-- ровно то же самое — ролики перестанут выходить.
+WHERE pr.kind IN ('creators_turnkey', 'brand_turnkey')
   AND pr.status = 'active'
   AND pr.is_test = FALSE
   -- Сбор по проекту остановлен — он закрывается, и расписание ему

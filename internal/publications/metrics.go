@@ -174,7 +174,9 @@ FROM project_publications p
 JOIN projects pr ON pr.id = p.project_id
 WHERE p.status IN ('planned', 'partial')
   AND p.due_date < $1::date
-  AND pr.kind = 'creators_turnkey'
+  -- Оба вида с выкладками: просрочка у проекта без креаторов такая же
+  -- просрочка, и gauge, который её не видит, врёт.
+  AND pr.kind IN ('creators_turnkey', 'brand_turnkey')
   AND NOT EXISTS (
       SELECT 1 FROM publication_date_requests dr
       WHERE dr.publication_id = p.id AND dr.status = 'pending'

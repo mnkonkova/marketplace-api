@@ -8,9 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"marketpclce/internal/outbox"
+	"marketpclce/internal/projects"
 )
 
 var (
@@ -18,9 +20,19 @@ var (
 	// ErrForbidden — сдавать ролик может только тот креатор, на кого
 	// заведена выкладка. Проверка на бэке, а не только в UI.
 	ErrForbidden = errors.New("publication belongs to another creator")
-	// ErrNotCreatorsProject — выкладки существуют только у проектов вида
-	// creators_turnkey. У продакшна воронка, у общего проекта один срок.
-	ErrNotCreatorsProject = errors.New("project is not of kind creators_turnkey")
+	// ErrNotCreatorsProject — выкладок у этого вида проекта не бывает.
+	// У продакшна воронка, у общего проекта один срок; план выкладок
+	// есть только у «креаторов под ключ» и «бренда под ключ».
+	ErrNotCreatorsProject = errors.New("project kind has no publications")
+	// ErrNoCreator — действие требует креатора, а у выкладки его нет:
+	// это ролик проекта без людей. Не ErrForbidden и не ErrNotFound —
+	// оба врут о причине: выкладка существует и видна, просто сдавать,
+	// проверять и напоминать по ней некому.
+	ErrNoCreator = errors.New("publication has no creator")
+	// ErrCrewNotAllowed — в проект без креаторов пытаются добавить
+	// состав. Пустой состав здесь не «ещё никого не добавили», а
+	// «не будет никогда».
+	ErrCrewNotAllowed = errors.New("project kind has no crew")
 	// ErrCreatorNotInProject — креатора нет в составе проекта (или его
 	// оттуда убрали).
 	ErrCreatorNotInProject = errors.New("creator is not in project")
@@ -155,7 +167,7 @@ ORDER BY added_at`
 // транзакции и с общим created_batch_id, чтобы ошибочную пачку можно было
 // снять одним действием (см. CancelBatch).
 func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResult, error) {
-	if len(in.CreatorUserIDs) == 0 || len(in.Dates) == 0 {
+	if len(in.Dates) == 0 {
 		return BatchResult{}, ErrNothingToCreate
 	}
 
@@ -165,20 +177,36 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	draftRequired, err := r.assertCreatorsProject(ctx, tx, in.ProjectID)
+	plan, err := r.assertProjectHasPublications(ctx, tx, in.ProjectID)
 	if err != nil {
 		return BatchResult{}, err
 	}
+	draftRequired := plan.DraftRequired
 
-	// Состав проекта читаем один раз: проверять каждого креатора отдельным
-	// запросом на пачке из 60 выкладок — 60 лишних round-trip'ов.
-	members, err := txCreatorSet(ctx, tx, in.ProjectID)
-	if err != nil {
-		return BatchResult{}, err
-	}
-	for _, cid := range in.CreatorUserIDs {
-		if !members[cid] {
-			return BatchResult{}, fmt.Errorf("%w: %s", ErrCreatorNotInProject, cid)
+	// Где креаторов нет, там пачка — это просто даты, и пустой список
+	// людей норма. Непустой при этом отказываем, а не игнорируем тихо:
+	// менеджер, приславший креаторов в проект без креаторов, ошибся
+	// проектом, и молчаливое «поняли по-своему» он заметит только в
+	// отчёте.
+	if !plan.HasCrew() {
+		if len(in.CreatorUserIDs) > 0 {
+			return BatchResult{}, ErrCrewNotAllowed
+		}
+	} else {
+		if len(in.CreatorUserIDs) == 0 {
+			return BatchResult{}, ErrNothingToCreate
+		}
+		// Состав проекта читаем один раз: проверять каждого креатора
+		// отдельным запросом на пачке из 60 выкладок — 60 лишних
+		// round-trip'ов.
+		members, err := txCreatorSet(ctx, tx, in.ProjectID)
+		if err != nil {
+			return BatchResult{}, err
+		}
+		for _, cid := range in.CreatorUserIDs {
+			if !members[cid] {
+				return BatchResult{}, fmt.Errorf("%w: %s", ErrCreatorNotInProject, cid)
+			}
 		}
 	}
 
@@ -193,11 +221,24 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 	// ON CONFLICT DO NOTHING поверх publications_creator_day_uniq:
 	// повторная отправка формы (двойной клик, ретрай) не создаёт вторую
 	// пачку на те же даты, а тихо пропускает уже существующие.
-	total := len(in.CreatorUserIDs) * len(in.Dates)
-	creatorArg := make([]uuid.UUID, 0, total)
+	//
+	// У проекта без креаторов произведение вырождается в одни даты, и
+	// столбец креаторов уходит в базу массивом NULL'ов: выкладка
+	// принадлежит проекту, а не человеку.
+	owners := in.CreatorUserIDs
+	if !plan.HasCrew() {
+		owners = []uuid.UUID{uuid.Nil}
+	}
+	total := len(owners) * len(in.Dates)
+	// pgtype.UUID, а не *uuid.UUID: драйвер кодирует срез указателей
+	// поэлементно через driver.Valuer, и метод-значение UUID.Value на
+	// nil-указателе паникует. Явный Valid=false — единственный способ
+	// положить NULL в массив uuid[].
+	creatorArg := make([]pgtype.UUID, 0, total)
 	dueArg := make([]time.Time, 0, total)
 	draftArg := make([]*time.Time, 0, total)
-	for _, cid := range in.CreatorUserIDs {
+	for i := range owners {
+		owner := pgtype.UUID{Bytes: owners[i], Valid: plan.HasCrew()}
 		for _, d := range in.Dates {
 			day := truncateDay(d)
 			var draft *time.Time
@@ -205,7 +246,7 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 				dd := day.AddDate(0, 0, -in.DraftLeadDays)
 				draft = &dd
 			}
-			creatorArg = append(creatorArg, cid)
+			creatorArg = append(creatorArg, owner)
 			dueArg = append(dueArg, day)
 			draftArg = append(draftArg, draft)
 		}
@@ -280,8 +321,15 @@ func (r *Repo) AddSelfPublication(ctx context.Context, projectID, creatorID uuid
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := r.assertCreatorsProject(ctx, tx, projectID); err != nil {
+	plan, err := r.assertProjectHasPublications(ctx, tx, projectID)
+	if err != nil {
 		return Publication{}, err
+	}
+	// Кабинета креатора у проекта без креаторов нет, но ручка обязана
+	// отказывать явно: пустой ответ читался бы как «проект есть, просто
+	// пуст».
+	if !plan.HasCrew() {
+		return Publication{}, ErrCrewNotAllowed
 	}
 	members, err := txCreatorSet(ctx, tx, projectID)
 	if err != nil {
@@ -354,23 +402,32 @@ func (r *Repo) ManagerAddPublication(ctx context.Context, in AddPublicationInput
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	draftRequired, err := r.assertCreatorsProject(ctx, tx, in.ProjectID)
+	plan, err := r.assertProjectHasPublications(ctx, tx, in.ProjectID)
 	if err != nil {
 		return Publication{}, err
 	}
-	members, err := txCreatorSet(ctx, tx, in.ProjectID)
-	if err != nil {
-		return Publication{}, err
-	}
-	if !members[in.CreatorUserID] {
-		return Publication{}, ErrCreatorNotInProject
+	// Владелец выкладки есть ровно там, где есть состав. У проекта без
+	// креаторов вставляем NULL, и переданный креатор — ошибка проектом,
+	// а не пожелание, которое можно молча проигнорировать.
+	var owner *uuid.UUID
+	if plan.HasCrew() {
+		members, err := txCreatorSet(ctx, tx, in.ProjectID)
+		if err != nil {
+			return Publication{}, err
+		}
+		if !members[in.CreatorUserID] {
+			return Publication{}, ErrCreatorNotInProject
+		}
+		owner = &in.CreatorUserID
+	} else if in.CreatorUserID != uuid.Nil {
+		return Publication{}, ErrCrewNotAllowed
 	}
 	if err := assertPeriodOpen(ctx, tx, in.ProjectID, in.Day); err != nil {
 		return Publication{}, err
 	}
 
 	var draft *time.Time
-	if draftRequired && in.DraftLeadDays > 0 {
+	if plan.DraftRequired && in.DraftLeadDays > 0 {
 		dd := in.Day.AddDate(0, 0, -in.DraftLeadDays)
 		draft = &dd
 	}
@@ -382,7 +439,7 @@ INSERT INTO project_publications
 VALUES ($1, $2, $3::date, $4::date, $5)
 RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, status,
           created_batch_id, self_added, created_at, updated_at`,
-		in.ProjectID, in.CreatorUserID, in.Day, draft, in.ManagerUserID).Scan(
+		in.ProjectID, owner, in.Day, draft, in.ManagerUserID).Scan(
 		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate,
 		&p.Status, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
 	if isUniqueViolation(err) {
@@ -396,7 +453,7 @@ RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, stat
 		outbox.EventPublicationsCreated, map[string]any{
 			"project_id":      in.ProjectID,
 			"publication_id":  p.ID,
-			"creator_user_id": in.CreatorUserID,
+			"creator_user_id": owner,
 			"due_date":        in.Day.Format("2006-01-02"),
 			"count":           1,
 			"created_by":      in.ManagerUserID,
@@ -432,7 +489,9 @@ func (r *Repo) MoveDueDate(ctx context.Context, in MoveDueDateInput) (Publicatio
 	}
 
 	var status string
-	var creatorID uuid.UUID
+	// Указателем: у ролика проекта без креаторов владельца нет, и скан
+	// NULL в uuid.UUID — не компиляторная, а рантайм-ошибка.
+	var creatorID *uuid.UUID
 	var oldDay time.Time
 	var hasLinks bool
 	if err := tx.QueryRow(ctx, `
@@ -834,9 +893,16 @@ GROUP BY l.publication_id`, ids)
 
 	// Имена — четвёртым запросом на всю пачку, там же где ссылки и переносы.
 	// Без них в интерфейсе остаётся «Креатор 3f2a91b8».
+	//
+	// У выкладки без креатора имени нет и быть не может — это ролик
+	// проекта. Пустая строка здесь правильнее любой подстановки:
+	// «Проект» или «Бренд» в колонке «Креатор» читалось бы как имя
+	// человека, которого нет.
 	creatorIDs := make([]uuid.UUID, 0, len(ps))
 	for _, p := range ps {
-		creatorIDs = append(creatorIDs, p.CreatorUserID)
+		if p.CreatorUserID != nil {
+			creatorIDs = append(creatorIDs, *p.CreatorUserID)
+		}
 	}
 	names, err := r.resolveNames(ctx, creatorIDs)
 	if err != nil {
@@ -845,7 +911,9 @@ GROUP BY l.publication_id`, ids)
 
 	today := truncateDay(time.Now())
 	for _, p := range ps {
-		p.CreatorName = names[p.CreatorUserID]
+		if p.CreatorUserID != nil {
+			p.CreatorName = names[*p.CreatorUserID]
+		}
 		p.Overdue = p.Status.IsOpen() &&
 			p.PendingDateRequest == nil &&
 			truncateDay(p.DueDate).Before(today)
@@ -865,7 +933,8 @@ func (r *Repo) SubmitLinks(ctx context.Context, in SubmitLinksInput, parsed []Li
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var projectID, creatorID uuid.UUID
+	var projectID uuid.UUID
+	var creatorID *uuid.UUID
 	var status Status
 	err = tx.QueryRow(ctx, `
 SELECT project_id, creator_user_id, status FROM project_publications
@@ -876,7 +945,9 @@ WHERE id = $1 FOR UPDATE`, in.PublicationID).Scan(&projectID, &creatorID, &statu
 	if err != nil {
 		return Publication{}, fmt.Errorf("lock publication: %w", err)
 	}
-	if creatorID != in.ActorUserID {
+	// Креаторская сдача по ролику без креатора обязана отказывать, а не
+	// падать: ссылки такому проекту вставляет менеджер (ManagerEditLink).
+	if creatorID == nil || *creatorID != in.ActorUserID {
 		return Publication{}, ErrForbidden
 	}
 	if status == StatusCancelled || status == StatusClosedManually {
@@ -1245,7 +1316,7 @@ WHERE id = $1`, in.PublicationID, in.ManagerUserID, in.Reason); err != nil {
 // RequestDateChange — креатор просит перенос. Пока просьба не рассмотрена,
 // выкладка не считается просроченной (см. hydrate).
 func (r *Repo) RequestDateChange(ctx context.Context, pubID, actorID uuid.UUID, newDate time.Time, reason string) (DateRequest, error) {
-	var creatorID uuid.UUID
+	var creatorID *uuid.UUID
 	err := r.db.QueryRow(ctx,
 		`SELECT creator_user_id FROM project_publications WHERE id = $1`, pubID).Scan(&creatorID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1254,7 +1325,9 @@ func (r *Repo) RequestDateChange(ctx context.Context, pubID, actorID uuid.UUID, 
 	if err != nil {
 		return DateRequest{}, fmt.Errorf("get publication: %w", err)
 	}
-	if creatorID != actorID {
+	// Просить перенос может только тот, кому выкладка поручена. У ролика
+	// проекта без креаторов такого человека нет вовсе.
+	if creatorID == nil || *creatorID != actorID {
 		return DateRequest{}, ErrForbidden
 	}
 
@@ -1519,23 +1592,41 @@ func missingChecklistTexts(required []ChecklistItem, ok map[uuid.UUID]bool) []st
 	return missing
 }
 
-// assertCreatorsProject — выкладки бывают только у creators_turnkey.
-// Возвращает draft_required проекта, чтобы не ходить в ту же строку дважды.
-func (r *Repo) assertCreatorsProject(ctx context.Context, tx pgx.Tx, projectID uuid.UUID) (bool, error) {
+// projectPlan — вид проекта и его настройка черновиков.
+//
+// Возвращается вместе, чтобы вызывающий не ходил в ту же строку второй
+// раз: вид ему нужен, чтобы решить про креаторов, а draft_required —
+// чтобы поставить срок черновика.
+type projectPlan struct {
+	Kind          projects.ProjectKind
+	DraftRequired bool
+}
+
+// HasCrew — выкладку этого проекта поручают человеку.
+func (p projectPlan) HasCrew() bool { return projects.FeaturesOf(p.Kind).HasCrew }
+
+// assertProjectHasPublications — план выкладок бывает не у всякого вида.
+//
+// Раньше здесь стоял литерал `kind != "creators_turnkey"`, и он же был
+// единственным вратарём выкладок. С появлением второго вида с планом
+// (бренд под ключ) сравнение со строкой пришлось бы держать в голове —
+// спрашиваем матрицу.
+func (r *Repo) assertProjectHasPublications(ctx context.Context, tx pgx.Tx, projectID uuid.UUID) (projectPlan, error) {
+	var out projectPlan
 	var kind string
-	var draftRequired bool
 	err := tx.QueryRow(ctx,
-		`SELECT kind::text, draft_required FROM projects WHERE id = $1`, projectID).Scan(&kind, &draftRequired)
+		`SELECT kind::text, draft_required FROM projects WHERE id = $1`, projectID).Scan(&kind, &out.DraftRequired)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, ErrNotFound
+		return projectPlan{}, ErrNotFound
 	}
 	if err != nil {
-		return false, fmt.Errorf("get project kind: %w", err)
+		return projectPlan{}, fmt.Errorf("get project kind: %w", err)
 	}
-	if kind != "creators_turnkey" {
-		return false, fmt.Errorf("%w: kind=%s", ErrNotCreatorsProject, kind)
+	out.Kind = projects.ProjectKind(kind)
+	if !projects.FeaturesOf(out.Kind).HasPublications {
+		return projectPlan{}, fmt.Errorf("%w: kind=%s", ErrNotCreatorsProject, kind)
 	}
-	return draftRequired, nil
+	return out, nil
 }
 
 func txCreatorSet(ctx context.Context, tx pgx.Tx, projectID uuid.UUID) (map[uuid.UUID]bool, error) {

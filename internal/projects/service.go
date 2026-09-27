@@ -86,7 +86,7 @@ func (s *Service) StartProject(ctx context.Context, in StartProjectInput) (uuid.
 	// Воронку при создании больше не выбирают: в форме выбирают вид
 	// проекта. Продакшну она всё ещё нужна как каркас шагов — берём
 	// воронку по умолчанию, а править её будут уже внутри проекта.
-	if in.Kind == KindProductionTurnkey && in.PipelineID == uuid.Nil {
+	if FeaturesOf(in.Kind).HasFunnel && in.PipelineID == uuid.Nil {
 		def, err := s.repo.DefaultPipelineID(ctx)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf(

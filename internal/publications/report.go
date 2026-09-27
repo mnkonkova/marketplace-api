@@ -72,15 +72,17 @@ type PlatformRow struct {
 type VideoRow struct {
 	PublicationID uuid.UUID `json:"publication_id"`
 	LinkID        uuid.UUID `json:"link_id"`
-	CreatorUserID uuid.UUID `json:"creator_user_id"`
-	CreatorName   string    `json:"creator_name,omitempty"`
-	Platform      string    `json:"platform"`
-	URL           string    `json:"url"`
-	SubmittedAt   time.Time `json:"submitted_at"`
-	Views         int64     `json:"views"`
-	Likes         int64     `json:"likes"`
-	Comments      int64     `json:"comments"`
-	Shares        *int64    `json:"shares,omitempty"`
+	// CreatorUserID — чей ролик. Пусто у проекта без креаторов: там
+	// ролик принадлежит проекту, и колонки «Креатор» в таблице нет.
+	CreatorUserID *uuid.UUID `json:"creator_user_id,omitempty"`
+	CreatorName   string     `json:"creator_name,omitempty"`
+	Platform      string     `json:"platform"`
+	URL           string     `json:"url"`
+	SubmittedAt   time.Time  `json:"submitted_at"`
+	Views         int64      `json:"views"`
+	Likes         int64      `json:"likes"`
+	Comments      int64      `json:"comments"`
+	Shares        *int64     `json:"shares,omitempty"`
 	// Growth24h — прирост ЗА СУТКИ: разница с вчерашним снимком. null —
 	// вчерашнего снимка нет, и прирост неизвестен. Ноль здесь означал бы
 	// «ролик встал», а это другое утверждение: см. sharesTotal, правило
@@ -109,13 +111,25 @@ type Report struct {
 	ERPercent *float64 `json:"er_percent,omitempty"`
 	// ERWithoutShares — хоть одна площадка, вошедшая в расчёт, репостов
 	// не отдала. Показатель занижен, и сказать об этом обязаны.
-	ERWithoutShares bool          `json:"er_without_shares,omitempty"`
-	AsOf            *time.Time    `json:"as_of,omitempty"`
-	Collapsed       bool          `json:"collapsed"`
-	ByDay           []DayPoint    `json:"by_day"`
-	ByCreator       []CreatorRow  `json:"by_creator"`
-	ByPlatform      []PlatformRow `json:"by_platform"`
-	VideoRows       []VideoRow    `json:"videos_table"`
+	ERWithoutShares bool `json:"er_without_shares,omitempty"`
+	// Cost — сколько стоит проект за период, копейки. Приходит только у
+	// вида, где сумму называет менеджер (FeaturesOf(...).HasManualCost):
+	// у проекта с креаторами деньги считаются по людям, и второе число
+	// рядом с начислениями означало бы два разных ответа на один вопрос.
+	// nil — вида не того или сумму ещё не назвали.
+	Cost *int64 `json:"cost,omitempty"`
+	// CostPer1000 — стоимость тысячи просмотров, копейки. Та же целочисленная
+	// формула, что в billing.totals: сумма × 1000 ÷ просмотры.
+	//
+	// nil при нулевых просмотрах намеренно: ноль читался бы как
+	// «бесплатно», а «не знаем» — другое утверждение.
+	CostPer1000 *int64        `json:"cost_per_1000,omitempty"`
+	AsOf        *time.Time    `json:"as_of,omitempty"`
+	Collapsed   bool          `json:"collapsed"`
+	ByDay       []DayPoint    `json:"by_day"`
+	ByCreator   []CreatorRow  `json:"by_creator"`
+	ByPlatform  []PlatformRow `json:"by_platform"`
+	VideoRows   []VideoRow    `json:"videos_table"`
 }
 
 // Report — собрать отчёт. Пять запросов вместо одного: каждый агрегат
@@ -152,6 +166,9 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 		// В итоговом снимке репостов нет: он сворачивался до того, как мы
 		// начали их собирать, и достраивать их задним числом неоткуда.
 		out.ERPercent, out.ERWithoutShares = erPercent(stats.Likes, stats.Comments, nil, stats.Views)
+		if err := r.fillCost(ctx, &out); err != nil {
+			return out, err
+		}
 		return out, nil
 	}
 
@@ -192,11 +209,18 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 			out.Videos++
 		}
 
-		c, ok := byCreator[v.CreatorUserID]
+		// Разбор «по креаторам» бывает только там, где они есть. У
+		// проекта без креаторов ByCreator остаётся пустым — и это не
+		// «никто ничего не снял», а «делить не по кому»: фронт такому
+		// виду блок не рисует вовсе.
+		if v.CreatorUserID == nil {
+			continue
+		}
+		c, ok := byCreator[*v.CreatorUserID]
 		if !ok {
-			c = &CreatorRow{CreatorUserID: v.CreatorUserID}
-			byCreator[v.CreatorUserID] = c
-			creatorOrder = append(creatorOrder, v.CreatorUserID)
+			c = &CreatorRow{CreatorUserID: *v.CreatorUserID}
+			byCreator[*v.CreatorUserID] = c
+			creatorOrder = append(creatorOrder, *v.CreatorUserID)
 		}
 		c.Views += v.Views
 
@@ -263,7 +287,49 @@ func (r *Repo) Report(ctx context.Context, projectID uuid.UUID, f ReportFilter) 
 	if err := r.nameRows(ctx, &out); err != nil {
 		return out, err
 	}
+	if err := r.fillCost(ctx, &out); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// fillCost — стоимость проекта и СПВ.
+//
+// Только для вида, где сумму вводит менеджер. У проектов с креаторами
+// деньги живут в начислениях (billing), и вторая сумма в отчёте
+// разъехалась бы с первой на первой же правке тарифа — поэтому вид
+// спрашивается здесь, а не гасится на фронте.
+//
+// Сумма лежит в снимке условий project_billing, то есть в чужом домене.
+// Читаем её одним полем и только на чтение: заводить ради одного числа
+// зависимость publications → billing (а billing уже зависит от
+// publications) значило бы получить цикл.
+func (r *Repo) fillCost(ctx context.Context, out *Report) error {
+	var cost *int64
+	err := r.db.QueryRow(ctx, `
+SELECT b.project_cost
+FROM projects pr
+LEFT JOIN project_billing b ON b.project_id = pr.id
+WHERE pr.id = $1 AND pr.kind = 'brand_turnkey'`, out.ProjectID).Scan(&cost)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Вид не тот — стоимости в отчёте не бывает.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("project cost: %w", err)
+	}
+	if cost == nil || *cost <= 0 {
+		// Сумму ещё не назвали. Ноль сюда не кладём: «бесплатно» и
+		// «не назвали» — разные утверждения, и на экране они выглядят
+		// одинаково только в одном случае — когда поля нет вовсе.
+		return nil
+	}
+	out.Cost = cost
+	if out.Views > 0 {
+		per := *cost * 1000 / out.Views
+		out.CostPer1000 = &per
+	}
+	return nil
 }
 
 // nameRows — проставить человеческие имена в строках отчёта.
@@ -273,7 +339,9 @@ func (r *Repo) nameRows(ctx context.Context, out *Report) error {
 		ids = append(ids, c.CreatorUserID)
 	}
 	for _, v := range out.VideoRows {
-		ids = append(ids, v.CreatorUserID)
+		if v.CreatorUserID != nil {
+			ids = append(ids, *v.CreatorUserID)
+		}
 	}
 	names, err := r.resolveNames(ctx, ids)
 	if err != nil {
@@ -283,7 +351,9 @@ func (r *Repo) nameRows(ctx context.Context, out *Report) error {
 		out.ByCreator[i].CreatorName = names[out.ByCreator[i].CreatorUserID]
 	}
 	for i := range out.VideoRows {
-		out.VideoRows[i].CreatorName = names[out.VideoRows[i].CreatorUserID]
+		if id := out.VideoRows[i].CreatorUserID; id != nil {
+			out.VideoRows[i].CreatorName = names[*id]
+		}
 	}
 	return nil
 }
@@ -367,12 +437,18 @@ GROUP BY p.creator_user_id`
 	defer rows.Close()
 	out := make(map[uuid.UUID]int, 4)
 	for rows.Next() {
-		var id uuid.UUID
+		// Указателем: группировка по creator_user_id у проекта без
+		// креаторов даёт строку с NULL, и скан её в uuid.UUID — ошибка
+		// в рантайме. Считать по ней нечего, поэтому просто пропускаем.
+		var id *uuid.UUID
 		var n int
 		if err := rows.Scan(&id, &n); err != nil {
 			return nil, fmt.Errorf("scan videos per creator: %w", err)
 		}
-		out[id] = n
+		if id == nil {
+			continue
+		}
+		out[*id] = n
 	}
 	return out, rows.Err()
 }

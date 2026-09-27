@@ -180,6 +180,12 @@ func checkRates(t Terms) (Terms, error) {
 				"%w: креатору за ролик обещано больше, чем платит заказчик", ErrInvalidInput)
 		}
 	}
+	// Стоимость проекта, названная менеджером. Ноль — «не назвали», и
+	// это рабочее состояние; отрицательная — описка, и молча записать её
+	// значило бы показать заказчику отрицательный СПВ.
+	if t.ProjectCost < 0 {
+		return Terms{}, fmt.Errorf("%w: стоимость проекта не бывает отрицательной", ErrInvalidInput)
+	}
 	if t.VideosFirstMonth < 0 || t.VideosNextMonths < 0 {
 		return Terms{}, fmt.Errorf("%w: объём роликов не бывает отрицательным", ErrInvalidInput)
 	}

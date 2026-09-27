@@ -102,6 +102,11 @@ type termsReq struct {
 	// CreatorSubscriberRate — сколько из этого получает креатор.
 	// null = «как у клиента».
 	CreatorSubscriberRate *int64 `json:"creator_subscriber_rate" extensions:"x-nullable"`
+
+	// ProjectCost — стоимость проекта за период, копейки. Единственное
+	// денежное поле проекта без креаторов: там начислений по людям нет,
+	// а СПВ считать надо, и делимое называет менеджер.
+	ProjectCost int64 `json:"project_cost"`
 }
 
 // terms — запрос в условия. Одним местом на обе ручки (менеджер правит
@@ -143,6 +148,8 @@ func (req termsReq) terms() Terms {
 		Steps:                 req.Steps,
 		SubscriberRate:        req.SubscriberRate,
 		CreatorSubscriberRate: req.CreatorSubscriberRate,
+
+		ProjectCost: req.ProjectCost,
 	}
 }
 
@@ -440,6 +447,9 @@ func (h *Handler) ManagerRecalcAccruals(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	if !h.requireBilling(w, r, projectID) {
+		return
+	}
 	seq, ok := periodParam(r)
 	if !ok {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
@@ -497,8 +507,11 @@ func (h *Handler) ManagerPayAccrual(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) decideAccrual(w http.ResponseWriter, r *http.Request, pay bool) {
-	_, uid, ok := h.managerProject(w, r)
+	projectID, uid, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireBilling(w, r, projectID) {
 		return
 	}
 	accrualID, err := uuid.Parse(chi.URLParam(r, "accrual_id"))
@@ -541,6 +554,9 @@ func (h *Handler) ManagerSaveUTM(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireBilling(w, r, projectID) {
+		return
+	}
 	creatorID, err := uuid.Parse(chi.URLParam(r, "creator_id"))
 	if err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id креатора.")
@@ -578,6 +594,9 @@ func (h *Handler) ManagerSaveUTM(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ManagerSubscribers(w http.ResponseWriter, r *http.Request) {
 	projectID, _, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireBilling(w, r, projectID) {
 		return
 	}
 	seq, ok := periodParam(r)
@@ -624,6 +643,9 @@ func (h *Handler) ManagerSubscribers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ManagerSaveSubscribers(w http.ResponseWriter, r *http.Request) {
 	projectID, uid, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireBilling(w, r, projectID) {
 		return
 	}
 	creatorID, err := uuid.Parse(chi.URLParam(r, "creator_id"))
@@ -987,6 +1009,9 @@ func (h *Handler) ManagerConfirmPeriodEnd(w http.ResponseWriter, r *http.Request
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
 		return
 	}
+	if !h.requireBilling(w, r, projectID) {
+		return
+	}
 	seq, ok := periodParam(r)
 	if !ok {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
@@ -1078,6 +1103,9 @@ func (h *Handler) AdminUnlockPeriod(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ManagerPeriods(w http.ResponseWriter, r *http.Request) {
 	projectID, _, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireBilling(w, r, projectID) {
 		return
 	}
 	items, err := h.svc.Periods(r.Context(), projectID, time.Now().UTC())

@@ -273,13 +273,11 @@ func (h *Handler) AdminCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := ProjectKind(in.Kind)
-	switch kind {
-	case "":
+	if kind == "" {
 		kind = KindProductionTurnkey
-	case KindCreatorsTurnkey, KindProductionTurnkey, KindGeneral:
-	default:
+	} else if !IsKnownKind(kind) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_kind",
-			"Вид проекта бывает creators_turnkey, production_turnkey или general.")
+			"Вид проекта бывает "+KindsHint()+".")
 		return
 	}
 	var pipelineID uuid.UUID

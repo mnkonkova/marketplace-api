@@ -92,6 +92,11 @@ func (h *Handler) ManagerListCreators(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Не пустым списком: пустой состав читается как «ещё никого не
+	// добавили», а здесь его не будет никогда.
+	if !h.requireFeature(w, r, projectID, hasCrew, whyNoCrew) {
+		return
+	}
 	items, err := h.svc.ProjectCreators(r.Context(), projectID)
 	if err != nil {
 		writeErr(w, err)
@@ -288,6 +293,11 @@ func (h *Handler) ClientMaterials(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ManagerChecklist(w http.ResponseWriter, r *http.Request) {
 	projectID, _, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	// Пустой чек-лист читается как «забыли подключить». У этого вида его
+	// не будет никогда — говорим об этом прямо.
+	if !h.requireFeature(w, r, projectID, hasChecklist, whyNoChecklist) {
 		return
 	}
 	items, err := h.svc.ProjectChecklist(r.Context(), projectID)

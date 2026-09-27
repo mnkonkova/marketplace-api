@@ -35,10 +35,11 @@ func (s *Service) WithChecklistAttacher(a ChecklistAttacher) *Service {
 // а вот проект, не созданный из-за пустой библиотеки, — поломка на
 // ровном месте. Поэтому ошибка здесь только логируется.
 //
-// Только creators_turnkey: чек-лист описывает требования к выкладке, а
-// у продакшна и общих проектов выкладок нет вовсе.
+// Только тем видам, у кого чек-лист есть по матрице: он описывает
+// требования к работе креатора, а там, где креаторов нет, требовать
+// не с кого — см. FeaturesOf.
 func (s *Service) attachChecklist(ctx context.Context, projectID, actor uuid.UUID, kind ProjectKind) {
-	if s.checklistAttacher == nil || kind != KindCreatorsTurnkey {
+	if s.checklistAttacher == nil || !FeaturesOf(kind).HasChecklist {
 		return
 	}
 	n, err := s.checklistAttacher.AttachActiveChecklist(ctx, projectID, actor)

@@ -78,7 +78,7 @@ func (r *Repo) StartProject(ctx context.Context, in StartProjectInput) (uuid.UUI
 	if in.Kind == "" {
 		in.Kind = KindProductionTurnkey
 	}
-	if in.Kind == KindProductionTurnkey && in.PipelineID == uuid.Nil {
+	if FeaturesOf(in.Kind).HasFunnel && in.PipelineID == uuid.Nil {
 		return uuid.Nil, fmt.Errorf("%w: pipeline_id is required for production projects", ErrInvalidInput)
 	}
 

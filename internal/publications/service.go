@@ -88,15 +88,22 @@ func (s *Service) CreateBatchByScheme(ctx context.Context, projectID uuid.UUID,
 // CreateBatch — простановка произвольного набора дат.
 func (s *Service) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResult, error) {
 	in.CreatorUserIDs = dedupeIDs(in.CreatorUserIDs)
-	if len(in.CreatorUserIDs) == 0 {
-		return BatchResult{}, fmt.Errorf("%w: не выбран ни один креатор", ErrInvalidInput)
-	}
 	in.Dates = dedupeDates(in.Dates)
 	if len(in.Dates) == 0 {
 		return BatchResult{}, fmt.Errorf("%w: не выбрано ни одной даты", ErrInvalidInput)
 	}
-	if total := len(in.CreatorUserIDs) * len(in.Dates); total > maxBatch {
-		return BatchResult{}, fmt.Errorf("%w: пачка на %d выкладок, потолок %d", ErrInvalidInput, total, maxBatch)
+	// «Ни одного креатора» проверяет репозиторий, а не сервис: пустой
+	// список — ошибка у проекта с креаторами и норма у проекта без них,
+	// а вид проекта известен только там, где читается его строка.
+	//
+	// Потолок пачки считается по строкам, которые реально уедут в
+	// INSERT: без креаторов произведение вырождается в одни даты.
+	rows := len(in.Dates)
+	if n := len(in.CreatorUserIDs); n > 0 {
+		rows *= n
+	}
+	if rows > maxBatch {
+		return BatchResult{}, fmt.Errorf("%w: пачка на %d выкладок, потолок %d", ErrInvalidInput, rows, maxBatch)
 	}
 	if in.DraftLeadDays < 0 || in.DraftLeadDays > 30 {
 		return BatchResult{}, fmt.Errorf("%w: срок черновика вне разумных границ", ErrInvalidInput)

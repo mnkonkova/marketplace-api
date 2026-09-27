@@ -52,6 +52,7 @@ SELECT terms_version_id, salary_per_month, videos_first_month, videos_next_month
        creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
        subscriber_rate, creator_subscriber_rate,
        fee_per_video, creator_fee_per_video,
+       project_cost,
        updated_at
 FROM project_billing WHERE project_id = $1`, projectID).
 		Scan(&t.TermsVersionID, &t.SalaryPerMonth, &t.VideosFirstMonth, &t.VideosNextMonths,
@@ -64,6 +65,7 @@ FROM project_billing WHERE project_id = $1`, projectID).
 			&t.CreatorFirstPeriodFee, &t.CreatorBaseFee, &t.CreatorStepFee, &t.CreatorStepFeeOver,
 			&t.SubscriberRate, &t.CreatorSubscriberRate,
 			&t.FeePerVideo, &t.CreatorFeePerVideo,
+			&t.ProjectCost,
 			&t.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, nil
@@ -93,11 +95,11 @@ INSERT INTO project_billing
    step_tier2_from, step_fee_over, step_cap_views, guarantee_views,
    creator_first_period_fee, creator_base_fee, creator_step_fee, creator_step_fee_over,
    subscriber_rate, creator_subscriber_rate,
-   fee_per_video, creator_fee_per_video,
+   fee_per_video, creator_fee_per_video, project_cost,
    updated_by, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
         $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
-        $28, $29, $30, $31,
+        $28, $29, $30, $31, $32,
         $15, now())
 ON CONFLICT (project_id) DO UPDATE SET
   terms_version_id = EXCLUDED.terms_version_id,
@@ -129,6 +131,7 @@ ON CONFLICT (project_id) DO UPDATE SET
   creator_fee_per_video = EXCLUDED.creator_fee_per_video,
   subscriber_rate = EXCLUDED.subscriber_rate,
   creator_subscriber_rate = EXCLUDED.creator_subscriber_rate,
+  project_cost = EXCLUDED.project_cost,
   updated_by = EXCLUDED.updated_by,
   updated_at = now()
 RETURNING updated_at`,
@@ -142,7 +145,7 @@ RETURNING updated_at`,
 		t.StepTier2From, t.StepFeeOver, t.StepCapViews, t.GuaranteeViews,
 		t.CreatorFirstPeriodFee, t.CreatorBaseFee, t.CreatorStepFee, t.CreatorStepFeeOver,
 		t.SubscriberRate, t.CreatorSubscriberRate,
-		t.FeePerVideo, t.CreatorFeePerVideo,
+		t.FeePerVideo, t.CreatorFeePerVideo, t.ProjectCost,
 	).Scan(&t.UpdatedAt); err != nil {
 		return Terms{}, fmt.Errorf("save project billing: %w", err)
 	}

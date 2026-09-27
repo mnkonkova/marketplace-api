@@ -28,9 +28,13 @@ func (s Status) IsOpen() bool { return s == StatusPlanned || s == StatusPartial 
 
 // Publication — выкладка: кто, когда и что сдал.
 type Publication struct {
-	ID            uuid.UUID `json:"id"`
-	ProjectID     uuid.UUID `json:"project_id"`
-	CreatorUserID uuid.UUID `json:"creator_user_id"`
+	ID        uuid.UUID `json:"id"`
+	ProjectID uuid.UUID `json:"project_id"`
+	// CreatorUserID — кому поручен ролик. nil означает «это ролик
+	// проекта, а не чей-то»: у проекта без креаторов поручать некому, и
+	// подставной владелец тут же полез бы в состав, в отчёт по людям и
+	// в начисления как настоящий участник.
+	CreatorUserID *uuid.UUID `json:"creator_user_id,omitempty"`
 	// CreatorName — человеческое имя вместо uuid. Считается в выдаче, а не
 	// хранится: имя живёт в профиле и меняется там.
 	CreatorName string `json:"creator_name,omitempty"`

@@ -89,7 +89,10 @@ func TestCreateBatchByScheme(t *testing.T) {
 
 	perCreator := map[uuid.UUID]int{}
 	for _, p := range res.Items {
-		perCreator[p.CreatorUserID]++
+		if p.CreatorUserID == nil {
+			t.Fatalf("у выкладки проекта с креаторами нет владельца: %s", p.ID)
+		}
+		perCreator[*p.CreatorUserID]++
 		if p.Status != publications.StatusPlanned {
 			t.Errorf("новая выкладка должна быть planned, а она %s", p.Status)
 		}
@@ -445,7 +448,7 @@ func TestCreatorSeesOnlyOwnPublications(t *testing.T) {
 		t.Fatalf("креатор видит %d выкладок, ожидалось 2", len(mine))
 	}
 	for _, p := range mine {
-		if p.CreatorUserID != creators[0] {
+		if p.CreatorUserID == nil || *p.CreatorUserID != creators[0] {
 			t.Errorf("в выдачу креатора попала чужая выкладка %s", p.ID)
 		}
 	}

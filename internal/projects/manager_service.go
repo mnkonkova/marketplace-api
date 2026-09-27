@@ -500,12 +500,12 @@ func (s *Service) ChangeFunnel(ctx context.Context, projectID, newPipelineID, ac
 	return s.repo.ChangeFunnel(ctx, projectID, newPipelineID, actorID)
 }
 
-// turnkeyIDs — только проекты «креаторы под ключ»: у остальных прогресс
+// turnkeyIDs — только проекты с планом выкладок: у остальных прогресс
 // считается по шагам, и лишний запрос им не нужен.
 func turnkeyIDs(projects []Project) []uuid.UUID {
 	out := make([]uuid.UUID, 0, len(projects))
 	for _, p := range projects {
-		if p.Kind == KindCreatorsTurnkey {
+		if FeaturesOf(p.Kind).HasPublications {
 			out = append(out, p.ID)
 		}
 	}
@@ -515,7 +515,7 @@ func turnkeyIDs(projects []Project) []uuid.UUID {
 // turnkeyProgress — доля закрытых выкладок одного проекта. Второй
 // результат — «мера применима»: у проекта с воронкой её нет.
 func (s *Service) turnkeyProgress(ctx context.Context, p Project) (float64, bool) {
-	if p.Kind != KindCreatorsTurnkey {
+	if !FeaturesOf(p.Kind).HasPublications {
 		return 0, false
 	}
 	m, err := s.repo.PublicationProgress(ctx, []uuid.UUID{p.ID})

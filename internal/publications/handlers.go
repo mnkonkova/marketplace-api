@@ -310,6 +310,14 @@ func (h *Handler) ManagerReview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	projectID, err := h.svc.ProjectOfPublication(r.Context(), pubID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !h.requireFeature(w, r, projectID, hasReview, whyNoReview) {
+		return
+	}
 	var req reviewReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
@@ -605,6 +613,9 @@ func (h *Handler) ManagerAddCreator(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.requireFeature(w, r, projectID, hasCrew, whyNoCrew) {
+		return
+	}
 	var req creatorReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CreatorUserID == uuid.Nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Нужен creator_user_id.")
@@ -634,6 +645,9 @@ func (h *Handler) ManagerAddCreator(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ManagerRemoveCreator(w http.ResponseWriter, r *http.Request) {
 	projectID, _, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireFeature(w, r, projectID, hasCrew, whyNoCrew) {
 		return
 	}
 	creatorID, err := pathUUID(r, "creator_id")
@@ -673,6 +687,9 @@ type snapshotResp struct {
 func (h *Handler) ManagerSnapshotChecklist(w http.ResponseWriter, r *http.Request) {
 	projectID, uid, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireFeature(w, r, projectID, hasChecklist, whyNoChecklist) {
 		return
 	}
 	var req snapshotReq
@@ -716,6 +733,9 @@ func (h *Handler) ManagerAddChecklistItem(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	if !h.requireFeature(w, r, projectID, hasChecklist, whyNoChecklist) {
+		return
+	}
 	var req checklistItemReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
@@ -746,6 +766,9 @@ func (h *Handler) ManagerAddChecklistItem(w http.ResponseWriter, r *http.Request
 func (h *Handler) ManagerDeleteChecklistItem(w http.ResponseWriter, r *http.Request) {
 	projectID, _, ok := h.managerProject(w, r)
 	if !ok {
+		return
+	}
+	if !h.requireFeature(w, r, projectID, hasChecklist, whyNoChecklist) {
 		return
 	}
 	itemID, err := pathUUID(r, "itemId")
@@ -1158,7 +1181,13 @@ func writeErr(w http.ResponseWriter, err error) {
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Выкладка не найдена.")
 	case errors.Is(err, ErrNotCreatorsProject):
 		httpx.WriteErrMsg(w, http.StatusConflict, "wrong_project_kind",
-			"Выкладки бывают только у проектов «креаторы под ключ».")
+			"Выкладки бывают только у проектов «креаторы под ключ» и «бренд под ключ».")
+	case errors.Is(err, ErrCrewNotAllowed):
+		httpx.WriteErrMsg(w, http.StatusConflict, "wrong_project_kind",
+			"У проекта «бренд под ключ» креаторов не бывает: ролики выходят с аккаунтов бренда.")
+	case errors.Is(err, ErrNoCreator):
+		httpx.WriteErrMsg(w, http.StatusConflict, "wrong_project_kind",
+			"Это ролик проекта, а не чей-то: напоминать, проверять и сдавать по нему некому.")
 	case errors.Is(err, ErrNotACreator):
 		httpx.WriteErrMsg(w, http.StatusConflict, "not_a_creator",
 			"Этого пользователя нельзя добавить креатором: он не специалист либо аккаунт отключён.")

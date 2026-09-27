@@ -44,9 +44,12 @@ type WeakVideo struct {
 	PublicationID uuid.UUID `json:"publication_id"`
 	ProjectID     uuid.UUID `json:"project_id"`
 	ProjectTitle  string    `json:"project_title"`
-	CreatorID     uuid.UUID `json:"creator_user_id"`
-	Title         string    `json:"title"`
-	PublishedOn   time.Time `json:"published_on"`
+	// CreatorID — чей ролик. Пусто у проекта без креаторов: событие
+	// всё равно CRMOnly, собеседника у него нет ни там, ни здесь, и в
+	// журнал оно ложится с user_id = NULL.
+	CreatorID   *uuid.UUID `json:"creator_user_id,omitempty"`
+	Title       string     `json:"title"`
+	PublishedOn time.Time  `json:"published_on"`
 	// Views — сколько набрал суммарно по всем площадкам.
 	Views int64 `json:"views"`
 	// Platforms — сколько площадок у ролика измерено. Ноль при Dead
@@ -99,7 +102,11 @@ WITH pub AS (
         WHERE d.link_id = l.id ORDER BY d.stat_date DESC LIMIT 1
     ) cur ON TRUE
     WHERE p.status = 'done'
-      AND pr.kind = 'creators_turnkey'
+      -- Оба вида с выкладками: «ролик не пошёл» и «битая ссылка» —
+      -- это про ролик, а не про человека, и у проекта без креаторов
+      -- они такие же настоящие. Иначе метрика молчит там, где ссылки
+      -- больше неоткуда взять.
+      AND pr.kind IN ('creators_turnkey', 'brand_turnkey')
       AND pr.status = 'active'
       AND pr.is_test = FALSE
       AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $1)

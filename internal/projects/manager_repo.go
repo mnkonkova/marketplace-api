@@ -160,11 +160,9 @@ func (r *Repo) ListAll(ctx context.Context, p AdminListParams) ([]Project, int, 
 		conds = append(conds, "p.is_test = FALSE")
 	}
 	if p.Kind != "" {
-		switch ProjectKind(p.Kind) {
-		case KindCreatorsTurnkey, KindProductionTurnkey, KindGeneral:
-		default:
+		if !IsKnownKind(ProjectKind(p.Kind)) {
 			return nil, 0, fmt.Errorf("%w: неизвестная ветка %q: допустимые значения — %s",
-				ErrInvalidInput, p.Kind, allowedKindsHint)
+				ErrInvalidInput, p.Kind, allowedKindsHint())
 		}
 		args = append(args, p.Kind)
 		conds = append(conds, fmt.Sprintf("p.kind = $%d", len(args)))

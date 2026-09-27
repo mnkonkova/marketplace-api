@@ -39,8 +39,11 @@ func clientStatus(s Status) ClientVideoStatus {
 // ClientVideo — ролик в ленте клиента.
 type ClientVideo struct {
 	PublicationID uuid.UUID `json:"publication_id"`
-	CreatorUserID uuid.UUID `json:"creator_user_id"`
-	CreatorName   string    `json:"creator_name,omitempty"`
+	// CreatorUserID — чей ролик. Пусто у проекта без креаторов: ролик
+	// проекта, а не человека, и колонка «Креатор» у него не пустая по
+	// недосмотру, а отсутствует по устройству.
+	CreatorUserID *uuid.UUID `json:"creator_user_id,omitempty"`
+	CreatorName   string     `json:"creator_name,omitempty"`
 	// Title — название ролика, которое дал креатор при сдаче. Пусто у
 	// роликов, сданных до того, как название начали спрашивать.
 	Title       string     `json:"title,omitempty"`
@@ -58,8 +61,9 @@ type ClientVideo struct {
 
 // CalendarItem — одна выкладка в дне календаря.
 type CalendarItem struct {
-	PublicationID uuid.UUID         `json:"publication_id"`
-	CreatorUserID uuid.UUID         `json:"creator_user_id"`
+	PublicationID uuid.UUID `json:"publication_id"`
+	// CreatorUserID — см. ClientVideo: пусто у ролика проекта.
+	CreatorUserID *uuid.UUID        `json:"creator_user_id,omitempty"`
 	CreatorName   string            `json:"creator_name,omitempty"`
 	Status        ClientVideoStatus `json:"status"`
 }
@@ -168,14 +172,18 @@ LIMIT $2`
 	}
 	ids := make([]uuid.UUID, 0, len(out))
 	for _, v := range out {
-		ids = append(ids, v.CreatorUserID)
+		if v.CreatorUserID != nil {
+			ids = append(ids, *v.CreatorUserID)
+		}
 	}
 	names, err := r.resolveNames(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
 	for i := range out {
-		out[i].CreatorName = names[out[i].CreatorUserID]
+		if id := out[i].CreatorUserID; id != nil {
+			out[i].CreatorName = names[*id]
+		}
 	}
 	return out, nil
 }
@@ -258,7 +266,9 @@ ORDER BY day, p.created_at`
 	ids := make([]uuid.UUID, 0, 32)
 	for _, d := range out {
 		for _, it := range d.Items {
-			ids = append(ids, it.CreatorUserID)
+			if it.CreatorUserID != nil {
+				ids = append(ids, *it.CreatorUserID)
+			}
 		}
 	}
 	names, err := r.resolveNames(ctx, ids)
@@ -267,7 +277,9 @@ ORDER BY day, p.created_at`
 	}
 	for i := range out {
 		for j := range out[i].Items {
-			out[i].Items[j].CreatorName = names[out[i].Items[j].CreatorUserID]
+			if id := out[i].Items[j].CreatorUserID; id != nil {
+				out[i].Items[j].CreatorName = names[*id]
+			}
 		}
 	}
 	return out, nil

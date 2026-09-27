@@ -51,7 +51,7 @@ func TestClientFeedShowsOnlyPublished(t *testing.T) {
 	if len(feed[0].Platforms) != 2 {
 		t.Errorf("площадок %d, ожидалось 2", len(feed[0].Platforms))
 	}
-	if feed[0].CreatorUserID != creators[0] {
+	if feed[0].CreatorUserID == nil || *feed[0].CreatorUserID != creators[0] {
 		t.Error("в ленте не тот креатор")
 	}
 }

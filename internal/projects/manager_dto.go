@@ -91,9 +91,12 @@ const unfinishedStatusesSQL = `('draft','active','on_hold','dispute')`
 const (
 	allowedStatusesHint = "draft, active, on_hold, done, cancelled, dispute, " +
 		"unfinished (в работе) или пусто (всё, кроме отменённых)"
-	allowedKindsHint = "creators_turnkey, production_turnkey, general или пусто (все виды)"
 	allowedSortsHint = "updated_asc, updated_desc, created_asc, created_desc"
 )
+
+// allowedKindsHint — перечень видов собирается из матрицы, а не пишется
+// руками: четвёртый вид появился, а подсказка о нём молчала бы.
+func allowedKindsHint() string { return KindsHint() + " или пусто (все виды)" }
 
 // isKnownProjectStatus — статус из enum'а project_status. Проверяем в Go,
 // а не приведением к типу в SQL: незнакомое значение иначе доходит до

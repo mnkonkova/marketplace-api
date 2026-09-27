@@ -932,3 +932,37 @@ func (h *Handler) ClientSaveBrief(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusOK, briefResp{Brief: b})
 }
+
+// ManagerRemoveCandidate godoc
+// @Summary  Убрать человека из заявки (менеджер)
+// @Description Только пока он не согласился: согласившийся уже в составе проекта,
+// @Description и его выводят оттуда, а не отсюда.
+// @Tags     manager-orders
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "order id"
+// @Param    creator_id path string true "creator user id"
+// @Success  200 {object} Order
+// @Failure  400 {object} errorResponse "bad_id"
+// @Failure  401 {object} errorResponse "no_user"
+// @Failure  404 {object} errorResponse "not_found — такого в заявке нет"
+// @Failure  409 {object} errorResponse "wrong_status — человек уже согласился"
+// @Router   /manager/orders/{id}/candidates/{creator_id} [delete]
+func (h *Handler) ManagerRemoveCandidate(w http.ResponseWriter, r *http.Request) {
+	id, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id заявки.")
+		return
+	}
+	creatorID, err := pathUUID(r, "creator_id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id креатора.")
+		return
+	}
+	out, err := h.svc.RemoveCandidate(r.Context(), id, creatorID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, out)
+}

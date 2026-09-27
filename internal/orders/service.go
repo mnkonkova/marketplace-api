@@ -341,3 +341,12 @@ func (s *Service) SaveBrief(
 	}
 	return b, nil
 }
+
+// RemoveCandidate — менеджер убирает человека из заявки: не подходит, и
+// звать его незачем. Состав проекта при этом не меняется.
+func (s *Service) RemoveCandidate(ctx context.Context, orderID, creatorID uuid.UUID) (Order, error) {
+	if err := s.repo.RemoveCandidate(ctx, orderID, creatorID); err != nil {
+		return Order{}, err
+	}
+	return s.repo.Get(ctx, orderID)
+}

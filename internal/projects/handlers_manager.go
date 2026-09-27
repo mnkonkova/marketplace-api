@@ -639,13 +639,11 @@ func (h *Handler) ManagerCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := ProjectKind(in.Kind)
-	switch kind {
-	case "":
+	if kind == "" {
 		kind = KindProductionTurnkey
-	case KindCreatorsTurnkey, KindProductionTurnkey, KindGeneral:
-	default:
+	} else if !IsKnownKind(kind) {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_kind",
-			"Вид проекта бывает creators_turnkey, production_turnkey или general.")
+			"Вид проекта бывает "+KindsHint()+".")
 		return
 	}
 
@@ -660,7 +658,7 @@ func (h *Handler) ManagerCreateProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pipelineID = parsed
-	} else if kind == KindProductionTurnkey {
+	} else if FeaturesOf(kind).HasFunnel {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_pipeline_id",
 			"Для проекта с воронкой нужен pipeline_id.")
 		return

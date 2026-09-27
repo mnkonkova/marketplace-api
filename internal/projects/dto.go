@@ -82,6 +82,10 @@ const (
 	// KindCreatorsTurnkey — креаторы под ключ: выкладки, пять площадок,
 	// ежедневная статистика.
 	KindCreatorsTurnkey ProjectKind = "creators_turnkey"
+	// KindBrandTurnkey — бренд под ключ: те же выкладки и та же
+	// статистика, но без людей — ролики выходят с аккаунтов бренда.
+	// Состава, проверки, чек-листов и начислений у него нет.
+	KindBrandTurnkey ProjectKind = "brand_turnkey"
 	// KindProductionTurnkey — продакшн под ключ: воронка pipelines.
 	KindProductionTurnkey ProjectKind = "production_turnkey"
 	// KindGeneral — общий проект: исполнитель и один срок.

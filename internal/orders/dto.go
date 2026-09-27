@@ -97,7 +97,15 @@ type Candidate struct {
 	CreatorUserID uuid.UUID `json:"creator_user_id"`
 	// CreatorName — человеческое имя вместо uuid: та же лесенка
 	// specialist → client → префикс email, что в остальной выдаче.
-	CreatorName string          `json:"creator_name,omitempty"`
+	CreatorName string `json:"creator_name,omitempty"`
+	// IsPreferred — заказчик отметил этого человека: «хочу особенно
+	// его». Это НЕ приоритет очереди — очереди больше нет, приглашение
+	// уходит всем сразу. Отметка идёт в текст приглашения и в список у
+	// менеджера, когда он собирает состав из откликнувшихся.
+	IsPreferred bool `json:"is_preferred"`
+	// Priority — порядок строк, в котором заказчик их отметил. Смысла
+	// очереди у него больше нет; оставлен как устойчивая сортировка,
+	// чтобы список не прыгал между запросами.
 	Priority    int             `json:"priority"`
 	Status      CandidateStatus `json:"status"`
 	InvitedAt   *time.Time      `json:"invited_at,omitempty"`
