@@ -97,16 +97,36 @@ type BotResolver interface {
 	Recipients(ctx context.Context, bot string, userIDs []uuid.UUID) ([]telegram.Recipient, error)
 }
 
-// botEnvelope — что уезжает сервису бота: обычный payload плюс список
-// адресатов.
+// Кому адресовано сообщение.
+const (
+	// audiencePerson — личное: креатору или заказчику, по привязке.
+	audiencePerson = "person"
+	// audienceManagers — в общий чат менеджеров.
+	//
+	// Раньше туда писал n8n через CRM-вебхук и телеграм-прокси. Теперь
+	// тот же бот, что говорит с креаторами (решение владельца от 27
+	// сентября): одна очередь доставки вместо двух, одно место, где
+	// смотреть логи, и менеджеру не нужен отдельный бот ради доступа в
+	// мини-апп — он заходит креаторским.
+	audienceManagers = "managers"
+)
+
+// botEnvelope — что уезжает сервису бота: обычный payload плюс
+// адресат.
 //
 // Получателей считаем МЫ, а не бот: у него нет ни привязок, ни
 // дневного потолка, ни знания о том, кого этот проект касается.
 // Отдать ему «событие, разберись сам» значит завести вторую копию
 // правил доставки и однажды написать человеку дважды.
+//
+// У сообщения менеджерам список получателей пуст, и это не ошибка:
+// чат один и известен самому боту — идентификатор группы живёт в его
+// настройках. Нам о нём знать незачем: мы решаем ЧТО отправить и кому
+// по смыслу, а «в какой чат» — вопрос доставки.
 type botEnvelope struct {
 	notifications.Payload
 	Bot        string               `json:"bot"`
+	Audience   string               `json:"audience"`
 	Recipients []telegram.Recipient `json:"recipients"`
 }
 
@@ -122,8 +142,28 @@ type botEnvelope struct {
 func (d Deps) botFanout(
 	ctx context.Context, outboxID int64, aggregate, aggregateID, eventType string, payload []byte,
 ) error {
+	if d.Bot == nil {
+		return nil
+	}
+	// Сообщения менеджерам. Отбирать некого: чат один, и он у бота в
+	// настройках. Отправляем всё, что помечено «идёт в чат», — тем же
+	// решением, которое принято в chat.go, а не вторым списком рядом.
+	if delivery, known := DeliveryOf(eventType); known && delivery == ToChat {
+		env := botEnvelope{
+			Payload:  webhookPayload(outboxID, aggregate, aggregateID, eventType, payload),
+			Bot:      telegram.BotCreator,
+			Audience: audienceManagers,
+		}
+		env.AppBaseURL = d.AppBaseURL
+		if err := d.Bot.SendEnvelope(ctx, env); err != nil {
+			return fmt.Errorf("bot dispatch (managers): %w", err)
+		}
+		d.logger().Info("bot delivery", "event", eventType, "audience", audienceManagers)
+		return nil
+	}
+
 	route, ok := botRouting[eventType]
-	if !ok || d.Bot == nil || d.BotUsers == nil {
+	if !ok || d.BotUsers == nil {
 		return nil
 	}
 	ids, err := recipientIDs(payload, route.keys)
@@ -149,6 +189,7 @@ func (d Deps) botFanout(
 		// Адрес кабинета: ссылка в сообщении ведёт туда, где человек
 		// сделает то, о чём его просят.
 		Bot:        route.bot,
+		Audience:   audiencePerson,
 		Recipients: recipients,
 	}
 	env.AppBaseURL = d.AppBaseURL

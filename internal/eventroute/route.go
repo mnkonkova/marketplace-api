@@ -136,6 +136,15 @@ func (d Deps) CRMHandler(aggregate string) outbox.Handler {
 			// копить ретраи.
 			return nil
 		}
+		// При живом боте чатовые события в n8n НЕ дублируем: и туда, и
+		// туда — это два одинаковых сообщения в одной группе. Бот их
+		// уже доставил строкой выше; n8n остаётся тем, кто пишет в чат,
+		// только пока бота нет.
+		if d.Bot != nil {
+			if delivery, known := DeliveryOf(eventType); known && delivery == ToChat {
+				return nil
+			}
+		}
 		return d.CRM.Send(ctx, webhookPayload(outboxID, aggregate, aggregateID, eventType, payload))
 	}
 }
