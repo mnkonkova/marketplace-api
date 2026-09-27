@@ -1,9 +1,9 @@
 {
-  "name": "sotka-telegram-bots",
+  "name": "prmarket-telegram-bots",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Два телеграм-бота «Сотки»: креаторский и клиентский",
+  "description": "Два телеграм-бота «PrMarket»: креаторский и клиентский",
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/server.js",

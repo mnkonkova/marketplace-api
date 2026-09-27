@@ -378,7 +378,7 @@ language_code}`. Правило одно: **пишем только в пуст�
 | `impactOccurred('light')` | обычное нажатие: кнопки `.btn`, клетки плана, ссылки-действия |
 | `impactOccurred('medium')` | действия, меняющие мир: сдать ролик, подтвердить конец периода, утвердить выплату |
 | `notificationOccurred('success' \| 'error')` | ответ сервера — рядом с тостом `NzMessageService` |
-| `selectionChanged()` | переключение вкладок и разделов (`SotkaTabbarComponent`, `.ptabs`) |
+| `selectionChanged()` | переключение вкладок и разделов (`PrMarketTabbarComponent`, `.ptabs`) |
 
 Как подключать — **централизованно, а не на каждой кнопке**:
 
