@@ -207,8 +207,14 @@ func (s *Service) EstimateOrder(ctx context.Context, orderID, clientID uuid.UUID
 // «оформить». После создания заказа смета считается по версии, записанной
 // в заказ, — числа совпадут, если прайс за эти минуты не поменяли.
 func (s *Service) EstimateDraft(ctx context.Context, needed, videos int, creatorIDs []uuid.UUID) (OrderEstimate, error) {
-	if needed < 1 {
-		return OrderEstimate{}, fmt.Errorf("%w: needed must be positive", ErrInvalidInput)
+	// Ноль людей — законный вопрос, а не ошибка ввода.
+	//
+	// Во второй ветке воронки («видео под ключ») креаторов нет вовсе:
+	// снимаем мы, ролики выходят с аккаунтов бренда. Цена там —
+	// ролики × фикс, и число людей в ней не участвует. Отказ на такой
+	// вопрос означал бы пустое место там, где сервер отвечает точно.
+	if needed < 0 {
+		return OrderEstimate{}, fmt.Errorf("%w: needed must not be negative", ErrInvalidInput)
 	}
 	if videos < 0 {
 		return OrderEstimate{}, fmt.Errorf("%w: videos_count must not be negative", ErrInvalidInput)

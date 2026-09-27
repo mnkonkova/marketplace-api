@@ -577,3 +577,109 @@ func TestChecklistItemRequiredToggle(t *testing.T) {
 		t.Error("пункт правится из чужого проекта")
 	}
 }
+
+// Вторая ветка воронки: «видео под ключ», проект без креаторов.
+//
+// Заводится она ТАК ЖЕ, как первая, и это главное требование: заявка
+// создаёт проект в ту же секунду, менеджеру уходит пинг, заказчику есть
+// куда прийти. Отличий ровно три, и все три — отсутствие: нет отбора
+// креаторов, нет рассылки, нет откликов. Ролики снимаем мы и выкладываем
+// с аккаунтов бренда, звать некого.
+func TestBrandBranchStartsProjectWithoutCrew(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	clientID, creators, cleanup := setupOrderWorld(t, pool)
+	defer cleanup()
+
+	// Известный креатор в базе есть — и он НЕ должен получить ничего:
+	// во второй ветке рассылки не бывает.
+	markProfile(t, pool, creators[0], "approved")
+
+	projectsSvc := projects.NewService(projects.NewRepo(pool))
+	svc := orders.NewService(orders.NewRepo(pool)).WithProjects(projectsSvc)
+
+	res, err := svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID,
+		ProjectKind:  orders.KindBrand,
+		StartMonth:   nextMonth(),
+		VideosCount:  20,
+		Brief:        orders.OrderBrief{Product: "ролики для бренда"},
+		Ceiling:      2_000_000,
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	orderID := res.Order.ID
+	if res.Order.ProjectID == nil {
+		t.Fatal("вторая ветка не завела проект — заказчику снова некуда прийти")
+	}
+	projectID := *res.Order.ProjectID
+	defer func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM outbox WHERE aggregate_id = $1`, orderID.String())
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
+	}()
+
+	if res.Order.ProjectKind != orders.KindBrand {
+		t.Errorf("ветка заявки %q, ожидали brand_turnkey", res.Order.ProjectKind)
+	}
+
+	// Проект — того самого вида: у него нет состава, чеклиста и
+	// проверки роликов, и определяется это видом, а не пустотой.
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT kind FROM projects WHERE id = $1`, projectID).
+		Scan(&kind); err != nil {
+		t.Fatalf("kind: %v", err)
+	}
+	if kind != string(projects.KindBrandTurnkey) {
+		t.Errorf("вид проекта %q, ожидали brand_turnkey", kind)
+	}
+
+	// Чеклист к такому проекту не цепляется сам: проверять нечего и
+	// некого.
+	var checklist int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM project_checklist_items WHERE project_id = $1`, projectID).
+		Scan(&checklist); err != nil {
+		t.Fatalf("checklist: %v", err)
+	}
+	if checklist != 0 {
+		t.Errorf("к проекту без креаторов прицепился чеклист (%d пунктов)", checklist)
+	}
+
+	// Рассылки не было: ни кандидатов, ни записей в журнале.
+	if res.Broadcast.Recipients != 0 {
+		t.Errorf("во второй ветке ушла рассылка на %d человек", res.Broadcast.Recipients)
+	}
+	var candidates int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM order_candidates WHERE order_id = $1`, orderID).
+		Scan(&candidates); err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	if candidates != 0 {
+		t.Errorf("во второй ветке завелись кандидаты (%d) — звать здесь некого", candidates)
+	}
+
+	// А пинг менеджерам — такой же: заявку всё так же надо взять. И в
+	// нём видно ветку: у проекта без креаторов другой разговор.
+	p := lastPayload(t, pool, orderID.String(), "order.submitted")
+	if p["project_kind"] != string(orders.KindBrand) {
+		t.Errorf("в сообщении менеджерам ветка %v", p["project_kind"])
+	}
+	if p["videos_count"] != float64(20) {
+		t.Errorf("в сообщении %v роликов", p["videos_count"])
+	}
+
+	// Отметки креаторов во второй ветке — это перепутанная ветка, а не
+	// лишнее поле: принять такую заявку значит завести проект не того
+	// вида и обнаружить это по отсутствующему кабинету креатора.
+	if _, err := svc.Create(ctx, orders.CreateOrderInput{
+		ClientUserID: clientID,
+		ProjectKind:  orders.KindBrand,
+		StartMonth:   nextMonth(),
+		VideosCount:  10,
+		CreatorIDs:   creators[:1],
+	}, time.Now().UTC()); !errors.Is(err, orders.ErrInvalidInput) {
+		t.Errorf("заявка без креаторов с отмеченными креаторами принята: %v", err)
+	}
+}

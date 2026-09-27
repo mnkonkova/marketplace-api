@@ -17459,6 +17459,14 @@
                 "project_id": {
                     "type": "string"
                 },
+                "project_kind": {
+                    "description": "ProjectKind — ветка воронки, из которой пришла заявка. Хранится, а\nне выводится из состава: «никого не отметили» бывает в обеих.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.ProjectKind"
+                        }
+                    ]
+                },
                 "reserve_left": {
                     "description": "ReserveLeft — сколько людей ещё можно позвать без участия клиента.\nНоль при NeedMore \u003e 0 — это и есть момент «добрать», когда\nподключается менеджер.",
                     "type": "integer"
@@ -17531,6 +17539,17 @@
                 "StatusFinalized",
                 "StatusPaid",
                 "StatusCancelled"
+            ]
+        },
+        "internal_orders.ProjectKind": {
+            "type": "string",
+            "enum": [
+                "creators_turnkey",
+                "brand_turnkey"
+            ],
+            "x-enum-varnames": [
+                "KindCreators",
+                "KindBrand"
             ]
         },
         "internal_orders.Response": {
@@ -17776,6 +17795,14 @@
                 },
                 "needed": {
                     "type": "integer"
+                },
+                "project_kind": {
+                    "description": "ProjectKind — ветка воронки: creators_turnkey (по умолчанию) или\nbrand_turnkey. Во второй креаторов не выбирают.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_orders.ProjectKind"
+                        }
+                    ]
                 },
                 "start_month": {
                     "type": "string"

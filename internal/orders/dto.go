@@ -65,10 +65,28 @@ const InviteTTL = 72 * time.Hour
 // не отвечает. Самому креатору второй раз не пишем: его уже позвали.
 const ManagerPingAfter = 24 * time.Hour
 
+// ProjectKind — какой проект вырастет из заявки. Ровно два значения:
+// заказ порождает либо проект с креаторами, либо проект без них.
+type ProjectKind string
+
+const (
+	// KindCreators — «креаторы под ключ»: блогеры снимают у себя и
+	// выкладывают на своих аккаунтах.
+	KindCreators ProjectKind = "creators_turnkey"
+	// KindBrand — «видео под ключ»: снимаем мы, ролики выходят с
+	// аккаунтов бренда. Креаторов в таком проекте не бывает, и всё, что
+	// про них — отбор, рассылка, отклики, состав, — во второй ветке
+	// отсутствует, а не «пустует».
+	KindBrand ProjectKind = "brand_turnkey"
+)
+
 // Order — заказ на подбор креаторов.
 type Order struct {
-	ID             uuid.UUID   `json:"id"`
-	ClientUserID   uuid.UUID   `json:"client_user_id"`
+	ID           uuid.UUID `json:"id"`
+	ClientUserID uuid.UUID `json:"client_user_id"`
+	// ProjectKind — ветка воронки, из которой пришла заявка. Хранится, а
+	// не выводится из состава: «никого не отметили» бывает в обеих.
+	ProjectKind    ProjectKind `json:"project_kind"`
 	StartMonth     time.Time   `json:"start_month"`
 	Needed         int         `json:"needed"`
 	VideosCount    int         `json:"videos_count"`
@@ -131,6 +149,9 @@ type CreateOrderInput struct {
 	// не запрещён: человек может дописать его после отправки, и лучше
 	// пустой бриф с заведённым проектом, чем форма, которую бросили.
 	Brief OrderBrief
+	// ProjectKind — ветка воронки. Пусто = креаторы: так работали все
+	// заявки до второй ветки.
+	ProjectKind ProjectKind
 	// Ceiling — потолок, который заказчик УВИДЕЛ на баре, в копейках.
 	//
 	// Не пересчитываем его на сервере: менеджеру нужно знать не «сколько

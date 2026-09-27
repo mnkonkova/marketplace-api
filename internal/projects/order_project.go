@@ -30,18 +30,21 @@ import (
 // бы пускать в кабинет, в списки менеджера и в сводки руками — то есть
 // завести второй способ сказать «ещё не собрано».
 func (s *Service) StartOrderProject(
-	ctx context.Context, clientID uuid.UUID, title, notes string, monthlyPlan int,
+	ctx context.Context, clientID uuid.UUID, title, notes string,
+	monthlyPlan int, kind string,
 ) (uuid.UUID, error) {
 	// monthlyPlan приходит из заявки, но в проект пока не пишется:
 	// колонка monthly_plan заполняется менеджером на финализации вместе
 	// с датами выкладок. Держим параметр в подписи, чтобы не менять её
 	// на том шаге, и чтобы было видно: число известно уже сейчас.
 	_ = monthlyPlan
+	// Вид приходит из ветки воронки — разбирает его OrderKind, рядом с
+	// матрицей видов: неизвестная строка станет проектом с креаторами.
 	in := StartProjectInput{
 		ClientUserID: &clientID,
 		Title:        title,
 		Notes:        notes,
-		Kind:         KindCreatorsTurnkey,
+		Kind:         OrderKind(kind),
 		// Источник — маркетплейс: проект пришёл заявкой из кабинета, а не
 		// заведён менеджером руками. По этому полю потом считают, откуда
 		// идёт работа.

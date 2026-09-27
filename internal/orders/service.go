@@ -53,10 +53,12 @@ type CreateResult struct {
 // простыми типами по той же причине: общий DTO пришлось бы держать в
 // одном из пакетов, и кольцо вернулось бы через него.
 type ProjectStarter interface {
-	// StartOrderProject — проект заявки: вид «креаторы под ключ»,
-	// заказчик известен, менеджера ещё нет.
+	// StartOrderProject — проект заявки: заказчик известен, менеджера
+	// ещё нет. kind — вид проекта строкой: сам тип живёт в пакете
+	// projects, и тащить его сюда значит замкнуть импорты в кольцо.
 	StartOrderProject(
-		ctx context.Context, clientID uuid.UUID, title, notes string, monthlyPlan int,
+		ctx context.Context, clientID uuid.UUID, title, notes string,
+		monthlyPlan int, kind string,
 	) (uuid.UUID, error)
 	// CancelProject — компенсация, если заявка не записалась.
 	CancelOrderProject(ctx context.Context, projectID, clientID uuid.UUID) error
@@ -114,6 +116,28 @@ func (s *Service) Create(ctx context.Context, in CreateOrderInput, now time.Time
 	}
 	if !ok {
 		return out, ErrNoConsent
+	}
+
+	// Ветка воронки. Пусто = креаторы: так работали все заявки до
+	// второй ветки, и молчаливый апгрейд старого клиента до «проекта
+	// без креаторов» был бы худшим видом совместимости.
+	if in.ProjectKind == "" {
+		in.ProjectKind = KindCreators
+	}
+	switch in.ProjectKind {
+	case KindCreators:
+	case KindBrand:
+		// Во второй ветке креаторов не выбирают: ролики выходят с
+		// аккаунтов бренда, приглашать некого. Пришли отметки — это не
+		// «лишнее поле», а перепутанная ветка: заявка, собранная не тем
+		// экраном, и принимать её значит завести проект не того вида.
+		if len(in.CreatorIDs) > 0 {
+			return out, fmt.Errorf(
+				"%w: в проекте без креаторов отмечать некого", ErrInvalidInput)
+		}
+		in.Needed = 0
+	default:
+		return out, fmt.Errorf("%w: неизвестный вид проекта", ErrInvalidInput)
 	}
 
 	// Лимита «один креатор в первый месяц» больше нет.
@@ -186,7 +210,8 @@ func (s *Service) Create(ctx context.Context, in CreateOrderInput, now time.Time
 	projectID := uuid.Nil
 	if s.projects != nil {
 		id, err := s.projects.StartOrderProject(
-			ctx, in.ClientUserID, projectTitle(in.Brief), in.Brief.Text(), in.VideosCount)
+			ctx, in.ClientUserID, projectTitle(in.Brief), in.Brief.Text(),
+			in.VideosCount, string(in.ProjectKind))
 		if err != nil {
 			return out, fmt.Errorf("start project: %w", err)
 		}
@@ -203,6 +228,13 @@ func (s *Service) Create(ctx context.Context, in CreateOrderInput, now time.Time
 		return out, err
 	}
 	out.Order = order
+
+	// Во второй ветке рассылки нет: звать некого, ролики снимаем мы.
+	// Заявка при этом такая же настоящая — проект заведён, пинг
+	// менеджерам ушёл, заказчику есть куда прийти.
+	if in.ProjectKind == KindBrand {
+		return out, nil
+	}
 
 	// Рассылка — сразу, тем же запросом. Отдельной кнопки у неё нет:
 	// «Отправить» в воронке и значит «позовите людей», а заявка,
