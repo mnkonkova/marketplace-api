@@ -187,7 +187,12 @@ async function onNotify(envelope) {
       break;
     }
     try {
-      await sendMessage(bot, r.tg_chat_id, text);
+      // Кнопка «Открыть» ведёт в мини-апп: обычная ссылка открыла бы
+      // сайт во внешнем браузере, где сессии нет и человек упирается
+      // в форму входа — ради собственной же выкладки.
+      const target = texts.targetFor(eventType, data);
+      const markup = target ? texts.openButton(app, target.bot, target.path) : undefined;
+      await sendMessage(bot, r.tg_chat_id, text, markup ? { reply_markup: markup } : {});
       sent += 1;
     } catch (err) {
       if (isBlockedError(err)) {
