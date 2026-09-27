@@ -208,3 +208,29 @@ func (r *Repo) LoadPublishedSpecialistIDs(ctx context.Context) ([]uuid.UUID, err
 	}
 	return out, rows.Err()
 }
+
+// ExistingUserIDs — кто из переданных есть в базе вообще.
+//
+// Не «опубликован» и не «одобрен», а именно существует: по этому
+// признаку уборщик индекса отличает призрака — документ человека,
+// которого удалили мимо приложения, — от живого, снявшегося с
+// публикации. Спутать их значит выкосить из каталога половину живых.
+func (r *Repo) ExistingUserIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `SELECT id FROM users WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("existing users: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}

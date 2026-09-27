@@ -121,6 +121,17 @@ func main() {
 		}
 	}
 
+	// Уборка призраков: документы людей, которых в базе больше нет.
+	//
+	// Пользователей удаляют и МИМО приложения — харнесс интеграционных
+	// тестов и фикстуры e2e сносят своих одним DELETE FROM users, — и
+	// тогда outbox молчит, а документ остаётся в индексе навсегда.
+	// Стоит это дорого: заказчик отмечает призрака в воронке «под
+	// ключ» и получает 409 not_a_creator на карточку, которую мы ему
+	// сами и показали. Случалось дважды, оба раза чинилось реиндексом
+	// руками и возвращалось со следующим прогоном тестов.
+	go runIndexGhostSweepTicker(rootCtx, indexer, feedIndexer, 6*time.Hour, logger)
+
 	// Bootstrap для specialists-индекса: при recreate он тоже пустой и надо
 	// прогнать всех published-approved спецов через Reconcile. Раньше это
 	// делалось только для feed_videos — при redirect-фикс'ах пришли к тому
@@ -423,6 +434,43 @@ func runMediaSweepTicker(ctx context.Context, svc *profiles.Service, minAge, int
 			if deleted > 0 {
 				logger.Info("s3 sweep", "deleted", deleted, "kept", kept)
 			}
+		}
+	}
+}
+
+// runIndexGhostSweepTicker — сверка индексов с базой.
+//
+// Раз в шесть часов и сразу при старте: задача обычно находит ноль, а
+// когда находит — счёт идёт на дни, в которые заказчик натыкается на
+// карточку человека, которого нет. Чаще незачем, реже — значит жить с
+// призраком рабочий день.
+func runIndexGhostSweepTicker(ctx context.Context, indexer *search.Indexer,
+	feed *search.FeedIndexer, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		return
+	}
+	run := func() {
+		if n, err := indexer.SweepGhosts(ctx); err != nil {
+			logger.Warn("index ghost sweep failed", "err", err)
+		} else if n > 0 {
+			logger.Info("index ghost sweep", "removed", n)
+		}
+		if n, err := feed.SweepGhosts(ctx); err != nil {
+			logger.Warn("feed ghost sweep failed", "err", err)
+		} else if n > 0 {
+			logger.Info("feed ghost sweep", "removed", n)
+		}
+	}
+	run()
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
 		}
 	}
 }
