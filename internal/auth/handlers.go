@@ -3,11 +3,12 @@ package auth
 import (
 	"encoding/json"
 	"errors"
-	"net/http"
-
 	"log/slog"
-	"marketpclce/internal/httpx"
+	"net/http"
 	"strings"
+
+	"marketpclce/internal/httpx"
+	"marketpclce/internal/telegram"
 )
 
 type Handler struct{ svc *Service }
@@ -418,4 +419,95 @@ type errorResponse struct {
 	// Message — человеческий текст для интерфейса. omitempty: часть ручек
 	// зовёт httpx.WriteErr без текста, и в ответе поля тогда нет.
 	Message string `json:"message,omitempty"`
+}
+
+// telegramMiniAppReq — вход из мини-аппа Telegram.
+type telegramMiniAppReq struct {
+	// Bot — creator | client. Он же определяет роль нового человека:
+	// спрашивать её вторым экраном незачем, выбор уже сделан тем, в
+	// какого бота написали.
+	Bot string `json:"bot"`
+	// InitData — СЫРАЯ строка Telegram.WebApp.initData. Любая
+	// пересборка на клиенте ломает подпись, и отличить это от подделки
+	// нечем.
+	InitData string `json:"init_data"`
+	// Create — «я новый»: завести аккаунт, если этого телеграма у нас
+	// нет. Без него незнакомый телеграм получает 404, а не второй
+	// пустой аккаунт поверх существующего.
+	Create bool `json:"create"`
+	// Login/Password — «у меня уже есть аккаунт»: пароль один раз, и
+	// телеграм привязывается к нему.
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+// TelegramMiniApp godoc
+// @Summary      Вход из мини-аппа Telegram
+// @Description  Проверяет подпись initData токеном бота и выдаёт пару токенов.
+// @Description  Три сценария одной ручкой: знакомый телеграм — вход;
+// @Description  login+password — привязка к существующему аккаунту;
+// @Description  create=true — новый человек (без почты и пароля).
+// @Description  Незнакомый телеграм без create и без пароля — 404: молча
+// @Description  заводить второй аккаунт нельзя, у человека уже может быть наш.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        input  body      telegramMiniAppReq  true  "бот и initData"
+// @Success      200    {object}  registerResp
+// @Failure      400    {object}  errorResponse  "invalid_input"
+// @Failure      401    {object}  errorResponse  "telegram_bad_signature; telegram_expired; bad_credentials"
+// @Failure      403    {object}  errorResponse  "inactive"
+// @Failure      404    {object}  errorResponse  "telegram_unknown — этот телеграм у нас не встречался"
+// @Failure      409    {object}  errorResponse  "telegram_taken — привязан к другому аккаунту"
+// @Failure      501    {object}  errorResponse  "telegram_disabled"
+// @Router       /auth/telegram/miniapp [post]
+func (h *Handler) TelegramMiniApp(w http.ResponseWriter, r *http.Request) {
+	var in telegramMiniAppReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input", "Не удалось разобрать тело запроса.")
+		return
+	}
+	res, err := h.svc.LoginWithTelegram(r.Context(), TelegramLogin{
+		Bot:      strings.TrimSpace(in.Bot),
+		InitData: in.InitData,
+		Create:   in.Create,
+		Login:    in.Login,
+		Password: in.Password,
+	})
+	switch {
+	case errors.Is(err, ErrTelegramDisabled):
+		httpx.WriteErrMsg(w, http.StatusNotImplemented, "telegram_disabled",
+			"Вход через этого бота не настроен.")
+	case errors.Is(err, telegram.ErrBadSignature):
+		// Без подробностей: подбирающему они скажут больше, чем нам.
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "telegram_bad_signature",
+			"Не удалось проверить данные Telegram. Откройте мини-апп заново.")
+	case errors.Is(err, telegram.ErrExpired):
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "telegram_expired",
+			"Данные Telegram устарели. Откройте мини-апп заново.")
+	case errors.Is(err, telegram.ErrMalformed):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input",
+			"Данные Telegram не разобрались.")
+	case errors.Is(err, ErrTelegramUnknown):
+		httpx.WriteErrMsg(w, http.StatusNotFound, "telegram_unknown",
+			"Этот телеграм у нас не встречался.")
+	case errors.Is(err, telegram.ErrTaken):
+		httpx.WriteErrMsg(w, http.StatusConflict, "telegram_taken",
+			"Этот телеграм уже привязан к другому аккаунту. Напишите менеджеру — перенесём.")
+	case errors.Is(err, ErrBadCredentials):
+		httpx.WriteErrMsg(w, http.StatusUnauthorized, "bad_credentials",
+			"Неверный логин или пароль.")
+	case errors.Is(err, ErrInactive):
+		httpx.WriteErrMsg(w, http.StatusForbidden, "inactive", "Аккаунт отключён.")
+	case err != nil:
+		slog.Error("telegram miniapp login", "err", err)
+		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
+	default:
+		httpx.WriteJSON(w, http.StatusOK, registerResp{
+			UserID: res.UserID.String(),
+			Tokens: res.Tokens,
+			IsNew:  res.IsNew,
+			Kind:   res.Kind,
+		})
+	}
 }

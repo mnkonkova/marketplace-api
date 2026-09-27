@@ -42,6 +42,11 @@ type User struct {
 	// IsApproved — для manager обязательный аппрув админом до доступа в
 	// кабинет менеджера. Остальные по умолчанию TRUE.
 	IsApproved bool
+	// TelegramUserID — человек, пришедший из мини-аппа. Не канал
+	// доставки (он в telegram_links), а ОПОЗНАНИЕ: по нему такой
+	// человек вообще может существовать без почты и телефона —
+	// CHECK users_contact_present требует хотя бы одного из трёх.
+	TelegramUserID *int64
 	// PasswordChangedAt — момент последней смены пароля. Используется в Refresh:
 	// refresh, выпущенный до этой отметки, отзывается. Защита от ситуации
 	// «украли пароль → юзер сделал reset → атакующий продолжает жить на refresh».
@@ -57,7 +62,10 @@ func (u User) Role() string {
 		return RoleAdmin
 	case u.IsManager:
 		return RoleManager
-	case u.Kind == KindSpecialist:
+	// both — это и исполнитель тоже: человек, который снимает и сам
+	// заказывает. Отдавать ему роль клиента значит закрыть половину
+	// его же кабинета — гварды ролей питаются отсюда.
+	case u.Kind == KindSpecialist || u.Kind == KindBoth:
 		return RoleSpecialist
 	default:
 		return RoleClient
@@ -66,11 +74,12 @@ func (u User) Role() string {
 
 func (r *Repo) CreateUser(ctx context.Context, tx pgx.Tx, u User) (uuid.UUID, error) {
 	const q = `
-INSERT INTO users (email, phone, password_hash, kind, display_name)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO users (email, phone, password_hash, kind, display_name, telegram_user_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id`
 	var id uuid.UUID
-	err := tx.QueryRow(ctx, q, u.Email, u.Phone, u.PasswordHash, u.Kind, u.DisplayName).Scan(&id)
+	err := tx.QueryRow(ctx, q,
+		u.Email, u.Phone, u.PasswordHash, u.Kind, u.DisplayName, u.TelegramUserID).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return uuid.Nil, ErrAlreadyExists
@@ -133,6 +142,36 @@ func (r *Repo) FindIDByEmail(ctx context.Context, email string) (uuid.UUID, stri
 }
 
 // MarkEmailVerified — почта из Яндекса уже подтверждена, письмо не нужно.
+// UpgradeKindToBoth — поднять роль до «и снимает, и заказывает».
+//
+// Только вверх: обратного перехода нет ни здесь, ни где-либо ещё.
+// Опустить `both` обратно значит отобрать у человека кабинет, в
+// котором у него уже лежит работа.
+func (r *Repo) UpgradeKindToBoth(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE users SET kind = 'both', updated_at = now() WHERE id = $1 AND kind <> 'both'`,
+		userID)
+	if err != nil {
+		return fmt.Errorf("upgrade kind: %w", err)
+	}
+	return nil
+}
+
+// HasTelegramLink — есть ли у человека живая привязка хоть к одному
+// боту. Нужна проверке «человека есть чем опознать»: она перестала
+// быть проверкой почты, потому что из Telegram приходят люди вовсе без
+// почты.
+func (r *Repo) HasTelegramLink(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var ok bool
+	err := r.db.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM telegram_links
+		                 WHERE user_id = $1 AND blocked_at IS NULL)`, userID).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("has telegram link: %w", err)
+	}
+	return ok, nil
+}
+
 func (r *Repo) MarkEmailVerified(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
 	q := `UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1`
 	var err error

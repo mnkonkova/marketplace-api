@@ -1,0 +1,12 @@
+{
+  "name": "sotka-telegram-bots",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Два телеграм-бота «Сотки»: креаторский и клиентский",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "set-webhook": "node src/set-webhook.js"
+  }
+}

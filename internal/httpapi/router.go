@@ -32,6 +32,7 @@ import (
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
 	"marketpclce/internal/support"
+	"marketpclce/internal/telegram"
 )
 
 type Deps struct {
@@ -72,6 +73,10 @@ type Deps struct {
 	// Ratings — справочник порогов оценок. nil — админские ручки не
 	// маунтятся.
 	Ratings *ratings.Handler
+	// Telegram — привязка к ботам: кабинет человека и ручки самого
+	// бота. nil — ни того, ни другого: неработающая привязка хуже
+	// отсутствующей, человек нажимает кнопку и получает пятисотку.
+	Telegram *telegram.Handler
 
 	CORSOrigins []string
 
@@ -160,6 +165,10 @@ func NewRouter(d Deps) http.Handler {
 			// Вход через Яндекс: фронт присылает одноразовый code, обмен на
 			// токен делает бэкенд — client_secret на клиент не попадает.
 			r.Post("/auth/yandex", d.Auth.YandexLogin)
+			// Вход из мини-аппа Telegram: подпись initData проверяем
+			// сами — токен бота на клиент не попадает, и проверка не
+			// зависит от того, жив ли сервис бота.
+			r.Post("/auth/telegram/miniapp", d.Auth.TelegramMiniApp)
 			r.Post("/auth/login", d.Auth.Login)
 			r.Post("/auth/refresh", d.Auth.Refresh)
 			r.Post("/auth/verify-email", d.Auth.VerifyEmail)
@@ -426,6 +435,33 @@ func NewRouter(d Deps) http.Handler {
 				r.Put("/me/creator/availability", d.Orders.CreatorSetAvailability)
 			}
 		})
+
+		// Привязка к ботам: под авторизацией — человек подключает СВОЙ
+		// телеграм к СВОЕМУ аккаунту, и чужой id сюда не пролезает.
+		if d.Telegram != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(auth.MiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))
+				r.Get("/me/telegram", d.Telegram.MyStatus)
+				r.Post("/me/telegram/link-code", d.Telegram.LinkCode)
+				r.Delete("/me/telegram/link", d.Telegram.Unlink)
+			})
+
+			// Бот → мы. Свой способ авторизации: у бота нет
+			// пользователя, а выдавать ему сервисный аккаунт значит
+			// завести учётку, которой можно ходить куда угодно.
+			//
+			// Лимит scope "bot" НЕ в expensiveScopes намеренно:
+			// fail-closed там означал бы потерянные привязки при
+			// недоступном Redis — человек нажал /start, бот получил
+			// 503, и повторить это некому.
+			r.Group(func(r chi.Router) {
+				r.Use(RateLimit(d.Limiter, "bot", d.ReadWindows))
+				r.Use(d.Telegram.RequireSecret)
+				r.Post("/bot/link", d.Telegram.BotLink)
+				r.Get("/bot/users/by-telegram/{tg_user_id}", d.Telegram.BotWhoIs)
+				r.Post("/bot/blocked", d.Telegram.BotBlocked)
+			})
+		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.MiddlewareWithRevocation(d.TokenIssuer, d.AuthRevocation))

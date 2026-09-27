@@ -36,6 +36,13 @@ type Dispatcher interface {
 	Send(ctx context.Context, p notifications.Payload) error
 }
 
+// BotSender — отправка в сервис бота. Отдельный интерфейс от
+// Dispatcher: туда уезжает не Payload, а конверт с адресатами —
+// получателей считаем мы.
+type BotSender interface {
+	SendEnvelope(ctx context.Context, v any) error
+}
+
 // SpecialistIndexer — часть search.Indexer, которой пользуется
 // обработчик specialist.*.
 type SpecialistIndexer interface {
@@ -64,6 +71,18 @@ type Deps struct {
 	Email Dispatcher
 	// Support — отдельный вебхук обращений в поддержку.
 	Support Dispatcher
+	// Bot — сервис телеграм-ботов: личные уведомления креатору и
+	// заказчику. nil — доставка выключена, события квитируются
+	// как раньше (кабинет всё показывает и без бота).
+	Bot BotSender
+	// BotUsers — кто превращает людей в чаты: привязки, заблокированные
+	// и дневной потолок. nil вместе с Bot.
+	BotUsers BotResolver
+	// AppBaseURL — адрес кабинета для ссылок в сообщениях бота. У
+	// вебхук-диспетчера он свой, но тело бота мы собираем сами, и
+	// подставить его больше некому.
+
+	AppBaseURL string
 
 	Search SpecialistIndexer
 	Feed   FeedIndexer
@@ -104,6 +123,14 @@ func Handlers(d Deps) map[string]outbox.Handler {
 // адрес общий.
 func (d Deps) CRMHandler(aggregate string) outbox.Handler {
 	return func(ctx context.Context, outboxID int64, aggregateID, eventType string, payload []byte) error {
+		// Бот ПЕРВЫМ, и порядок здесь не косметика. Если сперва уйдёт
+		// в чат, а бот упадёт, ретрай отправит в чат второй раз — то
+		// есть дубль в общем чате менеджеров. Наоборот безопасно:
+		// сервис бота дедуплицирует по event_id, и повтор для него
+		// бесплатен.
+		if err := d.botFanout(ctx, outboxID, aggregate, aggregateID, eventType, payload); err != nil {
+			return err
+		}
 		if d.CRM == nil {
 			// Адрес не задан (локальный запуск) — квитируем, чтобы не
 			// копить ретраи.

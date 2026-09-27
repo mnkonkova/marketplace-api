@@ -383,3 +383,63 @@ func sortedKeys(m map[string]string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// Каждое событие, которое мы возим в боты, объявлено в таблице
+// назначения — и объявлено ЛИЧНЫМ.
+//
+// Два разных промаха ловятся здесь одним тестом. Первый: опечатка в
+// типе. Доставка молчит, потому что такого события не бывает, и
+// заметить это можно только по жалобе «мне ничего не приходит».
+// Второй: событие помечено ToChat и при этом возится в бота — значит
+// одно и то же уезжает и в общий чат менеджеров, и человеку лично;
+// такое бывает осознанным решением, но принимать его надо вслух, а не
+// случайно.
+func TestBotRoutesAreDeclaredPersonal(t *testing.T) {
+	for eventType, bot := range BotRoutes() {
+		delivery, ok := DeliveryOf(eventType)
+		if !ok {
+			t.Errorf("%q возится в бота %q, но в таблице назначения его нет — "+
+				"скорее всего опечатка: такого события не эмитит никто", eventType, bot)
+			continue
+		}
+		if delivery != CRMOnly {
+			t.Errorf("%q помечен «идёт в чат» и при этом возится в бота %q: "+
+				"одно и то же уедет и в общий чат, и человеку лично", eventType, bot)
+		}
+	}
+}
+
+// И наоборот: у типов, адресованных человеку, доставка должна быть.
+//
+// Список «личных» ведём явно — тот же приём, что у dynamicEmitSites:
+// иначе новое событие креатору снова окажется посчитанным,
+// продедуплицированным и никуда не доставленным. Ровно это и было до
+// ботов: механизм существовал только в комментариях.
+func TestPersonalEventsHaveBotRoute(t *testing.T) {
+	personal := []string{
+		"project.publication_due_tomorrow",
+		"project.publication_due_today",
+		"project.publication_incomplete",
+		"project.publication_manual",
+		"project.publication_returned",
+		"project.publication_accepted",
+		"project.publication_moved",
+		"project.publication_cancelled",
+		"project.project_materials_updated",
+		"project.project_checklist_updated",
+		"project.project_creator_briefed",
+		"project.client_views_threshold",
+		"project.client_new_video",
+		"project.client_date_shift",
+		"project.client_weekly_digest",
+		"order.invitation_sent",
+		"order.broadcast_sent",
+	}
+	routes := BotRoutes()
+	for _, e := range personal {
+		if _, ok := routes[e]; !ok {
+			t.Errorf("%q адресован человеку, но ни в один бот не возится — "+
+				"он будет посчитан, продедуплицирован и потерян", e)
+		}
+	}
+}

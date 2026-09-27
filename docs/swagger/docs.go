@@ -3057,6 +3057,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/telegram/miniapp": {
+            "post": {
+                "description": "Проверяет подпись initData токеном бота и выдаёт пару токенов.\nТри сценария одной ручкой: знакомый телеграм — вход;\nlogin+password — привязка к существующему аккаунту;\ncreate=true — новый человек (без почты и пароля).\nНезнакомый телеграм без create и без пароля — 404: молча\nзаводить второй аккаунт нельзя, у человека уже может быть наш.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Вход из мини-аппа Telegram",
+                "parameters": [
+                    {
+                        "description": "бот и initData",
+                        "name": "input",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.telegramMiniAppReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.registerResp"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "telegram_bad_signature; telegram_expired; bad_credentials",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "inactive",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "telegram_unknown — этот телеграм у нас не встречался",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "telegram_taken — привязан к другому аккаунту",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "telegram_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/verify-email": {
             "post": {
                 "consumes": [
@@ -3137,6 +3207,176 @@ const docTemplate = `{
                         "description": "Not Implemented",
                         "schema": {
                             "$ref": "#/definitions/internal_auth.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bot/blocked": {
+            "post": {
+                "description": "Строку привязки не удаляем: удаление выглядит как «никогда не\nподключал», и мы бы позвали его подключиться заново — то есть\nпредложили то, от чего он только что отказался.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bot"
+                ],
+                "summary": "Человек заблокировал бота",
+                "parameters": [
+                    {
+                        "description": "бот и телеграм",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.botBlockedReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.Link"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; unknown_bot",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "bad_secret",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bot/link": {
+            "post": {
+                "description": "Человек нажал /start с кодом из кабинета. Код гасится, и\nпривязка появляется в той же транзакции: погашенный код без\nпривязки — это человек без уведомлений, и по логам этого не\nвидно.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bot"
+                ],
+                "summary": "Привязать телеграм по коду (бот)",
+                "parameters": [
+                    {
+                        "description": "код и телеграм",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.botLinkReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.Link"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; unknown_bot",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "bad_secret",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — кода нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "telegram_taken",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "code_expired — код протух или уже использован",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bot/users/by-telegram/{tg_user_id}": {
+            "get": {
+                "description": "Бот знает только tg_user_id. Без этой ручки он на каждое\nсообщение не понимает, с кем говорит.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bot"
+                ],
+                "summary": "Кто это (бот)",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "telegram user id",
+                        "name": "tg_user_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator | client",
+                        "name": "bot",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.Link"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; unknown_bot",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "bad_secret",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_linked",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
                         }
                     }
                 }
@@ -12859,6 +13099,135 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/telegram": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "telegram"
+                ],
+                "summary": "Мои привязки к ботам",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.Status"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/telegram/link": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "telegram"
+                ],
+                "summary": "Отключить бота",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "creator | client",
+                        "name": "bot",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "unknown_bot",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/telegram/link-code": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Одноразовый код внутри ссылки живёт 15 минут. Прежние\nнеиспользованные коды этого человека гасятся: две живые\nссылки на один аккаунт — это две двери, а нужна одна.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "telegram"
+                ],
+                "summary": "Ссылка подключения бота",
+                "parameters": [
+                    {
+                        "description": "бот",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.linkCodeReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.LinkStart"
+                        }
+                    },
+                    "400": {
+                        "description": "unknown_bot — бот не настроен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/uploads/image": {
             "post": {
                 "security": [
@@ -14317,6 +14686,30 @@ const docTemplate = `{
                     "$ref": "#/definitions/internal_auth.TokenPair"
                 },
                 "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_auth.telegramMiniAppReq": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "description": "Bot — creator | client. Он же определяет роль нового человека:\nспрашивать её вторым экраном незачем, выбор уже сделан тем, в\nкакого бота написали.",
+                    "type": "string"
+                },
+                "create": {
+                    "description": "Create — «я новый»: завести аккаунт, если этого телеграма у нас\nнет. Без него незнакомый телеграм получает 404, а не второй\nпустой аккаунт поверх существующего.",
+                    "type": "boolean"
+                },
+                "init_data": {
+                    "description": "InitData — СЫРАЯ строка Telegram.WebApp.initData. Любая\nпересборка на клиенте ломает подпись, и отличить это от подделки\nнечем.",
+                    "type": "string"
+                },
+                "login": {
+                    "description": "Login/Password — «у меня уже есть аккаунт»: пароль один раз, и\nтелеграм привязывается к нему.",
+                    "type": "string"
+                },
+                "password": {
                     "type": "string"
                 }
             }
@@ -22908,6 +23301,115 @@ const docTemplate = `{
                     }
                 },
                 "target_category": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_telegram.Link": {
+            "type": "object",
+            "properties": {
+                "blocked_at": {
+                    "type": "string"
+                },
+                "bot": {
+                    "type": "string"
+                },
+                "linked_at": {
+                    "type": "string"
+                },
+                "tg_chat_id": {
+                    "type": "integer"
+                },
+                "tg_user_id": {
+                    "type": "integer"
+                },
+                "tg_username": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_telegram.LinkStart": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "url": {
+                    "description": "URL — то, что открывают. Код внутри, отдельно его показывать\nнезачем: руками его никто не вводит.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_telegram.Status": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "description": "Available — какие боты вообще настроены. Кнопку «подключить»\nрисуем только по ним: кнопка, ведущая в t.me/?start=, хуже\nотсутствующей.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "links": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_telegram.Link"
+                    }
+                }
+            }
+        },
+        "internal_telegram.botBlockedReq": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "type": "string"
+                },
+                "tg_user_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_telegram.botLinkReq": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "type": "string"
+                },
+                "code": {
+                    "type": "string"
+                },
+                "tg_chat_id": {
+                    "type": "integer"
+                },
+                "tg_user_id": {
+                    "type": "integer"
+                },
+                "tg_username": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_telegram.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_telegram.linkCodeReq": {
+            "type": "object",
+            "properties": {
+                "bot": {
                     "type": "string"
                 }
             }

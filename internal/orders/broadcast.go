@@ -166,20 +166,43 @@ VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`, id, broadcastKind, orderID, day
 		}
 		out.Recipients = len(sent)
 
-		if err := tx.QueryRow(ctx, `
-SELECT count(*) FROM order_candidates
-WHERE order_id = $1 AND is_preferred AND creator_user_id = ANY($2)`,
-			orderID, sent).Scan(&out.Preferred); err != nil {
-			return fmt.Errorf("count preferred: %w", err)
+		preferredIDs := make([]uuid.UUID, 0, 4)
+		prefRows, err := tx.Query(ctx, `
+SELECT creator_user_id FROM order_candidates
+WHERE order_id = $1 AND is_preferred AND creator_user_id = ANY($2)`, orderID, sent)
+		if err != nil {
+			return fmt.Errorf("select preferred: %w", err)
 		}
+		for prefRows.Next() {
+			var id uuid.UUID
+			if err := prefRows.Scan(&id); err != nil {
+				prefRows.Close()
+				return fmt.Errorf("scan preferred: %w", err)
+			}
+			preferredIDs = append(preferredIDs, id)
+		}
+		prefRows.Close()
+		if err := prefRows.Err(); err != nil {
+			return err
+		}
+		out.Preferred = len(preferredIDs)
 
 		// Событие пишем ВСЕГДА, даже с нулём получателей: «рассылка
 		// была и не нашла никого» и «рассылки не было» — разные
 		// поломки, и различить их потом больше нечем.
 		payload := map[string]any{
-			"order_id":           orderID,
-			"recipients":         out.Recipients,
+			"order_id":   orderID,
+			"recipients": out.Recipients,
+			// recipient_ids — сами люди, а не только их число.
+			//
+			// По ним доставка разносит заявку по ботам: без списка
+			// событие рассказывает, что рассылка была, и не говорит
+			// кому — то есть в бот не уходит ничего. Отмеченных
+			// «хочу особенно» перечисляем отдельно: боту нужно знать,
+			// кому дописать приписку в том же сообщении.
+			"recipient_ids":      sent,
 			"preferred":          out.Preferred,
+			"preferred_ids":      preferredIDs,
 			"skipped_over_limit": out.SkippedOverLimit,
 		}
 		withProject(payload, projectID)
