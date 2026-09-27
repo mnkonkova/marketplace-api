@@ -142,3 +142,64 @@ func TestDisplayNameFallbacks(t *testing.T) {
 		}
 	}
 }
+
+// Подпись сходится и тогда, когда клиент положил в проверочную строку
+// поле signature.
+//
+// Telegram добавил его для сторонней проверки уже после того, как
+// описал алгоритм, и клиенты разных версий считают hash по-разному.
+// Принять только один вариант — значит отказать живому человеку на
+// ровном месте, а перебрать оба стоит одного HMAC: подделать подпись
+// это не помогает, ключ всё тот же.
+func TestVerifyAcceptsSignatureInCheckString(t *testing.T) {
+	now := time.Now().UTC()
+	fields := map[string]string{
+		"auth_date":     strconv.FormatInt(now.Unix(), 10),
+		"chat_instance": "-1234567890",
+		"chat_type":     "sender",
+		"signature":     "3zYm4b_fake_ed25519_signature",
+		"user":          userJSON,
+	}
+	// SignForTest считает hash по ВСЕМ переданным полям, то есть
+	// включая signature, — ровно как новые клиенты.
+	init := telegram.SignForTest(token, fields)
+	if _, err := telegram.Verify(init, token, time.Hour, now); err != nil {
+		t.Fatalf("строка с signature в подписи отвергнута: %v", err)
+	}
+
+	// И старый вариант — без signature в проверочной строке — тоже
+	// принимается: клиенты постарше живы.
+	old := map[string]string{"auth_date": fields["auth_date"], "user": userJSON}
+	initOld := telegram.SignForTest(token, old)
+	// Дописываем signature УЖЕ ПОСЛЕ подписи, как сделал бы клиент,
+	// который его не учитывает.
+	if _, err := telegram.Verify(initOld+"&signature=3zYm4b_fake", token, time.Hour, now); err != nil {
+		t.Fatalf("строка без signature в подписи отвергнута: %v", err)
+	}
+}
+
+// В отказе «не разобрались» перечислены пришедшие поля — без значений.
+//
+// Без них жалоба «не пускает» упирается в догадки: строку живого
+// человека мы посмотреть не можем, в ней его подпись.
+func TestMalformedNamesTheFields(t *testing.T) {
+	now := time.Now().UTC()
+	init := telegram.SignForTest(token, map[string]string{
+		"auth_date":     strconv.FormatInt(now.Unix(), 10),
+		"chat_instance": "-1",
+	})
+	_, err := telegram.Verify(init, token, time.Hour, now)
+	if err == nil {
+		t.Fatal("строка без user принята")
+	}
+	msg := err.Error()
+	for _, want := range []string{"auth_date", "chat_instance", "hash"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("в отказе нет поля %q: %s", want, msg)
+		}
+	}
+	// А значений в нём быть не должно: там подпись.
+	if strings.Contains(msg, "=") {
+		t.Errorf("в отказе просочились значения: %s", msg)
+	}
+}

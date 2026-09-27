@@ -486,8 +486,15 @@ func (h *Handler) TelegramMiniApp(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusUnauthorized, "telegram_expired",
 			"Данные Telegram устарели. Откройте мини-апп заново.")
 	case errors.Is(err, telegram.ErrMalformed):
+		// Причину отдаём человеку в текст: там имена пришедших полей и
+		// ничего больше (значения — это подпись и его данные). Без неё
+		// жалоба «не пускает» упирается в догадки: строку мы
+		// посмотреть не можем, а воспроизвести на другом клиенте — не
+		// всегда.
+		slog.Warn("telegram miniapp: malformed init data", "err", err)
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_input",
-			"Данные Telegram не разобрались.")
+			"Данные Telegram не разобрались: "+strings.TrimPrefix(
+				err.Error(), "telegram init data malformed: "))
 	case errors.Is(err, ErrTelegramUnknown):
 		httpx.WriteErrMsg(w, http.StatusNotFound, "telegram_unknown",
 			"Этот телеграм у нас не встречался.")
