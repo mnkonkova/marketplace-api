@@ -42,6 +42,7 @@ import (
 	"marketpclce/internal/search"
 	"marketpclce/internal/summarize"
 	"marketpclce/internal/support"
+	"marketpclce/internal/telegram"
 
 	// Сгенерённый swaggo-пакет (`make swag`) — регистрирует OpenAPI spec в init(),
 	// чтобы http-swagger мог отдать /swagger/doc.json.
@@ -128,6 +129,37 @@ func main() {
 	if !authSvc.YandexEnabled() {
 		slog.Info("yandex oauth disabled: YANDEX_CLIENT_ID/SECRET не заданы")
 	}
+
+	// Телеграм-боты: креаторский и клиентский. Сам бот живёт отдельным
+	// сервисом и ходит в api.telegram.org сам; у нас — привязки,
+	// проверка подписи мини-аппа и отбор получателей. Токены нужны
+	// здесь именно ради проверки: она чистая криптография, и делать её
+	// на стороне бота значит уронить вход в мини-апп вместе с ним.
+	telegramSvc := telegram.NewService(telegram.NewRepo(pool)).
+		WithBots(cfg.TelegramCreatorBotUsername, cfg.TelegramClientBotUsername, cfg.BotSharedSecret)
+	authSvc.WithTelegram(auth.TelegramConfig{
+		CreatorToken: cfg.TelegramCreatorBotToken,
+		ClientToken:  cfg.TelegramClientBotToken,
+		TTL:          cfg.TelegramInitDataTTL,
+	}, telegram.NewRepo(pool))
+	var telegramHandler *telegram.Handler
+	switch {
+	case !authSvc.TelegramEnabled():
+		slog.Info("telegram bots disabled: TELEGRAM_*_BOT_TOKEN не заданы")
+	case !telegramSvc.Enabled():
+		// Токены есть, общего секрета нет: вход в мини-апп работает,
+		// а ручек бота нет. Это законный промежуточный режим (сервис
+		// бота ещё не выкачен), но сказать о нём надо — иначе «почему
+		// /start ничего не делает» ищут в боте.
+		slog.Warn("telegram bot endpoints disabled: BOT_SHARED_SECRET не задан")
+		telegramHandler = telegram.NewHandler(telegramSvc, auth.UserIDFrom)
+	default:
+		telegramHandler = telegram.NewHandler(telegramSvc, auth.UserIDFrom)
+		slog.Info("telegram bots ready",
+			"creator", cfg.TelegramCreatorBotUsername != "",
+			"client", cfg.TelegramClientBotUsername != "")
+	}
+
 	authHandler := auth.NewHandler(authSvc)
 
 	catalogRepo := catalog.NewRepo(pool)
@@ -321,6 +353,7 @@ func main() {
 		Partner:        partnerHandler,
 		Admin:          adminHandler,
 		Ratings:        ratingsHandler,
+		Telegram:       telegramHandler,
 		CORSOrigins:    cfg.CORSOrigins,
 		Limiter:        limiter,
 		ReadWindows: []ratelimit.Window{

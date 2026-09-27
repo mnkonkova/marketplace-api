@@ -30,6 +30,7 @@ import (
 	"marketpclce/internal/projects"
 	"marketpclce/internal/publications"
 	"marketpclce/internal/search"
+	"marketpclce/internal/telegram"
 	"marketpclce/internal/transcode"
 )
 
@@ -39,6 +40,16 @@ import (
 // Send такое переживает, но полагаться на это нельзя — интерфейс должен
 // быть честно пустым.
 func dispatcherOrNil(d *notifications.WebhookDispatcher) eventroute.Dispatcher {
+	if d == nil {
+		return nil
+	}
+	return d
+}
+
+// botSenderOrNil — та же беда с nil в интерфейсе, что у dispatcherOrNil:
+// nil-указатель, положенный в интерфейс, перестаёт быть nil, и проверка
+// «доставка выключена» его не поймает.
+func botSenderOrNil(d *notifications.WebhookDispatcher) eventroute.BotSender {
 	if d == nil {
 		return nil
 	}
@@ -163,6 +174,26 @@ func main() {
 		slog.Info("n8n webhook ready", "url", cfg.N8nWebhookURL)
 	}
 
+	// Телеграм-боты: личные уведомления креатору и заказчику. Тело
+	// подписываем — принимающая сторона наша, и отличить наш запрос от
+	// чужого она обязана. Пусто → доставка выключена: события
+	// квитируются, кабинет всё показывает и без бота.
+	botDispatcher := notifications.NewWebhookDispatcher(
+		cfg.BotWebhookURL, cfg.BotWebhookToken, cfg.AppBaseURL).
+		WithSignature(cfg.BotWebhookSecret)
+	telegramSvc := telegram.NewService(telegram.NewRepo(pool))
+	switch {
+	case botDispatcher == nil:
+		slog.Info("telegram bot delivery disabled (BOT_WEBHOOK_URL empty) — " +
+			"личные уведомления квитируются как no-op")
+	case cfg.BotWebhookSecret == "":
+		// Без подписи сервис бота не отличит нас от любого, кто знает
+		// адрес. Работать будет, но сказать об этом надо.
+		slog.Warn("telegram bot delivery without signature: BOT_WEBHOOK_SECRET не задан")
+	default:
+		slog.Info("telegram bot delivery ready", "url", cfg.BotWebhookURL)
+	}
+
 	// support.message_received → отдельный workflow (дамп в Telegram).
 	n8nSupportDispatcher := notifications.NewWebhookDispatcher(cfg.N8nSupportWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
 	if n8nSupportDispatcher == nil {
@@ -224,6 +255,9 @@ func main() {
 			CRM:        dispatcherOrNil(n8nDispatcher),
 			Email:      dispatcherOrNil(n8nEmailDispatcher),
 			Support:    dispatcherOrNil(n8nSupportDispatcher),
+			Bot:        botSenderOrNil(botDispatcher),
+			BotUsers:   telegramSvc,
+			AppBaseURL: cfg.AppBaseURL,
 			Search:     indexer,
 			Feed:       feedIndexer,
 			Transcoder: transcoder,

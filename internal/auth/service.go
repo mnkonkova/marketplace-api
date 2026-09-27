@@ -38,6 +38,10 @@ var (
 const (
 	KindClient     = "client"
 	KindSpecialist = "specialist"
+	// KindBoth — и снимает, и заказывает. Ставится только вверх: тот,
+	// кто пришёл креатором и написал боту заказчиков, получает второй
+	// кабинет, а не меняет первый на второй.
+	KindBoth = "both"
 )
 
 // CRM-роли (users.role). Отдельно от Kind — см. docs/CRM_V5_BRIEF.md §1.
@@ -60,6 +64,10 @@ type Service struct {
 	// Пусто = вход через Яндекс выключен: локальный запуск без ключей это
 	// нормальный режим, а не поломка.
 	yandex YandexConfig
+	// Телеграм: токены обоих ботов для проверки подписи мини-аппа и
+	// запись привязки. Пусто — вход из мини-аппа отвечает 501.
+	telegram TelegramConfig
+	tgLinks  TelegramLinker
 	// yandexOnce — клиент к Яндексу создаём один раз на сервис, а не на
 	// каждый вход. Свой http.Client на запрос — это свой пул соединений
 	// на запрос: TLS-рукопожатие заново каждый раз и ни одного
@@ -256,13 +264,21 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 	return RegisterResult{UserID: userID, Tokens: pair}, nil
 }
 
-func (s *Service) Login(ctx context.Context, login, password string) (TokenPair, error) {
+// normalizeLogin — почта в нижний регистр, телефон как есть. Общий с
+// входом из мини-аппа: два места, приводящие логин по-разному, дают
+// «пароль не подходит» на верном пароле.
+func normalizeLogin(login string) string {
 	login = strings.TrimSpace(login)
+	if strings.Contains(login, "@") {
+		return strings.ToLower(login)
+	}
+	return login
+}
+
+func (s *Service) Login(ctx context.Context, login, password string) (TokenPair, error) {
+	login = normalizeLogin(login)
 	if login == "" || password == "" {
 		return TokenPair{}, ErrBadCredentials
-	}
-	if strings.Contains(login, "@") {
-		login = strings.ToLower(login)
 	}
 	u, err := s.repo.FindByLogin(ctx, login)
 	if errors.Is(err, ErrNotFound) {
@@ -474,7 +490,26 @@ func (s *Service) CheckActiveVerified(ctx context.Context, id uuid.UUID) (active
 	if s.verificationOff {
 		return true, true, nil
 	}
-	return true, u.EmailVerifiedAt != nil, nil
+	if u.EmailVerifiedAt != nil {
+		return true, true, nil
+	}
+	// Второе значение перестало означать «почта подтверждена» — оно
+	// означает «человека есть чем опознать».
+	//
+	// Из Telegram приходят люди БЕЗ почты вовсе: id там вечный,
+	// подделать его нельзя, подпись проверяется нашим же токеном бота.
+	// Требовать от такого человека подтверждённую почту — значит не
+	// пускать его туда, куда он пришёл, ради канала, которого у него
+	// нет.
+	//
+	// А вот «почта есть, но не подтверждена» привязка НЕ закрывает:
+	// Telegram не доказывает владения ящиком (в отличие от Яндекса), и
+	// письма по этому адресу всё так же могут уходить не тому.
+	linked, err := s.repo.HasTelegramLink(ctx, id)
+	if err != nil {
+		return true, false, err
+	}
+	return true, linked, nil
 }
 
 // VerifyEmail — обмен raw-токена из письма на «email подтверждён».

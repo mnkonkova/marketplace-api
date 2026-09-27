@@ -3,6 +3,9 @@ package notifications
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +23,32 @@ type WebhookDispatcher struct {
 	url        string
 	token      string
 	appBaseURL string
-	client     *http.Client
+	// secret — ключ подписи тела (X-Signature, HMAC-SHA256 hex). Пусто
+	// — заголовка нет. Нужен там, где принимающая сторона наша и
+	// обязана отличить наш запрос от чужого: у n8n для этого bearer, у
+	// сервиса бота — подпись, как у «Бота Работ».
+	secret string
+	client *http.Client
+}
+
+// WithSignature — подписывать тело. Возвращает тот же диспетчер,
+// чтобы собираться одной строкой.
+func (d *WebhookDispatcher) WithSignature(secret string) *WebhookDispatcher {
+	if d == nil {
+		return nil
+	}
+	d.secret = secret
+	return d
+}
+
+// AppBaseURL — адрес фронта, который уезжает в payload. Нужен там, где
+// тело собирают снаружи: ссылки в сообщении бота ведут в кабинет, и
+// собирать их из ничего нельзя.
+func (d *WebhookDispatcher) AppBaseURL() string {
+	if d == nil {
+		return ""
+	}
+	return d.appBaseURL
 }
 
 // NewWebhookDispatcher — appBaseURL пробрасывается в payload, чтобы n8n
@@ -63,7 +91,24 @@ func (d *WebhookDispatcher) Send(ctx context.Context, p Payload) error {
 	if p.AppBaseURL == "" {
 		p.AppBaseURL = d.appBaseURL
 	}
-	body, err := json.Marshal(p)
+	return d.post(ctx, p)
+}
+
+// SendEnvelope — отправить произвольное тело тем же путём: те же коды
+// ответа, те же ретраи, та же подпись.
+//
+// Нужен доставке в бот: ей мало Payload — вместе с событием едет
+// список адресатов, посчитанный НАМИ. Считать его на стороне бота
+// значило бы завести вторую копию правил доставки.
+func (d *WebhookDispatcher) SendEnvelope(ctx context.Context, v any) error {
+	if d == nil {
+		return nil
+	}
+	return d.post(ctx, v)
+}
+
+func (d *WebhookDispatcher) post(ctx context.Context, v any) error {
+	body, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
@@ -75,6 +120,11 @@ func (d *WebhookDispatcher) Send(ctx context.Context, p Payload) error {
 	req.Header.Set("Accept", "application/json")
 	if d.token != "" {
 		req.Header.Set("Authorization", "Bearer "+d.token)
+	}
+	if d.secret != "" {
+		mac := hmac.New(sha256.New, []byte(d.secret))
+		mac.Write(body)
+		req.Header.Set("X-Signature", hex.EncodeToString(mac.Sum(nil)))
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {

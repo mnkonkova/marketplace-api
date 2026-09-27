@@ -102,6 +102,38 @@ type Config struct {
 	PartnerSecret      string `env:"PARTNER_SECRET"`
 	BotrabotWebhookURL string `env:"BOTRABOT_WEBHOOK_URL"`
 
+	// ── Телеграм-боты ──────────────────────────────────────────────
+	//
+	// Ботов два: креаторский и клиентский. Сам бот живёт отдельным
+	// сервисом и ходит в api.telegram.org сам; у нас — источник истины
+	// (привязки), проверка initData и отбор получателей.
+	//
+	// Токены держим и у себя: проверка подписи мини-аппа — чистая
+	// криптография над токеном бота, и гонять её через чужой сервис
+	// значит уронить вход в мини-апп вместе с ним. Пусто — вход через
+	// этого бота отвечает 501, а не пятисоткой.
+	TelegramCreatorBotToken    string `env:"TELEGRAM_CREATOR_BOT_TOKEN"`
+	TelegramCreatorBotUsername string `env:"TELEGRAM_CREATOR_BOT_USERNAME"`
+	TelegramClientBotToken     string `env:"TELEGRAM_CLIENT_BOT_TOKEN"`
+	TelegramClientBotUsername  string `env:"TELEGRAM_CLIENT_BOT_USERNAME"`
+	// TelegramInitDataTTL — сколько живёт подписанная строка мини-аппа.
+	// Сутки: webview держат открытым, и вкладку возвращают к жизни на
+	// следующий день — отказывать такому человеку незачем, а вечная
+	// подпись становится ключом от аккаунта.
+	TelegramInitDataTTL time.Duration `env:"TELEGRAM_INITDATA_TTL" envDefault:"24h"`
+
+	// BotWebhookURL — куда мы шлём уведомления для ботов. Пусто →
+	// доставка выключена: события обрабатываются как no-op и не висят
+	// в outbox. BotWebhookToken — bearer, BotWebhookSecret — ключ для
+	// X-Signature (HMAC-SHA256 тела), как у «Бота Работ».
+	BotWebhookURL    string `env:"BOT_WEBHOOK_URL"`
+	BotWebhookToken  string `env:"BOT_WEBHOOK_TOKEN"`
+	BotWebhookSecret string `env:"BOT_WEBHOOK_SECRET"`
+	// BotSharedSecret — общий секрет для входящих /api/v1/bot/*. Пусто
+	// — группа ручек не поднимается вовсе: открытая привязка чужого
+	// телеграма к чужому аккаунту хуже отсутствующей.
+	BotSharedSecret string `env:"BOT_SHARED_SECRET"`
+
 	SummarizeCacheTTL    time.Duration `env:"SUMMARIZE_CACHE_TTL" envDefault:"10m"`
 	FeedCacheTTL         time.Duration `env:"FEED_CACHE_TTL" envDefault:"30s"`
 	RateSummarizePerMin  int           `env:"RATE_SUMMARIZE_PER_MIN" envDefault:"5"`

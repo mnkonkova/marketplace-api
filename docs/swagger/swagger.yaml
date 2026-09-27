@@ -710,6 +710,34 @@ definitions:
       user_id:
         type: string
     type: object
+  internal_auth.telegramMiniAppReq:
+    properties:
+      bot:
+        description: |-
+          Bot — creator | client. Он же определяет роль нового человека:
+          спрашивать её вторым экраном незачем, выбор уже сделан тем, в
+          какого бота написали.
+        type: string
+      create:
+        description: |-
+          Create — «я новый»: завести аккаунт, если этого телеграма у нас
+          нет. Без него незнакомый телеграм получает 404, а не второй
+          пустой аккаунт поверх существующего.
+        type: boolean
+      init_data:
+        description: |-
+          InitData — СЫРАЯ строка Telegram.WebApp.initData. Любая
+          пересборка на клиенте ломает подпись, и отличить это от подделки
+          нечем.
+        type: string
+      login:
+        description: |-
+          Login/Password — «у меня уже есть аккаунт»: пароль один раз, и
+          телеграм привязывается к нему.
+        type: string
+      password:
+        type: string
+    type: object
   internal_auth.verifyEmailReq:
     properties:
       token:
@@ -7756,6 +7784,82 @@ definitions:
       target_category:
         type: string
     type: object
+  internal_telegram.Link:
+    properties:
+      blocked_at:
+        type: string
+      bot:
+        type: string
+      linked_at:
+        type: string
+      tg_chat_id:
+        type: integer
+      tg_user_id:
+        type: integer
+      tg_username:
+        type: string
+      user_id:
+        type: string
+    type: object
+  internal_telegram.LinkStart:
+    properties:
+      bot:
+        type: string
+      expires_at:
+        type: string
+      url:
+        description: |-
+          URL — то, что открывают. Код внутри, отдельно его показывать
+          незачем: руками его никто не вводит.
+        type: string
+    type: object
+  internal_telegram.Status:
+    properties:
+      available:
+        description: |-
+          Available — какие боты вообще настроены. Кнопку «подключить»
+          рисуем только по ним: кнопка, ведущая в t.me/?start=, хуже
+          отсутствующей.
+        items:
+          type: string
+        type: array
+      links:
+        items:
+          $ref: '#/definitions/internal_telegram.Link'
+        type: array
+    type: object
+  internal_telegram.botBlockedReq:
+    properties:
+      bot:
+        type: string
+      tg_user_id:
+        type: integer
+    type: object
+  internal_telegram.botLinkReq:
+    properties:
+      bot:
+        type: string
+      code:
+        type: string
+      tg_chat_id:
+        type: integer
+      tg_user_id:
+        type: integer
+      tg_username:
+        type: string
+    type: object
+  internal_telegram.errorResponse:
+    properties:
+      error:
+        type: string
+      message:
+        type: string
+    type: object
+  internal_telegram.linkCodeReq:
+    properties:
+      bot:
+        type: string
+    type: object
   marketpclce_internal_audit.Entry:
     properties:
       action:
@@ -10144,6 +10248,58 @@ paths:
       summary: Перевыслать письмо подтверждения email
       tags:
       - auth
+  /auth/telegram/miniapp:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Проверяет подпись initData токеном бота и выдаёт пару токенов.
+        Три сценария одной ручкой: знакомый телеграм — вход;
+        login+password — привязка к существующему аккаунту;
+        create=true — новый человек (без почты и пароля).
+        Незнакомый телеграм без create и без пароля — 404: молча
+        заводить второй аккаунт нельзя, у человека уже может быть наш.
+      parameters:
+      - description: бот и initData
+        in: body
+        name: input
+        required: true
+        schema:
+          $ref: '#/definitions/internal_auth.telegramMiniAppReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_auth.registerResp'
+        "400":
+          description: invalid_input
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "401":
+          description: telegram_bad_signature; telegram_expired; bad_credentials
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "403":
+          description: inactive
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "404":
+          description: telegram_unknown — этот телеграм у нас не встречался
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "409":
+          description: telegram_taken — привязан к другому аккаунту
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+        "501":
+          description: telegram_disabled
+          schema:
+            $ref: '#/definitions/internal_auth.errorResponse'
+      summary: Вход из мини-аппа Telegram
+      tags:
+      - auth
   /auth/verify-email:
     post:
       consumes:
@@ -10203,6 +10359,127 @@ paths:
       summary: Вход и регистрация через Яндекс
       tags:
       - auth
+  /bot/blocked:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Строку привязки не удаляем: удаление выглядит как «никогда не
+        подключал», и мы бы позвали его подключиться заново — то есть
+        предложили то, от чего он только что отказался.
+      parameters:
+      - description: бот и телеграм
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_telegram.botBlockedReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.Link'
+        "400":
+          description: bad_json; unknown_bot
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: bad_secret
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      summary: Человек заблокировал бота
+      tags:
+      - bot
+  /bot/link:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Человек нажал /start с кодом из кабинета. Код гасится, и
+        привязка появляется в той же транзакции: погашенный код без
+        привязки — это человек без уведомлений, и по логам этого не
+        видно.
+      parameters:
+      - description: код и телеграм
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_telegram.botLinkReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.Link'
+        "400":
+          description: bad_json; unknown_bot
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: bad_secret
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "404":
+          description: not_found — кода нет
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "409":
+          description: telegram_taken
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "410":
+          description: code_expired — код протух или уже использован
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      summary: Привязать телеграм по коду (бот)
+      tags:
+      - bot
+  /bot/users/by-telegram/{tg_user_id}:
+    get:
+      description: |-
+        Бот знает только tg_user_id. Без этой ручки он на каждое
+        сообщение не понимает, с кем говорит.
+      parameters:
+      - description: telegram user id
+        in: path
+        name: tg_user_id
+        required: true
+        type: integer
+      - description: creator | client
+        in: query
+        name: bot
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.Link'
+        "400":
+          description: bad_id; unknown_bot
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: bad_secret
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "404":
+          description: not_linked
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      summary: Кто это (бот)
+      tags:
+      - bot
   /categories:
     get:
       produces:
@@ -16771,6 +17048,89 @@ paths:
       summary: Воронка моего проекта (специалист, read-only)
       tags:
       - specialist-projects
+  /me/telegram:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.Status'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои привязки к ботам
+      tags:
+      - telegram
+  /me/telegram/link:
+    delete:
+      parameters:
+      - description: creator | client
+        in: query
+        name: bot
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: unknown_bot
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отключить бота
+      tags:
+      - telegram
+  /me/telegram/link-code:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Одноразовый код внутри ссылки живёт 15 минут. Прежние
+        неиспользованные коды этого человека гасятся: две живые
+        ссылки на один аккаунт — это две двери, а нужна одна.
+      parameters:
+      - description: бот
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_telegram.linkCodeReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.LinkStart'
+        "400":
+          description: unknown_bot — бот не настроен
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Ссылка подключения бота
+      tags:
+      - telegram
   /me/uploads/image:
     post:
       consumes:
