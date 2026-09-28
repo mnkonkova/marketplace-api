@@ -412,6 +412,85 @@ func TestBrandDisabledBlocksRefuseExplicitly(t *testing.T) {
 	}
 }
 
+// Одна дата ставится ручкой, а не только пачкой.
+//
+// Живой месяц правят по одной клетке: перенесли съёмку, добавили ролик.
+// Ручка отказывала на пустом creator_user_id ещё до чтения вида
+// проекта — «Нужны creator_user_id и due_date», 400, — хотя репозиторий
+// за ней умел вставлять выкладку без владельца с самого начала. Со
+// стороны это выглядело так, будто проект без креаторов заводится, но
+// не ведётся: пачка есть, правки нет.
+//
+// Проверяем обе стороны развилки: у проекта без креаторов пустое поле —
+// норма, у проекта с креаторами оно означает «никого не назвали», и
+// отказ должен объяснять именно это, а не «тело не разобрали».
+func TestBrandAddPublicationWithoutCreator(t *testing.T) {
+	pool := integration.Pool(t)
+	projectID, cleanup := setupBrandProject(t, pool)
+	defer cleanup()
+
+	h := integration.NewAPIHarness(t, pool)
+	manager, cleanupManager := brandManager(t, h, projectID)
+	defer cleanupManager()
+	token := h.Token(t, manager)
+
+	path := "/api/v1/manager/projects/" + projectID.String() + "/publications"
+	day := pubDay(3).Format("2006-01-02")
+
+	// Пустая строка, а не отсутствие ключа: ровно это шлёт форма, и
+	// разобрать её в uuid.UUID нельзя — на этом запрос и падал.
+	code, body := h.Do(t, http.MethodPost, path, token,
+		map[string]any{"creator_user_id": "", "due_date": day})
+	if code != http.StatusCreated {
+		t.Fatalf("выкладка без владельца: код %d, тело %v — ожидали 201", code, body)
+	}
+	if owner, ok := body["creator_user_id"]; ok && owner != nil {
+		t.Errorf("у выкладки такого проекта появился владелец: %v", owner)
+	}
+
+	// Ключа нет вовсе — то же самое.
+	code, body = h.Do(t, http.MethodPost, path, token,
+		map[string]any{"due_date": pubDay(4).Format("2006-01-02")})
+	if code != http.StatusCreated {
+		t.Errorf("выкладка без ключа creator_user_id: код %d, тело %v", code, body)
+	}
+
+	// А мусор в поле остаётся ошибкой формата — и называется ею.
+	code, body = h.Do(t, http.MethodPost, path, token,
+		map[string]any{"creator_user_id": "не-uuid", "due_date": day})
+	if code != http.StatusBadRequest || body["error"] != "bad_id" {
+		t.Errorf("мусор в creator_user_id: код %d, ошибка %v — ожидали 400 bad_id", code, body["error"])
+	}
+}
+
+// У проекта С креаторами пустое поле — это «никого не назвали», и
+// отказ обязан говорить про состав, а не про формат тела.
+func TestCreatorsProjectAddPublicationNeedsCreator(t *testing.T) {
+	pool := integration.Pool(t)
+	_, _, projectID, cleanup := setupPipelineAndProject(t, pool)
+	defer cleanup()
+	// Посев заводит проект по воронке, а выкладки бывают только у двух
+	// видов: без этого ручка отвечала бы «у этого вида выкладок нет», и
+	// тест проверял бы не ту развилку.
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE projects SET kind = 'creators_turnkey' WHERE id = $1`, projectID); err != nil {
+		t.Fatalf("set project kind: %v", err)
+	}
+
+	h := integration.NewAPIHarness(t, pool)
+	manager, cleanupManager := brandManager(t, h, projectID)
+	defer cleanupManager()
+	token := h.Token(t, manager)
+
+	code, body := h.Do(t, http.MethodPost,
+		"/api/v1/manager/projects/"+projectID.String()+"/publications", token,
+		map[string]any{"creator_user_id": "", "due_date": pubDay(3).Format("2006-01-02")})
+	if code != http.StatusConflict || body["error"] != "creator_not_in_project" {
+		t.Errorf("выкладка без креатора в проекте с креаторами: код %d, ошибка %v — ожидали 409 creator_not_in_project",
+			code, body["error"])
+	}
+}
+
 // Матрица возможностей и ручки говорят одно и то же.
 //
 // Тест на согласованность, а не на значения: если FeaturesOf скажет

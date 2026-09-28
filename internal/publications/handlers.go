@@ -463,14 +463,21 @@ func (h *Handler) ManagerClosePublication(w http.ResponseWriter, r *http.Request
 }
 
 type addPubReq struct {
-	CreatorUserID uuid.UUID `json:"creator_user_id"`
-	DueDate       string    `json:"due_date"`
-	DraftLeadDays int       `json:"draft_lead_days"`
+	// CreatorUserID — кому поручена выкладка.
+	//
+	// Строкой, а не uuid.UUID: у проекта без креаторов владельца нет,
+	// и поле приходит пустым. uuid.UUID пустую строку разобрать не
+	// умеет — запрос падал на декодере с «bad_json» ещё до того, как
+	// кто-нибудь посмотрел на вид проекта.
+	CreatorUserID string `json:"creator_user_id"`
+	DueDate       string `json:"due_date"`
+	DraftLeadDays int    `json:"draft_lead_days"`
 }
 
 // ManagerAddPublication godoc
 // @Summary  Поставить одну выкладку на дату (менеджер)
 // @Description Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше состав и даты меняются поштучно.
+// @Description У проекта без креаторов creator_user_id не передаётся: выкладка принадлежит проекту.
 // @Tags     manager-publications
 // @Accept   json
 // @Produce  json
@@ -481,7 +488,7 @@ type addPubReq struct {
 // @Failure      400  {object}  errorResponse  "bad_json; bad_date — дата не в формате ГГГГ-ММ-ДД; invalid_input — дата в прошлом или дальше чем на год"
 // @Failure      401  {object}  errorResponse  "no_user"
 // @Failure      404  {object}  errorResponse  "not_found — проект не найден или чужой"
-// @Failure      409  {object}  errorResponse  "wrong_project_kind; creator_not_in_project; day_taken — на этот день у креатора уже есть выкладка; period_locked"
+// @Failure      409  {object}  errorResponse  "wrong_project_kind; creator_not_in_project — креатора нет в составе (в том числе когда его не назвали вовсе); wrong_project_kind — креатор назван у проекта без состава; day_taken — на этот день уже есть выкладка; period_locked"
 // @Router   /manager/projects/{id}/publications [post]
 func (h *Handler) ManagerAddPublication(w http.ResponseWriter, r *http.Request) {
 	projectID, uid, ok := h.managerProject(w, r)
@@ -489,9 +496,26 @@ func (h *Handler) ManagerAddPublication(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req addPubReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CreatorUserID == uuid.Nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Нужны creator_user_id и due_date.")
 		return
+	}
+	// Пустой creator_user_id здесь НЕ ошибка формата: у проекта без
+	// креаторов выкладка принадлежит проекту, и владельца у неё нет
+	// вовсе. Кто прав, а кто нет, решает репозиторий — он один читает
+	// вид проекта: там «пусто» у проекта с составом станет
+	// creator_not_in_project, а названный человек у проекта без
+	// состава — wrong_project_kind. Отказывать раньше него значило бы
+	// закрыть простановку дат тому виду проекта, ради которого её и
+	// научили обходиться без людей.
+	var creator uuid.UUID
+	if s := strings.TrimSpace(req.CreatorUserID); s != "" {
+		parsed, perr := uuid.Parse(s)
+		if perr != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "creator_user_id не похож на идентификатор.")
+			return
+		}
+		creator = parsed
 	}
 	day, err := time.Parse(dateLayout, req.DueDate)
 	if err != nil {
@@ -500,7 +524,7 @@ func (h *Handler) ManagerAddPublication(w http.ResponseWriter, r *http.Request) 
 	}
 	got, err := h.svc.ManagerAddPublication(r.Context(), AddPublicationInput{
 		ProjectID:     projectID,
-		CreatorUserID: req.CreatorUserID,
+		CreatorUserID: creator,
 		Day:           day,
 		DraftLeadDays: req.DraftLeadDays,
 		ManagerUserID: uid,

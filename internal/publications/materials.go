@@ -41,6 +41,14 @@ const (
 	MaterialContract = "contract"
 )
 
+// DocumentKinds — виды, которые попадают в «Мои документы» креатора.
+//
+// Договор и только он. Вид «документ» (doc) — материал для съёмки:
+// бренд-гайд, сценарий, обучение. Список, а не одно значение: вид у
+// договора не последний, и когда появится ТЗ или акт, правка будет
+// здесь, а не в запросе и четырёх шаблонах.
+var DocumentKinds = []string{MaterialContract}
+
 const (
 	materialTitleMax = 200
 	materialURLMax   = 2000
@@ -243,4 +251,67 @@ func (s *Service) AddMaterial(ctx context.Context, in AddMaterialInput) (Materia
 // DeleteMaterial — убрать материал из проекта.
 func (s *Service) DeleteMaterial(ctx context.Context, projectID, materialID uuid.UUID) error {
 	return s.repo.DeleteMaterial(ctx, projectID, materialID)
+}
+
+// ---- мои документы (креатор) ----
+
+// CreatorDocument — документ креатора: тот же материал проекта, но
+// названный проектом, в котором он лежит.
+//
+// «Мои документы» — это не список материалов. Материалы лежат в
+// проекте и отвечают на вопрос «как снимать»: бренд-гайд, референсы,
+// обучение. Документ отвечает на другой вопрос — «на каких условиях я
+// работаю», — и человек ищет его не тогда, когда снимает, а когда
+// подписывает, выставляет счёт или спорит. Искать его по проектам
+// значит помнить, в каком проекте он лежал.
+type CreatorDocument struct {
+	Material
+	ProjectTitle string `json:"project_title"`
+}
+
+// CreatorDocuments — договоры и документы креатора по всем его
+// действующим проектам.
+//
+// Что сюда попадает: пока только договор. Вид «документ» (doc) — нет,
+// хотя по названию просится: им кладут бренд-гайды, сценарии и
+// обучение, то есть материалы для съёмки, и они утопили бы
+// единственное, ради чего этот список существует. Список видов, а не
+// одно значение, — потому что вид у договора не последний.
+//
+// Порядок — по проектам, свежие сверху: человек ищет договор того
+// проекта, который сейчас ведёт.
+func (r *Repo) CreatorDocuments(ctx context.Context, creatorID uuid.UUID) ([]CreatorDocument, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT m.id, m.project_id, m.kind, m.title, m.url, m.audience, m.sort_order,
+       m.created_by, m.created_at, pr.title
+FROM project_materials m
+JOIN project_creators pc
+  ON pc.project_id = m.project_id
+ AND pc.creator_user_id = $1
+ AND pc.removed_at IS NULL
+JOIN projects pr ON pr.id = m.project_id
+WHERE m.audience = $2
+  AND m.delivery_id IS NULL
+  AND m.kind = ANY($3)
+ORDER BY (m.kind <> 'contract'), pc.added_at DESC, m.sort_order, m.created_at`,
+		creatorID, AudienceCreators, DocumentKinds)
+	if err != nil {
+		return nil, fmt.Errorf("list creator documents: %w", err)
+	}
+	defer rows.Close()
+	out := make([]CreatorDocument, 0)
+	for rows.Next() {
+		var d CreatorDocument
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Kind, &d.Title, &d.URL,
+			&d.Audience, &d.SortOrder, &d.CreatedBy, &d.CreatedAt, &d.ProjectTitle); err != nil {
+			return nil, fmt.Errorf("scan creator document: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// CreatorDocuments — мои документы по всем проектам.
+func (s *Service) CreatorDocuments(ctx context.Context, creatorID uuid.UUID) ([]CreatorDocument, error) {
+	return s.repo.CreatorDocuments(ctx, creatorID)
 }
