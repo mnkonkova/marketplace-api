@@ -491,6 +491,102 @@ func TestCreatorsProjectAddPublicationNeedsCreator(t *testing.T) {
 	}
 }
 
+// Цена просмотра у ЗАКАЗЧИКА такого проекта.
+//
+// Считается она у него из начислений: счёт складывается из работы
+// людей. Здесь людей нет, начислений не бывает, и деньги в сводке —
+// честный ноль; но проект стоит столько, сколько назвал менеджер, и
+// цена просмотра у него есть. До этой правки заказчику на её месте
+// стоял прочерк и в карточке проекта, и колонкой в списке — то есть
+// главный вопрос к такому проекту оставался без ответа именно у того,
+// кто его задаёт. Менеджер при этом ту же цифру у себя видел
+// (TestBrandManagerCostGivesCostPerView).
+func TestBrandClientOverviewHasCostPerView(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, cleanup := setupBrandProject(t, pool)
+	defer cleanup()
+
+	h := integration.NewAPIHarness(t, pool)
+	manager, cleanupManager := brandManager(t, h, projectID)
+	defer cleanupManager()
+
+	// Свой заказчик: сводка строится по его проектам, и чужой сюда не
+	// попадёт. Тестовые проекты сводка не показывает вовсе — снимаем
+	// отметку, если посев её поставил.
+	client, cleanupClient := h.NewUser(t, userOpts{Kind: "client"})
+	defer cleanupClient()
+	if _, err := pool.Exec(ctx,
+		`UPDATE projects SET client_user_id = $1, is_test = FALSE WHERE id = $2`,
+		client, projectID); err != nil {
+		t.Fatalf("заказчик проекта: %v", err)
+	}
+
+	// Вышедший ролик с просмотрами: делить без них не на что.
+	svc := publications.NewService(publications.NewRepo(pool))
+	repo := publications.NewRepo(pool)
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID: projectID,
+		Dates:     []time.Time{pubDay(0)},
+		CreatedBy: manager,
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	pub, err := svc.ManagerEditLink(ctx, publications.ManagerEditLinkInput{
+		PublicationID: res.Items[0].ID,
+		ManagerUserID: manager,
+		Platform:      "tiktok",
+		URL:           "https://www.tiktok.com/@brand/video/1001",
+	})
+	if err != nil {
+		t.Fatalf("ManagerEditLink: %v", err)
+	}
+	views, likes, comments := int64(200_000), int64(1000), int64(100)
+	if err := repo.SaveStats(ctx, publications.LinkToCollect{
+		LinkID:        pub.Links[0].ID,
+		PublicationID: pub.ID,
+		ProjectID:     projectID,
+		Platform:      pub.Links[0].Platform,
+		URL:           pub.Links[0].URLCanonical,
+		SubmittedAt:   pub.Links[0].SubmittedAt,
+	}, &views, &likes, &comments, nil, nil, time.Now().UTC()); err != nil {
+		t.Fatalf("SaveStats: %v", err)
+	}
+
+	bsvc := billing.NewService(billing.NewRepo(pool))
+	const cost = int64(5_000_000) // 50 000 ₽ за период
+	if _, err := bsvc.SaveTerms(ctx, billing.Terms{
+		ProjectID: projectID, ProjectCost: cost,
+	}, manager); err != nil {
+		t.Fatalf("стоимость проекта: %v", err)
+	}
+
+	out, err := bsvc.ClientOverview(ctx, client, "month", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ClientOverview: %v", err)
+	}
+	if len(out.Projects) != 1 {
+		t.Fatalf("проектов в сводке %d, ожидали один", len(out.Projects))
+	}
+	// 5 000 000 копеек на 200 000 просмотров — 25 000 копеек за тысячу.
+	// Ровно столько же показывает отчёт менеджеру.
+	row := out.Projects[0]
+	if row.CostPer1000 == nil || *row.CostPer1000 != 25_000 {
+		t.Errorf("цена тысячи по проекту %v, ожидалось 25000 копеек", row.CostPer1000)
+	}
+	if out.CostPer1000 == nil || *out.CostPer1000 != 25_000 {
+		t.Errorf("цена тысячи по всем проектам %v, ожидалось 25000 копеек", out.CostPer1000)
+	}
+	// Деньги при этом остаются нулём, и это не противоречие: начислений
+	// нет, а счёт заказчику такому проекту пока не выставляется вовсе
+	// (открытый вопрос 2 в PLAN_PROJECT_NO_CREW.md). Цена просмотра
+	// отвечает на другой вопрос — во что обходится просмотр.
+	if out.Money.Total != 0 {
+		t.Errorf("деньги в сводке %d, ожидали ноль: начислений у такого проекта нет", out.Money.Total)
+	}
+}
+
 // Матрица возможностей и ручки говорят одно и то же.
 //
 // Тест на согласованность, а не на значения: если FeaturesOf скажет

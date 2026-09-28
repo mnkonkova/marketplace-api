@@ -11,6 +11,7 @@ import (
 
 	"marketpclce/internal/auth"
 	"marketpclce/internal/httpx"
+	"marketpclce/internal/projects"
 	"marketpclce/internal/publications"
 )
 
@@ -314,6 +315,10 @@ func costPer1000(total, views int64) *int64 {
 type overviewProject struct {
 	ID    uuid.UUID
 	Title string
+	// Kind — вид проекта. Нужен ровно ради цены просмотра: у проекта
+	// без креаторов она считается не из начислений (их не бывает), а
+	// из суммы, которую назвал менеджер.
+	Kind string
 	// Done/CompletedAt — проект закончен. Берём из projects.status, а не
 	// выводим из периодов: закрытый период и законченный проект — разные
 	// вещи, и второе знает только сам проект.
@@ -328,7 +333,7 @@ func (r *Repo) ClientProjects(ctx context.Context, clientID uuid.UUID, limit int
 		limit = overviewProjectsLimit
 	}
 	rows, err := r.db.Query(ctx, `
-SELECT id, title, status = 'done', completed_at
+SELECT id, title, kind::text, status = 'done', completed_at
 FROM projects
 WHERE client_user_id = $1 AND is_test = FALSE AND status <> 'cancelled'
 ORDER BY created_at
@@ -340,10 +345,41 @@ LIMIT $2`, clientID, limit)
 	out := make([]overviewProject, 0, 8)
 	for rows.Next() {
 		var p overviewProject
-		if err := rows.Scan(&p.ID, &p.Title, &p.Done, &p.CompletedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Title, &p.Kind, &p.Done, &p.CompletedAt); err != nil {
 			return nil, fmt.Errorf("scan client project: %w", err)
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// projectCosts — названные менеджером стоимости проектов заказчика.
+//
+// Одним запросом на всю сводку, а не по запросу на проект: проектов у
+// заказчика бывает восемь, и ради одного числа ходить в базу восемь
+// раз незачем. Нулевые и неназванные не возвращаем вовсе — «сумму не
+// назвали» и «проект бесплатный» здесь разные утверждения, и пустая
+// карта говорит первое.
+func (r *Repo) projectCosts(ctx context.Context, clientID uuid.UUID) (map[uuid.UUID]int64, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT b.project_id, b.project_cost
+FROM project_billing b
+JOIN projects pr ON pr.id = b.project_id
+WHERE pr.client_user_id = $1 AND b.project_cost > 0`, clientID)
+	if err != nil {
+		return nil, fmt.Errorf("project costs: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]int64, 4)
+	for rows.Next() {
+		var (
+			id   uuid.UUID
+			cost int64
+		)
+		if err := rows.Scan(&id, &cost); err != nil {
+			return nil, fmt.Errorf("scan project cost: %w", err)
+		}
+		out[id] = cost
 	}
 	return out, rows.Err()
 }
@@ -580,12 +616,12 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 		out.Views.ByPlatform[p] = 0
 	}
 
-	projects, err := s.repo.ClientProjects(ctx, clientID, overviewProjectsLimit)
+	clientProjects, err := s.repo.ClientProjects(ctx, clientID, overviewProjectsLimit)
 	if err != nil {
 		return out, err
 	}
-	out.ProjectsTotal = len(projects)
-	if len(projects) == 0 {
+	out.ProjectsTotal = len(clientProjects)
+	if len(clientProjects) == 0 {
 		// Проектов нет — но окно, пять площадок и признак «сравнивать не
 		// с чем» отдать всё равно надо: экран рисуется по тем же ключам.
 		return out, s.fillDashboard(ctx, &out, clientID, w)
@@ -599,6 +635,12 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 	if err != nil {
 		return out, err
 	}
+	// Стоимости проектов, названные менеджером. Нужны только там, где
+	// начислений не бывает (см. costBasis ниже).
+	costByProject, err := s.repo.projectCosts(ctx, clientID)
+	if err != nil {
+		return out, err
+	}
 	out.SnapshotApprox = approx
 	if out.Money.Paid, err = s.repo.paidByClient(ctx, clientID); err != nil {
 		return out, err
@@ -608,7 +650,11 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 	}
 
 	var ladder tariffLadder
-	for _, pr := range projects {
+	// Из чего считается цена просмотра по всем проектам разом. Не
+	// равно out.Money.Total: у проекта без креаторов деньги в сводке
+	// нулевые (начислений нет), а стоимость — есть.
+	var costBasisTotal int64
+	for _, pr := range clientProjects {
 		row := OverviewProject{
 			ProjectID: pr.ID,
 			Title:     pr.Title,
@@ -694,7 +740,21 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 			row.CompletedAt = pr.CompletedAt
 		}
 
-		row.CostPer1000 = costPer1000(row.Total, row.Views)
+		// Цена просмотра — из того, во что проект обошёлся заказчику.
+		//
+		// У проекта с креаторами это сумма начислений: счёт складывается
+		// из работы людей. У проекта без креаторов людей нет, начислений
+		// не бывает, и row.Total — честный ноль; но проект при этом
+		// стоит денег, и сколько именно — назвал менеджер одним числом.
+		// По нему считает СПВ его карточка (publications.fillCost), и
+		// заказчик обязан видеть ТУ ЖЕ цену: два разных ответа на
+		// главный к такому проекту вопрос хуже, чем ни одного.
+		costBasis := row.Total
+		if projects.FeaturesOf(projects.ProjectKind(pr.Kind)).HasManualCost {
+			costBasis = costByProject[pr.ID]
+		}
+		costBasisTotal += costBasis
+		row.CostPer1000 = costPer1000(costBasis, row.Views)
 		out.Projects = append(out.Projects, row)
 	}
 
@@ -702,7 +762,11 @@ func (s *Service) ClientOverview(ctx context.Context, clientID uuid.UUID, rng st
 	// Стоимость тысячи — из фактических сумм и фактических просмотров.
 	// Средняя ставка по тарифам соврала бы: у проектов разные версии
 	// условий, и цена тысячи у них разная.
-	out.CostPer1000 = costPer1000(out.Money.Total, out.Views.Total)
+	//
+	// Складываем ту же основу, что и по строкам: иначе у заказчика, у
+	// которого есть проект без креаторов, общая цена просмотра не
+	// сойдётся с колонкой рядом.
+	out.CostPer1000 = costPer1000(costBasisTotal, out.Views.Total)
 	out.Tariff = ladder.result(out.Money.Total, out.Views.Total)
 
 	if err := s.fillDashboard(ctx, &out, clientID, w); err != nil {
