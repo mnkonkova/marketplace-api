@@ -1638,12 +1638,12 @@ func (h *Handler) ClientReportCSV(w http.ResponseWriter, r *http.Request) {
 
 // CreatorReport godoc
 // @Summary  Отчёт по своим роликам (креатор)
-// @Description Только свои ролики и без разбивки по площадкам: by_platform пуст, в videos_table — ссылки и состояние сбора без цифр. Сумма ролика — в самой выкладке.
+// @Description Только свои ролики: чужие цифры не попадают в выдачу.
 // @Tags     creator-publications
 // @Produce  json
 // @Security BearerAuth
 // @Param    id path string true "project id"
-// @Success  200 {object} CreatorReport
+// @Success  200 {object} Report
 // @Failure      400  {object}  errorResponse  "bad_id"
 // @Failure      401  {object}  errorResponse  "no_user"
 // @Failure      404  {object}  errorResponse  "not_found — вы не участник этого проекта"
@@ -1674,8 +1674,7 @@ func (h *Handler) CreatorReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	// Без разбивки по площадкам: её видит только менеджер (ForCreator).
-	httpx.WriteJSON(w, http.StatusOK, ForCreator(rep))
+	httpx.WriteJSON(w, http.StatusOK, rep)
 }
 
 // ---- взгляд клиента ----

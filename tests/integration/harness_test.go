@@ -552,3 +552,46 @@ func TestHarnessChecklistRequiresMembership(t *testing.T) {
 		t.Errorf("посторонний получил чеклист: код %d, тело %v", code, body)
 	}
 }
+
+// Креатор видит разбивку просмотров по площадкам — но только своих
+// роликов. Чужие цифры в его отчёт не попадают: креаторов в проекте
+// бывает несколько, и чужая статистика — не его дело.
+func TestHarnessCreatorReportOwnPlatforms(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+	if len(creators) < 2 {
+		t.Skip("нужны двое креаторов")
+	}
+	seedStats(t, projectID, creators[0], []string{
+		"https://www.tiktok.com/@u/video/1",
+		"https://www.youtube.com/shorts/abc",
+	}, map[int]int64{0: 1234})
+	seedStats(t, projectID, creators[1], []string{
+		"https://www.tiktok.com/@other/video/2",
+	}, map[int]int64{0: 9999})
+
+	code, cr := h.Do(t, http.MethodGet,
+		"/api/v1/me/creator/projects/"+projectID.String()+"/report", h.Token(t, creators[0]), nil)
+	if code != http.StatusOK {
+		t.Fatalf("отчёт креатора: код %d, тело %v", code, cr)
+	}
+	if plats, _ := cr["by_platform"].([]any); len(plats) == 0 {
+		t.Errorf("креатору не пришёл разрез по площадкам: %v", cr["by_platform"])
+	}
+	rows, _ := cr["videos_table"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("у креатора строк ссылок %d, ожидалось 2 — только его собственные", len(rows))
+	}
+	for _, r := range rows {
+		row := r.(map[string]any)
+		if _, ok := row["views"]; !ok {
+			t.Errorf("в строке ссылки креатора нет просмотров: %v", row)
+		}
+		if row["url"] == "https://www.tiktok.com/@other/video/2" {
+			t.Errorf("креатору пришёл чужой ролик: %v", row)
+		}
+	}
+}
