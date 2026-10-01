@@ -34,6 +34,14 @@ type Person struct {
 	AccountLinks map[string]string `json:"account_links,omitempty"`
 	// AddedAt — когда включён в состав проекта.
 	AddedAt time.Time `json:"added_at"`
+	// AvatarURL — портрет из профиля специалиста. Пусто у тех, кто его
+	// не ставил: буквы имени нарисует фронт.
+	//
+	// Состав проекта читают глазами и по лицам — в плане, в ссылках, в
+	// проверке ролика один и тот же человек встречается трижды. Пока
+	// портрета не было, везде стояли буквы, и строки не связывались в
+	// одного человека.
+	AvatarURL string `json:"avatar_url,omitempty"`
 	// Median — сколько просмотров этот человек обычно даёт за ролик.
 	// nil, пока измеренных роликов слишком мало: см. CreatorMedians.
 	Median *CreatorMedian `json:"median,omitempty"`
@@ -76,7 +84,8 @@ WHERE u.id = ANY($1)`, ids)
 // Пришёл на смену ListCreators, который отдавал голые uuid.
 func (r *Repo) ListProjectCreators(ctx context.Context, projectID uuid.UUID) ([]Person, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT pc.creator_user_id, `+displayNameExpr+`, sp.social_links, pc.added_at
+SELECT pc.creator_user_id, `+displayNameExpr+`, sp.social_links, pc.added_at,
+       COALESCE(sp.avatar_url, '')
 FROM project_creators pc
 JOIN users u ON u.id = pc.creator_user_id
 LEFT JOIN specialist_profiles sp ON sp.user_id = pc.creator_user_id
@@ -91,7 +100,7 @@ ORDER BY 2`, projectID)
 	for rows.Next() {
 		var p Person
 		var links []byte
-		if err := rows.Scan(&p.UserID, &p.Name, &links, &p.AddedAt); err != nil {
+		if err := rows.Scan(&p.UserID, &p.Name, &links, &p.AddedAt, &p.AvatarURL); err != nil {
 			return nil, fmt.Errorf("scan project creator: %w", err)
 		}
 		p.AccountLinks = platformLinks(links)
