@@ -321,3 +321,75 @@ func (h *Handler) BotBlocked(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusOK, link)
 }
+
+// ---- очередь сообщений ----
+//
+// Доставка перевёрнута: не мы стучимся в сервис бота, а он забирает
+// готовые сообщения сам. Причина — в queue.go; коротко: наша ВДС не
+// обязана уметь дозваниваться до чужого облака, а обратное
+// направление работает всегда.
+
+type botMessagesResp struct {
+	Items []Message `json:"items"`
+}
+
+// BotMessages godoc
+// @Summary  Забрать сообщения для отправки (бот)
+// @Description Выдаёт самые старые неотправленные и берёт их в аренду:
+// @Description пока бот не подтвердил доставку, сообщение остаётся в очереди
+// @Description и через минуту достанется следующему опросу. Потерять
+// @Description сообщение из-за упавшего контейнера нельзя; отправить дважды —
+// @Description можно пережить, на стороне бота стоит дедуп по event_id.
+// @Tags     bot
+// @Produce  json
+// @Param    limit query int false "сколько отдать, по умолчанию и максимум — 20"
+// @Success  200 {object} botMessagesResp
+// @Failure  401 {object} errorResponse "bad_secret"
+// @Router   /bot/messages [get]
+func (h *Handler) BotMessages(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.svc.LeaseMessages(r.Context(), limit)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, botMessagesResp{Items: items})
+}
+
+type botAckReq struct {
+	// Delivered — ушло в телеграм.
+	Delivered []int64 `json:"delivered"`
+	// Failed — не ушло и почему. Такие возвращаются в очередь: причина
+	// пишется в строку, следующий опрос возьмёт их снова.
+	Failed []struct {
+		ID    int64  `json:"id"`
+		Error string `json:"error"`
+	} `json:"failed"`
+}
+
+// BotMessagesAck godoc
+// @Summary  Подтвердить доставку (бот)
+// @Tags     bot
+// @Accept   json
+// @Produce  json
+// @Param    body body botAckReq true "что доставлено, что нет"
+// @Success  204
+// @Failure  400 {object} errorResponse "bad_json"
+// @Failure  401 {object} errorResponse "bad_secret"
+// @Router   /bot/messages/ack [post]
+func (h *Handler) BotMessagesAck(w http.ResponseWriter, r *http.Request) {
+	var in botAckReq
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Не удалось разобрать тело запроса.")
+		return
+	}
+	failed := make(map[int64]string, len(in.Failed))
+	for _, f := range in.Failed {
+		failed[f.ID] = f.Error
+	}
+	if err := h.svc.AckMessages(r.Context(), in.Delivered, failed); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

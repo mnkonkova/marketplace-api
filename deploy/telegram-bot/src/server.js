@@ -253,7 +253,14 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    // Уведомления от API.
+    // Уведомления от API — СТАРЫЙ путь, оставлен как запасной.
+    //
+    // Основной теперь обратный: мы сами опрашиваем очередь (см.
+    // pollOnce ниже). Причина — API живёт на российской ВДС, и
+    // дозвониться оттуда сюда получается не всегда: первого октября
+    // 2026 маршрут до Railway оборвался внутри сети хостера, и
+    // уведомление потерялось. Ручку не убираем: она рабочая, стоит
+    // дёшево и пригодится, если однажды направление станет надёжным.
     if (req.method === 'POST' && req.url === '/notify') {
       const raw = await readBody(req);
       if (config.notifyToken) {
@@ -295,7 +302,10 @@ const server = createServer(async (req, res) => {
 });
 
 if (!config.notifySecret) {
-  log('warn', 'BOT_WEBHOOK_SECRET is empty: подпись уведомлений не проверяется');
+  // Не тревога: основной путь — опрос очереди, он защищён общим
+  // секретом BOT_SHARED_SECRET. Подпись нужна только запасной ручке
+  // /notify, в которую сейчас никто не стучится.
+  log('info', 'BOT_WEBHOOK_SECRET пуст: запасная ручка /notify без подписи');
 }
 if (botNames.length === 0) {
   log('warn', 'ни один бот не настроен: TELEGRAM_*_BOT_TOKEN пусты');
@@ -307,4 +317,67 @@ if (!config.managers.chatID) {
       'Добавьте бота в группу и отправьте там /chatid',
   );
 }
+/**
+ * Опрос очереди: раз в несколько секунд спрашиваем API, есть ли что
+ * отправить, отправляем и квитируем.
+ *
+ * Почему так, а не «API присылает нам». API живёт на российской ВДС,
+ * мы — в чужом облаке, и дозвониться оттуда сюда выходит не всегда:
+ * первого октября 2026 уведомление потерялось именно так — сервис
+ * спал, холодный старт шёл дольше таймаута, все попытки оборвались, и
+ * событие уехало в мёртвую очередь. Обратное направление работает
+ * всегда: за привязкой и пользователями мы ходим туда сами, на этом
+ * живёт мини-апп.
+ *
+ * Выдача — аренда: пока мы не подтвердили доставку, сообщение
+ * остаётся в очереди и через минуту вернётся следующему опросу.
+ * Поэтому упавший контейнер ничего не теряет, а от повторной отправки
+ * защищает дедуп по event_id — тот же, что был у входящих.
+ */
+let polling = false;
+
+async function pollOnce() {
+  if (polling) return;
+  polling = true;
+  try {
+    const { status, data } = await api.pullMessages(20);
+    if (status !== 200) {
+      log('warn', 'pull failed', { status });
+      return;
+    }
+    const items = (data && data.items) || [];
+    if (!items.length) return;
+
+    const delivered = [];
+    const failed = [];
+    for (const m of items) {
+      try {
+        await onNotify(m.envelope || {});
+        delivered.push(m.id);
+      } catch (err) {
+        // Не доставили — возвращаем в очередь с причиной. Следующий
+        // опрос возьмёт его снова; телеграм падает редко, но когда
+        // падает, терять сообщение нельзя.
+        failed.push({ id: m.id, error: String(err?.message || err).slice(0, 400) });
+      }
+    }
+    await api.ackMessages(delivered, failed);
+    log('info', 'pulled', { got: items.length, sent: delivered.length, failed: failed.length });
+  } catch (err) {
+    // Сеть моргнула — следующий тик попробует снова. Шуметь в лог на
+    // каждую такую мелочь незачем: очередь никуда не денется.
+    log('warn', 'poll failed', { err: String(err?.message || err) });
+  } finally {
+    polling = false;
+  }
+}
+
 server.listen(config.port, () => log('info', 'listening', { port: config.port, bots: botNames }));
+
+if (config.api.baseURL && config.api.secret) {
+  const every = Math.max(1, config.api.pollSeconds) * 1000;
+  setInterval(pollOnce, every).unref?.();
+  log('info', 'очередь уведомлений: опрашиваем API', { every_ms: every });
+} else {
+  log('warn', 'API_BASE_URL/BOT_SHARED_SECRET пусты: очередь уведомлений не опрашивается');
+}

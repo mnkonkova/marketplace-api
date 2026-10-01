@@ -46,16 +46,6 @@ func dispatcherOrNil(d *notifications.WebhookDispatcher) eventroute.Dispatcher {
 	return d
 }
 
-// botSenderOrNil — та же беда с nil в интерфейсе, что у dispatcherOrNil:
-// nil-указатель, положенный в интерфейс, перестаёт быть nil, и проверка
-// «доставка выключена» его не поймает.
-func botSenderOrNil(d *notifications.WebhookDispatcher) eventroute.BotSender {
-	if d == nil {
-		return nil
-	}
-	return d
-}
-
 func main() {
 	_ = godotenv.Load()
 
@@ -174,33 +164,23 @@ func main() {
 		slog.Info("n8n webhook ready", "url", cfg.N8nWebhookURL)
 	}
 
-	// Телеграм-боты: личные уведомления креатору и заказчику. Тело
-	// подписываем — принимающая сторона наша, и отличить наш запрос от
-	// чужого она обязана. Пусто → доставка выключена: события
-	// квитируются, кабинет всё показывает и без бота.
-	botDispatcher := notifications.NewWebhookDispatcher(
-		cfg.BotWebhookURL, cfg.BotWebhookToken, cfg.AppBaseURL).
-		WithSignature(cfg.BotWebhookSecret).
-		// Тридцать секунд, а не десять: сервис бота живёт на Railway и
-		// засыпает без нагрузки. Холодный старт там дольше десяти
-		// секунд, и на коротком таймауте мы обрывали запрос ровно в тот
-		// момент, когда контейнер просыпался, — все десять попыток
-		// подряд, после чего событие уезжало в DLQ. Доставка личных
-		// уведомлений не спешит: лишние секунды ожидания здесь дешевле
-		// потерянного сообщения.
-		WithTimeout(30 * time.Second)
+	// Телеграм-боты: личные уведомления креатору и заказчику.
+	//
+	// Кладём в очередь, а не шлём запросом. Раньше воркер стучался в
+	// сервис бота по HTTP, и первого октября 2026 это стоило
+	// потерянного уведомления: сервис на Railway спал, холодный старт
+	// шёл дольше таймаута, все десять попыток оборвались на ожидании
+	// заголовков. Таймаут мы подняли, но причина глубже — доставка
+	// зависела от того, дозвонится ли российская ВДС до чужого облака,
+	// а это не в нашей власти.
+	//
+	// Обратное направление работает всегда: сервис бота и так ходит в
+	// наш API за привязкой и пользователями — на этом живёт мини-апп.
+	// Поэтому стрелку перевернули: мы пишем строку в bot_messages, бот
+	// опрашивает /bot/messages и квитирует. См. telegram/queue.go.
+	botQueue := telegram.NewQueue(pool)
 	telegramSvc := telegram.NewService(telegram.NewRepo(pool))
-	switch {
-	case botDispatcher == nil:
-		slog.Info("telegram bot delivery disabled (BOT_WEBHOOK_URL empty) — " +
-			"личные уведомления квитируются как no-op")
-	case cfg.BotWebhookSecret == "":
-		// Без подписи сервис бота не отличит нас от любого, кто знает
-		// адрес. Работать будет, но сказать об этом надо.
-		slog.Warn("telegram bot delivery without signature: BOT_WEBHOOK_SECRET не задан")
-	default:
-		slog.Info("telegram bot delivery ready", "url", cfg.BotWebhookURL)
-	}
+	slog.Info("telegram bot delivery: очередь bot_messages, забирает сам бот")
 
 	// support.message_received → отдельный workflow (дамп в Telegram).
 	n8nSupportDispatcher := notifications.NewWebhookDispatcher(cfg.N8nSupportWebhookURL, cfg.N8nWebhookToken, cfg.AppBaseURL)
@@ -263,7 +243,7 @@ func main() {
 			CRM:        dispatcherOrNil(n8nDispatcher),
 			Email:      dispatcherOrNil(n8nEmailDispatcher),
 			Support:    dispatcherOrNil(n8nSupportDispatcher),
-			Bot:        botSenderOrNil(botDispatcher),
+			Bot:        botQueue,
 			BotUsers:   telegramSvc,
 			AppBaseURL: cfg.AppBaseURL,
 			Search:     indexer,
@@ -301,6 +281,16 @@ func main() {
 
 	go runPublicationGaugeTicker(rootCtx,
 		publications.NewService(publications.NewRepo(pool)), 5*time.Minute, logger)
+
+	// Очередь сообщений для ботов: показания и уборка.
+	//
+	// Без собственного счётчика непрошедшее уведомление стало бы
+	// невидимым: раньше о нём говорил алерт про мёртвую очередь
+	// outbox, а теперь воркер кладёт строку в таблицу и считает дело
+	// сделанным. Тревожить надо по ВОЗРАСТУ самого старого
+	// неотправленного: очередь короткая, и по количеству застрявшую
+	// строку не разглядеть.
+	go runBotQueueTicker(rootCtx, telegram.NewRepo(pool), logger)
 
 	// Сбор статистики. Клиент nil, если адрес или ключ не заданы — тогда
 	// тикер не поднимается и в логе один внятный warn вместо ежечасных
@@ -976,6 +966,47 @@ func recalcAfterCollect(ctx context.Context, svc *billing.Service,
 		}
 		if _, err := svc.Recalculate(ctx, id, p); err != nil {
 			logger.Warn("recalc after collect: начисления", "project_id", id, "err", err)
+		}
+	}
+}
+
+// runBotQueueTicker — показания очереди ботов и уборка доставленного.
+//
+// Период минута: очередь живёт секундами, и реже снимать показания
+// значит узнавать о застрявшем сообщении с опозданием в несколько
+// минут. Уборка редкая — раз в час хватает с запасом.
+func runBotQueueTicker(ctx context.Context, repo *telegram.Repo, logger *slog.Logger) {
+	const metricsEvery = time.Minute
+	const cleanupEvery = time.Hour
+	// Доставленное держим две недели: столько живёт вопрос «а дошло
+	// ли», дальше ответ ищут в notification_log.
+	const keep = 14 * 24 * time.Hour
+
+	metrics := time.NewTicker(metricsEvery)
+	defer metrics.Stop()
+	cleanup := time.NewTicker(cleanupEvery)
+	defer cleanup.Stop()
+
+	if err := repo.RefreshMetrics(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Warn("bot queue metrics", "err", err)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-metrics.C:
+			if err := repo.RefreshMetrics(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Warn("bot queue metrics", "err", err)
+			}
+		case <-cleanup.C:
+			n, err := repo.CleanupDelivered(ctx, keep)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.Warn("bot queue cleanup", "err", err)
+				continue
+			}
+			if n > 0 {
+				logger.Info("bot queue cleanup", "removed", n)
+			}
 		}
 	}
 }

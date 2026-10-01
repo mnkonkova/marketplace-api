@@ -6279,6 +6279,30 @@ definitions:
     x-enum-varnames:
     - ClientStatusPublished
     - ClientStatusPlanned
+  internal_publications.CreatorDocument:
+    properties:
+      audience:
+        description: Audience — creators или client. Определяет, кто материал увидит.
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      project_id:
+        type: string
+      project_title:
+        type: string
+      sort_order:
+        type: integer
+      title:
+        type: string
+      url:
+        type: string
+    type: object
   internal_publications.CreatorMedian:
     properties:
       basis:
@@ -6994,6 +7018,13 @@ definitions:
   internal_publications.addPubReq:
     properties:
       creator_user_id:
+        description: |-
+          CreatorUserID — кому поручена выкладка.
+
+          Строкой, а не uuid.UUID: у проекта без креаторов владельца нет,
+          и поле приходит пустым. uuid.UUID пустую строку разобрать не
+          умеет — запрос падал на декодере с «bad_json» ещё до того, как
+          кто-нибудь посмотрел на вид проекта.
         type: string
       draft_lead_days:
         type: integer
@@ -7117,6 +7148,13 @@ definitions:
     properties:
       reason:
         type: string
+    type: object
+  internal_publications.creatorDocumentsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.CreatorDocument'
+        type: array
     type: object
   internal_publications.creatorProjectsResp:
     properties:
@@ -7828,6 +7866,21 @@ definitions:
           незачем: руками его никто не вводит.
         type: string
     type: object
+  internal_telegram.Message:
+    properties:
+      audience:
+        type: string
+      bot:
+        type: string
+      envelope:
+        items:
+          type: integer
+        type: array
+      event_type:
+        type: string
+      id:
+        type: integer
+    type: object
   internal_telegram.Status:
     properties:
       available:
@@ -7841,6 +7894,26 @@ definitions:
       links:
         items:
           $ref: '#/definitions/internal_telegram.Link'
+        type: array
+    type: object
+  internal_telegram.botAckReq:
+    properties:
+      delivered:
+        description: Delivered — ушло в телеграм.
+        items:
+          type: integer
+        type: array
+      failed:
+        description: |-
+          Failed — не ушло и почему. Такие возвращаются в очередь: причина
+          пишется в строку, следующий опрос возьмёт их снова.
+        items:
+          properties:
+            error:
+              type: string
+            id:
+              type: integer
+          type: object
         type: array
     type: object
   internal_telegram.botBlockedReq:
@@ -7862,6 +7935,13 @@ definitions:
         type: integer
       tg_username:
         type: string
+    type: object
+  internal_telegram.botMessagesResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_telegram.Message'
+        type: array
     type: object
   internal_telegram.claimReq:
     properties:
@@ -10499,6 +10579,60 @@ paths:
       summary: Привязать телеграм по коду (бот)
       tags:
       - bot
+  /bot/messages:
+    get:
+      description: |-
+        Выдаёт самые старые неотправленные и берёт их в аренду:
+        пока бот не подтвердил доставку, сообщение остаётся в очереди
+        и через минуту достанется следующему опросу. Потерять
+        сообщение из-за упавшего контейнера нельзя; отправить дважды —
+        можно пережить, на стороне бота стоит дедуп по event_id.
+      parameters:
+      - description: сколько отдать, по умолчанию и максимум — 20
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.botMessagesResp'
+        "401":
+          description: bad_secret
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      summary: Забрать сообщения для отправки (бот)
+      tags:
+      - bot
+  /bot/messages/ack:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: что доставлено, что нет
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_telegram.botAckReq'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: bad_json
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: bad_secret
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      summary: Подтвердить доставку (бот)
+      tags:
+      - bot
   /bot/users/by-telegram/{tg_user_id}:
     get:
       description: |-
@@ -12913,8 +13047,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: 'Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше
-        состав и даты меняются поштучно.'
+      description: |-
+        Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше состав и даты меняются поштучно.
+        У проекта без креаторов creator_user_id не передаётся: выкладка принадлежит проекту.
       parameters:
       - description: project id
         in: path
@@ -12948,8 +13083,10 @@ paths:
           schema:
             $ref: '#/definitions/internal_publications.errorResponse'
         "409":
-          description: wrong_project_kind; creator_not_in_project; day_taken — на
-            этот день у креатора уже есть выкладка; period_locked
+          description: wrong_project_kind; creator_not_in_project — креатора нет в
+            составе (в том числе когда его не назвали вовсе); wrong_project_kind —
+            креатор назван у проекта без состава; day_taken — на этот день уже есть
+            выкладка; period_locked
           schema:
             $ref: '#/definitions/internal_publications.errorResponse'
       security:
@@ -13841,6 +13978,31 @@ paths:
       summary: Отметить занятость в месяце (креатор)
       tags:
       - creator-orders
+  /me/creator/documents:
+    get:
+      description: |-
+        Договоры и документы по всем действующим проектам, в одном
+        списке и с названием проекта у каждого. Отдельно от
+        материалов проекта: договор ищут не тогда, когда снимают, а
+        когда подписывают или выставляют счёт, — и помнить, в каком
+        проекте он лежал, человек не обязан. Видео и ссылки сюда не
+        попадают: это материалы для работы, а не документы.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.creatorDocumentsResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои документы (креатор)
+      tags:
+      - creator-publications
   /me/creator/invitations:
     get:
       produces:

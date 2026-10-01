@@ -122,13 +122,14 @@ type Config struct {
 	// подпись становится ключом от аккаунта.
 	TelegramInitDataTTL time.Duration `env:"TELEGRAM_INITDATA_TTL" envDefault:"24h"`
 
-	// BotWebhookURL — куда мы шлём уведомления для ботов. Пусто →
-	// доставка выключена: события обрабатываются как no-op и не висят
-	// в outbox. BotWebhookToken — bearer, BotWebhookSecret — ключ для
-	// X-Signature (HMAC-SHA256 тела), как у «Бота Работ».
-	BotWebhookURL    string `env:"BOT_WEBHOOK_URL"`
-	BotWebhookToken  string `env:"BOT_WEBHOOK_TOKEN"`
-	BotWebhookSecret string `env:"BOT_WEBHOOK_SECRET"`
+	// Переменных BOT_WEBHOOK_* здесь больше нет, и это не упущение.
+	//
+	// Уведомления ботам мы не шлём: воркер кладёт их в bot_messages, а
+	// сервис бота забирает сам (GET /api/v1/bot/messages). Прежняя
+	// схема зависела от того, дозвонится ли наша ВДС до чужого
+	// облака, — первого октября 2026 маршрут до Railway оборвался
+	// внутри сети хостера, и уведомление потерялось. См.
+	// internal/telegram/queue.go.
 	// BotSharedSecret — общий секрет для входящих /api/v1/bot/*. Пусто
 	// — группа ручек не поднимается вовсе: открытая привязка чужого
 	// телеграма к чужому аккаунту хуже отсутствующей.

@@ -190,3 +190,13 @@ func (s *Service) Recipients(ctx context.Context, bot string, userIDs []uuid.UUI
 	day := s.now().UTC().Truncate(24 * time.Hour)
 	return s.repo.Recipients(ctx, bot, userIDs, day, s.dailyCap)
 }
+
+// LeaseMessages — выдать боту пачку неотправленных сообщений.
+func (s *Service) LeaseMessages(ctx context.Context, limit int) ([]Message, error) {
+	return s.repo.Lease(ctx, limit)
+}
+
+// AckMessages — что бот с пачкой сделал.
+func (s *Service) AckMessages(ctx context.Context, delivered []int64, failed map[int64]string) error {
+	return s.repo.Ack(ctx, delivered, failed)
+}

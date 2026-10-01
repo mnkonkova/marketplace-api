@@ -471,6 +471,12 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/bot/link", d.Telegram.BotLink)
 				r.Get("/bot/users/by-telegram/{tg_user_id}", d.Telegram.BotWhoIs)
 				r.Post("/bot/blocked", d.Telegram.BotBlocked)
+				// Очередь уведомлений: бот забирает сам и квитирует.
+				// Раньше мы слали ему HTTP-запрос — и зависели от
+				// того, дозвонится ли ВДС до чужого облака. См.
+				// internal/telegram/queue.go.
+				r.Get("/bot/messages", d.Telegram.BotMessages)
+				r.Post("/bot/messages/ack", d.Telegram.BotMessagesAck)
 			})
 		}
 

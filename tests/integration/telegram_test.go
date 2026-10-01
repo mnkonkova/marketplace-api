@@ -479,3 +479,187 @@ func TestTelegramLinkTicket(t *testing.T) {
 		t.Errorf("несуществующий билет: %v", err)
 	}
 }
+
+// ---- очередь сообщений ----
+//
+// Доставка перевёрнута: мы кладём сообщение в таблицу, бот забирает
+// сам и квитирует. Повод был не теоретический — первого октября 2026
+// уведомление потерялось потому, что маршрут с российской ВДС до
+// Railway обрывался у хостера, а воркер честно отстучал десять попыток
+// в пустоту. После переворота дозваниваться до облака не нужно вовсе:
+// работает направление, на котором и так живут привязка и мини-апп.
+
+// Конверт доходит до очереди, выдаётся один раз и закрывается ответом.
+func TestBotQueueDeliversOnce(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	queue := telegram.NewQueue(pool)
+	repo := telegram.NewRepo(pool)
+
+	// Чистим хвост от соседних прогонов: выдача идёт по всей таблице.
+	if _, err := pool.Exec(ctx, `DELETE FROM bot_messages`); err != nil {
+		t.Fatalf("очистка очереди: %v", err)
+	}
+
+	env := map[string]any{
+		"bot": telegram.BotCreator, "audience": "person",
+		"event_type": "project.publication_due_today", "event_id": "90001",
+		"recipients": []map[string]any{{"tg_chat_id": 42}},
+	}
+	if err := queue.SendEnvelope(ctx, env); err != nil {
+		t.Fatalf("SendEnvelope: %v", err)
+	}
+
+	got, err := repo.Lease(ctx, 10)
+	if err != nil {
+		t.Fatalf("Lease: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("выдано %d сообщений, ожидали одно", len(got))
+	}
+	if got[0].Bot != telegram.BotCreator || got[0].Audience != "person" {
+		t.Errorf("конверт адресован неверно: %+v", got[0])
+	}
+	// Конверт отдаётся ЦЕЛИКОМ: бот ничего не досчитывает, получателей
+	// считаем мы.
+	if !strings.Contains(string(got[0].Envelope), "tg_chat_id") {
+		t.Errorf("в конверте нет получателей: %s", got[0].Envelope)
+	}
+
+	// Второй опрос подряд ничего не даёт: сообщение в аренде.
+	again, err := repo.Lease(ctx, 10)
+	if err != nil {
+		t.Fatalf("повторный Lease: %v", err)
+	}
+	if len(again) != 0 {
+		t.Errorf("арендованное выдали второй раз: %d", len(again))
+	}
+
+	if err := repo.Ack(ctx, []int64{got[0].ID}, nil); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	after, err := repo.Lease(ctx, 10)
+	if err != nil {
+		t.Fatalf("Lease после ack: %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("доставленное вернулось в очередь: %d", len(after))
+	}
+}
+
+// Повтор outbox не плодит второе сообщение: ключ — id события.
+func TestBotQueueIsIdempotent(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `DELETE FROM bot_messages`); err != nil {
+		t.Fatalf("очистка очереди: %v", err)
+	}
+	queue := telegram.NewQueue(pool)
+
+	env := map[string]any{
+		"bot": telegram.BotClient, "audience": "person",
+		"event_type": "project.client_new_video", "event_id": "90002",
+	}
+	for i := 0; i < 3; i++ {
+		if err := queue.SendEnvelope(ctx, env); err != nil {
+			t.Fatalf("SendEnvelope %d: %v", i, err)
+		}
+	}
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM bot_messages WHERE event_id = 90002`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("строк по одному событию %d, ожидали одну", n)
+	}
+}
+
+// Не доставленное возвращается в очередь с причиной: упавший бот
+// ничего не теряет.
+func TestBotQueueReturnsFailed(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `DELETE FROM bot_messages`); err != nil {
+		t.Fatalf("очистка очереди: %v", err)
+	}
+	queue := telegram.NewQueue(pool)
+	repo := telegram.NewRepo(pool)
+
+	if err := queue.SendEnvelope(ctx, map[string]any{
+		"bot": telegram.BotCreator, "audience": "managers",
+		"event_type": "project.manager_digest", "event_id": "90003",
+	}); err != nil {
+		t.Fatalf("SendEnvelope: %v", err)
+	}
+	got, err := repo.Lease(ctx, 10)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Lease: %v, %d", err, len(got))
+	}
+	if err := repo.Ack(ctx, nil, map[int64]string{got[0].ID: "telegram 502"}); err != nil {
+		t.Fatalf("Ack failed: %v", err)
+	}
+
+	// Вернулось сразу, не дожидаясь срока аренды: мы знаем, что
+	// попытка была и не удалась.
+	back, err := repo.Lease(ctx, 10)
+	if err != nil {
+		t.Fatalf("Lease после отказа: %v", err)
+	}
+	if len(back) != 1 || back[0].ID != got[0].ID {
+		t.Fatalf("не доставленное не вернулось в очередь: %+v", back)
+	}
+	var attempts int
+	var lastErr *string
+	if err := pool.QueryRow(ctx,
+		`SELECT attempts, last_error FROM bot_messages WHERE id = $1`, got[0].ID).
+		Scan(&attempts, &lastErr); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("попыток %d, ожидали две: выдача считается попыткой", attempts)
+	}
+	if lastErr == nil || !strings.Contains(*lastErr, "502") {
+		t.Errorf("причина отказа не записана: %v", lastErr)
+	}
+}
+
+// Доставленное старше срока убирается: очередь — транспорт, а не журнал.
+func TestBotQueueCleanupKeepsPending(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `DELETE FROM bot_messages`); err != nil {
+		t.Fatalf("очистка очереди: %v", err)
+	}
+	queue := telegram.NewQueue(pool)
+	repo := telegram.NewRepo(pool)
+
+	for _, id := range []string{"90004", "90005"} {
+		if err := queue.SendEnvelope(ctx, map[string]any{
+			"bot": telegram.BotCreator, "audience": "person",
+			"event_type": "project.publication_accepted", "event_id": id,
+		}); err != nil {
+			t.Fatalf("SendEnvelope: %v", err)
+		}
+	}
+	// Первое «доставлено давно», второе ждёт отправки.
+	if _, err := pool.Exec(ctx, `
+UPDATE bot_messages SET delivered_at = now() - interval '30 days' WHERE event_id = 90004`); err != nil {
+		t.Fatalf("состарить: %v", err)
+	}
+
+	removed, err := repo.CleanupDelivered(ctx, 14*24*time.Hour)
+	if err != nil {
+		t.Fatalf("CleanupDelivered: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("убрано %d строк, ожидали одну", removed)
+	}
+	left, err := repo.Lease(ctx, 10)
+	if err != nil {
+		t.Fatalf("Lease: %v", err)
+	}
+	if len(left) != 1 {
+		t.Errorf("неотправленное не должно убираться уборкой: осталось %d", len(left))
+	}
+}

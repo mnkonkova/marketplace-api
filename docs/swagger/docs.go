@@ -3380,6 +3380,82 @@ const docTemplate = `{
                 }
             }
         },
+        "/bot/messages": {
+            "get": {
+                "description": "Выдаёт самые старые неотправленные и берёт их в аренду:\nпока бот не подтвердил доставку, сообщение остаётся в очереди\nи через минуту достанется следующему опросу. Потерять\nсообщение из-за упавшего контейнера нельзя; отправить дважды —\nможно пережить, на стороне бота стоит дедуп по event_id.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bot"
+                ],
+                "summary": "Забрать сообщения для отправки (бот)",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "сколько отдать, по умолчанию и максимум — 20",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.botMessagesResp"
+                        }
+                    },
+                    "401": {
+                        "description": "bad_secret",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bot/messages/ack": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bot"
+                ],
+                "summary": "Подтвердить доставку (бот)",
+                "parameters": [
+                    {
+                        "description": "что доставлено, что нет",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.botAckReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "bad_json",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "bad_secret",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bot/users/by-telegram/{tg_user_id}": {
             "get": {
                 "description": "Бот знает только tg_user_id. Без этой ручки он на каждое\nсообщение не понимает, с кем говорит.",
@@ -6952,7 +7028,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше состав и даты меняются поштучно.",
+                "description": "Правка плана по одной строке: пачкой ставят месяц вперёд, а дальше состав и даты меняются поштучно.\nУ проекта без креаторов creator_user_id не передаётся: выкладка принадлежит проекту.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7007,7 +7083,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "wrong_project_kind; creator_not_in_project; day_taken — на этот день у креатора уже есть выкладка; period_locked",
+                        "description": "wrong_project_kind; creator_not_in_project — креатора нет в составе (в том числе когда его не назвали вовсе); wrong_project_kind — креатор назван у проекта без состава; day_taken — на этот день уже есть выкладка; period_locked",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
                         }
@@ -8312,6 +8388,37 @@ const docTemplate = `{
                         "description": "no_user",
                         "schema": {
                             "$ref": "#/definitions/internal_orders.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/creator/documents": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Договоры и документы по всем действующим проектам, в одном\nсписке и с названием проекта у каждого. Отдельно от\nматериалов проекта: договор ищут не тогда, когда снимают, а\nкогда подписывают или выставляют счёт, — и помнить, в каком\nпроекте он лежал, человек не обязан. Видео и ссылки сюда не\nпопадают: это материалы для работы, а не документы.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Мои документы (креатор)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.creatorDocumentsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
                         }
                     }
                 }
@@ -21464,6 +21571,42 @@ const docTemplate = `{
                 "ClientStatusPlanned"
             ]
         },
+        "internal_publications.CreatorDocument": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — creators или client. Определяет, кто материал увидит.",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.CreatorMedian": {
             "type": "object",
             "properties": {
@@ -22318,6 +22461,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "creator_user_id": {
+                    "description": "CreatorUserID — кому поручена выкладка.\n\nСтрокой, а не uuid.UUID: у проекта без креаторов владельца нет,\nи поле приходит пустым. uuid.UUID пустую строку разобрать не\nумеет — запрос падал на декодере с «bad_json» ещё до того, как\nкто-нибудь посмотрел на вид проекта.",
                     "type": "string"
                 },
                 "draft_lead_days": {
@@ -22496,6 +22640,17 @@ const docTemplate = `{
             "properties": {
                 "reason": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_publications.creatorDocumentsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.CreatorDocument"
+                    }
                 }
             }
         },
@@ -23487,6 +23642,29 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_telegram.Message": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "type": "string"
+                },
+                "bot": {
+                    "type": "string"
+                },
+                "envelope": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                }
+            }
+        },
         "internal_telegram.Status": {
             "type": "object",
             "properties": {
@@ -23501,6 +23679,33 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_telegram.Link"
+                    }
+                }
+            }
+        },
+        "internal_telegram.botAckReq": {
+            "type": "object",
+            "properties": {
+                "delivered": {
+                    "description": "Delivered — ушло в телеграм.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "failed": {
+                    "description": "Failed — не ушло и почему. Такие возвращаются в очередь: причина\nпишется в строку, следующий опрос возьмёт их снова.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "error": {
+                                "type": "string"
+                            },
+                            "id": {
+                                "type": "integer"
+                            }
+                        }
                     }
                 }
             }
@@ -23533,6 +23738,17 @@ const docTemplate = `{
                 },
                 "tg_username": {
                     "type": "string"
+                }
+            }
+        },
+        "internal_telegram.botMessagesResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_telegram.Message"
+                    }
                 }
             }
         },

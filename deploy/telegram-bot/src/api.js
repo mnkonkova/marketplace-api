@@ -44,3 +44,20 @@ export function whoIs(bot, tgUserID) {
 export function blocked(bot, tgUserID) {
   return request('POST', '/api/v1/bot/blocked', { bot, tg_user_id: tgUserID });
 }
+
+/**
+ * Забрать сообщения для отправки.
+ *
+ * Доставка перевёрнута: не API стучится к нам, а мы спрашиваем его
+ * сами. Причина проста — API живёт на российской ВДС, мы в чужом
+ * облаке, и дозвониться оттуда сюда получается не всегда. А отсюда
+ * туда — всегда: на этом же направлении работают привязка и мини-апп.
+ */
+export function pullMessages(limit = 20) {
+  return request('GET', `/api/v1/bot/messages?limit=${limit}`);
+}
+
+/** Что с пачкой: доставлено / не доставлено и почему. */
+export function ackMessages(delivered, failed) {
+  return request('POST', '/api/v1/bot/messages/ack', { delivered, failed });
+}

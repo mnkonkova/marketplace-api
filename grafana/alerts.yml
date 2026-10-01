@@ -126,6 +126,36 @@ groups:
           summary: "Outbox dead-letter rate > 5/hour"
           description: "Темп DLQ: {{ $value }}/час. Похоже на системную поломку (новый event_type с неверным payload или 4xx от n8n workflow)."
 
+      # ── очередь сообщений для телеграм-ботов ──────────────────────
+      #
+      # Доставка перевёрнута (1 октября 2026): воркер кладёт сообщение
+      # в bot_messages, сервис бота забирает его сам и квитирует.
+      # Раньше о непрошедшем уведомлении говорил OutboxDeadLetterBacklog
+      # — теперь в DLQ по этой причине не попадает ничего, и без
+      # собственного алерта молчание стало бы неотличимо от «всё
+      # доставлено».
+      #
+      # Тревожим по ВОЗРАСТУ, а не по количеству: очередь короткая, и
+      # одна застрявшая строка по счётчику не видна. В норме возраст
+      # около нуля — бот опрашивает раз в пять секунд.
+      - alert: BotQueueStalled
+        expr: bot_queue_oldest_seconds > 300
+        for: 5m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Сообщения ботам не забираются"
+          description: "Самое старое неотправленное ждёт {{ $value | humanizeDuration }}. Значит сервис бота не приходит за очередью: проверь, жив ли он (GET /health) и доходит ли до API. Что лежит: SELECT id, bot, event_type, attempts, left(last_error,120) FROM bot_messages WHERE delivered_at IS NULL ORDER BY id LIMIT 20;"
+
+      # Бот приходит, но телеграм отказывает. Отличается от предыдущего:
+      # там нас не опрашивают, здесь — опрашивают и не могут отправить.
+      - alert: BotQueueDeliveryFailing
+        expr: bot_queue_failed > 0
+        for: 15m
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "Бот не может отправить сообщения"
+          description: "{{ $value }} сообщений с записанной ошибкой доставки. Причина в last_error той же таблицы: чаще всего токен бота или блокировка со стороны человека."
+
       - alert: OutboxHandlerErrorSpike
         expr: |
           sum by (aggregate, event_type) (rate(outbox_handler_errors_total[5m])) > 0.5
