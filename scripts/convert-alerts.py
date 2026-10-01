@@ -136,30 +136,62 @@ def delete_existing_in_namespace(namespace="marketpclce"):
     )
     if code != 200 or not body:
         return
-    for group_name in body.keys() if isinstance(body, dict) else []:
+    # Ответ ruler'а — словарь «пространство → список групп», и раньше
+    # здесь перебирались КЛЮЧИ этого словаря, то есть имена
+    # пространств. Удаление уходило в адрес вида
+    # .../rules/marketpclce/marketpclce — группы с таким именем нет, и
+    # ruler честно отвечал «нечего удалять». В выводе при этом стояло
+    # бодрое «rm mimir marketpclce: HTTP 202», и копия правил годами
+    # жила в Mimir параллельно с Grafana-managed: два одинаковых
+    # правила на одно событие.
+    groups = body.get(namespace, []) if isinstance(body, dict) else []
+    for group in groups:
+        name = group.get("name") if isinstance(group, dict) else None
+        if not name:
+            continue
         code, _ = _api(
-            f"/api/ruler/grafanacloud-prom/api/v1/rules/{namespace}/{group_name}",
+            f"/api/ruler/grafanacloud-prom/api/v1/rules/{namespace}/{name}",
             method="DELETE",
         )
-        print(f"  rm mimir {group_name}: HTTP {code}")
+        print(f"  rm mimir {name}: HTTP {code}")
 
 
-def delete_existing_grafana_managed(folder_uid):
-    """Удаляет все Grafana-managed rules в folder перед re-import'ом,
-    чтобы не плодить дубли при повторных запусках. Сохраняет isPaused
-    flag по-title для последующего восстановления."""
+def delete_existing_grafana_managed(folder_uid, known_titles):
+    """Удаляет Grafana-managed rules перед re-import'ом — но ТОЛЬКО те,
+    что скрипт умеет создать заново.
+
+    Раньше он сносил в папке всё подряд, и это была мина. В папке живёт
+    BotrabotDown: внешняя проверка через Infinity-datasource, которая
+    ходит на адрес Ботработ и помечена noDataState=Alerting. В
+    Prometheus-формате её не выразить, в alerts.yml её нет и быть не
+    может — а значит очередной запуск скрипта удалил бы единственный
+    сторож, переживающий смерть всего проекта на Railway. Молча: в
+    выводе была бы одна строка «removed N rules».
+
+    Поэтому удаляем по списку имён из файла. Всё, чего в файле нет,
+    считается заведённым руками и не трогается.
+
+    isPaused сохраняем по title — его восстанавливает main().
+    """
     code, body = _api("/api/v1/provisioning/alert-rules", method="GET")
     if code != 200 or not isinstance(body, list):
         return {}
     paused = {}
     deleted = 0
+    kept = []
     for r in body:
-        if r.get("folderUID") == folder_uid:
-            if r.get("isPaused"):
-                paused[r["title"]] = True
-            _api(f"/api/v1/provisioning/alert-rules/{r['uid']}", method="DELETE")
-            deleted += 1
+        if r.get("folderUID") != folder_uid:
+            continue
+        if r["title"] not in known_titles:
+            kept.append(r["title"])
+            continue
+        if r.get("isPaused"):
+            paused[r["title"]] = True
+        _api(f"/api/v1/provisioning/alert-rules/{r['uid']}", method="DELETE")
+        deleted += 1
     print(f"  removed {deleted} existing Grafana-managed rules in folder {folder_uid}")
+    if kept:
+        print(f"  оставлены как заведённые руками: {kept}")
     if paused:
         print(f"  was-paused: {list(paused.keys())}")
     return paused
@@ -171,9 +203,19 @@ def main(fp):
 
     print(f"== Delete existing Mimir rules in 'marketpclce' namespace ==")
     delete_existing_in_namespace("marketpclce")
+    # Зачем это вообще: правила когда-то жили в Mimir, потом переехали в
+    # Grafana-managed, и копия в Mimir осталась. Две копии одного
+    # правила — это два письма на одно событие, поэтому переезд
+    # доводится до конца при каждом запуске.
 
+    known = {
+        r["alert"]
+        for grp in data["groups"]
+        for r in grp.get("rules", [])
+        if "alert" in r
+    }
     print(f"\n== Delete existing Grafana-managed rules in folder ==")
-    paused = delete_existing_grafana_managed(FOLDER_UID)
+    paused = delete_existing_grafana_managed(FOLDER_UID, known)
 
     print(f"\n== Create Grafana-managed rules ==")
     ok = fail = 0

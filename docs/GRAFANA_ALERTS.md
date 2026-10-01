@@ -65,11 +65,44 @@ Service account token: **Administration → Service accounts → Add** →
 
 ## B. Залить/обновить алерты
 
+**Рабочий способ — один: `scripts/convert-alerts.py`.** Он читает
+`grafana/alerts.yml`, превращает Prometheus-правила в Grafana-managed
+и заливает их через provisioning API:
+
+```bash
+GRAFANA_URL=https://<ваш>.grafana.net GRAFANA_TOKEN=glsa_… \
+  python3 scripts/convert-alerts.py grafana/alerts.yml
+```
+
+Что он бережёт, и почему это важно знать:
+
+- **правила, заведённые руками, не трогает.** В папке живёт
+  `BotrabotDown` — внешняя проверка через Infinity-datasource, которая
+  ходит на адрес Ботработ. В Prometheus-формате её не выразить, в
+  `alerts.yml` её нет и быть не может. Раньше скрипт сносил в папке
+  всё подряд и однажды унёс бы единственный сторож, переживающий
+  смерть всего проекта на Railway, — молча, одной строкой «removed N
+  rules». Теперь удаляются только те правила, чьи имена есть в файле;
+- **снимает копию из Mimir.** Она осталась от старого переезда, и до
+  1 октября 2026 скрипт её не удалял: перебирал имена пространств
+  вместо имён групп и бодро печатал «rm mimir marketpclce: HTTP 202»,
+  не удаляя ничего;
+- **сохраняет паузу.** Правила на паузе (`LeadsStopped`,
+  `LeadToProjectConversionLow`) после пересоздания остаются на паузе.
+
+Ниже — ручные способы, на случай если скрипт недоступен.
+
 `grafana/alerts.yml` — стандартный Prometheus rule group format
 (совместим с Mimir, Prometheus, VictoriaMetrics). В Grafana Cloud
 правила хранятся в **Mimir**, и есть два пути их синхронизировать.
 
-### Способ 1: UI (paste YAML, ручной mode)
+### Способ 1: UI (paste YAML, ручной mode) — УСТАРЕЛ
+
+> Оба способа ниже кладут правила **в Mimir**. Туда их больше не
+> кладут: правила живут Grafana-managed, и вторая копия означает два
+> письма на одно событие. Оставлены для истории — пользуйтесь
+> `convert-alerts.py` выше.
+
 
 1. **Alerts & IRM** → **Alert rules** → **New rule** → выбери
    **Mimir or Loki managed alert rule** (НЕ Grafana-managed).
@@ -84,7 +117,7 @@ Service account token: **Administration → Service accounts → Add** →
 
 Это нудно, но рабоче если правил мало. Для 17 правил лучше CLI.
 
-### Способ 2: mimirtool (для IaC, recommended)
+### Способ 2: mimirtool — УСТАРЕЛ (тоже в Mimir)
 
 `mimirtool` умеет `rules load` — синхронит весь файл одной командой.
 
@@ -106,7 +139,29 @@ mimirtool rules print --rule-files grafana/alerts.yml
 `mimirtool rules load` — idempotent. Запускать после каждого изменения
 `grafana/alerts.yml`. Можно повесить в CI на push в main.
 
-### Способ 3: Alloy (декларативно)
+### Способ 3: HTTP API Grafana — если нужно поправить руками
+
+Правила живут **Grafana-managed** (папка `marketpclce`), а не в Mimir.
+Копия в Mimir когда-то осталась от переезда и жила параллельно: два
+одинаковых правила на одно событие. Первого октября 2026 она убрана, и
+`convert-alerts.py` теперь доводит переезд до конца сам.
+
+Посмотреть, что залито, достаточно токеном сервис-аккаунта:
+
+```bash
+export GU=https://<ваш>.grafana.net GT=glsa_…
+curl -s -H "Authorization: Bearer $GT" "$GU/api/v1/provisioning/alert-rules" \
+  | python3 -c "import sys,json; [print(r['title']) for r in json.load(sys.stdin)]"
+```
+
+Две ловушки ruler-API, если всё же придётся туда ходить:
+
+- **только JSON.** С `Content-Type: application/yaml` та же группа
+  отвечает `400 bad request data` без объяснения;
+- **POST заменяет группу целиком.** Отправить одно новое правило
+  нельзя — остальные из группы молча исчезнут.
+
+### Способ 4: Alloy (декларативно)
 
 Если хочешь чтобы alloy сам деплоил правила при перезапуске —
 добавь в `alloy/config.alloy`:
