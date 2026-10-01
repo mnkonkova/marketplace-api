@@ -180,7 +180,15 @@ func main() {
 	// квитируются, кабинет всё показывает и без бота.
 	botDispatcher := notifications.NewWebhookDispatcher(
 		cfg.BotWebhookURL, cfg.BotWebhookToken, cfg.AppBaseURL).
-		WithSignature(cfg.BotWebhookSecret)
+		WithSignature(cfg.BotWebhookSecret).
+		// Тридцать секунд, а не десять: сервис бота живёт на Railway и
+		// засыпает без нагрузки. Холодный старт там дольше десяти
+		// секунд, и на коротком таймауте мы обрывали запрос ровно в тот
+		// момент, когда контейнер просыпался, — все десять попыток
+		// подряд, после чего событие уезжало в DLQ. Доставка личных
+		// уведомлений не спешит: лишние секунды ожидания здесь дешевле
+		// потерянного сообщения.
+		WithTimeout(30 * time.Second)
 	telegramSvc := telegram.NewService(telegram.NewRepo(pool))
 	switch {
 	case botDispatcher == nil:
