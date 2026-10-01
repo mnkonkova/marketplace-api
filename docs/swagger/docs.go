@@ -14601,6 +14601,10 @@ const docTemplate = `{
         "internal_admin.UserSearchResult": {
             "type": "object",
             "properties": {
+                "avatar_url": {
+                    "description": "AvatarURL — лицо в списке. Этим поиском менеджер набирает состав\nпроекта, а людей он знает в лицо, а не по почте: список из одних\nстрок заставляет читать каждую, вместо того чтобы узнать нужного\nс одного взгляда. Пусто у тех, кто аватарку не ставил.",
+                    "type": "string"
+                },
                 "display_name": {
                     "type": "string"
                 },

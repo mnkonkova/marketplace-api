@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/google/uuid"
@@ -222,4 +223,84 @@ ON CONFLICT (user_id) DO UPDATE SET production_id = EXCLUDED.production_id`,
 		return
 	}
 	t.Errorf("продакшен не нашёлся в справочнике: %v", body)
+}
+
+// Поиск людей для состава проекта: по идентификатору и с лицом.
+//
+// Менеджер набирает состав, узнавая людей в лицо, а список из одних
+// почт заставляет читать каждую строку. И приходит он сюда часто со
+// ссылкой или строкой из лога, где кроме uuid ничего нет — по такой
+// строке раньше не находилось вообще ничего.
+func TestSearchUsersByIDAndAvatar(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	h := integration.NewAPIHarness(t, pool)
+
+	manager, cleanupManager := h.NewUser(t, userOpts{Kind: "client", IsManager: true})
+	defer cleanupManager()
+	token := h.Token(t, manager)
+
+	creator, cleanupCreator := h.NewUser(t, userOpts{Kind: "specialist"})
+	defer cleanupCreator()
+	const avatar = "https://cdn.example.com/ava/searched.jpg"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO specialist_profiles (user_id, display_name, avatar_url)
+VALUES ($1, 'Аня Поисковая', $2)
+ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name,
+                                    avatar_url = EXCLUDED.avatar_url`,
+		creator, avatar); err != nil {
+		t.Fatalf("профиль: %v", err)
+	}
+
+	find := func(q string) []map[string]any {
+		t.Helper()
+		code, body := h.Do(t, http.MethodGet,
+			"/api/v1/manager/users/search?kind=specialist&q="+url.QueryEscape(q), token, nil)
+		if code != http.StatusOK {
+			t.Fatalf("поиск %q: код %d", q, code)
+		}
+		raw, _ := body["items"].([]any)
+		out := make([]map[string]any, 0, len(raw))
+		for _, r := range raw {
+			if m, ok := r.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+
+	mine := func(items []map[string]any) map[string]any {
+		for _, it := range items {
+			if it["user_id"] == creator.String() {
+				return it
+			}
+		}
+		return nil
+	}
+
+	// По имени — как было, но теперь с лицом.
+	byName := mine(find("Аня Поисковая"))
+	if byName == nil {
+		t.Fatal("по имени человек не нашёлся")
+	}
+	if byName["avatar_url"] != avatar {
+		t.Errorf("аватарка не отдана: %v", byName["avatar_url"])
+	}
+
+	// По НАЧАЛУ идентификатора: полный uuid руками никто не набирает.
+	head := creator.String()[:8]
+	if mine(find(head)) == nil {
+		t.Errorf("по началу идентификатора %q человек не нашёлся", head)
+	}
+
+	// И по идентификатору целиком — его копируют из ссылки.
+	if mine(find(creator.String())) == nil {
+		t.Errorf("по полному идентификатору человек не нашёлся")
+	}
+
+	// Чужой идентификатор ничего не находит: поиск по префиксу не
+	// должен превращаться в «покажи всех».
+	if items := find("00000000-0000-0000-0000-0000000000ff"); len(items) != 0 {
+		t.Errorf("несуществующий идентификатор нашёл %d человек", len(items))
+	}
 }

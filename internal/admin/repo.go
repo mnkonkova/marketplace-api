@@ -93,8 +93,17 @@ WHERE u.is_manager = TRUE AND u.is_test = FALSE`
 // SearchUsers — лукап для admin/manager UI: создать проект для существующего
 // клиента, назначить спеца, найти юзера для promote-to-manager. Ищем по
 // ILIKE '%q%' одновременно в email, phone и display_name (из обоих профильных
-// таблиц через COALESCE). q короче 2 символов — пустой результат.
-// Возвращает максимум 20 результатов.
+// таблиц через COALESCE), плюс по НАЧАЛУ идентификатора. q короче 2
+// символов — пустой результат. Возвращает максимум 20 результатов.
+//
+// Идентификатор добавлен потому, что менеджер приходит сюда со ссылкой
+// на человека или со строкой из лога, где кроме uuid ничего нет: раньше
+// по такой строке не находилось ничего, и приходилось идти за почтой в
+// базу. Совпадение по префиксу — полный uuid руками никто не набирает,
+// а первых восьми знаков достаточно.
+//
+// Вместе с человеком отдаём аватарку: состав проекта набирают, узнавая
+// людей в лицо, а список из одних почт заставляет читать каждую строку.
 //
 // kind:
 //   - "client" / "specialist" — узкий фильтр по users.kind.
@@ -126,7 +135,8 @@ func (r *Repo) SearchUsers(ctx context.Context, q, kind string) ([]UserSearchRes
 	queryStr := `
 SELECT u.id, COALESCE(u.email::text,''), COALESCE(u.phone,''),
        u.kind,
-       COALESCE(NULLIF(cp.display_name,''), NULLIF(sp.display_name,''), '')
+       COALESCE(NULLIF(cp.display_name,''), NULLIF(sp.display_name,''), ''),
+       COALESCE(sp.avatar_url, '')
 FROM users u
 LEFT JOIN client_profiles     cp ON cp.user_id = u.id
 LEFT JOIN specialist_profiles sp ON sp.user_id = u.id
@@ -142,7 +152,14 @@ WHERE u.is_active = TRUE AND u.is_test = FALSE`
 	// в pattern/prefix как литералы, а не как метасимволы LIKE.
 	queryStr += `
   AND (u.email::text ILIKE $1 ESCAPE '\' OR u.phone ILIKE $1 ESCAPE '\'
-       OR cp.display_name ILIKE $1 ESCAPE '\' OR sp.display_name ILIKE $1 ESCAPE '\')
+       OR cp.display_name ILIKE $1 ESCAPE '\' OR sp.display_name ILIKE $1 ESCAPE '\'
+       -- Поиск по идентификатору. Менеджер приходит сюда со ссылкой на
+       -- человека или со строкой из лога, где кроме id ничего нет, —
+       -- и раньше по ней не находилось ничего: искали только по почте,
+       -- телефону и имени. Префикс, а не точное совпадение: первых
+       -- восьми знаков хватает, чтобы узнать нужного, а полный uuid
+       -- набирать руками никто не станет.
+       OR u.id::text ILIKE $2 ESCAPE '\')
 ORDER BY
   CASE WHEN u.email::text ILIKE $2 ESCAPE '\' OR cp.display_name ILIKE $2 ESCAPE '\' OR sp.display_name ILIKE $2 ESCAPE '\'
        THEN 0 ELSE 1 END,
@@ -156,7 +173,8 @@ LIMIT 20`
 	out := make([]UserSearchResult, 0, 20)
 	for rows.Next() {
 		var u UserSearchResult
-		if err := rows.Scan(&u.UserID, &u.Email, &u.Phone, &u.Kind, &u.DisplayName); err != nil {
+		if err := rows.Scan(&u.UserID, &u.Email, &u.Phone, &u.Kind, &u.DisplayName,
+			&u.AvatarURL); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
