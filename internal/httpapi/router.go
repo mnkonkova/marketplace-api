@@ -351,6 +351,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Post("/me/creator/projects/{id}/publications", d.Publications.CreatorAddPublication)
 				r.Get("/me/creator/projects/{id}/checklist", d.Publications.CreatorChecklist)
 				r.Post("/me/creator/publications/{pub_id}/links", d.Publications.CreatorSubmitLinks)
+				// «Я исправил — проверьте ещё раз». Без неё возврат на
+				// доработку был тупиком: правка идёт на площадке, адрес
+				// ролика не меняется, и новой ссылки у креатора нет.
+				r.Post("/me/creator/publications/{pub_id}/resubmit", d.Publications.CreatorResubmit)
 				// Переслать свою ссылку: ролик стёрли, адрес протух.
 				r.Put("/me/creator/publications/{pub_id}/links/{platform}",
 					d.Publications.CreatorEditLink)

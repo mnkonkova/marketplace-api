@@ -1140,6 +1140,40 @@ func (h *Handler) CreatorSubmitLinks(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, got)
 }
 
+// CreatorResubmit godoc
+// @Summary  Отправить возвращённый ролик на проверку заново (креатор)
+// @Description Ссылки и статистика остаются как есть: ролик тот же, изменилось
+// @Description то, что в нём исправили. Нужна там, где правка идёт НА ПЛОЩАДКЕ
+// @Description и адрес ролика не меняется — добавить «новую ссылку» в таком
+// @Description случае нечего, а сказать «готово» надо.
+// @Tags     creator-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    pub_id path string true "publication id"
+// @Success  200 {object} Publication
+// @Failure      401  {object}  errorResponse  "no_user"
+// @Failure      404  {object}  errorResponse  "not_found — выкладка не найдена или заведена на другого креатора"
+// @Failure      409  {object}  errorResponse  "nothing_to_resubmit — ролик уже на проверке; publication_closed; nothing_to_review — ссылок нет"
+// @Router   /me/creator/publications/{pub_id}/resubmit [post]
+func (h *Handler) CreatorResubmit(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	pubID, err := pathUUID(r, "pub_id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id выкладки.")
+		return
+	}
+	got, err := h.svc.CreatorResubmit(r.Context(), pubID, uid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, got)
+}
+
 type dateRequestReq struct {
 	RequestedDate string `json:"requested_date"`
 	Reason        string `json:"reason"`
@@ -1235,6 +1269,9 @@ func writeErr(w http.ResponseWriter, err error) {
 			"Ссылка не с одной из пяти площадок: TikTok, Instagram, YouTube, VK, Likee.")
 	case errors.Is(err, ErrUnknownScheme), errors.Is(err, ErrRangeTooLong):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_schedule", err.Error())
+	case errors.Is(err, ErrNothingToResubmit):
+		httpx.WriteErrMsg(w, http.StatusConflict, "nothing_to_resubmit",
+			"Ролик уже на проверке у менеджера — отправлять его заново не нужно.")
 	case errors.Is(err, ErrChecklistIncomplete):
 		httpx.WriteErrMsg(w, http.StatusUnprocessableEntity, "checklist_incomplete",
 			"Отметьте обязательные пункты чеклиста: "+httpx.InvalidInputMessage(err))
@@ -1601,12 +1638,12 @@ func (h *Handler) ClientReportCSV(w http.ResponseWriter, r *http.Request) {
 
 // CreatorReport godoc
 // @Summary  Отчёт по своим роликам (креатор)
-// @Description Только свои ролики: чужие цифры не попадают в выдачу.
+// @Description Только свои ролики и без разбивки по площадкам: by_platform пуст, в videos_table — ссылки и состояние сбора без цифр. Сумма ролика — в самой выкладке.
 // @Tags     creator-publications
 // @Produce  json
 // @Security BearerAuth
 // @Param    id path string true "project id"
-// @Success  200 {object} Report
+// @Success  200 {object} CreatorReport
 // @Failure      400  {object}  errorResponse  "bad_id"
 // @Failure      401  {object}  errorResponse  "no_user"
 // @Failure      404  {object}  errorResponse  "not_found — вы не участник этого проекта"
@@ -1637,7 +1674,8 @@ func (h *Handler) CreatorReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, rep)
+	// Без разбивки по площадкам: её видит только менеджер (ForCreator).
+	httpx.WriteJSON(w, http.StatusOK, ForCreator(rep))
 }
 
 // ---- взгляд клиента ----

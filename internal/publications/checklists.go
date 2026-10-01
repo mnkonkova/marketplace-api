@@ -427,6 +427,14 @@ func (s *Service) SetChecklistItemRequired(
 	return s.repo.SetChecklistItemRequired(ctx, projectID, itemID, required)
 }
 
+// AddChecklistItem — завести пункт под конкретный проект.
+//
+// Подключённый шаблон для этого НЕ нужен, и это решение, а не
+// недосмотр. Библиотека — для требований, которые повторяются из
+// проекта в проект; у разового проекта их может не быть вовсе, а
+// «снять логотип в первые три секунды» сказать всё равно надо.
+// Требовать сперва подключить шаблон значило бы заставлять заводить
+// библиотечную запись ради одного проекта — и портить её остальным.
 func (s *Service) AddChecklistItem(ctx context.Context, projectID uuid.UUID, text, platform string, required bool) (ChecklistItem, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {

@@ -28,6 +28,9 @@ type ReminderPrefs struct {
 	Incomplete bool `json:"incomplete"`
 	// ManagerDigest — сводка в общий чат менеджеров. Креаторы её не видят.
 	ManagerDigest bool `json:"manager_digest"`
+	// LowViews — ролик вышел, а просмотров почти нет. Включён по
+	// умолчанию: срабатывает редко и по делу, в отличие от DayBefore.
+	LowViews bool `json:"low_views"`
 	// DayBefore — креатору в бот НАКАНУНЕ срока. Единственный из видов,
 	// выключенный по умолчанию: он появился позже остальных, и включать
 	// его молча всем — значит завтра утром написать каждому креатору
@@ -44,7 +47,7 @@ func defaultReminderPrefs(projectID uuid.UUID) ReminderPrefs {
 	return ReminderPrefs{
 		ProjectID: projectID,
 		DueToday:  true, Overdue: true, Incomplete: true, ManagerDigest: true,
-		DayBefore: false,
+		DayBefore: false, LowViews: true,
 	}
 }
 
@@ -59,6 +62,8 @@ func (p ReminderPrefs) enabled(kind string) bool {
 		return p.Overdue
 	case ReminderIncomplete:
 		return p.Incomplete
+	case ReminderNoViews:
+		return p.LowViews
 	case ReminderManagerDigest:
 		return p.ManagerDigest
 	default:
@@ -71,10 +76,10 @@ func (p ReminderPrefs) enabled(kind string) bool {
 func (r *Repo) ReminderPrefs(ctx context.Context, projectID uuid.UUID) (ReminderPrefs, error) {
 	out := defaultReminderPrefs(projectID)
 	err := r.db.QueryRow(ctx, `
-SELECT due_today, overdue, incomplete, manager_digest, day_before, updated_at
+SELECT due_today, overdue, incomplete, manager_digest, day_before, low_views, updated_at
 FROM project_reminder_prefs WHERE project_id = $1`, projectID).
 		Scan(&out.DueToday, &out.Overdue, &out.Incomplete, &out.ManagerDigest,
-			&out.DayBefore, &out.UpdatedAt)
+			&out.DayBefore, &out.LowViews, &out.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}
@@ -91,19 +96,20 @@ func (r *Repo) SaveReminderPrefs(ctx context.Context, p ReminderPrefs, actor uui
 	if err := r.db.QueryRow(ctx, `
 INSERT INTO project_reminder_prefs
   (project_id, due_today, overdue, incomplete, manager_digest, day_before,
-   updated_by, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+   low_views, updated_by, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 ON CONFLICT (project_id) DO UPDATE SET
   due_today = EXCLUDED.due_today,
   overdue = EXCLUDED.overdue,
   incomplete = EXCLUDED.incomplete,
   manager_digest = EXCLUDED.manager_digest,
   day_before = EXCLUDED.day_before,
+  low_views = EXCLUDED.low_views,
   updated_by = EXCLUDED.updated_by,
   updated_at = now()
 RETURNING updated_at`,
 		p.ProjectID, p.DueToday, p.Overdue, p.Incomplete, p.ManagerDigest,
-		p.DayBefore, actor).
+		p.DayBefore, p.LowViews, actor).
 		Scan(&p.UpdatedAt); err != nil {
 		return ReminderPrefs{}, fmt.Errorf("save reminder prefs: %w", err)
 	}

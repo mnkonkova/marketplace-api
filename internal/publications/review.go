@@ -302,3 +302,112 @@ RETURNING round`, pubID).Scan(&round)
 	}
 	return nil
 }
+
+// ---- «я исправил, проверьте ещё раз» ----
+//
+// Возврат на доработку был тупиком, и вот почему.
+//
+// Менеджер возвращает ролик со словами «нет ссылки в шапке профиля».
+// Креатор правит это НА ПЛОЩАДКЕ — адрес ролика при этом не меняется.
+// Сказать сервису «готово» ему было нечем: окно сдачи требует НОВУЮ
+// ссылку («Вставьте хотя бы одну новую ссылку»), а «Заменить» с тем же
+// адресом проверку не переоткрывает — переоткрытие висит на смене
+// адреса, потому что другой адрес значит другой ролик.
+//
+// Выходов у креатора оставалось два, и оба плохие: написать менеджеру в
+// переписку (работа уходит из сервиса) или перезалить ролик ради нового
+// адреса (потеряв набранные просмотры).
+
+// ErrNothingToResubmit — проверка и так открыта, пересдавать нечего.
+//
+// Не ошибка ввода, а состояние: ролик уже лежит у менеджера. Отдельная
+// ошибка нужна, чтобы повторное нажатие не поднимало новый круг
+// проверки и не слало менеджеру второе уведомление.
+var ErrNothingToResubmit = errors.New("review is already open")
+
+// CreatorResubmit — креатор отправляет возвращённый ролик на проверку
+// заново, не трогая ссылки.
+//
+// Ссылки и статистика остаются как есть: ролик тот же, изменилось
+// только то, что в нём исправили. Отметки прошлой проверки снимаются —
+// менеджер смотрит заново, а не поверх своих же галочек (это делает
+// reopenReview).
+func (r *Repo) CreatorResubmit(ctx context.Context, pubID, creatorID uuid.UUID) (Publication, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Publication{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	projectID, err := lockPublicationForEdit(ctx, tx, pubID)
+	if err != nil {
+		return Publication{}, err
+	}
+
+	var owner *uuid.UUID
+	var status string
+	if err := tx.QueryRow(ctx,
+		`SELECT creator_user_id, status FROM project_publications WHERE id = $1`, pubID).
+		Scan(&owner, &status); err != nil {
+		return Publication{}, fmt.Errorf("read publication: %w", err)
+	}
+	// Не 403: подтверждать постороннему существование чужой выкладки
+	// незачем. Хендлер отвечает 404.
+	if owner == nil || *owner != creatorID {
+		return Publication{}, ErrForbidden
+	}
+	if Status(status) == StatusCancelled || Status(status) == StatusClosedManually {
+		return Publication{}, ErrPublicationClosed
+	}
+
+	// Проверять нечего, пока нечего смотреть.
+	platforms, err := publicationPlatforms(ctx, tx, pubID)
+	if err != nil {
+		return Publication{}, err
+	}
+	if len(platforms) == 0 {
+		return Publication{}, ErrNothingToReview
+	}
+
+	var reviewStatus string
+	err = tx.QueryRow(ctx,
+		`SELECT status FROM publication_reviews WHERE publication_id = $1`, pubID).Scan(&reviewStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Проверки не заводили вовсе — значит ролик и не возвращали.
+		return Publication{}, ErrNothingToResubmit
+	}
+	if err != nil {
+		return Publication{}, fmt.Errorf("read review: %w", err)
+	}
+	if reviewStatus == ReviewInReview {
+		return Publication{}, ErrNothingToResubmit
+	}
+
+	if err := reopenReview(ctx, tx, pubID); err != nil {
+		return Publication{}, err
+	}
+
+	// Событие то же, что у обычной сдачи: для менеджера это и есть
+	// сдача — ролик снова лежит у него на проверке. Заводить второй тип
+	// события значило бы чинить все уведомления и сводки дважды.
+	if err := outbox.Emit(ctx, tx, outbox.AggregateProject, projectID.String(),
+		outbox.EventPublicationSubmitted, map[string]any{
+			"project_id":      projectID,
+			"publication_id":  pubID,
+			"creator_user_id": creatorID,
+			"platforms":       platforms,
+			"resubmitted":     true,
+		}); err != nil {
+		return Publication{}, fmt.Errorf("emit publication_submitted: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Publication{}, fmt.Errorf("commit: %w", err)
+	}
+	return r.Get(ctx, pubID)
+}
+
+// CreatorResubmit — проверка принадлежности живёт в репозитории: там же
+// берётся блокировка строки.
+func (s *Service) CreatorResubmit(ctx context.Context, pubID, creatorID uuid.UUID) (Publication, error) {
+	return s.repo.CreatorResubmit(ctx, pubID, creatorID)
+}

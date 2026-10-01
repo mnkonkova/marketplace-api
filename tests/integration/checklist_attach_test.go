@@ -383,3 +383,55 @@ VALUES ($1, 'Логотип в первые 2 секунды', TRUE, 1)`, v2); e
 		}
 	}
 }
+
+// Пункт проекта заводится и БЕЗ подключённого шаблона.
+//
+// Библиотека — для требований, которые повторяются из проекта в
+// проект. У разового проекта их может не быть вовсе, а «снять логотип в
+// первые три секунды» сказать всё равно надо. Требовать сперва
+// подключить шаблон значило бы заводить библиотечную запись ради одного
+// проекта — и портить её всем остальным.
+//
+// Чеклист креатора при этом собирается из того, что есть: один пункт
+// проекта — это один пункт в окне сдачи, а не «проверок нет».
+func TestChecklistItemWorksWithoutTemplate(t *testing.T) {
+	pool := integration.Pool(t)
+	// Библиотека пуста: автоподключением проект ничего не получит.
+	hideTemplates(t, pool)
+
+	h := integration.NewAPIHarness(t, pool)
+	client, cleanupC := h.NewUser(t, integration.UserOpts{Kind: "client"})
+	t.Cleanup(cleanupC)
+	mgr, cleanupM := h.NewUser(t, integration.UserOpts{Kind: "client", IsManager: true})
+	t.Cleanup(cleanupM)
+	token := h.Token(t, mgr)
+
+	pid := startViaService(t, pool, projects.StartProjectInput{
+		ClientUserID: &client, Title: "Проект без библиотеки", AssignedToUserID: &mgr,
+	})
+
+	code, body := h.Do(t, http.MethodPost,
+		"/api/v1/manager/projects/"+pid.String()+"/checklist/items", token,
+		map[string]any{"text": "Шрифт титров — Onest Bold", "is_required": true})
+	if code != http.StatusCreated {
+		t.Fatalf("добавить пункт без шаблона: код %d, тело %v", code, body)
+	}
+
+	got := checklistTexts(t, pool, pid)
+	if len(got) != 1 || got[0] != "Шрифт титров — Onest Bold" {
+		t.Fatalf("чеклист проекта: %v, ожидался один заведённый пункт", got)
+	}
+
+	// И убирается так же, без шаблона.
+	svc := publications.NewService(publications.NewRepo(pool))
+	items, err := svc.ProjectChecklist(context.Background(), pid)
+	if err != nil {
+		t.Fatalf("ProjectChecklist: %v", err)
+	}
+	if err := svc.DeleteChecklistItem(context.Background(), pid, items[0].ID); err != nil {
+		t.Fatalf("удаление без шаблона: %v", err)
+	}
+	if left := checklistTexts(t, pool, pid); len(left) != 0 {
+		t.Errorf("после удаления осталось %v", left)
+	}
+}

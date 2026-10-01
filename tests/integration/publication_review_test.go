@@ -218,3 +218,80 @@ SELECT passed FROM publication_review_marks WHERE publication_id = $1 AND item_i
 		}
 	})
 }
+
+// «Я исправил — проверьте ещё раз», не трогая ссылки.
+//
+// Возврат на доработку был тупиком. Менеджер возвращает ролик со
+// словами «нет ссылки в шапке профиля», креатор правит это НА ПЛОЩАДКЕ,
+// и адрес ролика при этом не меняется. Сказать сервису «готово» ему
+// было нечем: окно сдачи требует НОВУЮ ссылку, а замена ссылки тем же
+// адресом проверку не переоткрывает — переоткрытие висит на смене
+// адреса, потому что другой адрес значит другой ролик.
+//
+// Оставалось два выхода, оба плохие: написать менеджеру в переписку
+// (работа уходит из сервиса) или перезалить ролик ради нового адреса,
+// потеряв набранные просмотры.
+func TestCreatorResubmitsReturnedPublication(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	pubID := res.Items[0].ID
+
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: pubID,
+		ActorUserID:   creators[0],
+		URLs:          []string{"https://www.tiktok.com/@u/video/4242"},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+
+	// Пока ролик на проверке, отправлять его туда же нечего.
+	if _, err := svc.CreatorResubmit(ctx, pubID, creators[0]); !errors.Is(
+		err, publications.ErrNothingToResubmit) {
+		t.Errorf("пересдача открытой проверки: %v, ожидалось ErrNothingToResubmit", err)
+	}
+
+	if _, err := svc.Review(ctx, publications.ReviewInput{
+		PublicationID: pubID,
+		ManagerUserID: creators[0],
+		Decision:      publications.DecisionReturn,
+		Comment:       "нет ссылки в шапке профиля",
+	}); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+
+	got, err := svc.CreatorResubmit(ctx, pubID, creators[0])
+	if err != nil {
+		t.Fatalf("CreatorResubmit: %v", err)
+	}
+	if got.Review == nil || got.Review.Status != publications.ReviewInReview {
+		t.Fatalf("проверка не открылась заново: %+v", got.Review)
+	}
+	if got.Review.Round != 2 {
+		t.Errorf("круг проверки %d, ожидался второй", got.Review.Round)
+	}
+	// Ссылка осталась та же: ролик тот же, изменилось то, что в нём
+	// исправили. Перезаливать ради нового адреса — терять просмотры.
+	if len(got.Links) != 1 {
+		t.Fatalf("ссылок %d, ожидалась одна — пересдача их не трогает", len(got.Links))
+	}
+
+	// Чужой ролик так не пересдать, и ответ — «не найдено»: подтверждать
+	// постороннему существование чужой выкладки незачем.
+	if _, err := svc.CreatorResubmit(ctx, pubID, creators[1]); !errors.Is(
+		err, publications.ErrForbidden) {
+		t.Errorf("чужая пересдача: %v, ожидалось ErrForbidden", err)
+	}
+}

@@ -60,6 +60,7 @@ export function targetFor(eventType, d = {}) {
   switch (eventType) {
     case 'project.publication_due_tomorrow':
     case 'project.publication_due_today':
+    case 'project.publication_no_views':
     case 'project.publication_incomplete':
     case 'project.publication_manual':
     case 'project.publication_returned':
@@ -109,6 +110,22 @@ export function messageFor(eventType, d = {}, app, recipient = null) {
     }
     case 'project.publication_manual':
       return `Напоминание от менеджера · ${project}\nСрок: ${day(d.due_date)}\n${projectLink}`;
+    // Ноль на вторые сутки почти никогда не «никто не посмотрел»: чаще
+    // это не тот адрес, теневой бан или закрытый аккаунт. Поэтому текст
+    // не обвиняет и не хвалит, а зовёт проверить — и говорит, что
+    // именно проверять.
+    case 'project.publication_no_views': {
+      const views = Number(d.views || 0);
+      // Склонение руками: «41 просмотров» выдаёт машину, а письмо
+      // должно читаться как от человека.
+      const tail = views % 10 === 1 && views % 100 !== 11 ? 'просмотр'
+        : [2, 3, 4].includes(views % 10) && ![12, 13, 14].includes(views % 100) ? 'просмотра'
+          : 'просмотров';
+      const head = views > 0
+        ? `Ролик почти не смотрят · ${project}\nЗа двое суток ${views} ${tail}.`
+        : `У ролика нет просмотров · ${project}\nЗа двое суток ноль.`;
+      return `${head}\nПроверьте, открывается ли ссылка и виден ли ролик чужому аккаунту.\n${projectLink}`;
+    }
     case 'project.publication_returned':
       return `Ролик вернули с замечанием · ${project}\n` +
         (d.comment ? `«${String(d.comment).slice(0, 400)}»\n` : '') +
