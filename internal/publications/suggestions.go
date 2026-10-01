@@ -126,6 +126,11 @@ LIMIT 1`,
 // suggestionsSelect — общая выборка. Выкладка-кандидат подбирается
 // LATERAL'ом: ближайшая по дате незакрытая выкладка ЭТОГО креатора в
 // ЭТОМ проекте, у которой площадка находки ещё не сдана.
+//
+// В дне выкладок бывает несколько, поэтому номер в дне дописан в
+// ORDER BY: без него из двух равноудалённых роликов одного дня
+// кандидатом становился случайный, и одна и та же находка показывала
+// бы человеку то первый ролик, то второй.
 var suggestionsSelect = `
 SELECT s.id, s.project_id, COALESCE(pr.title, ''), s.creator_user_id,
        s.platform, s.url, s.title, s.author_handle, s.published_at, s.created_at,
@@ -144,7 +149,7 @@ LEFT JOIN LATERAL (
           SELECT 1 FROM publication_links l
           WHERE l.publication_id = p.id AND l.platform = s.platform
       )
-    ORDER BY ABS(p.due_date - COALESCE(s.published_at::date, CURRENT_DATE)), p.due_date
+    ORDER BY ABS(p.due_date - COALESCE(s.published_at::date, CURRENT_DATE)), p.due_date, p.day_slot
     LIMIT 1
 ) cand ON TRUE`
 

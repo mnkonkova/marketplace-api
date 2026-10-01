@@ -55,17 +55,28 @@ func TestManagerAddPublicationOneDate(t *testing.T) {
 		t.Errorf("дата %s, ожидалась %s", got.DueDate, day)
 	}
 
-	// Второй раз на тот же день — отказ понятным словом, а не пятисоткой
-	// из драйвера.
-	_, err = svc.ManagerAddPublication(ctx, publications.AddPublicationInput{
+	if got.DaySlot != 1 {
+		t.Errorf("первый ролик дня: day_slot=%d, ожидался 1", got.DaySlot)
+	}
+
+	// Второй раз на тот же день — не отказ, а второй ролик: день съёмки
+	// один, роликов из него выходит несколько, и раньше менеджеру
+	// приходилось разносить их по датам, к работе отношения не имевшим.
+	again, err := svc.ManagerAddPublication(ctx, publications.AddPublicationInput{
 		ProjectID:     projectID,
 		CreatorUserID: creators[0],
 		Day:           day,
 		ManagerUserID: creators[0],
 		Now:           time.Now().UTC(),
 	})
-	if !errors.Is(err, publications.ErrDayTaken) {
-		t.Errorf("повтор дня: %v, ожидалось ErrDayTaken", err)
+	if err != nil {
+		t.Fatalf("второй ролик в тот же день: %v", err)
+	}
+	if again.DaySlot != 2 {
+		t.Errorf("второй ролик дня: day_slot=%d, ожидался 2", again.DaySlot)
+	}
+	if again.ID == got.ID {
+		t.Error("второй ролик вернулся тем же id — вставки не было")
 	}
 }
 
@@ -211,5 +222,174 @@ func TestCancelPublication(t *testing.T) {
 		ManagerUserID: creators[0], Now: time.Now().UTC(),
 	}); err != nil {
 		t.Errorf("день после отмены должен быть свободен, а вышло: %v", err)
+	}
+}
+
+// Несколько роликов в день.
+//
+// День съёмки один, роликов из него выходит три — и раньше план этого
+// сказать не умел: уникальность стояла по паре «креатор + день», и
+// менеджер разносил ролики по соседним датам, к работе отношения не
+// имевшим. Отчёт после этого считал выработку по выдуманным дням.
+//
+// Теперь номер в дне — часть ключа, а пачка получает «сколько роликов в
+// день». Главное свойство здесь и проверяется: ЧИСЛО — ЦЕЛЬ, А НЕ
+// ПРИБАВКА. Повторная отправка той же формы (двойной клик, ретрай)
+// приводит план к заданному числу, а не удваивает его.
+func TestCreateBatchPerDay(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	day := pubDay(4)
+
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{day},
+		PerDay:         3,
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if res.Created != 3 {
+		t.Fatalf("создано %d выкладок, ожидалось 3", res.Created)
+	}
+	slots := map[int]bool{}
+	for _, p := range res.Items {
+		slots[p.DaySlot] = true
+		if !p.DueDate.Equal(day) {
+			t.Errorf("дата %s, ожидалась %s", p.DueDate, day)
+		}
+	}
+	for n := 1; n <= 3; n++ {
+		if !slots[n] {
+			t.Errorf("в дне нет ролика с номером %d: %v", n, slots)
+		}
+	}
+
+	// Повтор той же пачки: план уже приведён к трём, добавлять нечего.
+	again, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{day},
+		PerDay:         3,
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("повторная пачка: %v", err)
+	}
+	if again.Created != 0 {
+		t.Errorf("повтор добавил ещё %d выкладок — план растёт на каждое нажатие", again.Created)
+	}
+
+	// А увеличение числа догружает недостающие номера, не трогая
+	// существующие: менеджер решил снимать по пять, а не по три.
+	more, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{day},
+		PerDay:         5,
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("пачка на пять: %v", err)
+	}
+	if more.Created != 2 {
+		t.Errorf("догрузилось %d выкладок, ожидалось 2", more.Created)
+	}
+}
+
+// Потолок дня. Десять роликов — уже не план, а опечатка в поле, и
+// отказать на одиннадцатом дешевле, чем вычищать потом.
+func TestAddPublicationRejectsFullDay(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	day := pubDay(5)
+
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{day},
+		PerDay:         10,
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("пачка на десять: %v", err)
+	}
+
+	_, err := svc.ManagerAddPublication(ctx, publications.AddPublicationInput{
+		ProjectID:     projectID,
+		CreatorUserID: creators[0],
+		Day:           day,
+		ManagerUserID: creators[0],
+		Now:           time.Now().UTC(),
+	})
+	if !errors.Is(err, publications.ErrDayFull) {
+		t.Errorf("одиннадцатый ролик дня: %v, ожидалось ErrDayFull", err)
+	}
+
+	// И в пачке потолок тот же, причём отказ приходит до записи.
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(6)},
+		PerDay:         11,
+		CreatedBy:      creators[0],
+	}); !errors.Is(err, publications.ErrInvalidInput) {
+		t.Errorf("пачка на одиннадцать: %v, ожидалось ErrInvalidInput", err)
+	}
+}
+
+// Перенос на занятый день кладёт ролик вторым номером, а не отказывает.
+//
+// Номер пересчитывается на новом месте: нести его с собой нельзя — на
+// целевом дне второе место могло быть занято, а свободным оказаться
+// первое.
+func TestMoveDueDateOntoOccupiedDay(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	from, to := pubDay(7), pubDay(8)
+
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{from, to},
+		CreatedBy:      creators[0],
+	})
+	if err != nil || res.Created != 2 {
+		t.Fatalf("CreateBatch: created=%d err=%v", res.Created, err)
+	}
+	var moving uuid.UUID
+	for _, p := range res.Items {
+		if p.DueDate.Equal(from) {
+			moving = p.ID
+		}
+	}
+
+	got, err := svc.MoveDueDate(ctx, publications.MoveDueDateInput{
+		PublicationID: moving,
+		Day:           to,
+		ManagerUserID: creators[0],
+		Now:           time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("MoveDueDate на занятый день: %v", err)
+	}
+	if !got.DueDate.Equal(to) {
+		t.Errorf("дата %s, ожидалась %s", got.DueDate, to)
+	}
+	if got.DaySlot != 2 {
+		t.Errorf("перенесённый ролик: day_slot=%d, ожидался 2", got.DaySlot)
 	}
 }

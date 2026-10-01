@@ -163,15 +163,24 @@ func TestBrandOneVideoPerDay(t *testing.T) {
 			second.Created)
 	}
 
-	// И тем же ограничением — поштучное добавление.
-	_, err = svc.ManagerAddPublication(ctx, publications.AddPublicationInput{
+	// А поштучное добавление на тот же день — осознанное действие, и оно
+	// проходит: ролик встаёт вторым номером в дне. Разница с пачкой не в
+	// ограничении, а в намерении: пачка повторяется случайно (двойной
+	// клик), кнопку «добавить» нажимают руками.
+	extra, err := svc.ManagerAddPublication(ctx, publications.AddPublicationInput{
 		ProjectID:     projectID,
 		Day:           day,
 		ManagerUserID: author,
 		Now:           time.Now().UTC(),
 	})
-	if !errors.Is(err, publications.ErrDayTaken) {
-		t.Errorf("второй ролик на тот же день: ждали ErrDayTaken, got %v", err)
+	if err != nil {
+		t.Fatalf("второй ролик на тот же день: %v", err)
+	}
+	if extra.DaySlot != 2 {
+		t.Errorf("второй ролик дня: day_slot=%d, ожидался 2", extra.DaySlot)
+	}
+	if extra.CreatorUserID != nil {
+		t.Error("у ролика проекта без креаторов владельца быть не должно")
 	}
 }
 

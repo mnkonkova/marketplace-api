@@ -362,6 +362,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Delete("/me/creator/suggestions/{id}", d.Publications.CreatorDismissSuggestion)
 				r.Post("/me/creator/publications/{pub_id}/date_request", d.Publications.CreatorRequestDateChange)
 				r.Get("/me/creator/projects/{id}/report", d.Publications.CreatorReport)
+				// Обновление цифр по заходу в карточку. POST, а не GET:
+				// запрос ходит к стороннему сборщику и тратит кредиты —
+				// такое не должно случаться от предзагрузки ссылки.
+				r.Post("/me/creator/projects/{id}/report/refresh", d.Publications.CreatorRefreshStats)
 				// «В каких проектах я креатор» — до этого ответить было
 				// нечем, и на страницу выкладок можно было попасть только
 				// по прямой ссылке.
@@ -549,6 +553,7 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/manager/projects/{id}/accounts/{account_id}/secret", d.Publications.ManagerAccountSecret)
 					r.Post("/manager/publications/{pub_id}/remind", d.Publications.ManagerRemindNow)
 					r.Get("/manager/projects/{id}/report", d.Publications.ManagerReport)
+					r.Post("/manager/projects/{id}/report/refresh", d.Publications.ManagerRefreshStats)
 					r.Get("/manager/projects/{id}/report.csv", d.Publications.ManagerReportCSV)
 
 					// Состав проекта. Раньше был только POST и DELETE:

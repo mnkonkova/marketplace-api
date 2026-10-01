@@ -667,6 +667,24 @@ groups:
           summary: "CRM не достучалась до instacurl"
           description: "{{ $value }} неудачных вызовов за 15 минут. Расписание при этом не двигается — ссылки дождутся следующего прохода."
 
+      - alert: StatsNeverCollected
+        # Ссылка сдана, а цифр по ней нет НИ ОДНОЙ. В отчёте на её месте
+        # ноль, и он читается как «ролик никто не смотрит» — подмена
+        # хуже пустоты.
+        #
+        # Отдельно от StatsCollectionStalled: тот считает отставание от
+        # next_collect_at и у свежей ссылки молчит ещё сутки. Это
+        # правило — единственное, которое ловит «сбор не поднялся вовсе»:
+        # 1 октября 2026 в прод не попала переменная INSTACURL_URL (была
+        # INSTACURL_HOST, она для скрейпа Alloy), воркер написал в лог
+        # «stats collection disabled», и больше об этом не узнал никто.
+        expr: crm_links_never_collected > 0
+        for: 2h
+        labels: { severity: warn, team: backend }
+        annotations:
+          summary: "{{ $value }} сданных ссылок без единой цифры"
+          description: "Сбор по ним не проходил ни разу, в отчёте на их месте ноль. Первым делом проверь, поднялся ли сбор вообще: docker compose -f docker-compose.prod.yml --env-file .env.prod logs worker | grep -i instacurl — строка «stats collection disabled» означает, что в окружении нет INSTACURL_URL или INSTACURL_API_KEY."
+
       - alert: StatsCollectionStalled
         # Ссылки просрочили свой интервал больше чем на сутки. Прямая
         # угроза приёмке «цифры сходятся с площадками».

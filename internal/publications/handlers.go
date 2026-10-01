@@ -96,6 +96,11 @@ type batchReq struct {
 	// Dates — альтернатива схеме: произвольный список дат (YYYY-MM-DD).
 	Dates         []string `json:"dates"`
 	DraftLeadDays int      `json:"draft_lead_days"`
+	// PerDay — сколько роликов ставить на каждый день, по умолчанию
+	// один. Это цель, а не прибавка: план приводится к заданному числу,
+	// и повторная отправка той же формы не добавляет ничего (см.
+	// ON CONFLICT DO NOTHING в CreateBatch).
+	PerDay int `json:"per_day"`
 }
 
 type previewResp struct {
@@ -133,7 +138,7 @@ func (h *Handler) ManagerPreviewBatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	dates, total, err := h.svc.PreviewBatch(req.Scheme, req.CreatorUserIDs, from, to)
+	dates, total, err := h.svc.PreviewBatch(req.Scheme, req.CreatorUserIDs, from, to, req.PerDay)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -187,6 +192,7 @@ func (h *Handler) ManagerCreateBatch(w http.ResponseWriter, r *http.Request) {
 			CreatorUserIDs: req.CreatorUserIDs,
 			Dates:          dates,
 			DraftLeadDays:  req.DraftLeadDays,
+			PerDay:         req.PerDay,
 			CreatedBy:      uid,
 		})
 	} else {
@@ -196,7 +202,7 @@ func (h *Handler) ManagerCreateBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res, err = h.svc.CreateBatchByScheme(r.Context(), projectID, req.CreatorUserIDs,
-			req.Scheme, from, to, req.DraftLeadDays, uid)
+			req.Scheme, from, to, req.DraftLeadDays, req.PerDay, uid)
 	}
 	if err != nil {
 		writeErr(w, err)
@@ -1273,7 +1279,10 @@ func writeErr(w http.ResponseWriter, err error) {
 			"Этого креатора нет в составе проекта.")
 	case errors.Is(err, ErrDayTaken):
 		httpx.WriteErrMsg(w, http.StatusConflict, "day_taken",
-			"На эту дату у вас уже есть выкладка — выберите другой день.")
+			"Эту дату только что занял кто-то другой — нажмите ещё раз.")
+	case errors.Is(err, ErrDayFull):
+		httpx.WriteErrMsg(w, http.StatusConflict, "day_full",
+			"На этот день уже стоит максимум роликов — выберите другой день.")
 	case errors.Is(err, ErrLinkRemoveDenied):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "link_remove_denied",
 			"Снять площадку может только менеджер — пришлите новый адрес или напишите ему.")
@@ -1327,6 +1336,105 @@ func (h *Handler) ManagerReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, rep)
+}
+
+type refreshStatsResp struct {
+	// Refreshed — сколько ссылок обошли прямо сейчас. Ноль — цифры и так
+	// свежие по расписанию, и это нормальный ответ, а не отказ.
+	Refreshed int `json:"refreshed"`
+	// Saved — по скольким пришли цифры. Меньше Refreshed — часть
+	// площадок сборщик не умеет либо ролик ещё не проиндексирован.
+	Saved int `json:"saved"`
+}
+
+// refreshLimit — сколько ссылок обходим за одно открытие карточки.
+//
+// Двадцать пять: сборщик держит два параллельных слота и тратит на
+// ссылку секунды, так что больше этого человек всё равно не дождётся, а
+// кредиты уйдут. Непопавшие в лимит обновит фоновый обход.
+const refreshLimit = 25
+
+// refreshStats — общий путь обновления для менеджера и креатора.
+//
+// Отвечает СИНХРОННО: карточка показывает загрузку на роликах и ждёт.
+// Фоновая задача с опросом была бы честнее по времени ответа, но она же
+// означала бы «цифры приедут когда-нибудь» — а человек открыл карточку
+// именно затем, чтобы посмотреть на них сейчас.
+func (h *Handler) refreshStats(w http.ResponseWriter, r *http.Request, projectID uuid.UUID) {
+	st, err := h.svc.RefreshProject(r.Context(), projectID, time.Now(), refreshLimit)
+	if errors.Is(err, ErrCollectorNotSet) {
+		// Не пятисотка: сбор может быть не настроен, и это состояние
+		// стенда, а не поломка. Но и не тихий успех — иначе «сбор
+		// выключен» и «просмотров нет» выглядят одинаково.
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "collector_not_set",
+			"Сбор статистики не настроен — обновить цифры нечем.")
+		return
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, refreshStatsResp{Refreshed: st.Considered, Saved: st.Saved})
+}
+
+// ManagerRefreshStats godoc
+// @Summary  Обновить просмотры по проекту (менеджер)
+// @Description Обходит ссылки проекта, которым пора обновиться, и ждёт ответа
+// @Description сборщика. Что считается «пора» — затухающее расписание первых
+// @Description суток ролика: минута, пять, десять, полчаса, час, шесть часов.
+// @Description Свежее своего шага не трогаем, поэтому перезагрузка страницы
+// @Description кредитов у поставщика не стоит.
+// @Tags     manager-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Success  200 {object} refreshStatsResp
+// @Failure      401  {object}  errorResponse  "no_user — сессия истекла"
+// @Failure      404  {object}  errorResponse  "not_found — проект не найден или назначен другому менеджеру"
+// @Failure      503  {object}  errorResponse  "collector_not_set — сбор статистики не настроен"
+// @Router   /manager/projects/{id}/report/refresh [post]
+func (h *Handler) ManagerRefreshStats(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	h.refreshStats(w, r, projectID)
+}
+
+// CreatorRefreshStats godoc
+// @Summary  Обновить просмотры по проекту (креатор)
+// @Description То же, что у менеджера: креатор смотрит на свои цифры теми же
+// @Description глазами, и ноль у вышедшего ролика объясняется ему так же плохо.
+// @Tags     creator-publications
+// @Produce  json
+// @Security BearerAuth
+// @Param    id path string true "project id"
+// @Success  200 {object} refreshStatsResp
+// @Failure      401  {object}  errorResponse  "no_user — сессия истекла"
+// @Failure      404  {object}  errorResponse  "not_found — вы не участник этого проекта"
+// @Failure      503  {object}  errorResponse  "collector_not_set — сбор статистики не настроен"
+// @Router   /me/creator/projects/{id}/report/refresh [post]
+func (h *Handler) CreatorRefreshStats(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		writeNoUser(w)
+		return
+	}
+	projectID, err := pathUUID(r, "id")
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id проекта.")
+		return
+	}
+	member, err := h.svc.CreatorInProject(r.Context(), projectID, uid)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !member {
+		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект не найден.")
+		return
+	}
+	h.refreshStats(w, r, projectID)
 }
 
 // ManagerReportCSV godoc

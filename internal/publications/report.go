@@ -93,6 +93,18 @@ type VideoRow struct {
 	// их не отдала или ролик собирали до того, как мы начали их писать.
 	ERWithoutShares bool       `json:"er_without_shares,omitempty"`
 	CollectedAt     *time.Time `json:"collected_at,omitempty"`
+	// CollectError — почему по этой ссылке нет цифр, словами сборщика.
+	//
+	// Пусто — цифры есть либо обход ещё не доходил. Непусто вместе с
+	// нулём означает «мы спросили, и нам отказали»: площадка не
+	// собирается, ролик удалён, кончились кредиты. Без этого поля три
+	// разных положения выглядели в кабинете одинаково — пустой цифрой,
+	// — и «никто не посмотрел» оказывалось неотличимо от «мы не умеем
+	// это считать».
+	CollectError string `json:"collect_error,omitempty"`
+	// CollectTriedAt — когда ходили в последний раз, удачно или нет.
+	// Вместе с CollectedAt отвечает на вопрос «сбор идёт вообще?».
+	CollectTriedAt *time.Time `json:"collect_tried_at,omitempty"`
 }
 
 // Report — всё, что показывает страница отчёта.
@@ -380,7 +392,7 @@ SELECT p.id, l.id, p.creator_user_id, l.platform, l.url_canonical, l.submitted_a
        COALESCE(cur.views, 0), COALESCE(cur.likes, 0), COALESCE(cur.comments, 0), cur.shares,
        CASE WHEN prev.views IS NULL THEN NULL
             ELSE GREATEST(COALESCE(cur.views, 0) - prev.views, 0) END,
-       cur.collected_at
+       cur.collected_at, l.last_collect_error, l.last_collect_try_at
 FROM project_publications p
 JOIN publication_links l ON l.publication_id = p.id
 LEFT JOIN LATERAL (
@@ -412,7 +424,7 @@ ORDER BY l.submitted_at DESC`
 		var v VideoRow
 		if err := rows.Scan(&v.PublicationID, &v.LinkID, &v.CreatorUserID, &v.Platform,
 			&v.URL, &v.SubmittedAt, &v.Views, &v.Likes, &v.Comments, &v.Shares,
-			&v.Growth24h, &v.CollectedAt); err != nil {
+			&v.Growth24h, &v.CollectedAt, &v.CollectError, &v.CollectTriedAt); err != nil {
 			return nil, fmt.Errorf("scan report row: %w", err)
 		}
 		v.ERPercent, v.ERWithoutShares = erPercent(v.Likes, v.Comments, v.Shares, v.Views)

@@ -14,25 +14,83 @@ import (
 	"marketpclce/internal/instacurl"
 )
 
-// CollectInterval — через сколько дней трогать ролик снова, в зависимости
-// от его возраста.
+// collectSchedule — фоновый обход: через сколько трогать ролик снова.
 //
-// График: 0–5 дней — каждый день, 6–14 — раз в два, 15–28 — раз в четыре,
-// дальше раз в восемь. Свежий ролик набирает просмотры быстро, архив почти
-// не меняется, а объём сбора иначе растёт линейно с каждым месяцем работы:
-// 60 видео × 5 площадок ежедневно — это 300 обходов в сутки на одного
-// креатора, и это только первый проект.
-func CollectInterval(ageDays int) int {
-	switch {
-	case ageDays <= 5:
-		return 1
-	case ageDays <= 14:
-		return 2
-	case ageDays <= 28:
-		return 4
-	default:
-		return 8
+// Это расписание про РАСХОД. Архив почти не меняется, а объём сбора
+// растёт линейно с каждым месяцем работы: 60 видео × 5 площадок
+// ежедневно — это 300 обходов в сутки на одного креатора, и это только
+// первый проект. Поэтому лестница: 0–5 дней ежедневно, 6–14 раз в два
+// дня, 15–28 раз в четыре, дальше раз в восемь.
+//
+// Частое обновление живёт НЕ здесь, а в RefreshEvery: оно включается
+// только когда карточку проекта открыл человек. Так свежие цифры стоят
+// ровно столько, сколько на них смотрят, а не круглые сутки.
+var collectSchedule = []struct {
+	upTo  time.Duration // возраст ролика, до которого действует шаг
+	every time.Duration // через сколько обходить
+}{
+	{upTo: 5 * 24 * time.Hour, every: 24 * time.Hour},
+	{upTo: 14 * 24 * time.Hour, every: 48 * time.Hour},
+	{upTo: 28 * 24 * time.Hour, every: 96 * time.Hour},
+}
+
+// collectEveryOldest — шаг для всего, что старше последней границы.
+const collectEveryOldest = 192 * time.Hour
+
+// CollectEvery — шаг фонового расписания для ролика такого возраста.
+func CollectEvery(age time.Duration) time.Duration {
+	for _, step := range collectSchedule {
+		if age <= step.upTo {
+			return step.every
+		}
 	}
+	return collectEveryOldest
+}
+
+// refreshSchedule — сколько цифра считается свежей, пока карточку
+// открывают.
+//
+// Это расписание про ДОВЕРИЕ к цифре, и работает оно только по заходу
+// менеджера или креатора в карточку проекта. Ролик выложили минуту
+// назад, на площадке у него уже есть просмотры, а в кабинете ноль — и
+// этот ноль неотличим от «никто не смотрит», то есть врёт сильнее, чем
+// пустота.
+//
+// Шаг затухает ровно потому, что затухает и скорость набора: минута,
+// пять, десять, полчаса, час, шесть часов — девять обновлений за первые
+// сутки жизни ролика. Дальше смысла нет: суточный ролик за время, пока
+// на него смотрят, не меняется вовсе, и там хватает фонового шага.
+//
+// Фоном это расписание НЕ работает: иначе свежая ссылка стоила бы 144
+// похода в сутки вместо одного, у проекта с пятью днями работы это
+// порядка восьмидесяти живых ссылок — двенадцать тысяч походов в сутки
+// на один проект при потолке воркера 4800 и кредите поставщика за
+// каждый. Платить столько за цифры, на которые никто не смотрит,
+// незачем.
+var refreshSchedule = []struct {
+	upTo  time.Duration
+	every time.Duration
+}{
+	{upTo: time.Minute, every: time.Minute},
+	{upTo: 6 * time.Minute, every: 5 * time.Minute},
+	{upTo: 16 * time.Minute, every: 10 * time.Minute},
+	{upTo: 76 * time.Minute, every: 30 * time.Minute},
+	{upTo: 196 * time.Minute, every: time.Hour},
+	{upTo: 10 * time.Hour, every: 6 * time.Hour},
+}
+
+// RefreshEvery — сколько цифра по ролику такого возраста считается
+// свежей при открытии карточки.
+//
+// За пределами первых суток возвращается фоновый шаг: открытие
+// карточки не должно обходить архив чаще, чем он того стоит.
+func RefreshEvery(age time.Duration) time.Duration {
+	for _, step := range refreshSchedule {
+		if age <= step.upTo {
+			return step.every
+		}
+	}
+	return CollectEvery(age)
 }
 
 // ParkedAt — признак «ссылка снята с обхода»: её next_collect_at.
@@ -96,6 +154,11 @@ func (r *Repo) DueForCollection(ctx context.Context, now time.Time, limit int) (
 	if limit <= 0 {
 		limit = 50
 	}
+	// Суточного правила («один ролик не чаще раза в календарный день»)
+	// здесь больше нет: частоту целиком задаёт next_collect_at, а его
+	// считает CollectEvery. Пока правило стояло, «обновлять раз в десять
+	// минут» было невыразимо в принципе — выборка всё равно отдавала
+	// ссылку один раз в сутки, независимо от расписания.
 	q := `
 WITH claimed AS (
     SELECT l.id
@@ -103,7 +166,6 @@ WITH claimed AS (
     JOIN project_publications p ON p.id = l.publication_id
     JOIN projects pr ON pr.id = p.project_id
     WHERE l.next_collect_at <= $1
-      AND (l.last_collected_at IS NULL OR l.last_collected_at::date < $1::date)
       AND p.status <> 'cancelled'
       AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $1)
     ORDER BY l.next_collect_at
@@ -138,6 +200,84 @@ JOIN project_publications p ON p.id = t.publication_id`
 	return out, rows.Err()
 }
 
+// ClaimProjectLinks — ссылки одного проекта, которым пора обновиться.
+//
+// Отдельно от DueForCollection, потому что вопрос другой. Та выбирает
+// по очереди: «кому пора по фоновому расписанию, кто первый». Эта — по
+// проекту и по тому, насколько ЦИФРА УСТАРЕЛА для человека, который на
+// неё сейчас смотрит (RefreshEvery). Свести их в один запрос не
+// получится: порог зависит от возраста каждой ссылки, а не от общего
+// времени.
+//
+// Отбор возраста считаем в Go, а не в SQL: расписание — это решение
+// продукта, и держать его в двух видах (таблицей в коде и CASE'ом в
+// запросе) значит однажды поправить только один из них.
+//
+// Взятые ссылки арендуются ровно так же, как в фоновом обходе: их
+// next_collect_at уезжает на claimLease вперёд, и воркер, проснувшийся
+// в эту секунду, их не возьмёт.
+func (r *Repo) ClaimProjectLinks(ctx context.Context, projectID uuid.UUID, now time.Time, limit int) ([]LinkToCollect, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT l.id, l.publication_id, l.platform, l.url_canonical, l.submitted_at, l.last_collected_at
+FROM publication_links l
+JOIN project_publications p ON p.id = l.publication_id
+JOIN projects pr ON pr.id = p.project_id
+WHERE p.project_id = $1
+  AND p.status <> 'cancelled'
+  AND l.next_collect_at <> `+ParkedAt+`
+  AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $2)
+ORDER BY l.submitted_at DESC
+LIMIT $3`, projectID, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list project links: %w", err)
+	}
+	type candidate struct {
+		link LinkToCollect
+		last *time.Time
+	}
+	cands := make([]candidate, 0, limit)
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.link.LinkID, &c.link.PublicationID, &c.link.Platform,
+			&c.link.URL, &c.link.SubmittedAt, &c.last); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan project link: %w", err)
+		}
+		c.link.ProjectID = projectID
+		cands = append(cands, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	stale := make([]LinkToCollect, 0, len(cands))
+	ids := make([]uuid.UUID, 0, len(cands))
+	for _, c := range cands {
+		// Ни разу не собранную берём всегда: ноль в отчёте — это не
+		// «никто не смотрит», а «мы не спросили».
+		if c.last != nil && now.Sub(*c.last) < RefreshEvery(now.Sub(c.link.SubmittedAt)) {
+			continue
+		}
+		stale = append(stale, c.link)
+		ids = append(ids, c.link.LinkID)
+	}
+	if len(stale) == 0 {
+		return nil, nil
+	}
+
+	if _, err := r.db.Exec(ctx, `
+UPDATE publication_links
+SET next_collect_at = `+keepParked("next_collect_at", "$2::timestamptz + $3::interval")+`
+WHERE id = ANY($1)`, ids, now, claimLease); err != nil {
+		return nil, fmt.Errorf("lease project links: %w", err)
+	}
+	return stale, nil
+}
+
 // SaveStats — снимок метрик на дату плюс перенос ссылки на следующий обход.
 //
 // Повторный вызов за ту же дату перезаписывает снимок, а не плодит строки:
@@ -168,24 +308,26 @@ SET views = EXCLUDED.views,
 		return fmt.Errorf("upsert daily stat: %w", err)
 	}
 
-	interval := CollectInterval(ageInDays(link.SubmittedAt, now))
+	every := CollectEvery(now.Sub(link.SubmittedAt))
 	if _, err := tx.Exec(ctx, `
 UPDATE publication_links
 SET last_collected_at = $2::timestamptz,
-    collect_interval_days = $3,
+    last_collect_try_at = $2::timestamptz,
+    -- Удачный обход стирает прошлую причину: она была про то, чего
+    -- больше нет, а в кабинете висела бы подписью под живой цифрой.
+    last_collect_error = '',
+    collect_every = $3,
     -- Дата публикации пишется один раз и больше не перезаписывается:
     -- ролик не выходит дважды, а источник со временем начинает врать
     -- (меняет часовой пояс, отдаёт дату перезалива). Первое непустое
     -- значение и есть ответ; COALESCE тут именно про это, а не про
     -- "подставить что-нибудь".
     published_at = COALESCE(published_at, $4),
-    -- Явные приведения обязательны. Без ::timestamptz Postgres не может
+    -- Приведение ::timestamptz обязательно: без него Postgres не может
     -- выбрать оператор "+" (кандидатов несколько: date, time, timestamp)
-    -- и выводит для параметра противоречивые типы — 42P08. А без
-    -- make_interval пришлось бы писать ($3 || ' days'), где тот же
-    -- параметр был бы и числом, и текстом.
-    next_collect_at = `+keepParked("next_collect_at", "$2::timestamptz + make_interval(days => $3)")+`
-WHERE id = $1`, link.LinkID, now, interval, publishedAt); err != nil {
+    -- и выводит для параметра противоречивые типы — 42P08.
+    next_collect_at = `+keepParked("next_collect_at", "$2::timestamptz + $3::interval")+`
+WHERE id = $1`, link.LinkID, now, every, publishedAt); err != nil {
 		return fmt.Errorf("reschedule link: %w", err)
 	}
 	return tx.Commit(ctx)
@@ -238,19 +380,41 @@ func parsePublishedAt(raw string) *time.Time {
 	return nil
 }
 
+// maxCollectError — сколько текста причины храним.
+//
+// Триста символов: причина — это строка для человека («метрики
+// отдельных постов для vk пока не поддержаны»), а не стектрейс. Чужой
+// сервис однажды пришлёт килобайт HTML вместо сообщения, и место под
+// него в каждой строке таблицы ссылок нам не нужно.
+const maxCollectError = 300
+
 // MarkFailed — сервис не отдал метрики (площадка не поддержана, ролик
 // удалён, кончились кредиты у поставщика).
 //
 // Снимок не пишем — нулей в отчёте быть не должно, они врут сильнее, чем
 // пропуск. Но следующий обход всё равно отодвигаем: иначе битая ссылка
 // будет дёргаться на каждом тике и съест слоты у живых.
-func (r *Repo) MarkFailed(ctx context.Context, link LinkToCollect, now time.Time) error {
-	interval := CollectInterval(ageInDays(link.SubmittedAt, now))
+//
+// А причину СОХРАНЯЕМ. Раньше она тут терялась, и в кабинете «площадка
+// не собирается», «ролик удалён» и «никто не посмотрел» выглядели
+// одинаково — пустой цифрой. Первые два — наша работа, третье — работа
+// креатора, и путать их нельзя.
+func (r *Repo) MarkFailed(ctx context.Context, link LinkToCollect, now time.Time, reason string) error {
+	every := CollectEvery(now.Sub(link.SubmittedAt))
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "сборщик не ответил по этой ссылке"
+	}
+	if len(reason) > maxCollectError {
+		reason = reason[:maxCollectError]
+	}
 	_, err := r.db.Exec(ctx, `
 UPDATE publication_links
-SET collect_interval_days = $2,
-    next_collect_at = `+keepParked("next_collect_at", "$3::timestamptz + make_interval(days => $2)")+`
-WHERE id = $1`, link.LinkID, interval, now)
+SET collect_every = $2,
+    last_collect_error = $4,
+    last_collect_try_at = $3::timestamptz,
+    next_collect_at = `+keepParked("next_collect_at", "$3::timestamptz + $2::interval")+`
+WHERE id = $1`, link.LinkID, every, now, reason)
 	if err != nil {
 		return fmt.Errorf("reschedule failed link: %w", err)
 	}
@@ -518,7 +682,6 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 	if err != nil {
 		return st, err
 	}
-	st.Considered = len(links)
 	if len(links) == 0 {
 		return st, nil
 	}
@@ -529,6 +692,45 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 	if len(links) >= batchSize {
 		ObserveCollectSaturated()
 	}
+	return s.collectClaimed(ctx, links, now)
+}
+
+// RefreshProject — обойти ссылки ОДНОГО проекта, которым пора.
+//
+// Зовётся при открытии карточки проекта менеджером или креатором:
+// человек смотрит на цифры, и цифры на это время становятся живыми.
+// «Кому пора» решает RefreshEvery — затухающее расписание первых суток
+// ролика; всё, что свежее своего шага, не трогаем, поэтому перезагрузка
+// страницы кредитов не стоит.
+//
+// Фоновый обход при этом идёт своим чередом и о нас не знает: от
+// двойной работы защищает та же аренда, что и между двумя воркерами, —
+// взятая ссылка уезжает на десять минут вперёд.
+func (s *Service) RefreshProject(ctx context.Context, projectID uuid.UUID, now time.Time, limit int) (CollectStats, error) {
+	var st CollectStats
+	if s.collector == nil {
+		return st, ErrCollectorNotSet
+	}
+	links, err := s.repo.ClaimProjectLinks(ctx, projectID, now, limit)
+	if err != nil {
+		return st, err
+	}
+	if len(links) == 0 {
+		return st, nil
+	}
+	return s.collectClaimed(ctx, links, now)
+}
+
+// collectClaimed — общий путь для фонового обхода и обхода по заходу в
+// карточку: сходить в сервис, разложить ответ, записать снимки.
+//
+// Общий намеренно: расписание у этих двух путей разное, а всё, что
+// после выборки, обязано быть одинаковым. Две копии разошлись бы на
+// первой же правке — например, на том, писать ли снимок, когда сервис
+// вернул «нет данных» (не писать: ноль врёт сильнее пропуска).
+func (s *Service) collectClaimed(ctx context.Context, links []LinkToCollect, now time.Time) (CollectStats, error) {
+	var st CollectStats
+	st.Considered = len(links)
 
 	// Один канонический адрес может принадлежать нескольким ссылкам: один
 	// ролик сдали двое, или один креатор в двух выкладках. Список на
@@ -580,7 +782,7 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 			if !hasData {
 				st.NoData++
 				ObserveCollect(link.Platform, "no_data")
-				if err := s.repo.MarkFailed(ctx, link, now); err != nil {
+				if err := s.repo.MarkFailed(ctx, link, now, res.Error); err != nil {
 					return st, err
 				}
 				continue
@@ -626,7 +828,10 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 		if !seen[l.LinkID] {
 			st.NoData++
 			ObserveCollect(l.Platform, "no_data")
-			if err := s.repo.MarkFailed(ctx, l, now); err != nil {
+			// Про эту ссылку сервис не сказал вообще ничего — ни цифр, ни
+			// причины. Так и пишем: иначе пустая причина читалась бы как
+			// «обход не проводился».
+			if err := s.repo.MarkFailed(ctx, l, now, "сборщик не вернул ответ по этой ссылке"); err != nil {
 				return st, err
 			}
 		}

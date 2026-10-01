@@ -55,6 +55,10 @@ var (
 	// человеку ответили «на эту дату у вас уже есть выкладка», а не
 	// пятисоткой из драйвера.
 	ErrDayTaken = errors.New("creator already has a publication on that day")
+	// ErrDayFull — в дне кончились номера. Несколько роликов в день —
+	// норма, десять — потолок (maxPerDay и CHECK в базе), и дальше
+	// это уже не план, а опечатка в поле «роликов в день».
+	ErrDayFull = errors.New("day already has the maximum number of publications")
 	// ErrPublicationStarted — по выкладке уже сдавали ссылки: двигать её
 	// дату или снимать её нельзя. Работа креатора не исчезает из-за
 	// правки календаря, а «перенос» ролика, который уже вышел, переписал
@@ -229,7 +233,11 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 	if !plan.HasCrew() {
 		owners = []uuid.UUID{uuid.Nil}
 	}
-	total := len(owners) * len(in.Dates)
+	perDay := in.PerDay
+	if perDay <= 0 {
+		perDay = 1
+	}
+	total := len(owners) * len(in.Dates) * perDay
 	// pgtype.UUID, а не *uuid.UUID: драйвер кодирует срез указателей
 	// поэлементно через driver.Valuer, и метод-значение UUID.Value на
 	// nil-указателе паникует. Явный Valid=false — единственный способ
@@ -237,6 +245,7 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 	creatorArg := make([]pgtype.UUID, 0, total)
 	dueArg := make([]time.Time, 0, total)
 	draftArg := make([]*time.Time, 0, total)
+	slotArg := make([]int32, 0, total)
 	for i := range owners {
 		owner := pgtype.UUID{Bytes: owners[i], Valid: plan.HasCrew()}
 		for _, d := range in.Dates {
@@ -246,22 +255,31 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 				dd := day.AddDate(0, 0, -in.DraftLeadDays)
 				draft = &dd
 			}
-			creatorArg = append(creatorArg, owner)
-			dueArg = append(dueArg, day)
-			draftArg = append(draftArg, draft)
+			// Номера в дне идут подряд с первого, а не с «следующего
+			// свободного»: конфликт гасится тем же ON CONFLICT DO NOTHING,
+			// и пачка на три ролика в день поверх одного существующего
+			// добавит второй и третий. Поэтому повторная отправка той же
+			// формы не добавляет ничего — план приводится к заданному
+			// числу, а не растёт на каждое нажатие.
+			for slot := 1; slot <= perDay; slot++ {
+				creatorArg = append(creatorArg, owner)
+				dueArg = append(dueArg, day)
+				draftArg = append(draftArg, draft)
+				slotArg = append(slotArg, int32(slot))
+			}
 		}
 	}
 
 	const ins = `
 INSERT INTO project_publications
-    (project_id, creator_user_id, due_date, draft_due_date, created_batch_id, created_by)
-SELECT $1, t.c, t.d, t.dr, $5, $6
-FROM unnest($2::uuid[], $3::date[], $4::date[]) AS t(c, d, dr)
+    (project_id, creator_user_id, due_date, draft_due_date, day_slot, created_batch_id, created_by)
+SELECT $1, t.c, t.d, t.dr, t.s, $6, $7
+FROM unnest($2::uuid[], $3::date[], $4::date[], $5::int[]) AS t(c, d, dr, s)
 ON CONFLICT DO NOTHING
-RETURNING id, project_id, creator_user_id, due_date, draft_due_date, status,
+RETURNING id, project_id, creator_user_id, due_date, draft_due_date, day_slot, status,
           created_batch_id, created_at, updated_at`
 
-	rows, err := tx.Query(ctx, ins, in.ProjectID, creatorArg, dueArg, draftArg,
+	rows, err := tx.Query(ctx, ins, in.ProjectID, creatorArg, dueArg, draftArg, slotArg,
 		batchID, in.CreatedBy)
 	if err != nil {
 		return BatchResult{}, fmt.Errorf("insert publications: %w", err)
@@ -270,7 +288,7 @@ RETURNING id, project_id, creator_user_id, due_date, draft_due_date, status,
 	for rows.Next() {
 		var p Publication
 		if err := rows.Scan(&p.ID, &p.ProjectID, &p.CreatorUserID, &p.DueDate,
-			&p.DraftDueDate, &p.Status, &p.BatchID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.DraftDueDate, &p.DaySlot, &p.Status, &p.BatchID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			rows.Close()
 			return BatchResult{}, fmt.Errorf("scan created publication: %w", err)
 		}
@@ -302,6 +320,41 @@ RETURNING id, project_id, creator_user_id, due_date, draft_due_date, status,
 		return BatchResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return BatchResult{BatchID: batchID, Created: len(items), Items: items}, nil
+}
+
+// nextDaySlot — номер для ещё одного ролика в этот день.
+//
+// «На этот день уже что-то стоит» перестало быть отказом: день съёмки
+// один, роликов из него выходит несколько, и раньше менеджеру
+// приходилось разносить их по соседним датам, которые к работе
+// отношения не имели. Номер выдаёт сам день — первый свободный из
+// 1..maxPerDay; отменённые места освобождаются, их не видит и
+// уникальный индекс.
+//
+// Гонку двух одновременных «Добавить» ловит не этот запрос, а индекс:
+// оба увидят один и тот же свободный номер, второй получит
+// ErrDayTaken. Блокировать строку, которой ещё нет, всё равно нечем,
+// а цена ошибки — одно повторное нажатие.
+func nextDaySlot(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, owner *uuid.UUID, day time.Time, exclude uuid.UUID) (int, error) {
+	var slot int
+	if err := tx.QueryRow(ctx, `
+SELECT COALESCE(MIN(s.n), 0)
+FROM generate_series(1, $4) AS s(n)
+WHERE NOT EXISTS (
+    SELECT 1 FROM project_publications p
+    WHERE p.project_id = $1
+      AND p.due_date = $2::date
+      AND p.creator_user_id IS NOT DISTINCT FROM $3
+      AND p.day_slot = s.n
+      AND p.status <> 'cancelled'
+      AND p.id <> $5
+)`, projectID, day, owner, maxPerDay, exclude).Scan(&slot); err != nil {
+		return 0, fmt.Errorf("pick day slot: %w", err)
+	}
+	if slot == 0 {
+		return 0, ErrDayFull
+	}
+	return slot, nil
 }
 
 // AddSelfPublication — креатор заводит себе выкладку сам.
@@ -360,19 +413,23 @@ SELECT EXISTS (
 		return Publication{}, ErrPeriodLocked
 	}
 
+	slot, err := nextDaySlot(ctx, tx, projectID, &creatorID, day, uuid.Nil)
+	if err != nil {
+		return Publication{}, err
+	}
+
 	var p Publication
 	err = tx.QueryRow(ctx, `
 INSERT INTO project_publications
-    (project_id, creator_user_id, due_date, created_by, self_added)
-VALUES ($1, $2, $3::date, $2, TRUE)
-RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, status,
+    (project_id, creator_user_id, due_date, day_slot, created_by, self_added)
+VALUES ($1, $2, $3::date, $4, $2, TRUE)
+RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, day_slot, status,
           created_batch_id, self_added, created_at, updated_at`,
-		projectID, creatorID, day).Scan(
+		projectID, creatorID, day, slot).Scan(
 		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate,
-		&p.Status, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
+		&p.DaySlot, &p.Status, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
 	if isUniqueViolation(err) {
-		// publications_creator_day_uniq: на этот день у него уже
-		// что-то стоит. Ограничение не обходим — отвечаем понятно.
+		// Номер из-под носа забрал кто-то одновременный (см. nextDaySlot).
 		return Publication{}, ErrDayTaken
 	}
 	if err != nil {
@@ -432,16 +489,21 @@ func (r *Repo) ManagerAddPublication(ctx context.Context, in AddPublicationInput
 		draft = &dd
 	}
 
+	slot, err := nextDaySlot(ctx, tx, in.ProjectID, owner, in.Day, uuid.Nil)
+	if err != nil {
+		return Publication{}, err
+	}
+
 	var p Publication
 	err = tx.QueryRow(ctx, `
 INSERT INTO project_publications
-    (project_id, creator_user_id, due_date, draft_due_date, created_by)
-VALUES ($1, $2, $3::date, $4::date, $5)
-RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, status,
+    (project_id, creator_user_id, due_date, draft_due_date, day_slot, created_by)
+VALUES ($1, $2, $3::date, $4::date, $5, $6)
+RETURNING id, project_id, creator_user_id, title, due_date, draft_due_date, day_slot, status,
           created_batch_id, self_added, created_at, updated_at`,
-		in.ProjectID, owner, in.Day, draft, in.ManagerUserID).Scan(
+		in.ProjectID, owner, in.Day, draft, slot, in.ManagerUserID).Scan(
 		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate,
-		&p.Status, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
+		&p.DaySlot, &p.Status, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
 	if isUniqueViolation(err) {
 		return Publication{}, ErrDayTaken
 	}
@@ -514,15 +576,24 @@ FROM project_publications p WHERE p.id = $1`, in.PublicationID).Scan(
 		return Publication{}, err
 	}
 
+	// Номер в дне пересчитывается на новом месте: уносить его с собой
+	// нельзя — на целевом дне «второй ролик» мог быть занят, а свободным
+	// оказаться первый.
+	slot, err := nextDaySlot(ctx, tx, projectID, creatorID, in.Day, in.PublicationID)
+	if err != nil {
+		return Publication{}, err
+	}
+
 	if _, err := tx.Exec(ctx, `
 UPDATE project_publications
 SET due_date = $2::date,
+    day_slot = $3,
     draft_due_date = CASE
         WHEN draft_due_date IS NULL THEN NULL
         ELSE $2::date - (due_date - draft_due_date)
     END,
     updated_at = now()
-WHERE id = $1`, in.PublicationID, in.Day); err != nil {
+WHERE id = $1`, in.PublicationID, in.Day, slot); err != nil {
 		if isUniqueViolation(err) {
 			return Publication{}, ErrDayTaken
 		}
@@ -640,13 +711,13 @@ WHERE project_id = $1 AND created_batch_id = $2
 // Get — выкладка со ссылками и открытой просьбой о переносе.
 func (r *Repo) Get(ctx context.Context, id uuid.UUID) (Publication, error) {
 	const q = `
-SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, status,
+SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, day_slot, status,
        closed_by, COALESCE(close_reason, ''), created_batch_id, self_added, created_at, updated_at
 FROM project_publications WHERE id = $1`
 	var p Publication
 	err := r.db.QueryRow(ctx, q, id).Scan(
-		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate, &p.Status,
-		&p.ClosedBy, &p.CloseReason, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
+		&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate, &p.DraftDueDate, &p.DaySlot,
+		&p.Status, &p.ClosedBy, &p.CloseReason, &p.BatchID, &p.SelfAdded, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Publication{}, ErrNotFound
 	}
@@ -662,11 +733,11 @@ FROM project_publications WHERE id = $1`
 // ListByProject — все выкладки проекта. Это выдача менеджера: он видит всех.
 func (r *Repo) ListByProject(ctx context.Context, projectID uuid.UUID) ([]Publication, error) {
 	return r.list(ctx, `
-SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, status,
+SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, day_slot, status,
        closed_by, COALESCE(close_reason, ''), created_batch_id, self_added, created_at, updated_at
 FROM project_publications
 WHERE project_id = $1
-ORDER BY due_date, created_at`, projectID)
+ORDER BY due_date, day_slot, created_at`, projectID)
 }
 
 // ListByCreator — выкладки одного креатора в проекте.
@@ -675,11 +746,11 @@ ORDER BY due_date, created_at`, projectID)
 // попадают в принципе, а не прячутся на фронте (требование К1).
 func (r *Repo) ListByCreator(ctx context.Context, projectID, creatorID uuid.UUID) ([]Publication, error) {
 	return r.list(ctx, `
-SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, status,
+SELECT id, project_id, creator_user_id, title, due_date, draft_due_date, day_slot, status,
        closed_by, COALESCE(close_reason, ''), created_batch_id, self_added, created_at, updated_at
 FROM project_publications
 WHERE project_id = $1 AND creator_user_id = $2
-ORDER BY due_date, created_at`, projectID, creatorID)
+ORDER BY due_date, day_slot, created_at`, projectID, creatorID)
 }
 
 func (r *Repo) list(ctx context.Context, q string, args ...any) ([]Publication, error) {
@@ -692,7 +763,7 @@ func (r *Repo) list(ctx context.Context, q string, args ...any) ([]Publication, 
 	for rows.Next() {
 		var p Publication
 		if err := rows.Scan(&p.ID, &p.ProjectID, &p.CreatorUserID, &p.Title, &p.DueDate,
-			&p.DraftDueDate, &p.Status, &p.ClosedBy, &p.CloseReason, &p.BatchID,
+			&p.DraftDueDate, &p.DaySlot, &p.Status, &p.ClosedBy, &p.CloseReason, &p.BatchID,
 			&p.SelfAdded, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan publication: %w", err)
 		}
@@ -965,8 +1036,8 @@ WHERE id = $1 FOR UPDATE`, in.PublicationID).Scan(&projectID, &creatorID, &statu
 	upsert := `
 INSERT INTO publication_links
     (publication_id, platform, url, url_canonical, external_media_id,
-     submitted_at, collect_interval_days, next_collect_at)
-VALUES ($1, $2, $3, $4, NULLIF($5, ''), now(), 1, now())
+     submitted_at, collect_every, next_collect_at)
+VALUES ($1, $2, $3, $4, NULLIF($5, ''), now(), interval '1 minute', now())
 ON CONFLICT (publication_id, platform) DO UPDATE
 SET url = EXCLUDED.url,
     url_canonical = EXCLUDED.url_canonical,
@@ -976,7 +1047,7 @@ SET url = EXCLUDED.url,
     -- он попал в ближайший обход, а не ждал своего интервала. Кроме
     -- ссылок, уже снятых с обхода: период такого ролика подытожен, и
     -- новые просмотры по нему записывать некуда (см. ParkedAt).
-    collect_interval_days = 1,
+    collect_every = interval '1 minute',
     next_collect_at = ` + keepParked("publication_links.next_collect_at", "now()")
 
 	for _, l := range parsed {
@@ -1100,8 +1171,8 @@ WHERE publication_id = $1 AND platform = $2`, in.PublicationID, in.Platform).Sca
 	upsert := `
 INSERT INTO publication_links
     (publication_id, platform, url, url_canonical, external_media_id,
-     submitted_at, collect_interval_days, next_collect_at)
-VALUES ($1, $2, $3, $4, NULLIF($5, ''), now(), 1, now())
+     submitted_at, collect_every, next_collect_at)
+VALUES ($1, $2, $3, $4, NULLIF($5, ''), now(), interval '1 minute', now())
 ON CONFLICT (publication_id, platform) DO UPDATE
 SET url = EXCLUDED.url,
     url_canonical = EXCLUDED.url_canonical,
@@ -1109,7 +1180,7 @@ SET url = EXCLUDED.url,
     submitted_at = now(),
     -- Снятую с обхода ссылку правка адреса в очередь не возвращает:
     -- её период подытожен, числа заморожены срезом (см. ParkedAt).
-    collect_interval_days = 1,
+    collect_every = interval '1 minute',
     next_collect_at = ` + keepParked("publication_links.next_collect_at", "now()") + `
 RETURNING id`
 	// Замеры сносим ДО правки самой ссылки, хотя логически это следствие.

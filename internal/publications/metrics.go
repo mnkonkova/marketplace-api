@@ -65,6 +65,27 @@ var (
 		Help: "Links overdue for collection by more than a day.",
 	})
 
+	// linksNeverCollected — сданные ссылки, по которым сбор не проходил
+	// НИ РАЗУ.
+	//
+	// Отдельно от linksStale, хотя обе про «сбор не идёт». Отставание
+	// говорит «цифры устаревают», и у него порог в сутки: цифра вчера
+	// есть, просто она вчерашняя. Здесь цифры нет вовсе, а в отчёте
+	// вместо неё ноль — и ноль читается как «ролик никто не смотрит».
+	// Это худшая подмена из возможных, поэтому и порог другой: не сутки,
+	// а пара часов.
+	//
+	// Именно этого показателя не хватило 1 октября 2026. В окружении
+	// прода не было INSTACURL_URL (стояла INSTACURL_HOST — переменная
+	// Alloy для скрейпа), воркер честно написал в лог «stats collection
+	// disabled» и больше ничего. Сбор не шёл, менеджер смотрел на пустые
+	// просмотры у вышедшего ролика, и ни один алерт не горел: отставание
+	// считается от next_collect_at, а он у свежей ссылки ещё не настал.
+	linksNeverCollected = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "crm_links_never_collected",
+		Help: "Submitted links that have never been collected, older than two hours.",
+	})
+
 	// statLagSeconds — возраст самой свежей цифры среди живых ссылок.
 	// Это ровно то число, которое показывается пользователю как «дата
 	// последнего сбора»: если оно растёт, отчёт врёт всё сильнее.
@@ -119,9 +140,17 @@ func ObserveCollectSaturated() {
 // чтобы это можно было проверить тестом, не поднимая Prometheus.
 type GaugeSnapshot struct {
 	LinksStale          int   `json:"links_stale"`
+	LinksNeverCollected int   `json:"links_never_collected"`
 	StatLagSeconds      int64 `json:"stat_lag_seconds"`
 	PublicationsOverdue int   `json:"publications_overdue"`
 }
+
+// neverCollectedGrace — сколько ссылке дозволено прожить без цифр.
+//
+// Два часа, а не десять минут: тик сбора по умолчанию часовой, и ссылка,
+// сданная за минуту до прохода, законно ждёт следующего. Две форы
+// подряд уже означают, что сбор не работает.
+const neverCollectedGrace = 2 * time.Hour
 
 // RefreshGauges — пересчитать бизнес-gauge'и. Дешёвые запросы по узким
 // индексам, зовутся периодически из воркера.
@@ -140,6 +169,23 @@ WHERE l.next_collect_at < $1::timestamptz - interval '1 day'
   AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $1)`,
 		now).Scan(&g.LinksStale); err != nil {
 		return g, fmt.Errorf("gauge links stale: %w", err)
+	}
+
+	// Сданные ссылки без единого снимка. Снятые с обхода и мёртвые
+	// проекты исключены теми же условиями, что и в отставании: там цифр
+	// нет законно.
+	if err := r.db.QueryRow(ctx, `
+SELECT count(*)
+FROM publication_links l
+JOIN project_publications p ON p.id = l.publication_id
+JOIN projects pr ON pr.id = p.project_id
+WHERE l.last_collected_at IS NULL
+  AND l.next_collect_at <> `+ParkedAt+`
+  AND l.submitted_at < $1::timestamptz - $2::interval
+  AND p.status <> 'cancelled'
+  AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $1)`,
+		now, neverCollectedGrace).Scan(&g.LinksNeverCollected); err != nil {
+		return g, fmt.Errorf("gauge links never collected: %w", err)
 	}
 
 	// Возраст самой свежей цифры. NULL (ничего не собирали) — это 0, а
@@ -185,6 +231,7 @@ WHERE p.status IN ('planned', 'partial')
 	}
 
 	linksStale.Set(float64(g.LinksStale))
+	linksNeverCollected.Set(float64(g.LinksNeverCollected))
 	statLagSeconds.Set(float64(g.StatLagSeconds))
 	publicationsOverdue.Set(float64(g.PublicationsOverdue))
 	return g, nil

@@ -314,14 +314,24 @@ func TestSelfAddRefusals(t *testing.T) {
 		}
 	})
 
-	t.Run("день уже занят", func(t *testing.T) {
+	// Второй ролик в тот же день креатору можно: план периода бывает
+	// выполнен, а до ступени просмотров не хватает, и снимать добор
+	// обязательно в другой день — требование из ниоткуда. А вот
+	// одиннадцатый — уже опечатка, и на ней отказ.
+	t.Run("в дне кончились номера", func(t *testing.T) {
 		day := pubDay(350).Format("2006-01-02")
-		if code, body := doJSON(t, srv, http.MethodPost, path, map[string]any{"due_date": day}); code != http.StatusCreated {
-			t.Fatalf("первая выкладка: код %d (%v)", code, body)
+		for n := 1; n <= 10; n++ {
+			code, body := doJSON(t, srv, http.MethodPost, path, map[string]any{"due_date": day})
+			if code != http.StatusCreated {
+				t.Fatalf("ролик №%d: код %d (%v)", n, code, body)
+			}
+			if got, _ := body["day_slot"].(float64); int(got) != n {
+				t.Fatalf("ролик №%d: day_slot=%v", n, body["day_slot"])
+			}
 		}
 		code, body := doJSON(t, srv, http.MethodPost, path, map[string]any{"due_date": day})
-		if code != http.StatusConflict || body["error"] != "day_taken" {
-			t.Fatalf("код %d, ошибка %v — ожидался 409/day_taken, а не пятисотка из драйвера",
+		if code != http.StatusConflict || body["error"] != "day_full" {
+			t.Fatalf("код %d, ошибка %v — ожидался 409/day_full, а не пятисотка из драйвера",
 				code, body["error"])
 		}
 	})

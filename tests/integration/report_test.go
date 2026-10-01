@@ -240,7 +240,7 @@ func TestReportCreatorSeesOnlyOwn(t *testing.T) {
 		t.Error("в свой срез попал чужой креатор")
 	}
 	for _, v := range rep.VideoRows {
-		if (v.CreatorUserID == nil || *v.CreatorUserID != creators[1]) {
+		if v.CreatorUserID == nil || *v.CreatorUserID != creators[1] {
 			t.Errorf("в таблице роликов чужая строка: %s", v.URL)
 		}
 	}

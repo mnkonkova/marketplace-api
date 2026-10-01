@@ -22,6 +22,7 @@ import (
 	"marketpclce/internal/config"
 	"marketpclce/internal/feed"
 	"marketpclce/internal/httpapi"
+	"marketpclce/internal/instacurl"
 	"marketpclce/internal/leads"
 	"marketpclce/internal/llm"
 	"marketpclce/internal/orders"
@@ -264,6 +265,26 @@ func main() {
 		logger.Warn("ACCOUNTS_SECRET_KEY пуст: пароли от аккаунтов бренда не хранятся")
 	}
 	publicationsSvc := publications.NewService(publications.NewRepo(pool)).WithSecrets(accountSecrets)
+	// Сбор статистики в API, а не только в воркере.
+	//
+	// Фоновый обход как был, так и остаётся делом воркера. Здесь нужен
+	// другой — по заходу в карточку проекта: человек открыл её и смотрит
+	// на цифры, и у свежего ролика они обязаны быть сегодняшними, а не
+	// вчерашними. Ждать общего тика для этого нельзя — он про расход, а
+	// не про того, кто сейчас на экране.
+	//
+	// Клиент тот же и настраивается теми же ключами. Нет ключей — ручка
+	// обновления честно отвечает «сбор не настроен», а не делает вид,
+	// что обновила.
+	// Короткие ссылки «поделиться» (vt.tiktok.com и такие же) разворачиваем
+	// при сдаче: в них нет ни автора, ни id ролика, и сборщик принимает их
+	// хвост за имя аккаунта — ролик с 680 просмотрами показывал ноль.
+	publicationsSvc = publicationsSvc.WithURLExpander(publications.NewURLExpander())
+	if ic := instacurl.New(cfg.InstacurlURL, cfg.InstacurlAPIKey, cfg.InstacurlTimeout); ic != nil {
+		publicationsSvc = publicationsSvc.WithCollector(ic)
+	} else {
+		logger.Warn("stats refresh on open disabled: INSTACURL_URL or INSTACURL_API_KEY not set")
+	}
 	publicationsHandler := publications.NewHandler(publicationsSvc)
 
 	projectsSvc := projects.NewService(projectsRepo).

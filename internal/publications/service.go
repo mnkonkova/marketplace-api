@@ -34,6 +34,15 @@ var (
 // запас и одновременно ловит случай «выбрал весь каталог».
 const maxBatch = 500
 
+// maxPerDay — сколько роликов можно поставить на один день.
+//
+// Не про технику: тридцать роликов в один день — это опечатка в поле
+// «роликов в день», а не план съёмок, и дешевле отказать сразу, чем
+// вычищать потом. То же число стоит ограничением в базе (миграция
+// 00076), здесь — чтобы человек получил внятный отказ, а не ошибку
+// драйвера.
+const maxPerDay = 10
+
 type Service struct {
 	repo *Repo
 	// collector — сбор статистики. nil, если интеграция не настроена:
@@ -47,6 +56,9 @@ type Service struct {
 	// secrets — шифрование паролей от аккаунтов бренда. Пустой (ключа в
 	// окружении нет) — логины и ссылки работают, пароли не заводятся.
 	secrets *Secrets
+	// expander — разворачиватель коротких ссылок «поделиться». nil —
+	// короткая ссылка сохраняется как есть, как было до 1 октября 2026.
+	expander URLExpander
 }
 
 func NewService(repo *Repo) *Service {
@@ -67,7 +79,7 @@ func (s *Service) SecretsEnabled() bool { return s.secrets.Enabled() }
 // менеджера: выбрал креаторов, выбрал «вторник-четверг» и границы месяца.
 func (s *Service) CreateBatchByScheme(ctx context.Context, projectID uuid.UUID,
 	creatorIDs []uuid.UUID, scheme Scheme, from, to time.Time,
-	draftLeadDays int, createdBy uuid.UUID) (BatchResult, error) {
+	draftLeadDays, perDay int, createdBy uuid.UUID) (BatchResult, error) {
 
 	dates, err := GenerateDates(scheme, from, to)
 	if err != nil {
@@ -81,6 +93,7 @@ func (s *Service) CreateBatchByScheme(ctx context.Context, projectID uuid.UUID,
 		CreatorUserIDs: creatorIDs,
 		Dates:          dates,
 		DraftLeadDays:  draftLeadDays,
+		PerDay:         perDay,
 		CreatedBy:      createdBy,
 	})
 }
@@ -98,7 +111,13 @@ func (s *Service) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchRe
 	//
 	// Потолок пачки считается по строкам, которые реально уедут в
 	// INSERT: без креаторов произведение вырождается в одни даты.
-	rows := len(in.Dates)
+	if in.PerDay <= 0 {
+		in.PerDay = 1
+	}
+	if in.PerDay > maxPerDay {
+		return BatchResult{}, fmt.Errorf("%w: роликов в день не больше %d", ErrInvalidInput, maxPerDay)
+	}
+	rows := len(in.Dates) * in.PerDay
 	if n := len(in.CreatorUserIDs); n > 0 {
 		rows *= n
 	}
@@ -114,12 +133,22 @@ func (s *Service) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchRe
 // PreviewBatch — что будет создано, до создания. Массовое создание —
 // единственное место, где одна ошибка стоит ручной чистки шестидесяти
 // строк, поэтому предпросмотр обязателен (см. риск в плане).
-func (s *Service) PreviewBatch(scheme Scheme, creatorIDs []uuid.UUID, from, to time.Time) ([]time.Time, int, error) {
+func (s *Service) PreviewBatch(scheme Scheme, creatorIDs []uuid.UUID, from, to time.Time, perDay int) ([]time.Time, int, error) {
 	dates, err := GenerateDates(scheme, from, to)
 	if err != nil {
 		return nil, 0, err
 	}
-	return dates, len(dates) * len(dedupeIDs(creatorIDs)), nil
+	if perDay <= 0 {
+		perDay = 1
+	}
+	// Дни и количество — разные числа, и предпросмотр обязан показывать
+	// второе: «14 дат» при трёх роликах в день — это 42 строки в плане,
+	// и узнать об этом после нажатия хуже, чем до.
+	total := len(dates) * perDay
+	if n := len(dedupeIDs(creatorIDs)); n > 0 {
+		total *= n
+	}
+	return dates, total, nil
 }
 
 // AddSelfPublication — креатор заводит себе выкладку сам.
@@ -250,7 +279,10 @@ func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publica
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		l, err := ParseLink(raw)
+		// Короткую ссылку из приложения разворачиваем ДО разбора: в
+		// vt.tiktok.com/ZSbyuhrDf нет ни автора, ни id ролика, и
+		// сборщик принимает её хвост за имя аккаунта (см. shortlinks.go).
+		l, err := ParseLink(s.expandShort(ctx, raw))
 		if err != nil {
 			return Publication{}, fmt.Errorf("%q: %w", raw, err)
 		}
@@ -333,7 +365,7 @@ func (s *Service) editLink(ctx context.Context, in ManagerEditLinkInput) (Public
 	if in.URL == "" {
 		return s.repo.ManagerRemoveLink(ctx, in)
 	}
-	l, err := ParseLink(in.URL)
+	l, err := ParseLink(s.expandShort(ctx, in.URL))
 	if err != nil {
 		return Publication{}, fmt.Errorf("%q: %w", in.URL, err)
 	}

@@ -209,9 +209,15 @@ type Config struct {
 	InstacurlAPIKey  string        `env:"INSTACURL_API_KEY"`
 	InstacurlTimeout time.Duration `env:"INSTACURL_TIMEOUT" envDefault:"60s"`
 	// StatsCollectInterval — как часто воркер проверяет, кого пора
-	// обойти. Частый тик безопасен: правило «раз в сутки на ролик»
-	// держится в выборке, а не расписанием тикера.
-	StatsCollectInterval time.Duration `env:"STATS_COLLECT_INTERVAL" envDefault:"1h"`
+	// обойти. Частый тик безопасен: частоту обхода задаёт расписание
+	// ссылки (collect_every), а не период тикера, и когда брать нечего,
+	// тик стоит один запрос по индексу.
+	//
+	// Минута, а не час: у свежего ролика первые шаги расписания —
+	// минута и пять минут, и при часовом тике они не выполнялись бы
+	// никогда. Час здесь означал «ноль просмотров у вышедшего ролика до
+	// следующего часа», ровно та жалоба, с которой это и началось.
+	StatsCollectInterval time.Duration `env:"STATS_COLLECT_INTERVAL" envDefault:"1m"`
 	// StatsCollectBatch — сколько ссылок за ОДИН поход в instacurl.
 	//
 	// Десять, а не сорок: обход одной ссылки VK занимает ~3,5 секунды

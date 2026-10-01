@@ -77,9 +77,24 @@ func setupSubmittedLinks(t *testing.T, urls ...string) (projectID uuid.UUID, cre
 	return projectID, creators[0], cleanup
 }
 
-// Жёсткое правило: один ролик обходится не чаще раза в сутки. Проверяем
-// по числу походов в сервис — деньги тратятся там, а не в базе.
-func TestCollectionOncePerDayHardLimit(t *testing.T) {
+// Частоту задаёт расписание, и только оно.
+//
+// Раньше здесь проверялось жёсткое правило «один ролик не чаще раза в
+// календарный день». Правило снято намеренно: пока оно стояло, шаг
+// меньше суток был невыразим, и у ролика, вышедшего час назад, в
+// кабинете честно висел ноль до следующей полуночи.
+//
+// Что проверяется вместо него, тремя шагами подряд:
+//
+//  1. фоновый обход соблюдает свой шаг — раньше срока в сервис не
+//     ходим, деньги тратятся там, а не в базе;
+//  2. открытие карточки обновляет цифру, хотя фоновый срок ещё не
+//     настал, — ради этого вся затея;
+//  3. снимок за сутки при этом ПЕРЕЗАПИСЫВАЕТСЯ, а не плодит строки.
+//     На третьем держится весь отчёт: итог считается по последнему
+//     снимку каждой ссылки, и две строки за один день сложились бы в
+//     двойные просмотры.
+func TestCollectionFollowsSchedule(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
 
@@ -102,41 +117,126 @@ func TestCollectionOncePerDayHardLimit(t *testing.T) {
 		t.Fatalf("первый проход: %+v, ожидалось 1 рассмотрено и 1 сохранено", st)
 	}
 
-	// Второй проход в тот же день — сервис дёргаться не должен вообще.
+	// Фоновый шаг свежего ролика — сутки. Через два часа в сервис идти
+	// не за чем: на эти цифры сейчас никто не смотрит.
 	st, err = svc.RunCollection(ctx, now.Add(2*time.Hour), 50)
 	if err != nil {
-		t.Fatalf("RunCollection (повтор): %v", err)
+		t.Fatalf("RunCollection (раньше срока): %v", err)
 	}
 	if st.Considered != 0 {
-		t.Errorf("во второй раз за сутки взято %d ссылок, ожидалось 0", st.Considered)
+		t.Errorf("раньше срока взято %d ссылок, ожидалось 0", st.Considered)
 	}
 	if fake.calls != 1 {
-		t.Errorf("в instacurl сходили %d раза, ожидался один — правило «раз в сутки» обойдено", fake.calls)
+		t.Errorf("в instacurl сходили %d раза, ожидался один — фоновый шаг обойдён", fake.calls)
+	}
+
+	// А вот открытие карточки обновляет, хотя фоновый срок не настал:
+	// ролику двенадцать минут, шаг для такого возраста — десять. И цифра
+	// ложится ПОВЕРХ сегодняшнего снимка, а не рядом с ним.
+	//
+	// Двенадцать, а не ровно шесть: на границе шага тест зависел бы от
+	// миллисекунд между посевом ссылки и взятием now — возраст уезжал
+	// на следующую ступень, и «пора» превращалось в «ещё рано».
+	fake.byURL[url] = okResult(url, 1500, 60, 9)
+	st, err = svc.RefreshProject(ctx, projectID, now.Add(12*time.Minute), 25)
+	if err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	if st.Saved != 1 {
+		t.Fatalf("по заходу в карточку: %+v, ожидалось 1 сохранено", st)
+	}
+	var rowsToday int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM video_stat_daily d
+JOIN publication_links l ON l.id = d.link_id
+JOIN project_publications p ON p.id = l.publication_id
+WHERE p.project_id = $1 AND d.stat_date = $2::date`, projectID, now).Scan(&rowsToday); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rowsToday != 1 {
+		t.Fatalf("за сутки %d снимков, ожидался один — повторный обход плодит строки, и итог удвоится",
+			rowsToday)
 	}
 
 	stats, err := repo.Stats(ctx, projectID)
 	if err != nil {
 		t.Fatalf("Stats: %v", err)
 	}
-	if stats.Views != 1000 || stats.Likes != 50 || stats.Comments != 7 {
-		t.Errorf("итоги проекта %+v, ожидалось 1000/50/7", stats)
+	if stats.Views != 1500 || stats.Likes != 60 || stats.Comments != 9 {
+		t.Errorf("итоги проекта %+v, ожидалось 1500/60/9 — в снимке должна остаться свежая цифра", stats)
 	}
 	if stats.AsOf == nil {
 		t.Error("нет даты последнего сбора — без неё цифру невозможно объяснить")
 	}
 }
 
-// График 1→2→4→8 по возрасту ролика.
-func TestCollectIntervalGrowsWithAge(t *testing.T) {
-	cases := []struct{ age, want int }{
-		{0, 1}, {5, 1},
-		{6, 2}, {14, 2},
-		{15, 4}, {28, 4},
-		{29, 8}, {365, 8},
+// Два расписания, и они про разное.
+//
+// Фоновое (CollectEvery) — про РАСХОД: архив почти не меняется, а обход
+// стоит кредит у поставщика, поэтому 1→2→4→8 дней по возрасту ролика.
+//
+// По заходу в карточку (RefreshEvery) — про ДОВЕРИЕ к цифре: ролик
+// выложили минуту назад, на площадке у него уже есть просмотры, а в
+// кабинете ноль, и этот ноль неотличим от «никто не смотрит». Первые
+// сутки шаг затухает: минута, пять, десять, полчаса, час, шесть часов.
+//
+// Главное, что здесь проверяется, — что частое расписание НЕ работает
+// фоном. Иначе свежая ссылка стоила бы 144 похода в сутки вместо
+// одного, и это были бы походы за цифрами, на которые никто не смотрит.
+func TestCollectSchedules(t *testing.T) {
+	min, hour, day := time.Minute, time.Hour, 24*time.Hour
+
+	background := []struct {
+		age  time.Duration
+		want time.Duration
+	}{
+		{0, day}, {min, day}, {6 * hour, day}, {5 * day, day},
+		{6 * day, 2 * day}, {14 * day, 2 * day},
+		{15 * day, 4 * day}, {28 * day, 4 * day},
+		{29 * day, 8 * day}, {365 * day, 8 * day},
 	}
-	for _, c := range cases {
-		if got := publications.CollectInterval(c.age); got != c.want {
-			t.Errorf("возраст %d дней: интервал %d, ожидался %d", c.age, got, c.want)
+	for _, c := range background {
+		if got := publications.CollectEvery(c.age); got != c.want {
+			t.Errorf("фоновый шаг для возраста %s: %s, ожидался %s", c.age, got, c.want)
+		}
+	}
+
+	onOpen := []struct {
+		age  time.Duration
+		want time.Duration
+	}{
+		{0, min}, {min, min},
+		{2 * min, 5 * min}, {6 * min, 5 * min},
+		{7 * min, 10 * min}, {16 * min, 10 * min},
+		{17 * min, 30 * min}, {76 * min, 30 * min},
+		{2 * hour, hour}, {196 * min, hour},
+		{4 * hour, 6 * hour}, {10 * hour, 6 * hour},
+		// За первыми сутками частить незачем: суточный ролик за время,
+		// пока на него смотрят, не меняется — дальше фоновый шаг.
+		{25 * hour, day}, {6 * day, 2 * day},
+	}
+	for _, c := range onOpen {
+		if got := publications.RefreshEvery(c.age); got != c.want {
+			t.Errorf("шаг по заходу для возраста %s: %s, ожидался %s", c.age, got, c.want)
+		}
+	}
+
+	// Монотонность обоих: шаг, уменьшающийся с возрастом, — это тихий
+	// перерасход кредитов на архиве.
+	var prev time.Duration
+	for _, c := range background {
+		if got := publications.CollectEvery(c.age); got < prev {
+			t.Fatalf("фоновое расписание не монотонно на возрасте %s", c.age)
+		} else {
+			prev = got
+		}
+	}
+	prev = 0
+	for _, c := range onOpen {
+		if got := publications.RefreshEvery(c.age); got < prev {
+			t.Fatalf("расписание по заходу не монотонно на возрасте %s", c.age)
+		} else {
+			prev = got
 		}
 	}
 }
@@ -223,14 +323,19 @@ WHERE p.project_id = $1`, projectID).Scan(&rows); err != nil {
 		t.Errorf("записано %d снимков с нулями — в отчёте появится ложный ноль", rows)
 	}
 
-	// Но следующий обход отодвинут: битая ссылка не должна дёргаться
-	// на каждом тике.
-	links, err := repo.DueForCollection(ctx, now.Add(time.Hour), 10)
+	// Но следующий обход отодвинут на шаг расписания: битая ссылка не
+	// должна дёргаться на каждом тике.
+	//
+	// Шаг для только что сданного ролика — минута, и это не оплошность:
+	// свежий ролик площадка отдаёт не сразу, и «не нашли через минуту
+	// после выкладки» чаще значит «ещё не проиндексировали», чем «не
+	// поддержано». Поэтому ранний повтор здесь полезнее экономии.
+	links, err := repo.DueForCollection(ctx, now.Add(30*time.Second), 10)
 	if err != nil {
 		t.Fatalf("DueForCollection: %v", err)
 	}
 	if len(links) != 0 {
-		t.Error("несобравшаяся ссылка снова в очереди через час")
+		t.Error("несобравшаяся ссылка вернулась в очередь раньше срока")
 	}
 }
 
@@ -978,5 +1083,236 @@ func TestZeroSharesDifferFromUnknown(t *testing.T) {
 	// (10 + 5 + 0) / 1000 = 1.5%
 	if rep.ERPercent == nil || *rep.ERPercent < 1.49 || *rep.ERPercent > 1.51 {
 		t.Errorf("ER %v, ожидали 1.5%%", rep.ERPercent)
+	}
+}
+
+// Открытие карточки не обходит то, что и так свежее своего шага.
+//
+// Это и есть «кеш», ради которого расписание первых суток вообще
+// придумано: менеджер может перезагружать страницу сколько угодно, а
+// кредиты у поставщика тратятся не чаще, чем цифра успевает устареть.
+// Без этой проверки одна лишняя перезагрузка стоила бы столько же,
+// сколько обход всего проекта.
+func TestRefreshProjectRespectsItsOwnSchedule(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/555"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: okResult(url, 100, 1, 1),
+	}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+
+	now := time.Now().UTC()
+	st, err := svc.RefreshProject(ctx, projectID, now, 25)
+	if err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	if st.Saved != 1 {
+		t.Fatalf("первое открытие: %+v, ожидалось 1 сохранено", st)
+	}
+
+	// Через полминуты — ничего: ролику меньше минуты, шаг для такого
+	// возраста ровно минута.
+	st, err = svc.RefreshProject(ctx, projectID, now.Add(30*time.Second), 25)
+	if err != nil {
+		t.Fatalf("RefreshProject (повтор): %v", err)
+	}
+	if st.Considered != 0 {
+		t.Errorf("перезагрузка страницы взяла %d ссылок, ожидалось 0", st.Considered)
+	}
+	if fake.calls != 1 {
+		t.Errorf("в instacurl сходили %d раза, ожидался один — расписание обойдено", fake.calls)
+	}
+}
+
+// Сбор не настроен — ручка обновления говорит об этом, а не делает вид.
+//
+// Молчаливый успех здесь хуже отказа: «сбор выключен» и «просмотров
+// нет» выглядят на экране одинаково, и ровно на этом 1 октября 2026
+// потерялся целый день — в окружении прода не было INSTACURL_URL, а
+// кабинет показывал честные нули.
+func TestRefreshProjectWithoutCollectorSaysSo(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	projectID, _, cleanup := setupSubmittedLinks(t, "https://www.tiktok.com/@u/video/556")
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	_, err := svc.RefreshProject(ctx, projectID, time.Now().UTC(), 25)
+	if !errors.Is(err, publications.ErrCollectorNotSet) {
+		t.Errorf("%v, ожидалось ErrCollectorNotSet", err)
+	}
+}
+
+// fakeExpander — разворачиватель коротких ссылок для теста. Ходить в
+// живой TikTok из прогона нельзя: тест стал бы зависеть от сети и от
+// того, жив ли сегодня чужой редирект.
+type fakeExpander struct {
+	to   string
+	err  error
+	last string
+}
+
+func (f *fakeExpander) Expand(_ context.Context, raw string) (string, error) {
+	f.last = raw
+	return f.to, f.err
+}
+
+// Короткая ссылка «поделиться» разворачивается при сдаче.
+//
+// В vt.tiktok.com/ZSbyuhrDf нет ни автора, ни id ролика — только код
+// редиректа. Сборщик такую ссылку принимает за АККАУНТ (его ответ:
+// «kind: profile, handle: ZSbyuhrDf, Account doesn't exist»), а та же
+// ссылка в полном виде отдаёт просмотры. Пока мы сохраняли короткую,
+// у вышедшего ролика в кабинете стоял ноль — неотличимый от «никто не
+// смотрит».
+func TestSubmitExpandsShortTikTokLink(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	const full = "https://www.tiktok.com/@ad.dobrotsen/video/7691706681415470356"
+	exp := &fakeExpander{to: full}
+	svc := publications.NewService(publications.NewRepo(pool)).WithURLExpander(exp)
+
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	pub, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: res.Items[0].ID,
+		ActorUserID:   creators[0],
+		URLs:          []string{"https://vt.tiktok.com/ZSbyuhrDf"},
+	})
+	if err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+	if exp.last != "https://vt.tiktok.com/ZSbyuhrDf" {
+		t.Errorf("разворачивали %q, ожидали короткую ссылку", exp.last)
+	}
+	if len(pub.Links) != 1 {
+		t.Fatalf("ссылок %d, ожидалась одна", len(pub.Links))
+	}
+
+	// В базу уходит ПОЛНЫЙ адрес: по нему сборщик и находит ролик.
+	var canonical, mediaID string
+	if err := pool.QueryRow(ctx, `
+SELECT url_canonical, COALESCE(external_media_id, '')
+FROM publication_links WHERE publication_id = $1`, res.Items[0].ID).Scan(&canonical, &mediaID); err != nil {
+		t.Fatalf("read link: %v", err)
+	}
+	if canonical != full {
+		t.Errorf("сохранили %q, ожидали %q", canonical, full)
+	}
+	if mediaID != "7691706681415470356" {
+		t.Errorf("id ролика %q — без него ссылку не опознать", mediaID)
+	}
+}
+
+// Редирект не ответил — сдача всё равно проходит.
+//
+// Ролик уже вышел, человек его сдаёт, и ронять сдачу из-за недоступного
+// редиректа значит потерять работу ради аккуратности адреса. Хуже, чем
+// было, при этом не становится: раньше короткая ссылка сохранялась
+// всегда.
+func TestSubmitKeepsShortLinkWhenExpandFails(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	exp := &fakeExpander{err: errors.New("dial tcp: i/o timeout")}
+	svc := publications.NewService(publications.NewRepo(pool)).WithURLExpander(exp)
+
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: res.Items[0].ID,
+		ActorUserID:   creators[0],
+		URLs:          []string{"https://vt.tiktok.com/ZSbyuhrDf"},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v — отказ редиректа не должен ронять сдачу", err)
+	}
+}
+
+// Причина отказа сохраняется и доезжает до отчёта.
+//
+// Сборщик всегда говорит, почему цифр нет: «метрики отдельных постов
+// для vk пока не поддержаны», «ролик не найден». Мы эту причину
+// выбрасывали, и в кабинете «площадка не собирается», «ролик удалён» и
+// «никто не посмотрел» выглядели одинаково — пустой цифрой. Первые два
+// — наша работа, третье — работа креатора.
+func TestCollectFailureKeepsReason(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://vk.com/clip-1_2"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	const reason = "Метрики отдельных постов для 'vk' пока не поддержаны"
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: {Platform: "vk", URL: url, Kind: "media", OK: false, Error: reason},
+	}}
+	repo := publications.NewRepo(pool)
+	svc := publications.NewService(repo).WithCollector(fake)
+
+	if _, err := svc.RunCollection(ctx, time.Now().UTC(), 50); err != nil {
+		t.Fatalf("RunCollection: %v", err)
+	}
+
+	rep, err := repo.Report(ctx, projectID, publications.ReportFilter{})
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if len(rep.VideoRows) != 1 {
+		t.Fatalf("строк в отчёте %d, ожидалась одна", len(rep.VideoRows))
+	}
+	row := rep.VideoRows[0]
+	if row.CollectError != reason {
+		t.Errorf("причина %q, ожидалась %q", row.CollectError, reason)
+	}
+	if row.CollectTriedAt == nil {
+		t.Error("нет даты попытки — по ней отличают «сбор не дал цифр» от «сбор не ходил»")
+	}
+	if row.CollectedAt != nil {
+		t.Error("дата сбора проставлена, хотя цифр не было: снимка с нулями быть не должно")
+	}
+
+	// А удачный обход причину стирает: она была про то, чего больше нет.
+	fake.byURL[url] = okResult(url, 1200, 40, 3)
+	// Своим расписанием ссылка уедет на сутки вперёд, поэтому зовём тот
+	// путь, которым ходит открытая карточка.
+	if _, err := svc.RefreshProject(ctx, projectID, time.Now().UTC().Add(12*time.Minute), 25); err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	rep, err = repo.Report(ctx, projectID, publications.ReportFilter{})
+	if err != nil {
+		t.Fatalf("Report (после удачи): %v", err)
+	}
+	if rep.VideoRows[0].CollectError != "" {
+		t.Errorf("причина осталась после удачного обхода: %q", rep.VideoRows[0].CollectError)
+	}
+	if rep.VideoRows[0].Views != 1200 {
+		t.Errorf("просмотры %d, ожидалось 1200", rep.VideoRows[0].Views)
 	}
 }

@@ -76,7 +76,7 @@ func TestCreateBatchByScheme(t *testing.T) {
 	to := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 
 	res, err := svc.CreateBatchByScheme(ctx, projectID, creators,
-		publications.SchemeTueThu, from, to, 0, creators[0])
+		publications.SchemeTueThu, from, to, 0, 0, creators[0])
 	if err != nil {
 		t.Fatalf("CreateBatchByScheme: %v", err)
 	}
