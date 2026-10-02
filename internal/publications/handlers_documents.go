@@ -2,6 +2,7 @@ package publications
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -328,10 +329,16 @@ type openedResp struct {
 // @Summary  Мои документы
 // @Description Выданное лично и договоры из материалов проектов, где человек
 // @Description сейчас работает или заказчик. Отозванное не показывается.
+// @Description С project_id — только документы этого проекта, договор первым.
+// @Description С source=personal — только выданное лично, без договоров из
+// @Description материалов проекта.
 // @Tags     me-documents
 // @Produce  json
 // @Security BearerAuth
+// @Param    project_id query string false "только этот проект"
+// @Param    source     query string false "personal — только выданное лично"
 // @Success  200 {object} myDocumentsResp
+// @Failure  400 {object} errorResponse "invalid_input — project_id не uuid или неизвестный source"
 // @Failure  401 {object} errorResponse "no_user"
 // @Router   /me/documents [get]
 func (h *Handler) MyDocuments(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +347,25 @@ func (h *Handler) MyDocuments(w http.ResponseWriter, r *http.Request) {
 		writeNoUser(w)
 		return
 	}
-	items, err := h.svc.MyDocuments(r.Context(), uid)
+	var f MyDocumentsFilter
+	q := r.URL.Query()
+	if raw := q.Get("project_id"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			writeErr(w, fmt.Errorf("%w: project_id must be a uuid", ErrInvalidInput))
+			return
+		}
+		f.ProjectID = &id
+	}
+	switch q.Get("source") {
+	case "":
+	case "personal":
+		f.PersonalOnly = true
+	default:
+		writeErr(w, fmt.Errorf("%w: source must be personal", ErrInvalidInput))
+		return
+	}
+	items, err := h.svc.MyDocuments(r.Context(), uid, f)
 	if err != nil {
 		writeErr(w, err)
 		return

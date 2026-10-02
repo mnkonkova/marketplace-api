@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -145,15 +144,13 @@ func validAudience(a string) bool {
 	return a == AudienceCreators || a == AudienceClient
 }
 
-// checkDocURL — ссылка документа. Только http(s): ссылка попадает в
-// интерфейс кликабельной, и javascript: в ней — код у читателя в
-// браузере. Та же проверка, что у материалов проекта.
+// checkDocURL — ссылка документа: длина и та же проверка на http(s),
+// что у материалов проекта (isHTTPLink).
 func checkDocURL(raw string) error {
 	if raw == "" || len(raw) > docURLMax {
 		return fmt.Errorf("%w: url must be 1-%d chars", ErrInvalidInput, docURLMax)
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if !isHTTPLink(raw) {
 		return fmt.Errorf("%w: url must be an http(s) link", ErrInvalidInput)
 	}
 	return nil
@@ -564,25 +561,62 @@ WHERE id = $1 AND project_id = $2`, docID, projectID, revoked, actor)
 	return nil
 }
 
+// stillInProjectOf — адресат личного документа по-прежнему в проекте:
+// креатор не убран из состава, заказчик не сменён. Ушедшему документы
+// проекта не показываем — ровно как договоры из материалов.
+func stillInProjectOf(t string) string {
+	return `(
+       (` + t + `.audience = 'creators' AND EXISTS (
+            SELECT 1 FROM project_creators pc
+            WHERE pc.project_id = ` + t + `.project_id
+              AND pc.creator_user_id = ` + t + `.recipient_user_id
+              AND pc.removed_at IS NULL))
+    OR (` + t + `.audience = 'client' AND EXISTS (
+            SELECT 1 FROM projects p
+            WHERE p.id = ` + t + `.project_id
+              AND p.client_user_id = ` + t + `.recipient_user_id))
+  )`
+}
+
+var stillInProject = stillInProjectOf("d")
+
+// MyDocumentsFilter — сужение «Моих документов».
+type MyDocumentsFilter struct {
+	// ProjectID — только этот проект (карточка проекта); nil — все.
+	ProjectID *uuid.UUID
+	// PersonalOnly — только выданное лично, без договоров из материалов:
+	// для страницы, где материалы проекта и так стоят рядом.
+	PersonalOnly bool
+}
+
 // MyDocuments — «Мои документы»: выданное лично (не отозванное) и
 // договоры из материалов проектов, где человек сейчас работает.
 //
 // Договоры из материалов остаются как есть, без переноса: до таблицы
 // user_documents договор клали материалом всему составу, и человек
 // должен видеть и их тоже.
-func (r *Repo) MyDocuments(ctx context.Context, userID uuid.UUID) ([]MyDocument, error) {
+func (r *Repo) MyDocuments(ctx context.Context, userID uuid.UUID, f MyDocumentsFilter) ([]MyDocument, error) {
+	// Порядок: в карточке одного проекта договор первым — он один на
+	// проект, и ищут его чаще остального. По всем проектам — свежие
+	// сверху: договоров столько же, сколько проектов, и первым нужен
+	// тот, что пришёл последним.
 	rows, err := r.db.Query(ctx, `
+SELECT * FROM (
 SELECT d.id, 'personal', d.project_id, pr.title, d.kind, d.title, d.url, d.note,
        d.sent_at, d.opened_at
 FROM user_documents d
 JOIN projects pr ON pr.id = d.project_id
 WHERE d.recipient_user_id = $1 AND d.revoked_at IS NULL
+  AND ($3::uuid IS NULL OR d.project_id = $3)
+  AND `+stillInProject+`
 UNION ALL
 SELECT m.id, 'project', m.project_id, pr.title, m.kind, m.title, m.url, '',
        m.created_at, NULL
 FROM project_materials m
 JOIN projects pr ON pr.id = m.project_id
 WHERE m.kind = ANY($2)
+  AND NOT $4::boolean
+  AND ($3::uuid IS NULL OR m.project_id = $3)
   AND m.delivery_id IS NULL
   AND m.deleted_at IS NULL
   AND (
@@ -592,7 +626,9 @@ WHERE m.kind = ANY($2)
               AND pc.removed_at IS NULL))
     OR (m.audience = 'client' AND pr.client_user_id = $1)
   )
-ORDER BY 9 DESC, 1`, userID, DocumentKinds)
+) docs (id, source, project_id, project_title, kind, title, url, note, sent_at, opened_at)
+ORDER BY ($3::uuid IS NOT NULL AND kind <> 'contract'), sent_at DESC, id`,
+		userID, DocumentKinds, f.ProjectID, f.PersonalOnly)
 	if err != nil {
 		return nil, fmt.Errorf("my documents: %w", err)
 	}
@@ -618,6 +654,7 @@ func (r *Repo) MarkDocumentOpened(ctx context.Context, userID, docID uuid.UUID) 
 UPDATE user_documents
 SET opened_at = COALESCE(opened_at, now())
 WHERE id = $1 AND recipient_user_id = $2 AND revoked_at IS NULL
+  AND `+stillInProjectOf("user_documents")+`
 RETURNING opened_at`, docID, userID).Scan(&at)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, ErrNotFound
@@ -720,8 +757,8 @@ func (s *Service) SetDocumentRevoked(
 }
 
 // MyDocuments — «Мои документы» человека.
-func (s *Service) MyDocuments(ctx context.Context, userID uuid.UUID) ([]MyDocument, error) {
-	return s.repo.MyDocuments(ctx, userID)
+func (s *Service) MyDocuments(ctx context.Context, userID uuid.UUID, f MyDocumentsFilter) ([]MyDocument, error) {
+	return s.repo.MyDocuments(ctx, userID, f)
 }
 
 // MarkDocumentOpened — отметка «открыл».

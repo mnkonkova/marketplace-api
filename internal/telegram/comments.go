@@ -111,8 +111,9 @@ type SentMessage struct {
 // sentEnvelope — поля конверта, по которым отправленное сообщение
 // привязывается к проекту и человеку.
 type sentEnvelope struct {
-	Audience string `json:"audience"`
-	Data     struct {
+	Audience  string `json:"audience"`
+	Replyable bool   `json:"replyable"`
+	Data      struct {
 		ProjectID string `json:"project_id"`
 	} `json:"data"`
 	Recipients []Recipient `json:"recipients"`
@@ -134,6 +135,12 @@ func sentTarget(envelope []byte, chatID int64) (projectID, userID uuid.UUID, ok 
 	// Общий чат менеджеров: ответы там — разговор менеджеров между
 	// собой, а не комментарии в проект.
 	if env.Audience != "person" {
+		return uuid.Nil, uuid.Nil, false
+	}
+	// Можно ли на это ответить в проект, решает таблица маршрутов
+	// (eventroute.botRouting, флаг replyable): рассылка заявки тоже
+	// несёт project_id, но получают её те, кто в проекте ещё не состоит.
+	if !env.Replyable {
 		return uuid.Nil, uuid.Nil, false
 	}
 	pid, err := uuid.Parse(env.Data.ProjectID)

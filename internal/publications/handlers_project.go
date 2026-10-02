@@ -249,38 +249,6 @@ func (h *Handler) CreatorMaterials(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, materialsResp{Items: items})
 }
 
-type creatorDocumentsResp struct {
-	Items []CreatorDocument `json:"items"`
-}
-
-// CreatorDocuments godoc
-// @Summary  Мои документы (креатор)
-// @Description Договоры и документы по всем действующим проектам, в одном
-// @Description списке и с названием проекта у каждого. Отдельно от
-// @Description материалов проекта: договор ищут не тогда, когда снимают, а
-// @Description когда подписывают или выставляют счёт, — и помнить, в каком
-// @Description проекте он лежал, человек не обязан. Видео и ссылки сюда не
-// @Description попадают: это материалы для работы, а не документы.
-// @Tags     creator-publications
-// @Produce  json
-// @Security BearerAuth
-// @Success  200 {object} creatorDocumentsResp
-// @Failure  401 {object} errorResponse "no_user — сессия истекла"
-// @Router   /me/creator/documents [get]
-func (h *Handler) CreatorDocuments(w http.ResponseWriter, r *http.Request) {
-	uid, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		writeNoUser(w)
-		return
-	}
-	items, err := h.svc.CreatorDocuments(r.Context(), uid)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, creatorDocumentsResp{Items: items})
-}
-
 // ClientMaterials godoc
 // @Summary  Материалы проекта (заказчик)
 // @Description Только помеченные как клиентские. Обучение и бренд-гайд для

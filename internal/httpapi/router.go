@@ -385,11 +385,6 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/me/creator/projects", d.Publications.CreatorProjects)
 				r.Get("/me/creator/projects/{id}", d.Publications.CreatorProjectCard)
 				r.Get("/me/creator/projects/{id}/materials", d.Publications.CreatorMaterials)
-				// «Мои документы» — договоры по всем проектам разом. Не
-				// то же самое, что материалы проекта выше: те про то,
-				// как снимать, а этот список — про то, на каких
-				// условиях.
-				r.Get("/me/creator/documents", d.Publications.CreatorDocuments)
 				// «Мои документы» любого человека — креатора и заказчика:
 				// выданное лично и договоры из проектов. Выдача
 				// фильтруется по самому человеку, роль не нужна.

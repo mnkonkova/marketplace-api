@@ -172,43 +172,114 @@ WHERE p.project_id = $1 AND d.stat_date = $2::date`, projectID, now).Scan(&rowsT
 	}
 }
 
-// Фоновое расписание — про РАСХОД.
+// Фоновый обход суточный — и для архива тоже.
 //
-// Архив почти не меняется, а обход стоит кредит у поставщика, поэтому
-// 1→2→4→8 дней по возрасту ролика. Шаг, уменьшающийся с возрастом, — это
-// тихий перерасход кредитов на архиве, и монотонность проверяется
-// отдельно от значений.
+// Лестницы по возрасту ролика (1→2→4→8 дней) больше нет: решение
+// владельца от 2 октября — «каждый день, если дольше 12 часов не
+// заходили». Расход от этого не вырос, а стал предсказуемым: дорогим фон
+// делали бы проекты, в которые заходят, а их ссылки отсекает отсрочка
+// после визита.
 //
-// Второго расписания здесь больше нет. Обновление по заходу в карточку
-// затухающего шага не имеет вовсе: просмотры подтягиваются КАЖДЫЙ раз,
-// когда заходят в кабинет (решение владельца от 2 октября), а от
-// двойного счёта одного захода защищает refreshDebounce — полминуты, и
-// это не расписание.
-func TestCollectSchedules(t *testing.T) {
-	min, hour, day := time.Minute, time.Hour, 24*time.Hour
+// Проверяется здесь именно то, что шага по возрасту НЕ осталось: пока
+// лестница стояла, ролик месячной давности обходился раз в восемь дней,
+// и «каждый день» было бы обещанием, которое выборка не исполняет.
+func TestBackgroundCollectIsDailyForEveryAge(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
 
-	background := []struct {
-		age  time.Duration
-		want time.Duration
-	}{
-		{0, day}, {min, day}, {6 * hour, day}, {5 * day, day},
-		{6 * day, 2 * day}, {14 * day, 2 * day},
-		{15 * day, 4 * day}, {28 * day, 4 * day},
-		{29 * day, 8 * day}, {365 * day, 8 * day},
-	}
-	for _, c := range background {
-		if got := publications.CollectEvery(c.age); got != c.want {
-			t.Errorf("фоновый шаг для возраста %s: %s, ожидался %s", c.age, got, c.want)
-		}
+	const url = "https://www.tiktok.com/@u/video/daily1"
+	_, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: okResult(url, 900, 9, 1)}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+
+	// Ролик старый: по прежней лестнице шаг был бы восемь дней.
+	old := time.Now().UTC().AddDate(0, 0, -200)
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links SET submitted_at = $1, published_at = $1,
+       collect_every = interval '8 days', next_collect_at = now() - interval '1 minute',
+       last_collect_try_at = NULL
+WHERE url_canonical IS NOT NULL`, old); err != nil {
+		t.Fatalf("состарить: %v", err)
 	}
 
-	var prev time.Duration
-	for _, c := range background {
-		got := publications.CollectEvery(c.age)
-		if got < prev {
-			t.Fatalf("фоновое расписание не монотонно на возрасте %s", c.age)
-		}
-		prev = got
+	if _, err := svc.RunCollection(ctx, time.Now().UTC(), 10); err != nil {
+		t.Fatalf("RunCollection: %v", err)
+	}
+
+	var every time.Duration
+	var next, lastTry time.Time
+	if err := pool.QueryRow(ctx, `
+SELECT collect_every, next_collect_at, last_collect_try_at
+FROM publication_links WHERE url_canonical = $1`, url).Scan(&every, &next, &lastTry); err != nil {
+		t.Fatalf("read link: %v", err)
+	}
+	if every != 24*time.Hour {
+		t.Errorf("шаг после обхода %s, ожидались сутки — лестница по возрасту осталась", every)
+	}
+	// И срок следующего обхода — через сутки, а не через восемь дней.
+	if d := next.Sub(lastTry); d < 23*time.Hour || d > 25*time.Hour {
+		t.Errorf("следующий обход через %s, ожидались сутки", d)
+	}
+}
+
+// Фон не трогает ссылку, которую только что подтянул заход в кабинет.
+//
+// Заход тянет цифры целиком, и обойти ту же ссылку фоном через час —
+// это плата дважды за одно и то же число. А если в проект не заходят
+// дольше полусуток, фон обязан сходить сам: иначе пинг «ролик не пошёл»
+// и порог просмотров заказчику считались бы по цифрам последнего визита.
+func TestBackgroundSkipsRecentlyVisitedLinks(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/grace1"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: okResult(url, 700, 7, 1)}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+
+	// Зашли в кабинет — цифры подтянулись.
+	if _, err := svc.RefreshProject(ctx, projectID, nil, time.Now().UTC(), 25); err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	after := fake.calls
+
+	// Фон в ту же секунду: срок обхода притянут вручную, но отсрочка
+	// после визита держит.
+	if _, err := pool.Exec(ctx,
+		`UPDATE publication_links SET next_collect_at = now() - interval '1 minute'
+         WHERE url_canonical = $1`, url); err != nil {
+		t.Fatalf("притянуть срок: %v", err)
+	}
+	st, err := svc.RunCollection(ctx, time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("RunCollection: %v", err)
+	}
+	if st.Considered != 0 {
+		t.Errorf("фон взял %d ссылок сразу после захода — заплатили дважды", st.Considered)
+	}
+	if fake.calls != after {
+		t.Errorf("походов в сборщик %d, ожидалось %d", fake.calls, after)
+	}
+
+	// Полсуток прошло, в проект не заходили — фон идёт сам.
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links
+SET last_collect_try_at = now() - interval '13 hours',
+    last_collected_at = now() - interval '13 hours',
+    next_collect_at = now() - interval '1 minute'
+WHERE url_canonical = $1`, url); err != nil {
+		t.Fatalf("отодвинуть попытку: %v", err)
+	}
+	st, err = svc.RunCollection(ctx, time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("RunCollection (через 13 часов): %v", err)
+	}
+	if st.Saved != 1 {
+		t.Errorf("через 13 часов без захода фон собрал %+v, ожидалась одна ссылка", st)
 	}
 }
 

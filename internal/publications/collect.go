@@ -15,38 +15,33 @@ import (
 	"marketpclce/internal/instacurl"
 )
 
-// collectSchedule — фоновый обход: через сколько трогать ролик снова.
+// collectEvery — шаг фонового обхода: раз в сутки, и для архива тоже.
 //
-// Это расписание про РАСХОД. Архив почти не меняется, а объём сбора
-// растёт линейно с каждым месяцем работы: 60 видео × 5 площадок
-// ежедневно — это 300 обходов в сутки на одного креатора, и это только
-// первый проект. Поэтому лестница: 0–5 дней ежедневно, 6–14 раз в два
-// дня, 15–28 раз в четыре, дальше раз в восемь.
+// Лестницы по возрасту ролика (1→2→4→8 дней) здесь больше нет —
+// решение владельца от 2 октября: «каждый день, если дольше 12 часов не
+// заходили». Простое правило вместо расписания, которое приходилось
+// объяснять, и расход у него предсказуемый: ссылка стоит один обход в
+// сутки независимо от того, сколько ей месяцев.
 //
-// Обновление по заходу живёт НЕ здесь: карточку открыли — цифры
-// подтягиваются целиком, см. refreshDebounce. Так свежие цифры стоят
-// ровно столько, сколько на них смотрят, а не круглые сутки.
-var collectSchedule = []struct {
-	upTo  time.Duration // возраст ролика, до которого действует шаг
-	every time.Duration // через сколько обходить
-}{
-	{upTo: 5 * 24 * time.Hour, every: 24 * time.Hour},
-	{upTo: 14 * 24 * time.Hour, every: 48 * time.Hour},
-	{upTo: 28 * 24 * time.Hour, every: 96 * time.Hour},
-}
+// Дорогим это не делает backgroundVisitGrace: проекты, в которые
+// заходят, фоном почти не обходятся — цифры там уже свежие после
+// захода, и платить за них второй раз незачем. Фон остаётся тем, чем и
+// должен быть: страховкой для проектов, которые никто не открывал.
+const collectEvery = 24 * time.Hour
 
-// collectEveryOldest — шаг для всего, что старше последней границы.
-const collectEveryOldest = 192 * time.Hour
-
-// CollectEvery — шаг фонового расписания для ролика такого возраста.
-func CollectEvery(age time.Duration) time.Duration {
-	for _, step := range collectSchedule {
-		if age <= step.upTo {
-			return step.every
-		}
-	}
-	return collectEveryOldest
-}
+// backgroundVisitGrace — сколько после захода в кабинет фон не трогает
+// ссылку.
+//
+// Двенадцать часов. Заход тянет цифры целиком (см. refreshDebounce), и
+// обойти ту же ссылку фоном через час значит заплатить дважды за одно и
+// то же число. А если в проект не заходят дольше половины суток, фон
+// обязан сходить сам: иначе пинг «ролик не пошёл» и порог просмотров
+// заказчику считались бы по цифрам последнего визита.
+//
+// Считается по последней ПОПЫТКЕ, а не по удаче: ссылка, которую
+// сборщик не умеет, иначе не имела бы отсрочки вовсе и обходилась бы
+// каждым тиком.
+const backgroundVisitGrace = 12 * time.Hour
 
 // refreshDebounce — на сколько одно открытие карточки «накрывает» ссылку.
 //
@@ -130,11 +125,11 @@ func (r *Repo) DueForCollection(ctx context.Context, now time.Time, limit int) (
 	if limit <= 0 {
 		limit = 50
 	}
-	// Суточного правила («один ролик не чаще раза в календарный день»)
-	// здесь больше нет: частоту целиком задаёт next_collect_at, а его
-	// считает CollectEvery. Пока правило стояло, «обновлять раз в десять
-	// минут» было невыразимо в принципе — выборка всё равно отдавала
-	// ссылку один раз в сутки, независимо от расписания.
+	// Частоту задаёт next_collect_at, а его шаг — collectEvery, то есть
+	// сутки. Календарного правила («один ролик не чаще раза в день»)
+	// здесь нет: пока оно стояло, «обновлять раз в десять минут» было
+	// невыразимо в принципе — выборка всё равно отдавала ссылку один раз
+	// в сутки, независимо от расписания.
 	q := `
 WITH claimed AS (
     SELECT l.id
@@ -144,6 +139,17 @@ WITH claimed AS (
     WHERE l.next_collect_at <= $1
       AND p.status <> 'cancelled'
       AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $1)
+      -- Заходили недавно — фоном не трогаем: заход тянет цифры целиком,
+      -- и второй обход той же ссылки через час это плата дважды за одно
+      -- и то же число. Через полсуток фон идёт сам: иначе у проекта, в
+      -- который не заходят, пинг «ролик не пошёл» и порог просмотров
+      -- заказчику считались бы по цифрам последнего визита.
+      --
+      -- По последней ПОПЫТКЕ, а не по удаче: у ссылки, которую сборщик
+      -- не умеет, last_collected_at пуст навсегда, и отсрочки у неё не
+      -- было бы вовсе.
+      AND (l.last_collect_try_at IS NULL
+           OR l.last_collect_try_at <= $1::timestamptz - $4::interval)
     ORDER BY l.next_collect_at
     LIMIT $2
     FOR UPDATE OF l SKIP LOCKED
@@ -158,7 +164,7 @@ taken AS (
 SELECT t.id, t.publication_id, p.project_id, t.platform, t.url_canonical, t.submitted_at
 FROM taken t
 JOIN project_publications p ON p.id = t.publication_id`
-	rows, err := r.db.Query(ctx, q, now, limit, claimLease)
+	rows, err := r.db.Query(ctx, q, now, limit, claimLease, backgroundVisitGrace)
 	if err != nil {
 		return nil, fmt.Errorf("list links due for collection: %w", err)
 	}
@@ -331,7 +337,6 @@ SET views = EXCLUDED.views,
 		return fmt.Errorf("upsert daily stat: %w", err)
 	}
 
-	every := CollectEvery(now.Sub(link.SubmittedAt))
 	if _, err := tx.Exec(ctx, `
 UPDATE publication_links
 SET last_collected_at = $2::timestamptz,
@@ -350,7 +355,7 @@ SET last_collected_at = $2::timestamptz,
     -- выбрать оператор "+" (кандидатов несколько: date, time, timestamp)
     -- и выводит для параметра противоречивые типы — 42P08.
     next_collect_at = `+keepParked("next_collect_at", "$2::timestamptz + $3::interval")+`
-WHERE id = $1`, link.LinkID, now, every, publishedAt); err != nil {
+WHERE id = $1`, link.LinkID, now, collectEvery, publishedAt); err != nil {
 		return fmt.Errorf("reschedule link: %w", err)
 	}
 	return tx.Commit(ctx)
@@ -423,7 +428,6 @@ const maxCollectError = 300
 // одинаково — пустой цифрой. Первые два — наша работа, третье — работа
 // креатора, и путать их нельзя.
 func (r *Repo) MarkFailed(ctx context.Context, link LinkToCollect, now time.Time, reason string) error {
-	every := CollectEvery(now.Sub(link.SubmittedAt))
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "сборщик не ответил по этой ссылке"
@@ -442,7 +446,7 @@ SET collect_every = $2,
     last_collect_error = $4,
     last_collect_try_at = $3::timestamptz,
     next_collect_at = `+keepParked("next_collect_at", "$3::timestamptz + $2::interval")+`
-WHERE id = $1`, link.LinkID, every, now, reason)
+WHERE id = $1`, link.LinkID, collectEvery, now, reason)
 	if err != nil {
 		return fmt.Errorf("reschedule failed link: %w", err)
 	}

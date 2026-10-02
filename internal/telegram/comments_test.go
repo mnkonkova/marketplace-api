@@ -37,16 +37,20 @@ func TestAckRequestBackwardCompatible(t *testing.T) {
 func TestSentTarget(t *testing.T) {
 	pid := uuid.New()
 	alice, bob := uuid.New(), uuid.New()
-	env := func(audience, project string) []byte {
+	envOf := func(replyable bool, audience, project string) []byte {
 		b, _ := json.Marshal(map[string]any{
-			"audience": audience,
-			"data":     map[string]any{"project_id": project, "project_title": "П"},
+			"audience":  audience,
+			"replyable": replyable,
+			"data":      map[string]any{"project_id": project, "project_title": "П"},
 			"recipients": []map[string]any{
 				{"user_id": alice, "tg_chat_id": 100},
 				{"user_id": bob, "tg_chat_id": 200},
 			},
 		})
 		return b
+	}
+	env := func(audience, project string) []byte {
+		return envOf(true, audience, project)
 	}
 
 	t.Run("получатель найден по чату", func(t *testing.T) {
@@ -65,6 +69,14 @@ func TestSentTarget(t *testing.T) {
 	t.Run("чат менеджеров — не комментарии", func(t *testing.T) {
 		if _, _, ok := sentTarget(env("managers", pid.String()), 100); ok {
 			t.Error("сообщение в общий чат записано как личное")
+		}
+	})
+	t.Run("на что не отвечают в проект — не запоминаем", func(t *testing.T) {
+		// Рассылка заявки: project_id в ней есть, но получатели в
+		// проекте ещё не состоят — ответ упал бы с «вы больше не
+		// участвуете». Как и конверт старого API без флага.
+		if _, _, ok := sentTarget(envOf(false, "person", pid.String()), 100); ok {
+			t.Error("рассылка заявки записана как сообщение проекта")
 		}
 	})
 	t.Run("без проекта нечего запоминать", func(t *testing.T) {

@@ -37,6 +37,12 @@ type botRoute struct {
 	// по-разному — «creator_user_id» у выкладок, «creator_id» у
 	// заявок, «creator_ids» у задания проекта.
 	keys []string
+	// replyable — ответ на это сообщение уходит комментарием в проект, и
+	// под ним есть «Написать в проект». Только там, где получатель —
+	// участник проекта: рассылку заявки получают те, кто в проекте ещё
+	// не состоит, и отвечают на неё откликом в кабинете. Решение одно —
+	// здесь; бот и запоминание отправленного читают его из конверта.
+	replyable bool
 }
 
 // botRouting — событие → бот. Тип, которого здесь нет, в бот не едет:
@@ -47,47 +53,47 @@ var botRouting = map[string]botRoute{
 	// Сроки выкладки: завтра, сегодня, вышло не везде, ручное
 	// напоминание менеджера. Просрочка — в общий чат (это уже срыв), и
 	// ЕЁ здесь намеренно нет.
-	"project.publication_due_tomorrow": {telegram.BotCreator, []string{"creator_user_id"}},
-	"project.publication_due_today":    {telegram.BotCreator, []string{"creator_user_id"}},
-	"project.publication_incomplete":   {telegram.BotCreator, []string{"creator_user_id"}},
-	"project.publication_manual":       {telegram.BotCreator, []string{"creator_user_id"}},
+	"project.publication_due_tomorrow": {telegram.BotCreator, []string{"creator_user_id"}, true},
+	"project.publication_due_today":    {telegram.BotCreator, []string{"creator_user_id"}, true},
+	"project.publication_incomplete":   {telegram.BotCreator, []string{"creator_user_id"}, true},
+	"project.publication_manual":       {telegram.BotCreator, []string{"creator_user_id"}, true},
 	// Ролик вышел и не пошёл — и его напарник «по ссылке ничего нет».
 	// Адресно креатору: он единственный, кто может переснять, поправить
 	// обложку или перезалить. Без этих двух строк событие кладётся в
 	// очередь и молча выбрасывается — ровно так пинг и «не работал».
-	"project.publication_weak":      {telegram.BotCreator, []string{"creator_user_id"}},
-	"project.publication_dead_link": {telegram.BotCreator, []string{"creator_user_id"}},
+	"project.publication_weak":      {telegram.BotCreator, []string{"creator_user_id"}, true},
+	"project.publication_dead_link": {telegram.BotCreator, []string{"creator_user_id"}, true},
 	// Проверка ролика: приняли или вернули с замечанием. Адресно, и
 	// вернуть работу молча — худшее, что можно сделать.
-	"project.publication_returned": {telegram.BotCreator, []string{"creator_user_id"}},
-	"project.publication_accepted": {telegram.BotCreator, []string{"creator_user_id"}},
+	"project.publication_returned": {telegram.BotCreator, []string{"creator_user_id"}, true},
+	"project.publication_accepted": {telegram.BotCreator, []string{"creator_user_id"}, true},
 	// План подвинули: дату перенесли или день сняли. Сделал это
 	// менеджер, а работать по ней креатору.
-	"project.publication_moved":     {telegram.BotCreator, []string{"creator_user_id"}},
-	"project.publication_cancelled": {telegram.BotCreator, []string{"creator_user_id"}},
+	"project.publication_moved":     {telegram.BotCreator, []string{"creator_user_id"}, true},
+	"project.publication_cancelled": {telegram.BotCreator, []string{"creator_user_id"}, true},
 	// Задание изменилось: материалы, чеклист, «вас добавили в проект»
 	// (вместе с договором и ТЗ).
-	"project.project_materials_updated": {telegram.BotCreator, []string{"creator_ids"}},
-	"project.project_checklist_updated": {telegram.BotCreator, []string{"creator_ids"}},
-	"project.project_creator_briefed":   {telegram.BotCreator, []string{"creator_ids"}},
+	"project.project_materials_updated": {telegram.BotCreator, []string{"creator_ids"}, true},
+	"project.project_checklist_updated": {telegram.BotCreator, []string{"creator_ids"}, true},
+	"project.project_creator_briefed":   {telegram.BotCreator, []string{"creator_ids"}, true},
 	// Заявка «под ключ»: именное приглашение и рассылка всем
 	// известным креаторам.
-	"order.invitation_sent": {telegram.BotCreator, []string{"creator_id"}},
-	"order.broadcast_sent":  {telegram.BotCreator, []string{"recipient_ids"}},
+	"order.invitation_sent": {telegram.BotCreator, []string{"creator_id"}, false},
+	"order.broadcast_sent":  {telegram.BotCreator, []string{"recipient_ids"}, false},
 	// Документ выдали лично: договор, акт, NDA. Адресно — только тем,
 	// кому выдан.
-	"project.document_delivered": {telegram.BotCreator, []string{"recipient_ids"}},
+	"project.document_delivered": {telegram.BotCreator, []string{"recipient_ids"}, true},
 
 	// ---- разговор с ЗАКАЗЧИКОМ ----
 	// Его собственные выключатели: порог просмотров, новый ролик,
 	// сдвиг даты, недельная сводка. В чате менеджеров это был бы
 	// пересказ того, что человек и так видит у себя.
-	"project.client_views_threshold": {telegram.BotClient, []string{"client_user_id"}},
-	"project.client_new_video":       {telegram.BotClient, []string{"client_user_id"}},
-	"project.client_date_shift":      {telegram.BotClient, []string{"client_user_id"}},
-	"project.client_weekly_digest":   {telegram.BotClient, []string{"client_user_id"}},
+	"project.client_views_threshold": {telegram.BotClient, []string{"client_user_id"}, true},
+	"project.client_new_video":       {telegram.BotClient, []string{"client_user_id"}, true},
+	"project.client_date_shift":      {telegram.BotClient, []string{"client_user_id"}, true},
+	"project.client_weekly_digest":   {telegram.BotClient, []string{"client_user_id"}, true},
 	// Документ заказчику: договор, акт, счёт.
-	"project.client_document_delivered": {telegram.BotClient, []string{"recipient_ids"}},
+	"project.client_document_delivered": {telegram.BotClient, []string{"recipient_ids"}, true},
 }
 
 // BotRoutes — типы, которые едут в ботов. Для охранного теста: новый
@@ -100,6 +106,11 @@ func BotRoutes() map[string]string {
 	}
 	return out
 }
+
+// Replyable — уходит ли ответ на сообщение об этом событии комментарием
+// в проект (см. botRoute.replyable). Для тестов, собирающих конверт
+// руками, — чтобы флаг в них был тем же, что в настоящей доставке.
+func Replyable(eventType string) bool { return botRouting[eventType].replyable }
 
 // BotResolver — кто превращает людей в чаты. Реализуется
 // telegram.Service: он же держит дневной потолок и знает про
@@ -139,6 +150,8 @@ type botEnvelope struct {
 	Bot        string               `json:"bot"`
 	Audience   string               `json:"audience"`
 	Recipients []telegram.Recipient `json:"recipients"`
+	// Replyable — см. botRoute.replyable.
+	Replyable bool `json:"replyable,omitempty"`
 }
 
 // botFanout — отправить событие в бот, если оно кому-то адресовано.
@@ -202,6 +215,7 @@ func (d Deps) botFanout(
 		Bot:        route.bot,
 		Audience:   audiencePerson,
 		Recipients: recipients,
+		Replyable:  route.replyable,
 	}
 	env.AppBaseURL = d.AppBaseURL
 	if err := d.Bot.SendEnvelope(ctx, env); err != nil {

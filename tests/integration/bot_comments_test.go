@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"marketpclce/internal/eventroute"
 	"marketpclce/internal/projects"
 	"marketpclce/internal/telegram"
 	"marketpclce/tests/integration"
@@ -75,7 +76,8 @@ func (s *botStand) ping(
 	eventID := strconv.FormatInt(rand.Int63n(1<<40)+1<<41, 10)
 	env := map[string]any{
 		"bot": bot, "audience": audience, "event_type": eventType, "event_id": eventID,
-		"data": map[string]any{"project_id": projectID.String(), "project_title": "IT-проект"},
+		"data":      map[string]any{"project_id": projectID.String(), "project_title": "IT-проект"},
+		"replyable": eventroute.Replyable(eventType),
 	}
 	if audience == "person" {
 		env["recipients"] = []map[string]any{{"user_id": userID, "tg_chat_id": chatID}}
@@ -516,8 +518,8 @@ func TestBotPartialAckRemembersSent(t *testing.T) {
 	eventID := strconv.FormatInt(rand.Int63n(1<<40)+1<<41, 10)
 	if err := s.queue.SendEnvelope(ctx, map[string]any{
 		"bot": "creator", "audience": "person", "event_type": "project.publication_due_today",
-		"event_id": eventID,
-		"data":     map[string]any{"project_id": pid.String(), "project_title": "IT-проект"},
+		"event_id": eventID, "replyable": true,
+		"data": map[string]any{"project_id": pid.String(), "project_title": "IT-проект"},
 		"recipients": []map[string]any{
 			{"user_id": creator, "tg_chat_id": chat},
 			{"user_id": other, "tg_chat_id": otherChat},

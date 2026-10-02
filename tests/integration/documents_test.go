@@ -369,3 +369,79 @@ func TestMaterialSoftDelete(t *testing.T) {
 		t.Errorf("deleted_by = %v, ожидался менеджер", deletedBy)
 	}
 }
+
+// «Мои документы» по одному проекту и после ухода из проекта.
+//
+// project_id сужает список на сервере: карточке проекта незачем тянуть
+// документы всех проектов человека. Ушедшему из состава личные
+// документы проекта не показываются и открытыми не отмечаются — как и
+// договоры из материалов.
+func TestMyDocumentsByProjectAndAfterLeaving(t *testing.T) {
+	pool := integration.Pool(t)
+	h := newAPIHarness(t, pool)
+	ctx := context.Background()
+
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+	manager, cleanupManager := h.NewUser(t, userOpts{Kind: "client", IsManager: true})
+	defer cleanupManager()
+
+	code, out := h.Do(t, http.MethodPost, "/api/v1/manager/projects/"+projectID.String()+"/documents",
+		h.Token(t, manager), map[string]any{
+			"audience": "creators", "recipient_ids": []string{creators[0].String()},
+			"kind": "nda", "title": "NDA проекта", "url": "https://docs.example.com/nda",
+		})
+	if code != http.StatusCreated {
+		t.Fatalf("выдача: код %d, тело %v", code, out)
+	}
+	docID := docItems(t, out)[0]["id"].(string)
+	tok := h.Token(t, creators[0])
+
+	_, mine := h.Do(t, http.MethodGet, "/api/v1/me/documents?project_id="+projectID.String(), tok, nil)
+	if !hasTitle(docItems(t, mine), "NDA проекта") {
+		t.Error("с project_id своего проекта документа нет")
+	}
+	_, other := h.Do(t, http.MethodGet, "/api/v1/me/documents?project_id="+uuid.NewString(), tok, nil)
+	if len(docItems(t, other)) != 0 {
+		t.Errorf("по чужому project_id отдали документы: %v", docItems(t, other))
+	}
+	if code, _ := h.Do(t, http.MethodGet, "/api/v1/me/documents?project_id=abc", tok, nil); code != http.StatusBadRequest {
+		t.Errorf("project_id не uuid: код %d, ожидался 400", code)
+	}
+
+	// Договор проекта в материалах — старше выданного NDA, но в карточке
+	// проекта стоит первым: он один на проект, и ищут его чаще.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO project_materials (project_id, kind, title, url, audience, created_at)
+VALUES ($1, 'contract', 'Договор проекта', 'https://docs.example.com/c', 'creators',
+        now() - interval '1 day')`, projectID); err != nil {
+		t.Fatalf("договор в материалы: %v", err)
+	}
+	_, mine = h.Do(t, http.MethodGet, "/api/v1/me/documents?project_id="+projectID.String(), tok, nil)
+	if items := docItems(t, mine); len(items) < 2 || items[0]["title"] != "Договор проекта" {
+		t.Errorf("в карточке проекта договор не первым: %v", items)
+	}
+	// source=personal — без договоров из материалов: у заказчика они
+	// и так стоят рядом, в материалах проекта.
+	_, mine = h.Do(t, http.MethodGet,
+		"/api/v1/me/documents?source=personal&project_id="+projectID.String(), tok, nil)
+	if items := docItems(t, mine); hasTitle(items, "Договор проекта") || !hasTitle(items, "NDA проекта") {
+		t.Errorf("source=personal: %v", items)
+	}
+	if code, _ := h.Do(t, http.MethodGet, "/api/v1/me/documents?source=all", tok, nil); code != http.StatusBadRequest {
+		t.Errorf("неизвестный source: код %d, ожидался 400", code)
+	}
+
+	if _, err := pool.Exec(ctx, `
+UPDATE project_creators SET removed_at = now()
+WHERE project_id = $1 AND creator_user_id = $2`, projectID, creators[0]); err != nil {
+		t.Fatalf("убрать из состава: %v", err)
+	}
+	_, mine = h.Do(t, http.MethodGet, "/api/v1/me/documents", tok, nil)
+	if hasTitle(docItems(t, mine), "NDA проекта") {
+		t.Error("ушедший из проекта по-прежнему видит его документ")
+	}
+	if code, _ := h.Do(t, http.MethodPost, "/api/v1/me/documents/"+docID+"/open", tok, nil); code != http.StatusNotFound {
+		t.Errorf("ушедший отметил документ открытым: код %d, ожидался 404", code)
+	}
+}
