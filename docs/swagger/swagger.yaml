@@ -1357,40 +1357,19 @@ definitions:
         type: string
       creator_user_id:
         type: string
-      manual:
-        description: |-
-          Manual — число перебито рукой. Тогда Subscribers равно вписанному,
-          а Measured показывает, что было намерено.
-
-          Отдельным полем, а не сравнением Subscribers с Measured: они
-          совпадают и когда менеджер вписал ровно намеренное число, и это
-          разные состояния — у второго есть автор и время правки.
-        type: boolean
-      measured:
-        description: |-
-          Measured — что намерил обход: разница крайних снимков аудитории за
-          период по всем аккаунтам человека, прикреплённым к проекту.
-
-          Отдаётся ВСЕГДА, даже когда сверху лежит ручная правка: менеджеру
-          надо видеть, от чего он отступил, иначе «вписать своё» — это
-          выстрел в темноте.
-        type: integer
       period_start:
         description: |-
-          PeriodStart — за какой период записано. Периоды катятся от первой
+          PeriodStart — за какой период. Периоды катятся от первой
           публикации проекта, а не по календарю.
         type: string
       project_id:
         type: string
       subscribers:
         description: |-
-          Subscribers — сколько подписчиков прибавилось за период. Именно по
-          этому числу считается доплата: вписанное рукой, если оно есть,
-          иначе снятое обходом.
+          Subscribers — сколько подписчиков прибавилось за период по всем
+          аккаунтам человека, прикреплённым к проекту. По нему считается
+          доплата.
         type: integer
-      updated_at:
-        description: UpdatedAt — когда правили руками. Пусто у снятого обходом.
-        type: string
     type: object
   internal_billing.NextStepForecast:
     properties:
@@ -3107,16 +3086,6 @@ definitions:
         description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
         type: integer
       videos_next_months:
-        type: integer
-    type: object
-  internal_billing.subscribersReq:
-    properties:
-      period:
-        description: |-
-          Period — номер периода проекта. 0 = текущий: менеджер вписывает
-          число по ходу периода, а не разыскивает его номер.
-        type: integer
-      subscribers:
         type: integer
     type: object
   internal_billing.subscribersResp:
@@ -13115,102 +13084,6 @@ paths:
       summary: Напоминать креатору накануне срока (менеджер)
       tags:
       - manager-publications
-  /manager/projects/{id}/creators/{creator_id}/subscribers:
-    delete:
-      description: |-
-        Убирает ручную правку: доплата снова считается по снимкам
-        аудитории — срез на входе в период, срез в конце, разница.
-        Отдельным действием, а не «впишите ноль»: ноль это
-        объявленное «роста не было», и платить по нему — тоже
-        решение. В ответе — число, которое теперь считается.
-      parameters:
-      - description: project id
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: creator id
-        in: path
-        name: creator_id
-        required: true
-        type: string
-      - description: номер периода; по умолчанию текущий
-        in: query
-        name: period
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_billing.CreatorSubscribers'
-        "400":
-          description: bad_id; bad_period
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-        "401":
-          description: no_user — сессия истекла
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-        "404":
-          description: not_found — проект не найден, ведёт другой менеджер или периодов
-            ещё нет
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Вернуть снятое обходом число подписчиков (менеджер)
-      tags:
-      - manager-billing
-    put:
-      consumes:
-      - application/json
-      description: |-
-        Число вводится руками: сборщика подписчиков нет, а KPI по
-        ним в тарифе объявлен. Так же заведены переходы по UTM.
-      parameters:
-      - description: project id
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: creator id
-        in: path
-        name: creator_id
-        required: true
-        type: string
-      - description: подписчики
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/internal_billing.subscribersReq'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_billing.CreatorSubscribers'
-        "400":
-          description: bad_json; bad_id; invalid_input — отрицательное число
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-        "401":
-          description: no_user — сессия истекла
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-        "404":
-          description: not_found — проект не найден, ведёт другой менеджер или периодов
-            ещё нет
-          schema:
-            $ref: '#/definitions/internal_billing.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Вписать подписчиков за период (менеджер)
-      tags:
-      - manager-billing
   /manager/projects/{id}/creators/{creator_id}/utm:
     put:
       consumes:
@@ -14351,10 +14224,9 @@ paths:
   /manager/projects/{id}/subscribers:
     get:
       description: |-
-        Сколько подписчиков записано креаторам проекта за период.
-        Автоматического источника у этого числа нет: сборщика по
-        подписчикам в продукте не существует, и ставка в тарифе
-        объявляется под число, которое вписывает менеджер.
+        Прирост подписчиков креаторов проекта за период — тот, что
+        снял обход аккаунтов: срез аудитории на входе в период,
+        срез в конце, разница. Вписать число рукой нельзя.
       parameters:
       - description: project id
         in: path

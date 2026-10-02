@@ -408,34 +408,11 @@ func (s *Service) UTM(ctx context.Context, projectID uuid.UUID, creatorID *uuid.
 	return s.repo.UTM(ctx, projectID, creatorID)
 }
 
-// Subscribers — сколько подписчиков записано креаторам за период.
+// Subscribers — прирост подписчиков креаторов за период, снятый обходом.
 func (s *Service) Subscribers(
 	ctx context.Context, projectID uuid.UUID, p ProjectPeriod,
 ) ([]CreatorSubscribers, error) {
 	return s.repo.PeriodSubscribers(ctx, projectID, p)
-}
-
-// DropSubscribers — убрать ручную правку: доплата снова считается по
-// снятому обходом.
-func (s *Service) DropSubscribers(
-	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time,
-) error {
-	return s.repo.DropSubscribers(ctx, projectID, creatorID, periodStart)
-}
-
-// SaveSubscribers — число подписчиков за период вписывает менеджер.
-//
-// Проверка ровно одна и ровно та, которую нельзя проверить в базе
-// осмысленно: отрицательных подписчиков не бывает. Верхней границы нет
-// намеренно — придумывать «разумный максимум» для чужого канала мы не
-// умеем, а упёршийся в него менеджер не сможет выставить правду.
-func (s *Service) SaveSubscribers(
-	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time, n int64, actor uuid.UUID,
-) (CreatorSubscribers, error) {
-	if n < 0 {
-		return CreatorSubscribers{}, fmt.Errorf("%w: подписчиков не бывает меньше нуля", ErrInvalidInput)
-	}
-	return s.repo.SaveSubscribers(ctx, projectID, creatorID, periodStart, n, actor)
 }
 
 // SaveUTM — метку ставит менеджер.

@@ -656,15 +656,9 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/manager/projects/{id}/accruals/{accrual_id}/approve", d.Billing.ManagerApproveAccrual)
 					r.Post("/manager/projects/{id}/accruals/{accrual_id}/paid", d.Billing.ManagerPayAccrual)
 					r.Put("/manager/projects/{id}/creators/{creator_id}/utm", d.Billing.ManagerSaveUTM)
-					// Подписчики: сборщика по ним нет, число вписывает
-					// менеджер — те же две ручки, что у меток.
+					// Подписчики: прирост снимает обход, вписать его рукой
+					// нельзя — только посмотреть.
 					r.Get("/manager/projects/{id}/subscribers", d.Billing.ManagerSubscribers)
-					r.Put("/manager/projects/{id}/creators/{creator_id}/subscribers",
-						d.Billing.ManagerSaveSubscribers)
-					// Вернуть снятое обходом: убрать ручную правку. Не то
-					// же, что вписать ноль, — см. ManagerDropSubscribers.
-					r.Delete("/manager/projects/{id}/creators/{creator_id}/subscribers",
-						d.Billing.ManagerDropSubscribers)
 				}
 				if d.Orders != nil {
 					r.Get("/manager/orders", d.Orders.ManagerNeedingAttention)

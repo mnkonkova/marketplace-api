@@ -194,9 +194,10 @@ func TestSubscriberKPIReachesAccrual(t *testing.T) {
 		t.Fatalf("период: %v", err)
 	}
 	// 2 500 подписчиков по 12 ₽ с заказчика — 30 000 ₽ сверх ступени.
-	if _, err := svc.SaveSubscribers(ctx, pid, creators[0], p.StartsOn, 2_500, creators[0]); err != nil {
-		t.Fatalf("подписчики: %v", err)
-	}
+	// Прирост — разница снимков аудитории: на входе в период и в нём.
+	acc := addCreatorAccount(t, pid, creators[0], "tiktok", "https://www.tiktok.com/@ldr06")
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, -1), 10_000)
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, 2), 12_500)
 
 	rows, err := svc.Recalculate(ctx, pid, p)
 	if err != nil {

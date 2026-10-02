@@ -6506,140 +6506,6 @@
                 }
             }
         },
-        "/manager/projects/{id}/creators/{creator_id}/subscribers": {
-            "put": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Число вводится руками: сборщика подписчиков нет, а KPI по\nним в тарифе объявлен. Так же заведены переходы по UTM.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "manager-billing"
-                ],
-                "summary": "Вписать подписчиков за период (менеджер)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "project id",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "creator id",
-                        "name": "creator_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "подписчики",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.subscribersReq"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.CreatorSubscribers"
-                        }
-                    },
-                    "400": {
-                        "description": "bad_json; bad_id; invalid_input — отрицательное число",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "no_user — сессия истекла",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Убирает ручную правку: доплата снова считается по снимкам\nаудитории — срез на входе в период, срез в конце, разница.\nОтдельным действием, а не «впишите ноль»: ноль это\nобъявленное «роста не было», и платить по нему — тоже\nрешение. В ответе — число, которое теперь считается.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "manager-billing"
-                ],
-                "summary": "Вернуть снятое обходом число подписчиков (менеджер)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "project id",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "creator id",
-                        "name": "creator_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "номер периода; по умолчанию текущий",
-                        "name": "period",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.CreatorSubscribers"
-                        }
-                    },
-                    "400": {
-                        "description": "bad_id; bad_period",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "no_user — сессия истекла",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет",
-                        "schema": {
-                            "$ref": "#/definitions/internal_billing.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/manager/projects/{id}/creators/{creator_id}/utm": {
             "put": {
                 "security": [
@@ -8339,7 +8205,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Сколько подписчиков записано креаторам проекта за период.\nАвтоматического источника у этого числа нет: сборщика по\nподписчикам в продукте не существует, и ставка в тарифе\nобъявляется под число, которое вписывает менеджер.",
+                "description": "Прирост подписчиков креаторов проекта за период — тот, что\nснял обход аккаунтов: срез аудитории на входе в период,\nсрез в конце, разница. Вписать число рукой нельзя.",
                 "produces": [
                     "application/json"
                 ],
@@ -16454,28 +16320,16 @@
                 "creator_user_id": {
                     "type": "string"
                 },
-                "manual": {
-                    "description": "Manual — число перебито рукой. Тогда Subscribers равно вписанному,\nа Measured показывает, что было намерено.\n\nОтдельным полем, а не сравнением Subscribers с Measured: они\nсовпадают и когда менеджер вписал ровно намеренное число, и это\nразные состояния — у второго есть автор и время правки.",
-                    "type": "boolean"
-                },
-                "measured": {
-                    "description": "Measured — что намерил обход: разница крайних снимков аудитории за\nпериод по всем аккаунтам человека, прикреплённым к проекту.\n\nОтдаётся ВСЕГДА, даже когда сверху лежит ручная правка: менеджеру\nнадо видеть, от чего он отступил, иначе «вписать своё» — это\nвыстрел в темноте.",
-                    "type": "integer"
-                },
                 "period_start": {
-                    "description": "PeriodStart — за какой период записано. Периоды катятся от первой\nпубликации проекта, а не по календарю.",
+                    "description": "PeriodStart — за какой период. Периоды катятся от первой\nпубликации проекта, а не по календарю.",
                     "type": "string"
                 },
                 "project_id": {
                     "type": "string"
                 },
                 "subscribers": {
-                    "description": "Subscribers — сколько подписчиков прибавилось за период. Именно по\nэтому числу считается доплата: вписанное рукой, если оно есть,\nиначе снятое обходом.",
+                    "description": "Subscribers — сколько подписчиков прибавилось за период по всем\nаккаунтам человека, прикреплённым к проекту. По нему считается\nдоплата.",
                     "type": "integer"
-                },
-                "updated_at": {
-                    "description": "UpdatedAt — когда правили руками. Пусто у снятого обходом.",
-                    "type": "string"
                 }
             }
         },
@@ -18114,18 +17968,6 @@
                     "type": "integer"
                 },
                 "videos_next_months": {
-                    "type": "integer"
-                }
-            }
-        },
-        "internal_billing.subscribersReq": {
-            "type": "object",
-            "properties": {
-                "period": {
-                    "description": "Period — номер периода проекта. 0 = текущий: менеджер вписывает\nчисло по ходу периода, а не разыскивает его номер.",
-                    "type": "integer"
-                },
-                "subscribers": {
                     "type": "integer"
                 }
             }

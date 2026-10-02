@@ -1947,17 +1947,28 @@ func TestSubscriberGrowthFromSnapshots(t *testing.T) {
 		t.Errorf("доплата %d, ожидалось %d", got.SubscriberBonus, 2500*rate)
 	}
 
-	// Менеджер вписал своё число — оно и считается.
-	if _, err := svc.SaveSubscribers(ctx, pid, creators[0], p.StartsOn, 1000, creators[0]); err != nil {
-		t.Fatalf("SaveSubscribers: %v", err)
-	}
+	// Ручной ввод убран: подписчиков меряем, а не вписываем. Строка,
+	// оставшаяся от прежних ручных правок, на расчёт не влияет.
+	seedLegacyManualSubscribers(t, pid, creators[0], p.StartsOn, 1000)
 	items, err = svc.Recalculate(ctx, pid, p)
 	if err != nil {
-		t.Fatalf("Recalculate (после правки): %v", err)
+		t.Fatalf("Recalculate (со старой правкой): %v", err)
 	}
-	if got := accrualOf(t, items, creators[0]); got.Subscribers != 1000 {
-		t.Errorf("после правки руками %d, ожидалось 1000 — расчёт отменил решение человека",
-			got.Subscribers)
+	if got := accrualOf(t, items, creators[0]); got.Subscribers != 2500 {
+		t.Errorf("со старой ручной правкой %d, ожидалось снятое 2500", got.Subscribers)
+	}
+}
+
+// seedLegacyManualSubscribers — строка в таблице прежних ручных правок,
+// как у проектов, где число вписывали до того, как ввод убрали.
+func seedLegacyManualSubscribers(t *testing.T, pid, creator uuid.UUID, periodStart time.Time, n int64) {
+	t.Helper()
+	if _, err := integration.Pool(t).Exec(context.Background(), `
+INSERT INTO creator_period_subscribers (project_id, creator_user_id, period_start, subscribers, updated_by)
+VALUES ($1, $2, $3, $4, $2)
+ON CONFLICT (project_id, creator_user_id, period_start) DO UPDATE SET subscribers = EXCLUDED.subscribers`,
+		pid, creator, periodStart, n); err != nil {
+		t.Fatalf("старая ручная правка: %v", err)
 	}
 }
 
@@ -2067,14 +2078,12 @@ func accrualOf(t *testing.T, items []billing.Accrual, creator uuid.UUID) billing
 	return billing.Accrual{}
 }
 
-// Список подписчиков показывает И снятое обходом, И вписанное рукой.
+// Список подписчиков — то, что снял обход, у каждого в составе.
 //
-// Раньше он приходил из creator_period_subscribers, то есть показывал
-// ровно ручные правки — и до появления снимков это было честно. Теперь у
-// человека без правки есть намеренное число, и не показать его значит
-// спрятать то, по чему ему платят: менеджер видел бы ноль, а в начислении
-// стояла бы доплата.
-func TestSubscribersListShowsMeasuredAndManual(t *testing.T) {
+// Строка на человека без единой правки обязана быть: иначе менеджер
+// видел бы ноль, а в начислении стояла бы доплата. Ручного ввода нет —
+// подписчиков меряем, а не вписываем.
+func TestSubscribersListIsMeasured(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
 	pid, creators, cleanup := setupCreatorsProject(t, pool)
@@ -2112,67 +2121,17 @@ func TestSubscribersListShowsMeasuredAndManual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribers: %v", err)
 	}
-	got := find(items)
-	if got.Measured != 2500 {
-		t.Errorf("намерено %d, ожидалось 2500", got.Measured)
-	}
-	if got.Subscribers != 2500 {
-		t.Errorf("считается %d, ожидалось снятое 2500", got.Subscribers)
-	}
-	if got.Manual {
-		t.Error("число помечено ручным, хотя его никто не правил")
-	}
-	if got.UpdatedAt != nil {
-		t.Error("у снятого обходом есть время правки — его правил никто")
+	if got := find(items); got.Subscribers != 2500 {
+		t.Errorf("в списке %d, ожидалось снятое 2500", got.Subscribers)
 	}
 
-	// Менеджер перебил своё — снятое при этом ОСТАЁТСЯ видно: иначе
-	// «вписать своё» это выстрел в темноте.
-	if _, err := svc.SaveSubscribers(ctx, pid, creators[0], p.StartsOn, 900, creators[0]); err != nil {
-		t.Fatalf("SaveSubscribers: %v", err)
-	}
+	// Строка прежних ручных правок числа не подменяет.
+	seedLegacyManualSubscribers(t, pid, creators[0], p.StartsOn, 900)
 	items, err = svc.Subscribers(ctx, pid, p)
 	if err != nil {
-		t.Fatalf("Subscribers (после правки): %v", err)
+		t.Fatalf("Subscribers (со старой правкой): %v", err)
 	}
-	got = find(items)
-	if got.Subscribers != 900 {
-		t.Errorf("считается %d, ожидалось вписанное 900", got.Subscribers)
-	}
-	if got.Measured != 2500 {
-		t.Errorf("намеренное исчезло после правки: %d", got.Measured)
-	}
-	if !got.Manual || got.UpdatedAt == nil {
-		t.Errorf("правка не помечена ручной: manual=%v at=%v", got.Manual, got.UpdatedAt)
-	}
-
-	// «Вернуть снятое» — не то же, что вписать ноль.
-	if err := svc.DropSubscribers(ctx, pid, creators[0], p.StartsOn); err != nil {
-		t.Fatalf("DropSubscribers: %v", err)
-	}
-	items, err = svc.Subscribers(ctx, pid, p)
-	if err != nil {
-		t.Fatalf("Subscribers (после возврата): %v", err)
-	}
-	got = find(items)
-	if got.Manual || got.Subscribers != 2500 {
-		t.Errorf("после возврата manual=%v число=%d, ожидалось снятое 2500",
-			got.Manual, got.Subscribers)
-	}
-
-	// А вписанный ноль — это объявленное «роста не было», и он остаётся
-	// ручным: иначе расчёт молча вернул бы снятое и заплатил за то, от
-	// чего менеджер отказался.
-	if _, err := svc.SaveSubscribers(ctx, pid, creators[0], p.StartsOn, 0, creators[0]); err != nil {
-		t.Fatalf("SaveSubscribers(0): %v", err)
-	}
-	items, err = svc.Subscribers(ctx, pid, p)
-	if err != nil {
-		t.Fatalf("Subscribers (после нуля): %v", err)
-	}
-	got = find(items)
-	if !got.Manual || got.Subscribers != 0 {
-		t.Errorf("вписанный ноль: manual=%v число=%d — ноль подменён снятым",
-			got.Manual, got.Subscribers)
+	if got := find(items); got.Subscribers != 2500 {
+		t.Errorf("со старой ручной правкой в списке %d, ожидалось снятое 2500", got.Subscribers)
 	}
 }

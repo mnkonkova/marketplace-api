@@ -172,14 +172,6 @@ type utmReq struct {
 	URL string `json:"url"`
 }
 
-// subscribersReq — сколько подписчиков прибавилось креатору за период.
-type subscribersReq struct {
-	Subscribers int64 `json:"subscribers"`
-	// Period — номер периода проекта. 0 = текущий: менеджер вписывает
-	// число по ходу периода, а не разыскивает его номер.
-	Period int `json:"period"`
-}
-
 type subscribersResp struct {
 	Items []CreatorSubscribers `json:"items"`
 }
@@ -587,10 +579,9 @@ func (h *Handler) ManagerSaveUTM(w http.ResponseWriter, r *http.Request) {
 
 // ManagerSubscribers godoc
 // @Summary  Подписчики за период (менеджер)
-// @Description Сколько подписчиков записано креаторам проекта за период.
-// @Description Автоматического источника у этого числа нет: сборщика по
-// @Description подписчикам в продукте не существует, и ставка в тарифе
-// @Description объявляется под число, которое вписывает менеджер.
+// @Description Прирост подписчиков креаторов проекта за период — тот, что
+// @Description снял обход аккаунтов: срез аудитории на входе в период,
+// @Description срез в конце, разница. Вписать число рукой нельзя.
 // @Tags     manager-billing
 // @Produce  json
 // @Security BearerAuth
@@ -632,118 +623,6 @@ func (h *Handler) ManagerSubscribers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, subscribersResp{Items: items})
-}
-
-// ManagerSaveSubscribers godoc
-// @Summary  Вписать подписчиков за период (менеджер)
-// @Description Число вводится руками: сборщика подписчиков нет, а KPI по
-// @Description ним в тарифе объявлен. Так же заведены переходы по UTM.
-// @Tags     manager-billing
-// @Accept   json
-// @Produce  json
-// @Security BearerAuth
-// @Param    id         path string true "project id"
-// @Param    creator_id path string true "creator id"
-// @Param    body       body subscribersReq true "подписчики"
-// @Success  200 {object} CreatorSubscribers
-// @Failure  400 {object} errorResponse "bad_json; bad_id; invalid_input — отрицательное число"
-// @Failure  401 {object} errorResponse "no_user — сессия истекла"
-// @Failure  404 {object} errorResponse "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет"
-// @Router   /manager/projects/{id}/creators/{creator_id}/subscribers [put]
-func (h *Handler) ManagerSaveSubscribers(w http.ResponseWriter, r *http.Request) {
-	projectID, uid, ok := h.managerProject(w, r)
-	if !ok {
-		return
-	}
-	if !h.requireBilling(w, r, projectID) {
-		return
-	}
-	creatorID, err := uuid.Parse(chi.URLParam(r, "creator_id"))
-	if err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id креатора.")
-		return
-	}
-	var req subscribersReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_json", "Некорректный JSON.")
-		return
-	}
-	p, err := h.svc.Period(r.Context(), projectID, req.Period, time.Now())
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	c, err := h.svc.SaveSubscribers(r.Context(), projectID, creatorID, p.StartsOn, req.Subscribers, uid)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, c)
-}
-
-// ManagerDropSubscribers godoc
-// @Summary  Вернуть снятое обходом число подписчиков (менеджер)
-// @Description Убирает ручную правку: доплата снова считается по снимкам
-// @Description аудитории — срез на входе в период, срез в конце, разница.
-// @Description Отдельным действием, а не «впишите ноль»: ноль это
-// @Description объявленное «роста не было», и платить по нему — тоже
-// @Description решение. В ответе — число, которое теперь считается.
-// @Tags     manager-billing
-// @Produce  json
-// @Security BearerAuth
-// @Param    id         path  string true  "project id"
-// @Param    creator_id path  string true  "creator id"
-// @Param    period     query int    false "номер периода; по умолчанию текущий"
-// @Success  200 {object} CreatorSubscribers
-// @Failure  400 {object} errorResponse "bad_id; bad_period"
-// @Failure  401 {object} errorResponse "no_user — сессия истекла"
-// @Failure  404 {object} errorResponse "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет"
-// @Router   /manager/projects/{id}/creators/{creator_id}/subscribers [delete]
-func (h *Handler) ManagerDropSubscribers(w http.ResponseWriter, r *http.Request) {
-	projectID, _, ok := h.managerProject(w, r)
-	if !ok {
-		return
-	}
-	if !h.requireBilling(w, r, projectID) {
-		return
-	}
-	creatorID, err := uuid.Parse(chi.URLParam(r, "creator_id"))
-	if err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id креатора.")
-		return
-	}
-	seq, ok := periodParam(r)
-	if !ok {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
-			"Номер периода должен быть целым числом.")
-		return
-	}
-	p, err := h.svc.Period(r.Context(), projectID, seq, time.Now())
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	if err := h.svc.DropSubscribers(r.Context(), projectID, creatorID, p.StartsOn); err != nil {
-		writeErr(w, err)
-		return
-	}
-	// Отдаём то, что теперь считается: иначе кабинету пришлось бы
-	// перезапрашивать список, чтобы узнать, к какому числу он вернулся.
-	items, err := h.svc.Subscribers(r.Context(), projectID, p)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	for _, c := range items {
-		if c.CreatorUserID == creatorID {
-			httpx.WriteJSON(w, http.StatusOK, c)
-			return
-		}
-	}
-	// Креатора в составе уже нет — правку убрали, показывать нечего.
-	httpx.WriteJSON(w, http.StatusOK, CreatorSubscribers{
-		ProjectID: projectID, CreatorUserID: creatorID, PeriodStart: p.StartsOn,
-	})
 }
 
 // ---- заказчик ----

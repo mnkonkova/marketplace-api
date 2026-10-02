@@ -455,7 +455,7 @@ SELECT pc.creator_user_id,
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $5)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $5, 0)), 0),
        GREATEST(COALESCE(MAX(utm.clicks), 0) - COALESCE(MAX(prevclicks.counted), 0), 0),
-       COALESCE(MAX(subs.subscribers), MAX(snap.gained), 0)
+       COALESCE(MAX(snap.gained), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
@@ -473,14 +473,11 @@ LEFT JOIN LATERAL (
       AND ca.creator_user_id = pc.creator_user_id
       AND ca.period_start < $6
 ) prevclicks ON TRUE
-LEFT JOIN creator_period_subscribers subs
-       ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
-      AND subs.period_start = $6
 `+followerGainSQL("$6", "$4")+`
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
 -- $3 — левая граница отбора выкладок: у первого периода её нет (см.
--- periodFrom). $6 — начало периода как таковое: подписчиков менеджер
--- вписывает ИМЕННО периоду, и им открытая граница не нужна.
+-- periodFrom). $6 — начало периода как таковое: прирост подписчиков
+-- считается ровно за период, и открытая граница ему не нужна.
 GROUP BY pc.creator_user_id`, projectID, projectID, periodFrom(p), p.EndsOn, threshold, p.StartsOn)
 	if err != nil {
 		return nil, fmt.Errorf("period facts: %w", err)
@@ -553,6 +550,10 @@ LEFT JOIN LATERAL (
       AND ca.creator_user_id = pc.creator_user_id
       AND ca.period_start < $4
 ) prevclicks ON TRUE
+-- Ручные правки подписчиков, оставшиеся с тех пор, когда число можно
+-- было вписать. Ввод убран, новых не появится, но зафиксированный месяц
+-- обязан считаться так же, как в день фиксации, — поэтому здесь, и
+-- только здесь, они по-прежнему сильнее снятого.
 LEFT JOIN creator_period_subscribers subs
        ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
       AND subs.period_start = $4
@@ -900,35 +901,19 @@ LEFT JOIN LATERAL (
 // ---- подписчики ----
 //
 // Прирост снимает обход аккаунтов: срез аудитории на входе в период, срез
-// в конце, разница (account_follower_daily). Ручная правка остаётся
-// сверху — это решение менеджера по спорному случаю: аккаунт отдали
-// поздно, часть роста пришла не от проекта, площадка соврала. Отменять
-// его расчётом нельзя.
-//
-// Держим по периоду: доплата считается за период, и одно поле «сколько
-// всего» пришлось бы каждый месяц перезаписывать, теряя то, за что уже
-// заплатили.
+// в конце, разница (account_follower_daily). Вписать число рукой нельзя —
+// решение владельца: подписчиков мы меряем, а не вписываем. Таблицу
+// прежних ручных правок (creator_period_subscribers) читает только
+// зафиксированный месяц — см. periodFactsLocked.
 
-// PeriodSubscribers — прирост подписчиков по каждому креатору периода.
-//
-// Строка на КАЖДОГО в составе, а не только на тех, кого правили руками.
-// Раньше список приходил из creator_period_subscribers, то есть
-// показывал ровно ручные правки, — и до появления снимков это было
-// честно. Теперь у человека без правки есть намеренное число, и не
-// показать его значит спрятать то, по чему ему платят.
+// PeriodSubscribers — прирост подписчиков по каждому креатору периода:
+// строка на каждого в составе.
 func (r *Repo) PeriodSubscribers(
 	ctx context.Context, projectID uuid.UUID, p ProjectPeriod,
 ) ([]CreatorSubscribers, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT pc.creator_user_id, `+nameExpr+`,
-       COALESCE(s.subscribers, snap.gained, 0),
-       COALESCE(snap.gained, 0),
-       s.creator_user_id IS NOT NULL,
-       s.updated_at
+SELECT pc.creator_user_id, `+nameExpr+`, COALESCE(snap.gained, 0)
 FROM project_creators pc
-LEFT JOIN creator_period_subscribers s
-       ON s.project_id = pc.project_id AND s.creator_user_id = pc.creator_user_id
-      AND s.period_start = $2
 LEFT JOIN users u                ON u.id = pc.creator_user_id
 LEFT JOIN specialist_profiles sp ON sp.user_id = pc.creator_user_id
 LEFT JOIN client_profiles cp     ON cp.user_id = pc.creator_user_id
@@ -942,46 +927,10 @@ ORDER BY 2`, projectID, p.StartsOn, p.EndsOn)
 	out := make([]CreatorSubscribers, 0)
 	for rows.Next() {
 		c := CreatorSubscribers{ProjectID: projectID, PeriodStart: p.StartsOn}
-		if err := rows.Scan(&c.CreatorUserID, &c.CreatorName,
-			&c.Subscribers, &c.Measured, &c.Manual, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.CreatorUserID, &c.CreatorName, &c.Subscribers); err != nil {
 			return nil, fmt.Errorf("scan period subscribers: %w", err)
 		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
-}
-
-// DropSubscribers — убрать ручную правку, вернувшись к снятому обходом.
-//
-// Отдельным действием, а не «впишите ноль»: ноль — это объявленное «роста
-// не было», и платить по нему тоже решение. «Вернуть снятое» и «считать
-// ноль» — разные ответы, и различать их обязан интерфейс, а не догадка.
-func (r *Repo) DropSubscribers(
-	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time,
-) error {
-	if _, err := r.db.Exec(ctx, `
-DELETE FROM creator_period_subscribers
-WHERE project_id = $1 AND creator_user_id = $2 AND period_start = $3`,
-		projectID, creatorID, periodStart); err != nil {
-		return fmt.Errorf("drop period subscribers: %w", err)
-	}
-	return nil
-}
-
-// SaveSubscribers — записать число подписчиков за период.
-func (r *Repo) SaveSubscribers(
-	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time, n int64, actor uuid.UUID,
-) (CreatorSubscribers, error) {
-	c := CreatorSubscribers{CreatorUserID: creatorID, PeriodStart: periodStart}
-	if err := r.db.QueryRow(ctx, `
-INSERT INTO creator_period_subscribers
-  (project_id, creator_user_id, period_start, subscribers, updated_by)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (project_id, creator_user_id, period_start) DO UPDATE
-  SET subscribers = EXCLUDED.subscribers, updated_by = EXCLUDED.updated_by, updated_at = now()
-RETURNING subscribers, updated_at`, projectID, creatorID, periodStart, n, actor).
-		Scan(&c.Subscribers, &c.UpdatedAt); err != nil {
-		return CreatorSubscribers{}, fmt.Errorf("save period subscribers: %w", err)
-	}
-	return c, nil
 }
