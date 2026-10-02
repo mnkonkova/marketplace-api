@@ -1357,15 +1357,39 @@ definitions:
         type: string
       creator_user_id:
         type: string
+      manual:
+        description: |-
+          Manual — число перебито рукой. Тогда Subscribers равно вписанному,
+          а Measured показывает, что было намерено.
+
+          Отдельным полем, а не сравнением Subscribers с Measured: они
+          совпадают и когда менеджер вписал ровно намеренное число, и это
+          разные состояния — у второго есть автор и время правки.
+        type: boolean
+      measured:
+        description: |-
+          Measured — что намерил обход: разница крайних снимков аудитории за
+          период по всем аккаунтам человека, прикреплённым к проекту.
+
+          Отдаётся ВСЕГДА, даже когда сверху лежит ручная правка: менеджеру
+          надо видеть, от чего он отступил, иначе «вписать своё» — это
+          выстрел в темноте.
+        type: integer
       period_start:
         description: |-
           PeriodStart — за какой период записано. Периоды катятся от первой
           публикации проекта, а не по календарю.
         type: string
+      project_id:
+        type: string
       subscribers:
-        description: Subscribers — сколько подписчиков прибавилось за период.
+        description: |-
+          Subscribers — сколько подписчиков прибавилось за период. Именно по
+          этому числу считается доплата: вписанное рукой, если оно есть,
+          иначе снятое обходом.
         type: integer
       updated_at:
+        description: UpdatedAt — когда правили руками. Пусто у снятого обходом.
         type: string
     type: object
   internal_billing.NextStepForecast:
@@ -6352,30 +6376,6 @@ definitions:
     x-enum-varnames:
     - ClientStatusPublished
     - ClientStatusPlanned
-  internal_publications.CreatorDocument:
-    properties:
-      audience:
-        description: Audience — creators или client. Определяет, кто материал увидит.
-        type: string
-      created_at:
-        type: string
-      created_by:
-        type: string
-      id:
-        type: string
-      kind:
-        type: string
-      project_id:
-        type: string
-      project_title:
-        type: string
-      sort_order:
-        type: integer
-      title:
-        type: string
-      url:
-        type: string
-    type: object
   internal_publications.CreatorMedian:
     properties:
       basis:
@@ -7386,13 +7386,6 @@ definitions:
       url:
         type: string
     type: object
-  internal_publications.creatorDocumentsResp:
-    properties:
-      items:
-        items:
-          $ref: '#/definitions/internal_publications.CreatorDocument'
-        type: array
-    type: object
   internal_publications.creatorProjectsResp:
     properties:
       items:
@@ -8144,6 +8137,32 @@ definitions:
       target_category:
         type: string
     type: object
+  internal_telegram.BotCommentResult:
+    properties:
+      comment_id:
+        type: string
+      project_id:
+        type: string
+      project_title:
+        type: string
+      reader:
+        description: |-
+          Reader — кто прочтёт: manager, client (заказчик) или executor
+          (исполнитель общего проекта). По нему бот говорит «менеджер
+          увидит» или «исполнитель увидит»; по ветке это не вывести: ветку
+          заказчика в общем проекте читает исполнитель, менеджера там нет.
+        enum:
+        - manager
+        - client
+        - executor
+        type: string
+      thread:
+        description: |-
+          Thread — ветка: client (с заказчиком) или creator (с менеджером).
+          Бот по ней говорит, КТО прочитает: креатор общего проекта пишет
+          заказчику, а не менеджеру.
+        type: string
+    type: object
   internal_telegram.Link:
     properties:
       blocked_at:
@@ -8188,6 +8207,42 @@ definitions:
       id:
         type: integer
     type: object
+  internal_telegram.ProjectRef:
+    properties:
+      project_id:
+        type: string
+      project_title:
+        type: string
+      reader:
+        description: |-
+          Reader — кто прочтёт: manager, client (заказчик) или executor
+          (исполнитель общего проекта). По нему бот говорит «менеджер
+          увидит» или «исполнитель увидит»; по ветке это не вывести: ветку
+          заказчика в общем проекте читает исполнитель, менеджера там нет.
+        enum:
+        - manager
+        - client
+        - executor
+        type: string
+      thread:
+        description: |-
+          Thread — ветка: client (с заказчиком) или creator (с менеджером).
+          Бот по ней говорит, КТО прочитает: креатор общего проекта пишет
+          заказчику, а не менеджеру.
+        type: string
+    type: object
+  internal_telegram.SentMessage:
+    properties:
+      chat_id:
+        description: ChatID — куда ушло.
+        type: integer
+      id:
+        description: ID — строка bot_messages.
+        type: integer
+      message_id:
+        description: MessageID — message_id, который вернул Telegram.
+        type: integer
+    type: object
   internal_telegram.Status:
     properties:
       available:
@@ -8222,10 +8277,51 @@ definitions:
               type: integer
           type: object
         type: array
+      sent:
+        description: |-
+          Sent — под каким message_id и в какой чат ушло каждое
+          доставленное личное сообщение. По нему ответ человека на пинг
+          становится комментарием в проекте (см. comments.go).
+          Необязательно: бот старой версии его не присылает.
+        items:
+          $ref: '#/definitions/internal_telegram.SentMessage'
+        type: array
     type: object
   internal_telegram.botBlockedReq:
     properties:
       bot:
+        type: string
+      tg_user_id:
+        type: integer
+    type: object
+  internal_telegram.botCommentAnchorReq:
+    properties:
+      bot:
+        type: string
+      chat_id:
+        type: integer
+      message_id:
+        description: |-
+          MessageID — сообщение бота, ответ на которое пойдёт в этот
+          проект. Пусто — только проверить доступ и узнать название.
+        type: integer
+      project_id:
+        type: string
+      tg_user_id:
+        type: integer
+    type: object
+  internal_telegram.botCommentReq:
+    properties:
+      bot:
+        type: string
+      chat_id:
+        type: integer
+      reply_to_message_id:
+        description: |-
+          ReplyToMessageID — на какое сообщение бота человек ответил.
+          Обязательно: не ответ — не комментарий (not_reply).
+        type: integer
+      text:
         type: string
       tg_user_id:
         type: integer
@@ -10975,6 +11071,111 @@ paths:
       summary: Человек заблокировал бота
       tags:
       - bot
+  /bot/comments:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Человек ответил (reply) на сообщение бота о проекте —
+        текст ложится в переписку проекта от его имени, в ту ветку,
+        куда он написал бы из кабинета: креатор — в свою ветку с
+        менеджером (исполнитель общего проекта — в ветку с
+        заказчиком), заказчик — в ветку с заказчиком. Уведомления
+        менеджеру уходят те же, что у комментария из кабинета.
+        Проект — только по reply_to_message_id: сообщение бота о
+        проекте (уведомление, приглашение «Написать в проект»,
+        подтверждение «записала»), запомненное API. Ответ на
+        неизвестное сообщение — no_project; не ответ — not_reply.
+        Проект не угадывается. В ответе reader — кто прочтёт:
+        manager, client (заказчик) или executor (исполнитель общего проекта).
+      parameters:
+      - description: кто, где и что написал
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_telegram.botCommentReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_telegram.BotCommentResult'
+        "400":
+          description: bad_json; unknown_bot; not_reply — не ответ на сообщение бота;
+            empty_comment; too_long — длиннее 5000 знаков; invalid_comment — прочий
+            некорректный ввод
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: bad_secret
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "403":
+          description: not_member — человек выведен из состава или проект чужой
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "404":
+          description: not_linked — телеграм не привязан; no_project — ответ на сообщение,
+            которого API не знает, или проекта нет
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "503":
+          description: comments_disabled
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      summary: Ответ боту — комментарий в проект (бот)
+      tags:
+      - bot
+  /bot/comments/anchor:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Для кнопки «Написать в проект». Без message_id — проверка:
+        человек всё ещё в проекте, и как проект называется (им
+        подписано приглашение). С message_id — то же плюс «ответ на
+        это сообщение — комментарий в этот проект»: так бот
+        регистрирует приглашение и подтверждение «записала». Доступ
+        проверяется каждый раз: между шагами человека могли вывести.
+      parameters:
+      - description: кто, какой проект, какое сообщение
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_telegram.botCommentAnchorReq'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_telegram.ProjectRef'
+        "400":
+          description: bad_json; unknown_bot
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "401":
+          description: bad_secret
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "403":
+          description: not_member
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "404":
+          description: not_linked; no_project — проекта нет
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+        "503":
+          description: comments_disabled
+          schema:
+            $ref: '#/definitions/internal_telegram.errorResponse'
+      summary: Привязать сообщение бота к проекту (бот)
+      tags:
+      - bot
   /bot/link:
     post:
       consumes:
@@ -12915,6 +13116,53 @@ paths:
       tags:
       - manager-publications
   /manager/projects/{id}/creators/{creator_id}/subscribers:
+    delete:
+      description: |-
+        Убирает ручную правку: доплата снова считается по снимкам
+        аудитории — срез на входе в период, срез в конце, разница.
+        Отдельным действием, а не «впишите ноль»: ноль это
+        объявленное «роста не было», и платить по нему — тоже
+        решение. В ответе — число, которое теперь считается.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: creator id
+        in: path
+        name: creator_id
+        required: true
+        type: string
+      - description: номер периода; по умолчанию текущий
+        in: query
+        name: period
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_billing.CreatorSubscribers'
+        "400":
+          description: bad_id; bad_period
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+        "404":
+          description: not_found — проект не найден, ведёт другой менеджер или периодов
+            ещё нет
+          schema:
+            $ref: '#/definitions/internal_billing.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вернуть снятое обходом число подписчиков (менеджер)
+      tags:
+      - manager-billing
     put:
       consumes:
       - application/json
@@ -14602,31 +14850,6 @@ paths:
       summary: Отметить занятость в месяце (креатор)
       tags:
       - creator-orders
-  /me/creator/documents:
-    get:
-      description: |-
-        Договоры и документы по всем действующим проектам, в одном
-        списке и с названием проекта у каждого. Отдельно от
-        материалов проекта: договор ищут не тогда, когда снимают, а
-        когда подписывают или выставляют счёт, — и помнить, в каком
-        проекте он лежал, человек не обязан. Видео и ссылки сюда не
-        попадают: это материалы для работы, а не документы.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_publications.creatorDocumentsResp'
-        "401":
-          description: no_user — сессия истекла
-          schema:
-            $ref: '#/definitions/internal_publications.errorResponse'
-      security:
-      - BearerAuth: []
-      summary: Мои документы (креатор)
-      tags:
-      - creator-publications
   /me/creator/invitations:
     get:
       produces:
@@ -15678,6 +15901,18 @@ paths:
       description: |-
         Выданное лично и договоры из материалов проектов, где человек
         сейчас работает или заказчик. Отозванное не показывается.
+        С project_id — только документы этого проекта, договор первым.
+        С source=personal — только выданное лично, без договоров из
+        материалов проекта.
+      parameters:
+      - description: только этот проект
+        in: query
+        name: project_id
+        type: string
+      - description: personal — только выданное лично
+        in: query
+        name: source
+        type: string
       produces:
       - application/json
       responses:
@@ -15685,6 +15920,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/internal_publications.myDocumentsResp'
+        "400":
+          description: invalid_input — project_id не uuid или неизвестный source
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
         "401":
           description: no_user
           schema:

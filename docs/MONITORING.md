@@ -248,9 +248,14 @@ python3 scripts/sync-alerts.py        # создаёт недостающие, �
 
 - **сервис жив** — `APIDown`, `APINotScraped`, `ESDown`, `N8nDown`,
   `BotrabotDown`, `SiteUnreachableExternally`, `InstacurlDown`,
-  `InstacurlUnreachable`;
+  `InstacurlUnreachable`, `InstacurlUnreachableLong`;
 - **работа идёт** — `StatsCollectionStalled`, `PlatformCollectSilent`,
-  `RemindersNotSending`, `PlatformViewsMissing`, `ContainerMetricsMissing`.
+  `RemindersNotSending`, `PlatformViewsMissing`, `ContainerMetricsMissing`,
+  `CollectAllNoData`;
+- **поставщик отвечает** — `ScrapeCreatorsSilent`,
+  `ScrapeCreatorsCreditsUnknown`. Второе — сторож первого: оба гейджа
+  появляются только после ответа провайдера с остатком, и пока его не
+  было, правила про кредиты молчат по определению.
 
 Скорости, доли и перцентили (`HighErrorRate`, `APIp95LatencyHigh`,
 `*Spike`) оставлены на `OK` сознательно: ночью трафика нет, данных тоже,
@@ -463,7 +468,15 @@ GROUP BY pr.title ORDER BY 3 DESC;
 `INSTACURL_API_KEY` — сервис тот же). Включать стоит, посмотрев на
 остаток кредитов у поставщика (`ScrapeCreatorsCreditsLow`): обход
 тратит их каждый день независимо от того, вышло что-нибудь на аккаунте
-или нет. Расход стережёт `AccountScanVolumeSpike` — отдельное правило,
+или нет.
+
+**С него же снимаются подписчики.** Обход ходит на адрес профиля, а в
+ответе кроме списка роликов приходит число подписчиков — его и пишет
+`account_follower_daily` (срез на день). Доплата за прирост считается
+разницей крайних срезов периода, поэтому при выключенном обходе
+подписчики не измеряются вовсе: цена в тарифе объявлена, а число остаётся
+нулём, пока менеджер не впишет своё. Отдельного переключателя у срезов
+нет намеренно — это один и тот же поход и один и тот же кредит. Расход стережёт `AccountScanVolumeSpike` — отдельное правило,
 потому что и счётчик отдельный (`crm_account_scan_total`): сложенные с
 `crm_stat_collect_total`, эти два расхода нельзя было бы ни развести по
 причинам, ни спланировать.

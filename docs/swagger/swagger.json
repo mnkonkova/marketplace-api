@@ -3516,6 +3516,134 @@
                 }
             }
         },
+        "/bot/comments": {
+            "post": {
+                "description": "Человек ответил (reply) на сообщение бота о проекте —\nтекст ложится в переписку проекта от его имени, в ту ветку,\nкуда он написал бы из кабинета: креатор — в свою ветку с\nменеджером (исполнитель общего проекта — в ветку с\nзаказчиком), заказчик — в ветку с заказчиком. Уведомления\nменеджеру уходят те же, что у комментария из кабинета.\nПроект — только по reply_to_message_id: сообщение бота о\nпроекте (уведомление, приглашение «Написать в проект»,\nподтверждение «записала»), запомненное API. Ответ на\nнеизвестное сообщение — no_project; не ответ — not_reply.\nПроект не угадывается. В ответе reader — кто прочтёт:\nmanager, client (заказчик) или executor (исполнитель общего проекта).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bot"
+                ],
+                "summary": "Ответ боту — комментарий в проект (бот)",
+                "parameters": [
+                    {
+                        "description": "кто, где и что написал",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.botCommentReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.BotCommentResult"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; unknown_bot; not_reply — не ответ на сообщение бота; empty_comment; too_long — длиннее 5000 знаков; invalid_comment — прочий некорректный ввод",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "bad_secret",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "not_member — человек выведен из состава или проект чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_linked — телеграм не привязан; no_project — ответ на сообщение, которого API не знает, или проекта нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "comments_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bot/comments/anchor": {
+            "post": {
+                "description": "Для кнопки «Написать в проект». Без message_id — проверка:\nчеловек всё ещё в проекте, и как проект называется (им\nподписано приглашение). С message_id — то же плюс «ответ на\nэто сообщение — комментарий в этот проект»: так бот\nрегистрирует приглашение и подтверждение «записала». Доступ\nпроверяется каждый раз: между шагами человека могли вывести.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "bot"
+                ],
+                "summary": "Привязать сообщение бота к проекту (бот)",
+                "parameters": [
+                    {
+                        "description": "кто, какой проект, какое сообщение",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.botCommentAnchorReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.ProjectRef"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_json; unknown_bot",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "bad_secret",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "not_member",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_linked; no_project — проекта нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "comments_disabled",
+                        "schema": {
+                            "$ref": "#/definitions/internal_telegram.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bot/link": {
             "post": {
                 "description": "Человек нажал /start с кодом из кабинета. Код гасится, и\nпривязка появляется в той же транзакции: погашенный код без\nпривязки — это человек без уведомлений, и по логам этого не\nвидно.",
@@ -6447,6 +6575,69 @@
                         }
                     }
                 }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Убирает ручную правку: доплата снова считается по снимкам\nаудитории — срез на входе в период, срез в конце, разница.\nОтдельным действием, а не «впишите ноль»: ноль это\nобъявленное «роста не было», и платить по нему — тоже\nрешение. В ответе — число, которое теперь считается.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-billing"
+                ],
+                "summary": "Вернуть снятое обходом число подписчиков (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "creator id",
+                        "name": "creator_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "номер периода; по умолчанию текущий",
+                        "name": "period",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.CreatorSubscribers"
+                        }
+                    },
+                    "400": {
+                        "description": "bad_id; bad_period",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_billing.errorResponse"
+                        }
+                    }
+                }
             }
         },
         "/manager/projects/{id}/creators/{creator_id}/utm": {
@@ -8861,37 +9052,6 @@
                 }
             }
         },
-        "/me/creator/documents": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Договоры и документы по всем действующим проектам, в одном\nсписке и с названием проекта у каждого. Отдельно от\nматериалов проекта: договор ищут не тогда, когда снимают, а\nкогда подписывают или выставляют счёт, — и помнить, в каком\nпроекте он лежал, человек не обязан. Видео и ссылки сюда не\nпопадают: это материалы для работы, а не документы.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "creator-publications"
-                ],
-                "summary": "Мои документы (креатор)",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_publications.creatorDocumentsResp"
-                        }
-                    },
-                    "401": {
-                        "description": "no_user — сессия истекла",
-                        "schema": {
-                            "$ref": "#/definitions/internal_publications.errorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/me/creator/invitations": {
             "get": {
                 "security": [
@@ -10433,7 +10593,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Выданное лично и договоры из материалов проектов, где человек\nсейчас работает или заказчик. Отозванное не показывается.",
+                "description": "Выданное лично и договоры из материалов проектов, где человек\nсейчас работает или заказчик. Отозванное не показывается.\nС project_id — только документы этого проекта, договор первым.\nС source=personal — только выданное лично, без договоров из\nматериалов проекта.",
                 "produces": [
                     "application/json"
                 ],
@@ -10441,11 +10601,31 @@
                     "me-documents"
                 ],
                 "summary": "Мои документы",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "только этот проект",
+                        "name": "project_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "personal — только выданное лично",
+                        "name": "source",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.myDocumentsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input — project_id не uuid или неизвестный source",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
                         }
                     },
                     "401": {
@@ -16274,15 +16454,27 @@
                 "creator_user_id": {
                     "type": "string"
                 },
+                "manual": {
+                    "description": "Manual — число перебито рукой. Тогда Subscribers равно вписанному,\nа Measured показывает, что было намерено.\n\nОтдельным полем, а не сравнением Subscribers с Measured: они\nсовпадают и когда менеджер вписал ровно намеренное число, и это\nразные состояния — у второго есть автор и время правки.",
+                    "type": "boolean"
+                },
+                "measured": {
+                    "description": "Measured — что намерил обход: разница крайних снимков аудитории за\nпериод по всем аккаунтам человека, прикреплённым к проекту.\n\nОтдаётся ВСЕГДА, даже когда сверху лежит ручная правка: менеджеру\nнадо видеть, от чего он отступил, иначе «вписать своё» — это\nвыстрел в темноте.",
+                    "type": "integer"
+                },
                 "period_start": {
                     "description": "PeriodStart — за какой период записано. Периоды катятся от первой\nпубликации проекта, а не по календарю.",
                     "type": "string"
                 },
+                "project_id": {
+                    "type": "string"
+                },
                 "subscribers": {
-                    "description": "Subscribers — сколько подписчиков прибавилось за период.",
+                    "description": "Subscribers — сколько подписчиков прибавилось за период. Именно по\nэтому числу считается доплата: вписанное рукой, если оно есть,\nиначе снятое обходом.",
                     "type": "integer"
                 },
                 "updated_at": {
+                    "description": "UpdatedAt — когда правили руками. Пусто у снятого обходом.",
                     "type": "string"
                 }
             }
@@ -22253,42 +22445,6 @@
                 "ClientStatusPlanned"
             ]
         },
-        "internal_publications.CreatorDocument": {
-            "type": "object",
-            "properties": {
-                "audience": {
-                    "description": "Audience — creators или client. Определяет, кто материал увидит.",
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "created_by": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "kind": {
-                    "type": "string"
-                },
-                "project_id": {
-                    "type": "string"
-                },
-                "project_title": {
-                    "type": "string"
-                },
-                "sort_order": {
-                    "type": "integer"
-                },
-                "title": {
-                    "type": "string"
-                },
-                "url": {
-                    "type": "string"
-                }
-            }
-        },
         "internal_publications.CreatorMedian": {
             "type": "object",
             "properties": {
@@ -23523,17 +23679,6 @@
                 }
             }
         },
-        "internal_publications.creatorDocumentsResp": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/internal_publications.CreatorDocument"
-                    }
-                }
-            }
-        },
         "internal_publications.creatorProjectsResp": {
             "type": "object",
             "properties": {
@@ -24578,6 +24723,33 @@
                 }
             }
         },
+        "internal_telegram.BotCommentResult": {
+            "type": "object",
+            "properties": {
+                "comment_id": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "type": "string"
+                },
+                "reader": {
+                    "description": "Reader — кто прочтёт: manager, client (заказчик) или executor\n(исполнитель общего проекта). По нему бот говорит «менеджер\nувидит» или «исполнитель увидит»; по ветке это не вывести: ветку\nзаказчика в общем проекте читает исполнитель, менеджера там нет.",
+                    "type": "string",
+                    "enum": [
+                        "manager",
+                        "client",
+                        "executor"
+                    ]
+                },
+                "thread": {
+                    "description": "Thread — ветка: client (с заказчиком) или creator (с менеджером).\nБот по ней говорит, КТО прочитает: креатор общего проекта пишет\nзаказчику, а не менеджеру.",
+                    "type": "string"
+                }
+            }
+        },
         "internal_telegram.Link": {
             "type": "object",
             "properties": {
@@ -24642,6 +24814,47 @@
                 }
             }
         },
+        "internal_telegram.ProjectRef": {
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "type": "string"
+                },
+                "reader": {
+                    "description": "Reader — кто прочтёт: manager, client (заказчик) или executor\n(исполнитель общего проекта). По нему бот говорит «менеджер\nувидит» или «исполнитель увидит»; по ветке это не вывести: ветку\nзаказчика в общем проекте читает исполнитель, менеджера там нет.",
+                    "type": "string",
+                    "enum": [
+                        "manager",
+                        "client",
+                        "executor"
+                    ]
+                },
+                "thread": {
+                    "description": "Thread — ветка: client (с заказчиком) или creator (с менеджером).\nБот по ней говорит, КТО прочитает: креатор общего проекта пишет\nзаказчику, а не менеджеру.",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_telegram.SentMessage": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "description": "ChatID — куда ушло.",
+                    "type": "integer"
+                },
+                "id": {
+                    "description": "ID — строка bot_messages.",
+                    "type": "integer"
+                },
+                "message_id": {
+                    "description": "MessageID — message_id, который вернул Telegram.",
+                    "type": "integer"
+                }
+            }
+        },
         "internal_telegram.Status": {
             "type": "object",
             "properties": {
@@ -24684,6 +24897,13 @@
                             }
                         }
                     }
+                },
+                "sent": {
+                    "description": "Sent — под каким message_id и в какой чат ушло каждое\nдоставленное личное сообщение. По нему ответ человека на пинг\nстановится комментарием в проекте (см. comments.go).\nНеобязательно: бот старой версии его не присылает.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_telegram.SentMessage"
+                    }
                 }
             }
         },
@@ -24691,6 +24911,48 @@
             "type": "object",
             "properties": {
                 "bot": {
+                    "type": "string"
+                },
+                "tg_user_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_telegram.botCommentAnchorReq": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "type": "string"
+                },
+                "chat_id": {
+                    "type": "integer"
+                },
+                "message_id": {
+                    "description": "MessageID — сообщение бота, ответ на которое пойдёт в этот\nпроект. Пусто — только проверить доступ и узнать название.",
+                    "type": "integer"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "tg_user_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_telegram.botCommentReq": {
+            "type": "object",
+            "properties": {
+                "bot": {
+                    "type": "string"
+                },
+                "chat_id": {
+                    "type": "integer"
+                },
+                "reply_to_message_id": {
+                    "description": "ReplyToMessageID — на какое сообщение бота человек ответил.\nОбязательно: не ответ — не комментарий (not_reply).",
+                    "type": "integer"
+                },
+                "text": {
                     "type": "string"
                 },
                 "tg_user_id": {
