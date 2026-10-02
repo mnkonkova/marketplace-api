@@ -268,7 +268,16 @@ WHERE p.project_id = $1
   AND p.status <> 'cancelled'
   AND l.next_collect_at <> `+ParkedAt+`
   AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $2)
-ORDER BY l.submitted_at DESC
+-- Порядок — по давности последнего касания, а не по свежести сдачи.
+--
+-- Было ORDER BY submitted_at DESC: лимит отрезал двадцать пять САМЫХ
+-- НОВЫХ ссылок, и уже их отсеивал отбор по свежести. У проекта с
+-- тремя десятками роликов старые не обновлялись никогда — до них
+-- просто не доходила очередь.
+ORDER BY GREATEST(
+    COALESCE(l.last_collect_try_at, to_timestamp(0)),
+    COALESCE(l.last_collected_at, to_timestamp(0))
+), l.submitted_at DESC
 LIMIT $3
 FOR UPDATE OF l SKIP LOCKED`, projectID, now, limit, creatorID)
 	if err != nil {

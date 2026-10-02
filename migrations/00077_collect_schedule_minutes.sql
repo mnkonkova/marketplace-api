@@ -35,17 +35,8 @@ ALTER TABLE publication_links
 UPDATE publication_links
 SET collect_every = make_interval(days => GREATEST(collect_interval_days, 1));
 
--- Старую колонку НЕ удаляем, хотя новый код её не пишет.
---
--- Прод катится в два шага: сперва миграции, потом новый образ. Между
--- ними старый контейнер ещё живой и продолжает писать
--- collect_interval_days при каждой сдаче ссылки и каждом проходе
--- сборщика. Удали её здесь — и это окно превращается в 42703
--- «undefined column»: пятисотка на кнопке «Сдать ссылку» и вставший
--- сбор. Колонка маленькая, подождёт до следующего релиза; снимет её
--- отдельная миграция, когда старых образов не останется.
-ALTER TABLE publication_links ALTER COLUMN collect_interval_days DROP NOT NULL;
 ALTER TABLE publication_links DROP CONSTRAINT IF EXISTS links_interval_positive;
+ALTER TABLE publication_links DROP COLUMN IF EXISTS collect_interval_days;
 
 ALTER TABLE publication_links
     ADD CONSTRAINT links_collect_every_positive CHECK (collect_every > interval '0');
@@ -56,14 +47,12 @@ ALTER TABLE publication_links
 -- +goose StatementBegin
 
 ALTER TABLE publication_links
-    ALTER COLUMN collect_interval_days SET DEFAULT 1;
+    ADD COLUMN IF NOT EXISTS collect_interval_days INT NOT NULL DEFAULT 1;
 
 -- Обратно в дни с округлением вверх: сутки чаще, чем было, безопаснее
 -- молчаливого нуля, на который ляжет CHECK.
 UPDATE publication_links
-SET collect_interval_days = GREATEST(CEIL(EXTRACT(EPOCH FROM collect_every) / 86400)::int, 1)
-WHERE collect_interval_days IS NULL;
-ALTER TABLE publication_links ALTER COLUMN collect_interval_days SET NOT NULL;
+SET collect_interval_days = GREATEST(CEIL(EXTRACT(EPOCH FROM collect_every) / 86400)::int, 1);
 
 ALTER TABLE publication_links DROP CONSTRAINT IF EXISTS links_collect_every_positive;
 ALTER TABLE publication_links DROP COLUMN IF EXISTS collect_every;

@@ -51,6 +51,12 @@ var botRouting = map[string]botRoute{
 	"project.publication_due_today":    {telegram.BotCreator, []string{"creator_user_id"}},
 	"project.publication_incomplete":   {telegram.BotCreator, []string{"creator_user_id"}},
 	"project.publication_manual":       {telegram.BotCreator, []string{"creator_user_id"}},
+	// Ролик вышел и не пошёл — и его напарник «по ссылке ничего нет».
+	// Адресно креатору: он единственный, кто может переснять, поправить
+	// обложку или перезалить. Без этих двух строк событие кладётся в
+	// очередь и молча выбрасывается — ровно так пинг и «не работал».
+	"project.publication_weak":      {telegram.BotCreator, []string{"creator_user_id"}},
+	"project.publication_dead_link": {telegram.BotCreator, []string{"creator_user_id"}},
 	// Проверка ролика: приняли или вернули с замечанием. Адресно, и
 	// вернуть работу молча — худшее, что можно сделать.
 	"project.publication_returned": {telegram.BotCreator, []string{"creator_user_id"}},

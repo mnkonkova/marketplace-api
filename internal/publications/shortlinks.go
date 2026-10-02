@@ -110,15 +110,29 @@ func (e *httpExpander) Expand(ctx context.Context, raw string) (string, error) {
 // — дальше по нему же определяется площадка.
 func (s *Service) expandAll(ctx context.Context, urls []string) []string {
 	out := make([]string, len(urls))
+	if s.expander == nil {
+		copy(out, urls)
+		return out
+	}
+	// Больше пяти походов разом не делаем никогда.
+	//
+	// Площадок пять, и столько же ссылок в честной сдаче. Но список
+	// приходит от клиента, и ограничение «одна ссылка на площадку»
+	// проверяется ПОЗЖЕ, при разборе: без потолка один запрос с тысячей
+	// коротких адресов превращался бы в тысячу одновременных походов
+	// наружу с нашего адреса.
+	sem := make(chan struct{}, len(AllPlatforms))
 	var wg sync.WaitGroup
 	for i, raw := range urls {
 		out[i] = raw
-		if s.expander == nil || !isShortLink(raw) {
+		if !isShortLink(raw) {
 			continue
 		}
 		wg.Add(1)
 		go func(i int, raw string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			out[i] = s.expandShort(ctx, raw)
 		}(i, raw)
 	}

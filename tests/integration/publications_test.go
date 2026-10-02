@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1088,5 +1089,237 @@ VALUES ($1, CURRENT_DATE, 500000, 100, 10)`, linkID); err != nil {
 	if n := countStats(); n != 0 {
 		t.Errorf("после смены адреса осталось %d замеров — цифры старого ролика "+
 			"приклеились к новому", n)
+	}
+}
+
+// Пересдача не стирает замеры подытоженного периода.
+//
+// Цифры такого периода заморожены срезом, и по ним уже выставлен счёт.
+// Сброс при смене адреса нужен, чтобы просмотры двух роликов не
+// склеились в одну линию, — но у снятой с обхода ссылки он обнулил бы
+// оплаченное навсегда. То же правило соблюдает менеджерская правка.
+func TestResubmitKeepsStatsOfLockedPeriod(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	pubID := res.Items[0].ID
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: pubID, ActorUserID: creators[0],
+		URLs: []string{"https://www.tiktok.com/@u/video/locked1"},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+
+	var linkID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM publication_links WHERE publication_id = $1`, pubID).Scan(&linkID); err != nil {
+		t.Fatalf("read link: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO video_stat_daily (link_id, stat_date, views, likes, comments)
+VALUES ($1, CURRENT_DATE, 777000, 10, 1)`, linkID); err != nil {
+		t.Fatalf("замер: %v", err)
+	}
+	// Подытог периода снимает ссылку с обхода — это и есть признак
+	// «цифры заморожены».
+	if _, err := pool.Exec(ctx,
+		`UPDATE publication_links SET next_collect_at = 'infinity' WHERE id = $1`, linkID); err != nil {
+		t.Fatalf("снять с обхода: %v", err)
+	}
+
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: pubID, ActorUserID: creators[0],
+		URLs: []string{"https://www.tiktok.com/@u/video/locked2"},
+	}); err != nil {
+		t.Fatalf("пересдача: %v", err)
+	}
+
+	var views int64
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(MAX(views), -1) FROM video_stat_daily WHERE link_id = $1`, linkID).
+		Scan(&views); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if views != 777000 {
+		t.Errorf("просмотры подытоженного периода стали %d — оплаченное обнулено", views)
+	}
+}
+
+// Смена адреса стирает и причину отказа от прежней ссылки.
+//
+// Иначе в отчёте под новой ссылкой висит «ролик не найден», а пинг
+// «ссылка не открывается» уходит креатору по ролику, который он только
+// что перезалил.
+func TestResubmitClearsOldCollectError(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	pubID := res.Items[0].ID
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: pubID, ActorUserID: creators[0],
+		URLs: []string{"https://www.tiktok.com/@u/video/err1"},
+	}); err != nil {
+		t.Fatalf("SubmitLinks: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links
+SET last_collect_error = 'ролик не найден', last_collect_try_at = now()
+WHERE publication_id = $1`, pubID); err != nil {
+		t.Fatalf("посеять отказ: %v", err)
+	}
+
+	// Тот же адрес — причина остаётся: ролик тот же, и отказ про него.
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: pubID, ActorUserID: creators[0],
+		URLs: []string{"https://www.tiktok.com/@u/video/err1"},
+	}); err != nil {
+		t.Fatalf("пересдача того же: %v", err)
+	}
+	var reason string
+	if err := pool.QueryRow(ctx,
+		`SELECT last_collect_error FROM publication_links WHERE publication_id = $1`, pubID).
+		Scan(&reason); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if reason == "" {
+		t.Error("причина стёрлась при пересдаче того же адреса")
+	}
+
+	// Другой адрес — причина уходит вместе с прежним роликом.
+	if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: pubID, ActorUserID: creators[0],
+		URLs: []string{"https://www.tiktok.com/@u/video/err2"},
+	}); err != nil {
+		t.Fatalf("пересдача другого: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT last_collect_error FROM publication_links WHERE publication_id = $1`, pubID).
+		Scan(&reason); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if reason != "" {
+		t.Errorf("под новым адресом осталась причина %q — отсюда ложный пинг «ссылка не открывается»", reason)
+	}
+}
+
+// Больше пяти ссылок в сдаче не принимаем — и не ходим за ними в сеть.
+//
+// Площадок пять, и на каждую по одной. Список приходит от клиента, а
+// ограничение «одна ссылка на площадку» проверяется при разборе, то
+// есть ПОЗЖЕ разворачивания коротких адресов: без потолка один запрос
+// с тысячей ссылок превращался бы в тысячу походов наружу.
+func TestSubmitLinksRejectsOversizedListBeforeNetwork(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	spy := &countingExpander{}
+	urls := make([]string, 0, 50)
+	for i := 0; i < 50; i++ {
+		urls = append(urls, "https://vt.tiktok.com/ZS"+fmt.Sprint(i))
+	}
+	_, err = svc.WithURLExpander(spy).SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: res.Items[0].ID, ActorUserID: creators[0], URLs: urls,
+	})
+	if !errors.Is(err, publications.ErrInvalidInput) {
+		t.Fatalf("переросший список: %v, ожидалось ErrInvalidInput", err)
+	}
+	if spy.calls != 0 {
+		t.Errorf("сходили в сеть %d раз по отвергнутому списку", spy.calls)
+	}
+}
+
+// Простановка пачкой пропускает замороженные дни, а не ломается о них.
+//
+// Окно «добавить даты» открывается со всеми датами, которые уже стоят в
+// плане; снять галочку с прошедшей формой не предусмотрено. Отказ
+// целиком означал, что у проекта с одним подытоженным периодом
+// простановка не работает больше никогда: человек жмёт «Добавить» и
+// получает «период закрыт», не зная, какая из шестидесяти дат виновата.
+func TestCreateBatchSkipsLockedDaysAndPlacesTheRest(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	// Прошлая неделя подытожена, будущее открыто.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO project_periods (project_id, seq, starts_on, ends_on, status, locked_at)
+VALUES ($1, 1, current_date - 10, current_date - 1, 'locked', now())`, projectID); err != nil {
+		t.Fatalf("seed period: %v", err)
+	}
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	frozen := time.Now().UTC().AddDate(0, 0, -5)
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{frozen, pubDay(1), pubDay(2)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch с одной замороженной датой: %v", err)
+	}
+	if res.Created != 2 {
+		t.Errorf("поставлено %d выкладок, ожидались две открытые даты из трёх", res.Created)
+	}
+	var inFrozen int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM project_publications
+WHERE project_id = $1 AND due_date = $2::date`, projectID, frozen).Scan(&inFrozen); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if inFrozen != 0 {
+		t.Errorf("в подытоженный день дописалось %d выкладок", inFrozen)
+	}
+
+	// А вот когда открытых дат нет вовсе — отказ: дописывать некуда, и
+	// промолчать значило бы сказать «готово», ничего не сделав.
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates: []time.Time{
+			time.Now().UTC().AddDate(0, 0, -4),
+			time.Now().UTC().AddDate(0, 0, -3),
+		},
+		CreatedBy: creators[0],
+	}); !errors.Is(err, publications.ErrPeriodLocked) {
+		t.Errorf("пачка целиком в подытоге: got %v, ожидали ErrPeriodLocked", err)
 	}
 }

@@ -293,6 +293,15 @@ func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publica
 		return Publication{}, ErrForbidden
 	}
 
+	// Больше пяти ссылок в сдаче не бывает: площадок пять, и на каждую
+	// по одной. Проверяем ДО разворачивания — оно ходит в сеть, и
+	// отбивать переросший список после похода значит заплатить за него
+	// временем и чужой нагрузкой.
+	if len(in.URLs) > len(AllPlatforms) {
+		return Publication{}, fmt.Errorf("%w: ссылок больше, чем площадок (%d)",
+			ErrInvalidInput, len(AllPlatforms))
+	}
+
 	// Короткие ссылки разворачиваем ПАРАЛЛЕЛЬНО, а не по очереди.
 	//
 	// В vt.tiktok.com/ZSbyuhrDf нет ни автора, ни id ролика, и сборщик

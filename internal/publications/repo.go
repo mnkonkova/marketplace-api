@@ -230,20 +230,53 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 	for _, d := range in.Dates {
 		days = append(days, truncateDay(d))
 	}
-	var lockedDay *time.Time
-	if err := tx.QueryRow(ctx, `
+	// Замороженные дни ОТБРАСЫВАЕМ, а не роняем всю пачку.
+	//
+	// Окно простановки открывается со всеми датами, которые уже стоят в
+	// плане, и снять галочку с прошедшей нечем — такова форма. Откажи
+	// целиком, и у проекта с одним подытоженным периодом простановка
+	// перестаёт работать навсегда: человек жмёт «Добавить даты» и
+	// получает отказ, не понимая, какая из шестидесяти виновата.
+	//
+	// Поэтому молча пропускаем именно их: в подытог дописывать нельзя,
+	// а остальные даты поставить можно и нужно.
+	locked := make(map[time.Time]bool, 4)
+	lockedRows, err := tx.Query(ctx, `
 SELECT d::date FROM unnest($2::date[]) AS d
 WHERE EXISTS (
     SELECT 1 FROM project_periods pp
     WHERE pp.project_id = $1 AND pp.status = 'locked'
       AND d::date BETWEEN pp.starts_on AND pp.ends_on
-)
-LIMIT 1`, in.ProjectID, days).Scan(&lockedDay); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+)`, in.ProjectID, days)
+	if err != nil {
 		return BatchResult{}, fmt.Errorf("check locked periods: %w", err)
 	}
-	if lockedDay != nil {
-		return BatchResult{}, fmt.Errorf("%w: %s", ErrPeriodLocked,
-			lockedDay.Format("2006-01-02"))
+	for lockedRows.Next() {
+		var d time.Time
+		if err := lockedRows.Scan(&d); err != nil {
+			lockedRows.Close()
+			return BatchResult{}, fmt.Errorf("scan locked day: %w", err)
+		}
+		locked[truncateDay(d)] = true
+	}
+	lockedRows.Close()
+	if err := lockedRows.Err(); err != nil {
+		return BatchResult{}, err
+	}
+	if len(locked) > 0 {
+		open := make([]time.Time, 0, len(in.Dates))
+		for _, d := range in.Dates {
+			if !locked[truncateDay(d)] {
+				open = append(open, d)
+			}
+		}
+		// Все до одной в подытоге — вот это уже отказ: добавлять нечего,
+		// и промолчать значило бы сказать «готово», ничего не сделав.
+		if len(open) == 0 {
+			return BatchResult{}, fmt.Errorf("%w: все выбранные даты в подытоженном периоде",
+				ErrPeriodLocked)
+		}
+		in.Dates = open
 	}
 
 	batchID := uuid.New()
@@ -1080,6 +1113,16 @@ SET url = EXCLUDED.url,
     -- ссылок, уже снятых с обхода: период такого ролика подытожен, и
     -- новые просмотры по нему записывать некуда (см. ParkedAt).
     collect_every = interval '1 minute',
+    -- Причина отказа была про ПРЕЖНИЙ адрес. Оставь её — и в отчёте
+    -- под новой ссылкой висит «ролик не найден», а пинг «ссылка не
+    -- открывается» уходит креатору по ролику, который он только что
+    -- перезалил.
+    last_collect_error = CASE
+        WHEN publication_links.url_canonical = EXCLUDED.url_canonical
+        THEN publication_links.last_collect_error ELSE '' END,
+    last_collect_try_at = CASE
+        WHEN publication_links.url_canonical = EXCLUDED.url_canonical
+        THEN publication_links.last_collect_try_at ELSE NULL END,
     next_collect_at = ` + keepParked("publication_links.next_collect_at", "now()")
 
 	for _, l := range parsed {
@@ -1095,10 +1138,16 @@ SET url = EXCLUDED.url,
 		//
 		// Порядок тот же, что в сборе: сперва замеры, потом ссылка —
 		// иначе кольцо блокировок и 40P01 (см. ManagerRemoveLink).
+		// Замеры сносим только у ЖИВОЙ ссылки: снятая с обхода
+		// принадлежит подытоженному периоду, её цифры заморожены срезом
+		// и по ним уже выставлен счёт. Стереть их — значит обнулить
+		// оплаченное навсегда; то же правило соблюдает и менеджерская
+		// правка (см. ParkedAt).
 		if _, err := tx.Exec(ctx, `
 DELETE FROM video_stat_daily WHERE link_id IN (
     SELECT id FROM publication_links
     WHERE publication_id = $1 AND platform = $2 AND url_canonical <> $3
+      AND next_collect_at <> `+ParkedAt+`
 )`, in.PublicationID, l.Platform, l.Canonical); err != nil {
 			return Publication{}, fmt.Errorf("reset stats %s: %w", l.Platform, err)
 		}

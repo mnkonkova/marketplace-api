@@ -421,6 +421,11 @@ func TestPersonalEventsHaveBotRoute(t *testing.T) {
 		"project.publication_due_today",
 		"project.publication_incomplete",
 		"project.publication_manual",
+		// Ролик не пошёл и «по ссылке ничего нет» — те самые два, что
+		// эмитились, считались и молча выбрасывались: в таблице
+		// назначения их не было, и пинг «не работал» ровно поэтому.
+		"project.publication_weak",
+		"project.publication_dead_link",
 		"project.publication_returned",
 		"project.publication_accepted",
 		"project.publication_moved",

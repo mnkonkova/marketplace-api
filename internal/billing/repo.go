@@ -773,16 +773,16 @@ const (
 	StepKindSubscribers = "subscribers"
 )
 
+// loadSteps — лесенка ПРОСМОТРОВ владельца.
+//
+// Вид указываем явно: в той же таблице живёт лесенка подписчиков, и
+// прочитанная не тем видом ступень молча станет ценой периода. Второго
+// читателя пока нет, поэтому и обобщать нечего — появится, тогда и
+// параметр появится.
 func loadSteps(ctx context.Context, q querier, owner string, id uuid.UUID) ([]TermsStep, error) {
-	return loadStepsOf(ctx, q, owner, id, StepKindViews)
-}
-
-func loadStepsOf(
-	ctx context.Context, q querier, owner string, id uuid.UUID, kind string,
-) ([]TermsStep, error) {
 	rows, err := q.Query(ctx,
 		`SELECT from_views, client_fee, creator_fee FROM terms_steps
-WHERE `+owner+` = $1 AND kind = $2 ORDER BY from_views`, id, kind)
+WHERE `+owner+` = $1 AND kind = $2 ORDER BY from_views`, id, StepKindViews)
 	if err != nil {
 		return nil, fmt.Errorf("load terms steps: %w", err)
 	}
@@ -805,24 +805,17 @@ WHERE `+owner+` = $1 AND kind = $2 ORDER BY from_views`, id, kind)
 // расчёте. Для версии прайса это вставка в свежесозданную строку, для
 // снимка проекта — замена прежнего снимка.
 func replaceSteps(ctx context.Context, q querier, owner string, id uuid.UUID, steps []TermsStep) error {
-	return replaceStepsOf(ctx, q, owner, id, StepKindViews, steps)
-}
-
-// replaceStepsOf — переписать лесенку ОДНОГО вида, не трогая соседний.
-//
-// Чужой вид не трогаем ни на удалении, ни на вставке: сохранение
-// лесенки просмотров иначе стирало бы лесенку подписчиков целиком.
-func replaceStepsOf(
-	ctx context.Context, q querier, owner string, id uuid.UUID, kind string, steps []TermsStep,
-) error {
+	// Чужой вид не трогаем ни на удалении, ни на вставке: иначе
+	// сохранение лесенки просмотров стирало бы лесенку подписчиков
+	// целиком.
 	if _, err := q.Exec(ctx,
-		`DELETE FROM terms_steps WHERE `+owner+` = $1 AND kind = $2`, id, kind); err != nil {
+		`DELETE FROM terms_steps WHERE `+owner+` = $1 AND kind = $2`, id, StepKindViews); err != nil {
 		return fmt.Errorf("clear terms steps: %w", err)
 	}
 	for _, s := range steps {
 		if _, err := q.Exec(ctx,
 			`INSERT INTO terms_steps (`+owner+`, kind, from_views, client_fee, creator_fee)
-VALUES ($1, $2, $3, $4, $5)`, id, kind, s.FromViews, s.ClientFee, s.CreatorFee); err != nil {
+VALUES ($1, $2, $3, $4, $5)`, id, StepKindViews, s.FromViews, s.ClientFee, s.CreatorFee); err != nil {
 			return fmt.Errorf("insert terms step: %w", err)
 		}
 	}

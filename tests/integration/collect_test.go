@@ -1512,3 +1512,70 @@ func TestCollectErrorIsCutByRunes(t *testing.T) {
 		t.Errorf("битый UTF-8 в причине: %q", got)
 	}
 }
+
+// Обход по заходу берёт САМЫЕ ЗАСТОЯВШИЕСЯ ссылки, а не самые новые.
+//
+// Лимит отрезает двадцать пять штук, и раньше он резал по дате сдачи:
+// в выборку попадали новейшие, а уже свежие из них тут же отсеивались.
+// У проекта с тремя десятками роликов старые ссылки не обновлялись
+// никогда — до них просто не доходила очередь.
+func TestRefreshTakesStalestFirst(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(1), pubDay(2)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil || res.Created != 2 {
+		t.Fatalf("CreateBatch: created=%d err=%v", res.Created, err)
+	}
+	// Первая сдана раньше и давно не трогалась, вторая — только что.
+	type pub struct {
+		id  uuid.UUID
+		url string
+	}
+	pubs := []pub{
+		{res.Items[0].ID, "https://www.tiktok.com/@a/video/old"},
+		{res.Items[1].ID, "https://www.tiktok.com/@a/video/new"},
+	}
+	for _, p := range pubs {
+		if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+			PublicationID: p.id, ActorUserID: creators[0], URLs: []string{p.url},
+		}); err != nil {
+			t.Fatalf("SubmitLinks: %v", err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links SET submitted_at = now() - interval '20 days',
+       last_collected_at = now() - interval '20 days'
+WHERE publication_id = $1`, pubs[0].id); err != nil {
+		t.Fatalf("состарить: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links SET submitted_at = now(), last_collected_at = now()
+WHERE publication_id = $1`, pubs[1].id); err != nil {
+		t.Fatalf("освежить: %v", err)
+	}
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		pubs[0].url: okResult(pubs[0].url, 10, 1, 0),
+		pubs[1].url: okResult(pubs[1].url, 20, 2, 0),
+	}}
+	// Лимит в одну ссылку: место достанется тому, кто его заслужил.
+	st, err := svc.WithCollector(fake).RefreshProject(ctx, projectID, nil, time.Now().UTC(), 1)
+	if err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	if st.Considered != 1 {
+		t.Fatalf("%+v, ожидалась одна ссылка", st)
+	}
+	if len(fake.urlsSeen) != 1 || fake.urlsSeen[0] != pubs[0].url {
+		t.Errorf("обошли %v, ожидалась застоявшаяся ссылка", fake.urlsSeen)
+	}
+}

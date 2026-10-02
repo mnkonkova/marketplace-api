@@ -186,10 +186,6 @@ func (c ChecklistItem) AppliesTo(platform string) bool {
 // и дни, а не заводит выкладки по одной: 30 штук по одной — недопустимо
 // (требование М2).
 type CreateBatchInput struct {
-	// Now — «сегодня» глазами вызывающего. Пусто — возьмём системное
-	// время; параметром, чтобы тест мог поставить свой день, а не
-	// подстраивался под календарь.
-	Now            time.Time `json:"-"`
 	ProjectID      uuid.UUID
 	CreatorUserIDs []uuid.UUID
 	Dates          []time.Time
