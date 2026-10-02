@@ -23,8 +23,8 @@ import (
 // первый проект. Поэтому лестница: 0–5 дней ежедневно, 6–14 раз в два
 // дня, 15–28 раз в четыре, дальше раз в восемь.
 //
-// Частое обновление живёт НЕ здесь, а в RefreshEvery: оно включается
-// только когда карточку проекта открыл человек. Так свежие цифры стоят
+// Обновление по заходу живёт НЕ здесь: карточку открыли — цифры
+// подтягиваются целиком, см. refreshDebounce. Так свежие цифры стоят
 // ровно столько, сколько на них смотрят, а не круглые сутки.
 var collectSchedule = []struct {
 	upTo  time.Duration // возраст ролика, до которого действует шаг
@@ -48,68 +48,25 @@ func CollectEvery(age time.Duration) time.Duration {
 	return collectEveryOldest
 }
 
-// refreshSchedule — сколько цифра считается свежей, пока карточку
-// открывают.
+// refreshDebounce — на сколько одно открытие карточки «накрывает» ссылку.
 //
-// Это расписание про ДОВЕРИЕ к цифре, и работает оно только по заходу
-// менеджера или креатора в карточку проекта. Ролик выложили минуту
-// назад, на площадке у него уже есть просмотры, а в кабинете ноль — и
-// этот ноль неотличим от «никто не смотрит», то есть врёт сильнее, чем
-// пустота.
+// Решение владельца от 2 октября: просмотры подтягиваются КАЖДЫЙ раз,
+// когда заходят в кабинет. Затухающего расписания свежести (минута,
+// пять, десять, полчаса, час, шесть часов по возрасту ролика) здесь
+// больше нет: пока человек смотрит на экран, он смотрит на сегодняшнее
+// число, а не на то, которое мы сочли достаточно свежим.
 //
-// Шаг затухает ровно потому, что затухает и скорость набора: минута,
-// пять, десять, полчаса в первые полтора часа, дальше раз в час до
-// конца вторых суток и раз в шесть часов на всём остальном.
+// Полминуты — не расписание, а защита от двойного счёта ОДНОГО захода:
+// на карточке проекта обновление просят два виджета, F5 повторяет
+// запрос, вторая вкладка открывает тот же проект. Это одно «зашли», и
+// платить за него дважды незачем. Всё, что дольше полуминуты, — уже
+// второй заход, и он честно стоит своих кредитов.
 //
-// Второй день держим на часе намеренно: площадка доносит ролик до
-// ленты не сразу, и за эти сутки цифра меняется заметно. А шесть часов
-// на старом — это не фоновый шаг (тот про расход и считается днями), а
-// потолок свежести для того, кто прямо сейчас смотрит на экран.
-//
-// Фоном это расписание НЕ работает: иначе свежая ссылка стоила бы 144
-// похода в сутки вместо одного, у проекта с пятью днями работы это
-// порядка восьмидесяти живых ссылок — двенадцать тысяч походов в сутки
-// на один проект при потолке воркера 4800 и кредите поставщика за
-// каждый. Платить столько за цифры, на которые никто не смотрит,
-// незачем.
-var refreshSchedule = []struct {
-	upTo  time.Duration
-	every time.Duration
-}{
-	{upTo: time.Minute, every: time.Minute},
-	{upTo: 6 * time.Minute, every: 5 * time.Minute},
-	{upTo: 16 * time.Minute, every: 10 * time.Minute},
-	{upTo: 76 * time.Minute, every: 30 * time.Minute},
-	// Дальше первых полутора часов и весь второй день — раз в час.
-	//
-	// Второй день ролика ещё живой: площадка доносит его до ленты не
-	// сразу, и цифра за сутки меняется заметно. Раньше здесь был провал:
-	// после десяти часов шаг падал до фонового, то есть до СУТОК, и
-	// открытая карточка на второй день показывала вчерашнее число.
-	{upTo: 48 * time.Hour, every: time.Hour},
-}
-
-// refreshEveryOldest — шаг по заходу для всего, что старше второго дня.
-//
-// Шесть часов, а не фоновый шаг. Фоновый — про расход на архиве, его
-// считают неделями; но если человек открыл карточку и смотрит на
-// цифры, они не должны быть недельной давности. Четыре обхода в сутки
-// на ссылку — потолок, который платится только пока на проект смотрят.
-const refreshEveryOldest = 6 * time.Hour
-
-// RefreshEvery — сколько цифра по ролику такого возраста считается
-// свежей при открытии карточки.
-//
-// Всегда НЕ РЕЖЕ фонового расписания и, как правило, чаще: сюда
-// попадают только те ссылки, на которые смотрит живой человек.
-func RefreshEvery(age time.Duration) time.Duration {
-	for _, step := range refreshSchedule {
-		if age <= step.upTo {
-			return step.every
-		}
-	}
-	return refreshEveryOldest
-}
+// Верхнюю границу расхода держит не это, а лимитер ручки /report/refresh
+// (шесть раз в минуту, шестьдесят в час на человека) и потолок пачки:
+// за один заход в сборщик уезжает не больше двадцати пяти ссылок, самых
+// застоявшихся.
+const refreshDebounce = 30 * time.Second
 
 // ParkedAt — признак «ссылка снята с обхода»: её next_collect_at.
 //
@@ -219,24 +176,33 @@ JOIN project_publications p ON p.id = t.publication_id`
 	return out, rows.Err()
 }
 
-// ClaimProjectLinks — ссылки одного проекта, которым пора обновиться.
+// ClaimProjectLinks — ссылки одного проекта под обновление по заходу.
 //
-// Отдельно от DueForCollection, потому что вопрос другой. Та выбирает
-// по очереди: «кому пора по фоновому расписанию, кто первый». Эта — по
-// проекту и по тому, насколько ЦИФРА УСТАРЕЛА для человека, который на
-// неё сейчас смотрит (RefreshEvery). Свести их в один запрос не
-// получится: порог зависит от возраста каждой ссылки, а не от общего
-// времени.
+// Отдельно от DueForCollection, потому что вопрос другой. Та выбирает по
+// очереди: «кому пора по фоновому расписанию, кто первый». Эта берёт
+// ВСЁ, что у проекта живое, — человек открыл карточку, и цифры на ней
+// должны быть сегодняшними. Отбора по свежести больше нет: отсекается
+// только повтор одного и того же захода (refreshDebounce).
 //
-// Отбор возраста считаем в Go, а не в SQL: расписание — это решение
-// продукта, и держать его в двух видах (таблицей в коде и CASE'ом в
-// запросе) значит однажды поправить только один из них.
+// Потолок — limit: за раз в сборщик уезжает не больше двадцати пяти
+// ссылок, и берутся самые застоявшиеся. У проекта с шестью десятками
+// роликов второй заход доберёт остальные.
 //
 // Взятые ссылки арендуются ровно так же, как в фоновом обходе: их
 // next_collect_at уезжает на claimLease вперёд, и воркер, проснувшийся
 // в эту секунду, их не возьмёт.
+//
+// triedBefore — порог «считать ещё не тронутым». Два вызывающих и два
+// порога, и это ровно одно решение, вынесенное в параметр:
+//
+//   - заход в карточку даёт now-refreshDebounce: повтор одного захода
+//     не платим, второй заход платим;
+//   - форсированный обход на закрытии периода даёт МОМЕНТ НАЧАЛА этого
+//     обхода: пачка за пачкой, пока не кончатся ссылки, и ни одна не
+//     обходится в нём дважды.
 func (r *Repo) ClaimProjectLinks(
-	ctx context.Context, projectID uuid.UUID, creatorID *uuid.UUID, now time.Time, limit int,
+	ctx context.Context, projectID uuid.UUID, creatorID *uuid.UUID,
+	now, triedBefore time.Time, limit int,
 ) ([]LinkToCollect, error) {
 	if limit <= 0 {
 		limit = 50
@@ -268,6 +234,15 @@ WHERE p.project_id = $1
   AND p.status <> 'cancelled'
   AND l.next_collect_at <> `+ParkedAt+`
   AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $2)
+  -- Что считать «ещё не тронутым» — решает вызывающий, см. triedBefore.
+  --
+  -- По ПОСЛЕДНЕЙ ПОПЫТКЕ, а не по последней удаче: last_collected_at
+  -- пишется только при успехе, и ссылка, по которой сбор не удаётся
+  -- никогда (удалённый ролик, площадка без метрик), выглядела бы «ни
+  -- разу не собранной» вечно и улетала в сборщик при каждом F5. Дороже
+  -- всего обходились бы ровно те ссылки, которые заведомо ничего не
+  -- вернут.
+  AND (l.last_collect_try_at IS NULL OR l.last_collect_try_at < $5::timestamptz)
 -- Порядок — по давности последнего касания, а не по свежести сдачи.
 --
 -- Было ORDER BY submitted_at DESC: лимит отрезал двадцать пять САМЫХ
@@ -279,48 +254,29 @@ ORDER BY GREATEST(
     COALESCE(l.last_collected_at, to_timestamp(0))
 ), l.submitted_at DESC
 LIMIT $3
-FOR UPDATE OF l SKIP LOCKED`, projectID, now, limit, creatorID)
+FOR UPDATE OF l SKIP LOCKED`, projectID, now, limit, creatorID, triedBefore)
 	if err != nil {
 		return nil, fmt.Errorf("list project links: %w", err)
 	}
-	type candidate struct {
-		link      LinkToCollect
-		collected *time.Time
-		tried     *time.Time
-	}
-	cands := make([]candidate, 0, limit)
+	stale := make([]LinkToCollect, 0, limit)
+	ids := make([]uuid.UUID, 0, limit)
 	for rows.Next() {
-		var c candidate
-		if err := rows.Scan(&c.link.LinkID, &c.link.PublicationID, &c.link.Platform,
-			&c.link.URL, &c.link.SubmittedAt, &c.collected, &c.tried); err != nil {
+		var link LinkToCollect
+		// last_collected_at и last_collect_try_at читаются запросом, но
+		// в Go больше не нужны: отбор по ним делает сам запрос.
+		var collected, tried *time.Time
+		if err := rows.Scan(&link.LinkID, &link.PublicationID, &link.Platform,
+			&link.URL, &link.SubmittedAt, &collected, &tried); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan project link: %w", err)
 		}
-		c.link.ProjectID = projectID
-		cands = append(cands, c)
+		link.ProjectID = projectID
+		stale = append(stale, link)
+		ids = append(ids, link.LinkID)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
-	}
-
-	stale := make([]LinkToCollect, 0, len(cands))
-	ids := make([]uuid.UUID, 0, len(cands))
-	for _, c := range cands {
-		// Свежесть — по ПОСЛЕДНЕЙ ПОПЫТКЕ, а не по последней удаче.
-		//
-		// Раньше смотрели только на last_collected_at, который пишется
-		// исключительно при успехе. Ссылка, по которой сбор не удаётся
-		// никогда — VK, Likee, удалённый ролик, — выглядела «ни разу не
-		// собранной» вечно и улетала в сборщик при каждом открытии
-		// карточки и каждом F5. То есть дороже всего обходились ровно
-		// те ссылки, которые заведомо ничего не вернут.
-		if last := latest(c.collected, c.tried); last != nil &&
-			now.Sub(*last) < RefreshEvery(now.Sub(c.link.SubmittedAt)) {
-			continue
-		}
-		stale = append(stale, c.link)
-		ids = append(ids, c.link.LinkID)
 	}
 	if len(stale) == 0 {
 		return nil, tx.Commit(ctx)
@@ -343,20 +299,6 @@ WHERE id = ANY($1)`, ids, now, claimLease); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	return stale, nil
-}
-
-// latest — позднейшая из двух отметок; nil, если нет ни одной.
-func latest(a, b *time.Time) *time.Time {
-	switch {
-	case a == nil:
-		return b
-	case b == nil:
-		return a
-	case b.After(*a):
-		return b
-	default:
-		return a
-	}
 }
 
 // SaveStats — снимок метрик на дату плюс перенос ссылки на следующий обход.
@@ -785,9 +727,9 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 //
 // Зовётся при открытии карточки проекта менеджером или креатором:
 // человек смотрит на цифры, и цифры на это время становятся живыми.
-// «Кому пора» решает RefreshEvery — затухающее расписание первых суток
-// ролика; всё, что свежее своего шага, не трогаем, поэтому перезагрузка
-// страницы кредитов не стоит.
+// Берутся ВСЕ живые ссылки проекта, самые застоявшиеся первыми, —
+// отбора по свежести больше нет. Отсекается только повтор одного и того
+// же захода, см. refreshDebounce.
 //
 // creatorID — чьи ролики обновляем. nil означает «весь проект» и
 // годится только менеджеру: креатор не должен тратить кредиты на чужие
@@ -802,7 +744,8 @@ func (s *Service) RefreshProject(
 	if s.collector == nil {
 		return st, ErrCollectorNotSet
 	}
-	links, err := s.repo.ClaimProjectLinks(ctx, projectID, creatorID, now, limit)
+	links, err := s.repo.ClaimProjectLinks(
+		ctx, projectID, creatorID, now, now.Add(-refreshDebounce), limit)
 	if err != nil {
 		return st, err
 	}
@@ -978,4 +921,81 @@ func (r *Repo) DeferLinks(ctx context.Context, links []LinkToCollect, until time
 		return fmt.Errorf("defer links: %w", err)
 	}
 	return nil
+}
+
+// ---- закрытие периода ----
+//
+// Форсированный обход перед срезом: решение владельца от 2 октября —
+// «1 раз форсированно, когда заканчивается период».
+//
+// Нужен потому, что обычный обход идёт по заходу в кабинет. Если в
+// последний день периода карточку никто не открыл, срез снялся бы с
+// позавчерашних цифр — и по ним выставили бы счёт. Это единственный
+// проход, который не зависит от того, смотрит ли кто-то на экран.
+//
+// Вторая половина того решения — «после выставления счёта эти видео
+// больше не просматривать» — уже сделана и живёт там, где знают про
+// периоды: billing.parkPeriodLinks снимает ссылки с обхода в той же
+// транзакции, что и срез, а resumePeriodLinks возвращает их при
+// переоткрытии. Второй такой же код здесь означал бы два ответа на
+// вопрос «что считается роликом периода».
+
+// forceRefreshBatch — сколько ссылок за одну пачку форсированного
+// обхода. То же, что потолок пачки по заходу: instacurl держит два
+// параллельных слота и шестьдесят запросов в минуту, и пачка крупнее
+// упирается в его же лимит, а не ускоряет проход.
+const forceRefreshBatch = 25
+
+// forceRefreshBatches — потолок пачек за один проход.
+//
+// Защита от бесконечного цикла, а не ограничение продукта: пачка за
+// пачкой идут, пока ссылки не кончатся, и в норме проход заканчивается
+// сам. Двести пачек — это пять тысяч ссылок, то есть больше, чем бывает
+// у проекта за год; если упёрлись в потолок, остальное доберёт следующее
+// открытие карточки.
+const forceRefreshBatches = 200
+
+// ForceRefreshProject — обойти ВСЕ живые ссылки проекта, не спрашивая о
+// свежести.
+//
+// Зовётся на подытоге периода, до снятия среза. Пачка за пачкой: порог
+// «ещё не тронут» — момент начала прохода, поэтому обойдённое в этом же
+// проходе второй раз не берётся, а остановка — по пустой пачке.
+func (s *Service) ForceRefreshProject(
+	ctx context.Context, projectID uuid.UUID, now time.Time,
+) (CollectStats, error) {
+	var total CollectStats
+	if s.collector == nil {
+		return total, ErrCollectorNotSet
+	}
+	// Один клок на штамп и на порог. Порог — момент начала прохода, а
+	// штамп ставится этим же временем: пачка, которую только что взяли,
+	// на следующем круге уже не проходит условие «тронут раньше начала».
+	// Возьми их из разных источников (аргумент now от вызывающего и
+	// time.Now() внутри) — и пачка возвращала бы одно и то же, пока не
+	// упрётся в потолок пачек: двести платных походов за одну ссылку.
+	start := time.Now().UTC()
+	for i := 0; i < forceRefreshBatches; i++ {
+		links, err := s.repo.ClaimProjectLinks(
+			ctx, projectID, nil, start, start, forceRefreshBatch)
+		if err != nil {
+			return total, err
+		}
+		if len(links) == 0 {
+			return total, nil
+		}
+		st, err := s.collectClaimed(ctx, links, now)
+		total.Considered += st.Considered
+		total.Saved += st.Saved
+		total.NoData += st.NoData
+		total.ThresholdNotified += st.ThresholdNotified
+		total.Projects = append(total.Projects, st.Projects...)
+		if err != nil {
+			return total, err
+		}
+		if ctx.Err() != nil {
+			return total, ctx.Err()
+		}
+	}
+	return total, nil
 }

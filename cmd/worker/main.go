@@ -273,10 +273,25 @@ func main() {
 	go runOrderExpiryTicker(rootCtx, orders.NewService(orders.NewRepo(pool)),
 		cfg.OrderExpiryInterval, logger)
 
+	// Сборщик статистики: нужен и подытогу, и тикеру сбора, поэтому
+	// строится ОДИН раз и выше обоих. nil, если адрес или ключ не заданы.
+	collector := instacurl.New(cfg.InstacurlURL, cfg.InstacurlAPIKey, cfg.InstacurlTimeout)
+
 	// Подытог периодов. До него правило «через две недели после конца
 	// периода просмотры больше не меняются» не исполнялось нигде: оно
 	// держалось на том, что менеджер вовремя нажал «Пересчитать».
-	go runPeriodLockTicker(rootCtx, billing.NewService(billing.NewRepo(pool)),
+	//
+	// Со сборщиком подытог делает ещё два дела: форсированно обходит
+	// ролики проекта ДО снятия среза (иначе счёт выставляется по тем
+	// цифрам, которые успели собраться от последнего захода в кабинет) и
+	// снимает их с обхода ПОСЛЕ (считать по ним больше нечего). Без
+	// сборщика — ровно прежнее поведение.
+	billingSvc := billing.NewService(billing.NewRepo(pool))
+	if collector != nil {
+		billingSvc = billingSvc.WithStats(
+			publications.NewService(publications.NewRepo(pool)).WithCollector(collector))
+	}
+	go runPeriodLockTicker(rootCtx, billingSvc,
 		cfg.BillingPeriodLockInterval, cfg.BillingPeriodLockDelay, logger)
 
 	go runPublicationGaugeTicker(rootCtx,
@@ -295,7 +310,7 @@ func main() {
 	// Сбор статистики. Клиент nil, если адрес или ключ не заданы — тогда
 	// тикер не поднимается и в логе один внятный warn вместо ежечасных
 	// ошибок.
-	if ic := instacurl.New(cfg.InstacurlURL, cfg.InstacurlAPIKey, cfg.InstacurlTimeout); ic != nil {
+	if ic := collector; ic != nil {
 		go runStatsCollectTicker(rootCtx,
 			publications.NewService(publications.NewRepo(pool)).WithCollector(ic),
 			billing.NewService(billing.NewRepo(pool)),

@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -733,5 +734,159 @@ WHERE publication_id = $1 AND next_collect_at <> 'infinity'::timestamptz`, pub).
 	}
 	if n := due(inPeriod); n != 0 {
 		t.Errorf("правка адреса вернула в очередь %d ссылок подытоженного периода", n)
+	}
+}
+
+// fakeStats — вместо publications.Service в подытоге: считает, что его
+// позвали, и чем ответить.
+type fakeStats struct {
+	refreshed  []uuid.UUID
+	refreshErr error
+}
+
+func (f *fakeStats) ForceRefreshProject(
+	_ context.Context, projectID uuid.UUID, _ time.Time,
+) (publications.CollectStats, error) {
+	f.refreshed = append(f.refreshed, projectID)
+	return publications.CollectStats{Saved: 1}, f.refreshErr
+}
+
+// Подытог форсированно обходит ролики ДО снятия среза.
+//
+// Обычный сбор идёт по заходу в кабинет. Если в последний день периода
+// карточку никто не открыл, срез снялся бы с позавчерашних цифр — и по
+// ним выставили бы счёт. Этот проход единственный, который не зависит от
+// того, смотрит ли кто-то на экран.
+//
+// Снятие роликов с обхода после подытога проверяется отдельно
+// (TestCollectStopsAfterPeriodLock): его делает parkPeriodLinks в той же
+// транзакции, что и срез.
+func TestLockPeriodForcesRefreshBeforeSnapshot(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	fake := &fakeStats{}
+	svc := billing.NewService(billing.NewRepo(pool)).WithStats(fake)
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], nextDue(), "lockpark1", 100_000, true)
+
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Period: %v", err)
+	}
+	locked, err := svc.LockPeriod(ctx, p, nil, p.EndsOn, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("LockPeriod: %v", err)
+	}
+	if !locked.IsLocked() {
+		t.Fatal("период не подытожен")
+	}
+	if len(fake.refreshed) != 1 || fake.refreshed[0] != pid {
+		t.Errorf("форсированный обход: %v, ожидался один по этому проекту", fake.refreshed)
+	}
+
+	// Повторный подытог идемпотентен и ничего не делает заново: иначе
+	// каждый тик воркера платил бы за обход закрытого периода.
+	if _, err := svc.LockPeriod(ctx, locked, nil, locked.EndsOn, time.Now().UTC()); err != nil {
+		t.Fatalf("LockPeriod (повтор): %v", err)
+	}
+	if len(fake.refreshed) != 1 {
+		t.Errorf("повторный подытог обошёл проект снова: %v", fake.refreshed)
+	}
+}
+
+// Недоступный сборщик подытог не останавливает.
+//
+// Подытог — событие по календарю, и остановить его из-за упавшего
+// сборщика значит остановить счета всем проектам сразу. Срез тогда
+// снимается с тех цифр, что есть, — ровно прежнее поведение, — а об
+// ошибке сказано возвратом, чтобы она попала в лог воркера.
+func TestLockPeriodSurvivesCollectorOutage(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	fake := &fakeStats{refreshErr: errors.New("сборщик недоступен")}
+	svc := billing.NewService(billing.NewRepo(pool)).WithStats(fake)
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], nextDue(), "lockfail1", 50_000, true)
+
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Period: %v", err)
+	}
+	locked, err := svc.LockPeriod(ctx, p, nil, p.EndsOn, time.Now().UTC())
+	if err == nil {
+		t.Error("об ошибке сборщика не сказано — она пропала бы из логов")
+	}
+	if !locked.IsLocked() {
+		t.Fatal("подытог не состоялся из-за сборщика — счета встали бы всем проектам")
+	}
+	// И ролики периода всё равно сняты с обхода: срез снят, счёт
+	// посчитан — считать по ним больше нечего. Это делает подытог сам, в
+	// своей транзакции, а не сборщик.
+	var live int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM publication_links l
+JOIN project_period_publications spp ON spp.publication_id = l.publication_id
+WHERE spp.period_id = $1 AND l.next_collect_at <> 'infinity'::timestamptz`, locked.ID).
+		Scan(&live); err != nil {
+		t.Fatalf("read links: %v", err)
+	}
+	if live != 0 {
+		t.Errorf("%d ссылок остались в обходе, хотя период подытожен", live)
+	}
+}
+
+// Переоткрытие периода возвращает ролики в обход.
+//
+// Админ вернул период в работу — значит, по нему будут считать заново.
+// Без возврата это означало бы «считайте по мёртвым цифрам», и заметили
+// бы это на втором счёте. resumePeriodLinks для этого и написан; тест
+// сторожит именно его вызов — функция, которую забыли позвать,
+// выглядит как рабочая.
+func TestUnlockPeriodReopensLinks(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	fake := &fakeStats{}
+	svc := billing.NewService(billing.NewRepo(pool)).WithStats(fake)
+	if _, err := svc.SaveTerms(ctx, demoTerms(pid), creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], nextDue(), "unlockpark1", 70_000, true)
+
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Period: %v", err)
+	}
+	locked, err := svc.LockPeriod(ctx, p, nil, p.EndsOn, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("LockPeriod: %v", err)
+	}
+
+	if _, err := svc.UnlockPeriod(ctx, locked.ID, creators[0], "пересчёт по жалобе",
+		time.Now().UTC()); err != nil {
+		t.Fatalf("UnlockPeriod: %v", err)
+	}
+	var live int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM publication_links
+WHERE publication_id IN (
+    SELECT id FROM project_publications WHERE project_id = $1
+) AND next_collect_at <> 'infinity'::timestamptz`, pid).Scan(&live); err != nil {
+		t.Fatalf("read links: %v", err)
+	}
+	if live == 0 {
+		t.Error("после переоткрытия ссылки остались снятыми — считали бы по мёртвым цифрам")
 	}
 }

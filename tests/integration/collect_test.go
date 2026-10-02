@@ -172,19 +172,18 @@ WHERE p.project_id = $1 AND d.stat_date = $2::date`, projectID, now).Scan(&rowsT
 	}
 }
 
-// Два расписания, и они про разное.
+// Фоновое расписание — про РАСХОД.
 //
-// Фоновое (CollectEvery) — про РАСХОД: архив почти не меняется, а обход
-// стоит кредит у поставщика, поэтому 1→2→4→8 дней по возрасту ролика.
+// Архив почти не меняется, а обход стоит кредит у поставщика, поэтому
+// 1→2→4→8 дней по возрасту ролика. Шаг, уменьшающийся с возрастом, — это
+// тихий перерасход кредитов на архиве, и монотонность проверяется
+// отдельно от значений.
 //
-// По заходу в карточку (RefreshEvery) — про ДОВЕРИЕ к цифре: ролик
-// выложили минуту назад, на площадке у него уже есть просмотры, а в
-// кабинете ноль, и этот ноль неотличим от «никто не смотрит». Первые
-// сутки шаг затухает: минута, пять, десять, полчаса, час, шесть часов.
-//
-// Главное, что здесь проверяется, — что частое расписание НЕ работает
-// фоном. Иначе свежая ссылка стоила бы 144 похода в сутки вместо
-// одного, и это были бы походы за цифрами, на которые никто не смотрит.
+// Второго расписания здесь больше нет. Обновление по заходу в карточку
+// затухающего шага не имеет вовсе: просмотры подтягиваются КАЖДЫЙ раз,
+// когда заходят в кабинет (решение владельца от 2 октября), а от
+// двойного счёта одного захода защищает refreshDebounce — полминуты, и
+// это не расписание.
 func TestCollectSchedules(t *testing.T) {
 	min, hour, day := time.Minute, time.Hour, 24*time.Hour
 
@@ -203,45 +202,13 @@ func TestCollectSchedules(t *testing.T) {
 		}
 	}
 
-	onOpen := []struct {
-		age  time.Duration
-		want time.Duration
-	}{
-		{0, min}, {min, min},
-		{2 * min, 5 * min}, {6 * min, 5 * min},
-		{7 * min, 10 * min}, {16 * min, 10 * min},
-		{17 * min, 30 * min}, {76 * min, 30 * min},
-		// Остаток первого дня и весь второй — раз в час: площадка
-		// доносит ролик до ленты не сразу, и цифра за сутки меняется
-		// заметно.
-		{2 * hour, hour}, {10 * hour, hour}, {25 * hour, hour}, {2 * day, hour},
-		// Дальше — шесть часов. Не фоновый шаг: тот про расход на
-		// архиве и считается днями, а здесь на цифры смотрит человек.
-		{49 * hour, 6 * hour}, {6 * day, 6 * hour}, {90 * day, 6 * hour},
-	}
-	for _, c := range onOpen {
-		if got := publications.RefreshEvery(c.age); got != c.want {
-			t.Errorf("шаг по заходу для возраста %s: %s, ожидался %s", c.age, got, c.want)
-		}
-	}
-
-	// Монотонность обоих: шаг, уменьшающийся с возрастом, — это тихий
-	// перерасход кредитов на архиве.
 	var prev time.Duration
 	for _, c := range background {
-		if got := publications.CollectEvery(c.age); got < prev {
+		got := publications.CollectEvery(c.age)
+		if got < prev {
 			t.Fatalf("фоновое расписание не монотонно на возрасте %s", c.age)
-		} else {
-			prev = got
 		}
-	}
-	prev = 0
-	for _, c := range onOpen {
-		if got := publications.RefreshEvery(c.age); got < prev {
-			t.Fatalf("расписание по заходу не монотонно на возрасте %s", c.age)
-		} else {
-			prev = got
-		}
+		prev = got
 	}
 }
 
@@ -1090,14 +1057,20 @@ func TestZeroSharesDifferFromUnknown(t *testing.T) {
 	}
 }
 
-// Открытие карточки не обходит то, что и так свежее своего шага.
+// Каждый заход в кабинет подтягивает просмотры заново — но один заход
+// платится один раз.
 //
-// Это и есть «кеш», ради которого расписание первых суток вообще
-// придумано: менеджер может перезагружать страницу сколько угодно, а
-// кредиты у поставщика тратятся не чаще, чем цифра успевает устареть.
-// Без этой проверки одна лишняя перезагрузка стоила бы столько же,
-// сколько обход всего проекта.
-func TestRefreshProjectRespectsItsOwnSchedule(t *testing.T) {
+// Решение владельца от 2 октября: цифры тянем каждый раз, когда заходят.
+// Затухающего расписания свежести (минута, пять, десять, полчаса…)
+// больше нет — пока человек смотрит на экран, он смотрит на сегодняшнее
+// число.
+//
+// Остался только дебаунс в полминуты, и он не про свежесть: на карточке
+// обновление просят два виджета, F5 повторяет запрос, вторая вкладка
+// открывает тот же проект — это ОДНО «зашли», и платить за него дважды
+// незачем. Через полминуты это уже второй заход, и он честно идёт в
+// сборщик, даже если ролику минута от рождения.
+func TestRefreshPullsOnEveryVisit(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
 
@@ -1119,17 +1092,31 @@ func TestRefreshProjectRespectsItsOwnSchedule(t *testing.T) {
 		t.Fatalf("первое открытие: %+v, ожидалось 1 сохранено", st)
 	}
 
-	// Через полминуты — ничего: ролику меньше минуты, шаг для такого
-	// возраста ровно минута.
-	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(30*time.Second), 25)
+	// Тот же заход (второй виджет, F5, вторая вкладка) — второй раз не
+	// платим.
+	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(5*time.Second), 25)
 	if err != nil {
-		t.Fatalf("RefreshProject (повтор): %v", err)
+		t.Fatalf("RefreshProject (тот же заход): %v", err)
 	}
 	if st.Considered != 0 {
-		t.Errorf("перезагрузка страницы взяла %d ссылок, ожидалось 0", st.Considered)
+		t.Errorf("повтор одного захода взял %d ссылок, ожидалось 0", st.Considered)
 	}
 	if fake.calls != 1 {
-		t.Errorf("в instacurl сходили %d раза, ожидался один — расписание обойдено", fake.calls)
+		t.Errorf("в instacurl сходили %d раза, ожидался один — дебаунс обойдён", fake.calls)
+	}
+
+	// А это уже второй заход — и цифры тянутся снова, хотя ролику
+	// меньше минуты. По прежнему расписанию здесь был бы отказ: шаг для
+	// такого возраста равнялся минуте.
+	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(45*time.Second), 25)
+	if err != nil {
+		t.Fatalf("RefreshProject (второй заход): %v", err)
+	}
+	if st.Saved != 1 {
+		t.Errorf("второй заход: %+v, ожидалось 1 сохранено", st)
+	}
+	if fake.calls != 2 {
+		t.Errorf("в instacurl сходили %d раза, ожидалось два", fake.calls)
 	}
 }
 
@@ -1321,14 +1308,15 @@ func TestCollectFailureKeepsReason(t *testing.T) {
 	}
 }
 
-// Ссылка, по которой сбор НЕ УДАЁТСЯ, не ходит в сборщик без конца.
+// Отказ сборщика считается за попытку, а не за «ни разу не собрано».
 //
-// Самая дорогая находка ревью. Свежесть считалась по last_collected_at,
-// а его пишет только успех: у ссылки, которую сборщик не умеет (VK,
-// Likee, удалённый ролик), он оставался NULL навсегда. Значит, при
-// КАЖДОМ открытии карточки и каждом F5 такая ссылка снова уезжала в
-// платный обход — и дороже всех обходились ровно те, которые заведомо
-// ничего не вернут.
+// Самая дорогая находка ревью. Отметка свежести читалась из
+// last_collected_at, а его пишет только успех: у ссылки, которую сборщик
+// не умеет (VK, Likee, удалённый ролик), он оставался NULL навсегда.
+// Значит, двойной запрос одного захода уезжал в платный обход дважды —
+// и дороже всех обходились ровно те ссылки, которые заведомо ничего не
+// вернут. Дебаунс смотрит на last_collect_try_at, который ставится до
+// похода и потому не зависит от его исхода.
 func TestRefreshCountsFailedAttemptAsFreshness(t *testing.T) {
 	pool := integration.Pool(t)
 	ctx := context.Background()
@@ -1352,9 +1340,9 @@ func TestRefreshCountsFailedAttemptAsFreshness(t *testing.T) {
 		t.Fatalf("первый проход: %+v, ожидался отказ сборщика", st)
 	}
 
-	// Полминуты спустя — шаг ещё не прошёл, и платить второй раз не за
-	// что. Раньше здесь был второй поход, и так до бесконечности.
-	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(30*time.Second), 25)
+	// В пределах того же захода второго похода нет. Раньше он был — и так
+	// при каждом F5, до бесконечности.
+	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(5*time.Second), 25)
 	if err != nil {
 		t.Fatalf("RefreshProject (повтор): %v", err)
 	}
@@ -1366,7 +1354,7 @@ func TestRefreshCountsFailedAttemptAsFreshness(t *testing.T) {
 			fake.calls)
 	}
 
-	// А когда шаг прошёл — идём снова: отказ мог быть временным.
+	// А на следующем заходе — снова: отказ мог быть временным.
 	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(12*time.Minute), 25)
 	if err != nil {
 		t.Fatalf("RefreshProject (по сроку): %v", err)
@@ -1577,5 +1565,88 @@ WHERE publication_id = $1`, pubs[1].id); err != nil {
 	}
 	if len(fake.urlsSeen) != 1 || fake.urlsSeen[0] != pubs[0].url {
 		t.Errorf("обошли %v, ожидалась застоявшаяся ссылка", fake.urlsSeen)
+	}
+}
+
+// Снятая с обхода ссылка не берётся ни по заходу в карточку, ни фоном.
+//
+// Это и есть «после выставления счёта эти видео больше не
+// просматривать»: кабинет открывают каждый день, и если бы заход тянул
+// архив, снятие с обхода не значило бы ничего.
+func TestParkedLinksAreNotRefreshed(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/parked1"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	if _, err := pool.Exec(ctx, `
+UPDATE publication_links l SET next_collect_at = 'infinity'::timestamptz
+FROM project_publications p
+WHERE p.id = l.publication_id AND p.project_id = $1`, projectID); err != nil {
+		t.Fatalf("снять с обхода: %v", err)
+	}
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: okResult(url, 10, 1, 0)}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+
+	st, err := svc.RefreshProject(ctx, projectID, nil, time.Now().UTC(), 25)
+	if err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	if st.Considered != 0 {
+		t.Errorf("заход в карточку взял %d снятых ссылок", st.Considered)
+	}
+
+	// И форсированный обход тоже: он для ЗАКРЫВАЕМОГО периода, а не для
+	// уже закрытых.
+	fst, err := svc.ForceRefreshProject(ctx, projectID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ForceRefreshProject: %v", err)
+	}
+	if fst.Considered != 0 {
+		t.Errorf("форсированный обход взял %d снятых ссылок", fst.Considered)
+	}
+	if fake.calls != 0 {
+		t.Errorf("в instacurl сходили %d раз по снятым ссылкам", fake.calls)
+	}
+}
+
+// Форсированный обход не спрашивает о свежести — и не ходит по кругу.
+//
+// Он идёт пачками, пока ссылки не кончатся. Порог «ещё не тронут» у него
+// — момент начала прохода, поэтому обойдённое в этом же проходе второй
+// раз не берётся: иначе пачка возвращала бы одно и то же до упора в
+// потолок пачек.
+func TestForceRefreshIgnoresDebounceButNotItself(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://www.tiktok.com/@u/video/forced1"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: okResult(url, 500, 5, 1)}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+
+	now := time.Now().UTC()
+	// Только что обошли по заходу — дебаунс закрыт.
+	if _, err := svc.RefreshProject(ctx, projectID, nil, now, 25); err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	before := fake.calls
+
+	// Форсированный идёт всё равно: срез снимается по сегодняшним цифрам,
+	// а не по тем, что успели собраться.
+	st, err := svc.ForceRefreshProject(ctx, projectID, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("ForceRefreshProject: %v", err)
+	}
+	if st.Saved == 0 {
+		t.Errorf("форсированный обход ничего не собрал: %+v", st)
+	}
+	if fake.calls != before+1 {
+		t.Errorf("походов в сборщик %d, ожидался один форсированный после %d", fake.calls, before)
 	}
 }

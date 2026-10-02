@@ -913,6 +913,25 @@ func (s *Service) LockPeriod(ctx context.Context, p ProjectPeriod, actor *uuid.U
 	if p.IsLocked() {
 		return p, nil
 	}
+	// Форсированный обход ПЕРЕД срезом — единственный, который не зависит
+	// от того, смотрит ли кто-то на экран.
+	//
+	// Обычный сбор идёт по заходу в кабинет. Если в последний день
+	// периода карточку никто не открыл, срез снялся бы с позавчерашних
+	// цифр — и по ним выставили бы счёт. Решение владельца от 2 октября:
+	// «1 раз форсированно, когда заканчивается период».
+	//
+	// Ошибку не поднимаем выше. Подытог — событие по календарю, и
+	// остановить его из-за недоступного сборщика значит остановить счета
+	// всем проектам сразу; срез тогда снимется с тех цифр, что есть, и
+	// это ровно прежнее поведение. Молчать о таком нельзя, поэтому
+	// ошибка едет в лог вызывающего через возврат после подытога.
+	var refreshErr error
+	if s.stats != nil {
+		if _, err := s.stats.ForceRefreshProject(ctx, p.ProjectID, now); err != nil {
+			refreshErr = fmt.Errorf("force refresh before settle: %w", err)
+		}
+	}
 	locked, err := s.repo.LockPeriod(ctx, p.ID, actor, asOf, now)
 	if err != nil {
 		return ProjectPeriod{}, err
@@ -927,9 +946,9 @@ func (s *Service) LockPeriod(ctx context.Context, p ProjectPeriod, actor *uuid.U
 	// подытог уже состоялся, и откатывать его из-за неотправленного
 	// уведомления неправильно.
 	if err := s.announcePeriod(ctx, locked); err != nil {
-		return locked, fmt.Errorf("period closed announce: %w", err)
+		return locked, errors.Join(refreshErr, fmt.Errorf("period closed announce: %w", err))
 	}
-	return locked, nil
+	return locked, refreshErr
 }
 
 // announcePeriod — событие «период подытожен» с числами периода.

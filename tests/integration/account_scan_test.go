@@ -425,3 +425,45 @@ WHERE a.url = $1`, url).Scan(&rows); err != nil {
 		t.Errorf("записано %d снимков — «не измерили» превратилось в число", rows)
 	}
 }
+
+// Очередь обхода аккаунтов открывается в НОЛЬ ЧАСОВ, а не «через сутки».
+//
+// Решение владельца от 2 октября: «подписчиков раз в день в 00:00».
+// Разница не косметическая. Срез подписчиков — основа доплаты за
+// прирост, а прирост считается по границам периода, то есть по ДАТАМ. От
+// «+24 часа» аккаунт уплывает по времени суток: обошли в 23:50 — следующий
+// раз в 23:50 следующего дня, и в один календарный день снимка нет
+// вовсе, а в соседний попадают два. На границе периода это ровно та
+// разница, по которой человеку платят.
+func TestAccountScanRunsAtMidnight(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	const url = "https://www.tiktok.com/@midnight.scan"
+	_, _, svc, cleanup := setupScannedAccount(t, pool, url)
+	defer cleanup()
+
+	// Обход прошёл поздним вечером.
+	evening := time.Now().UTC().Truncate(24 * time.Hour).Add(23*time.Hour + 50*time.Minute)
+	followers := int64(1000)
+	res := profileResult(url, "midnight.scan")
+	res.Followers = &followers
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: res}}
+	if _, err := svc.WithAccountScanner(fake).RunAccountScan(ctx, evening, 10); err != nil {
+		t.Fatalf("RunAccountScan: %v", err)
+	}
+
+	var next time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT next_scan_at FROM project_accounts WHERE url = $1`, url).Scan(&next); err != nil {
+		t.Fatalf("read next_scan_at: %v", err)
+	}
+	midnight := evening.Truncate(24*time.Hour).AddDate(0, 0, 1)
+	if !next.UTC().Equal(midnight) {
+		t.Errorf("следующий обход в %s, ожидалась полночь %s", next.UTC(), midnight)
+	}
+	// И это РАНЬШЕ, чем «через сутки»: иначе снимок уехал бы в
+	// послезавтра и один календарный день остался бы без него.
+	if !next.UTC().Before(evening.Add(24 * time.Hour)) {
+		t.Error("полночь оказалась позже суток от обхода — расчёт даты сломан")
+	}
+}

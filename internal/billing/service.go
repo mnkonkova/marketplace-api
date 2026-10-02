@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"marketpclce/internal/publications"
 	"marketpclce/internal/ratings"
 )
 
@@ -23,6 +24,37 @@ type Service struct {
 	// ролик», когда считать не по чему: число версионируется вместе с
 	// остальными порогами, и константы в коде для него больше нет.
 	scales *ratings.Repo
+	// stats — кто умеет обойти ролики проекта и снять их с обхода.
+	// Реализуется publications.Service. nil = подытог идёт как раньше:
+	// по тем цифрам, которые успели собраться.
+	stats StatsCollector
+}
+
+// StatsCollector — сбор просмотров, нужный подытогу.
+//
+// Интерфейсом, а не прямой зависимостью: billing не знает про выкладки
+// и ссылки, и тянуть publications целиком ради двух вызовов значило бы
+// связать домены в одну сторону без нужды. Тот же приём, что у
+// WithChecklistAttacher в publications.
+type StatsCollector interface {
+	// ForceRefreshProject — обойти все живые ссылки проекта, не
+	// спрашивая о свежести. Зовётся ДО снятия среза.
+	//
+	// Снятие роликов с обхода после подытога сюда не входит: это делает
+	// parkPeriodLinks в той же транзакции, что и срез, — и правильно,
+	// потому что «ролик этого периода» определяет срез, а не сбор.
+	ForceRefreshProject(ctx context.Context, projectID uuid.UUID, now time.Time) (publications.CollectStats, error)
+}
+
+// WithStats — подключить сбор к подытогу.
+//
+// Без него подытог работает по-прежнему: срез снимается с тех цифр,
+// которые успели собраться к последнему заходу в кабинет. Это рабочее
+// состояние для api-процесса — подытог по расписанию делает воркер, и
+// сборщик нужен ему.
+func (s *Service) WithStats(c StatsCollector) *Service {
+	s.stats = c
+	return s
 }
 
 func NewService(repo *Repo) *Service {
