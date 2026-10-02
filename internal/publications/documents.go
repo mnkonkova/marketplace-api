@@ -561,25 +561,6 @@ WHERE id = $1 AND project_id = $2`, docID, projectID, revoked, actor)
 	return nil
 }
 
-// stillInProjectOf — адресат личного документа по-прежнему в проекте:
-// креатор не убран из состава, заказчик не сменён. Ушедшему документы
-// проекта не показываем — ровно как договоры из материалов.
-func stillInProjectOf(t string) string {
-	return `(
-       (` + t + `.audience = 'creators' AND EXISTS (
-            SELECT 1 FROM project_creators pc
-            WHERE pc.project_id = ` + t + `.project_id
-              AND pc.creator_user_id = ` + t + `.recipient_user_id
-              AND pc.removed_at IS NULL))
-    OR (` + t + `.audience = 'client' AND EXISTS (
-            SELECT 1 FROM projects p
-            WHERE p.id = ` + t + `.project_id
-              AND p.client_user_id = ` + t + `.recipient_user_id))
-  )`
-}
-
-var stillInProject = stillInProjectOf("d")
-
 // MyDocumentsFilter — сужение «Моих документов».
 type MyDocumentsFilter struct {
 	// ProjectID — только этот проект (карточка проекта); nil — все.
@@ -608,7 +589,6 @@ FROM user_documents d
 JOIN projects pr ON pr.id = d.project_id
 WHERE d.recipient_user_id = $1 AND d.revoked_at IS NULL
   AND ($3::uuid IS NULL OR d.project_id = $3)
-  AND `+stillInProject+`
 UNION ALL
 SELECT m.id, 'project', m.project_id, pr.title, m.kind, m.title, m.url, '',
        m.created_at, NULL
@@ -654,7 +634,6 @@ func (r *Repo) MarkDocumentOpened(ctx context.Context, userID, docID uuid.UUID) 
 UPDATE user_documents
 SET opened_at = COALESCE(opened_at, now())
 WHERE id = $1 AND recipient_user_id = $2 AND revoked_at IS NULL
-  AND `+stillInProjectOf("user_documents")+`
 RETURNING opened_at`, docID, userID).Scan(&at)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, ErrNotFound

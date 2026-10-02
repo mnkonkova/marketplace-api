@@ -661,6 +661,10 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/manager/projects/{id}/subscribers", d.Billing.ManagerSubscribers)
 					r.Put("/manager/projects/{id}/creators/{creator_id}/subscribers",
 						d.Billing.ManagerSaveSubscribers)
+					// Вернуть снятое обходом: убрать ручную правку. Не то
+					// же, что вписать ноль, — см. ManagerDropSubscribers.
+					r.Delete("/manager/projects/{id}/creators/{creator_id}/subscribers",
+						d.Billing.ManagerDropSubscribers)
 				}
 				if d.Orders != nil {
 					r.Get("/manager/orders", d.Orders.ManagerNeedingAttention)

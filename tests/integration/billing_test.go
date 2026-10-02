@@ -2066,3 +2066,113 @@ func accrualOf(t *testing.T, items []billing.Accrual, creator uuid.UUID) billing
 	t.Fatalf("начисления креатора %s нет в пачке из %d", creator, len(items))
 	return billing.Accrual{}
 }
+
+// Список подписчиков показывает И снятое обходом, И вписанное рукой.
+//
+// Раньше он приходил из creator_period_subscribers, то есть показывал
+// ровно ручные правки — и до появления снимков это было честно. Теперь у
+// человека без правки есть намеренное число, и не показать его значит
+// спрятать то, по чему ему платят: менеджер видел бы ноль, а в начислении
+// стояла бы доплата.
+func TestSubscribersListShowsMeasuredAndManual(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	terms := demoTerms(pid)
+	rate := int64(100)
+	terms.SubscriberRate = &rate
+	if _, err := svc.SaveTerms(ctx, terms, creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], pubDay(0), "subslist1", 1000, true)
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Period: %v", err)
+	}
+
+	acc := addCreatorAccount(t, pid, creators[0], "tiktok", "https://www.tiktok.com/@list")
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, -1), 4_000)
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, 4), 6_500)
+
+	find := func(items []billing.CreatorSubscribers) billing.CreatorSubscribers {
+		t.Helper()
+		for _, c := range items {
+			if c.CreatorUserID == creators[0] {
+				return c
+			}
+		}
+		t.Fatalf("креатора нет в списке из %d", len(items))
+		return billing.CreatorSubscribers{}
+	}
+
+	items, err := svc.Subscribers(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Subscribers: %v", err)
+	}
+	got := find(items)
+	if got.Measured != 2500 {
+		t.Errorf("намерено %d, ожидалось 2500", got.Measured)
+	}
+	if got.Subscribers != 2500 {
+		t.Errorf("считается %d, ожидалось снятое 2500", got.Subscribers)
+	}
+	if got.Manual {
+		t.Error("число помечено ручным, хотя его никто не правил")
+	}
+	if got.UpdatedAt != nil {
+		t.Error("у снятого обходом есть время правки — его правил никто")
+	}
+
+	// Менеджер перебил своё — снятое при этом ОСТАЁТСЯ видно: иначе
+	// «вписать своё» это выстрел в темноте.
+	if _, err := svc.SaveSubscribers(ctx, pid, creators[0], p.StartsOn, 900, creators[0]); err != nil {
+		t.Fatalf("SaveSubscribers: %v", err)
+	}
+	items, err = svc.Subscribers(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Subscribers (после правки): %v", err)
+	}
+	got = find(items)
+	if got.Subscribers != 900 {
+		t.Errorf("считается %d, ожидалось вписанное 900", got.Subscribers)
+	}
+	if got.Measured != 2500 {
+		t.Errorf("намеренное исчезло после правки: %d", got.Measured)
+	}
+	if !got.Manual || got.UpdatedAt == nil {
+		t.Errorf("правка не помечена ручной: manual=%v at=%v", got.Manual, got.UpdatedAt)
+	}
+
+	// «Вернуть снятое» — не то же, что вписать ноль.
+	if err := svc.DropSubscribers(ctx, pid, creators[0], p.StartsOn); err != nil {
+		t.Fatalf("DropSubscribers: %v", err)
+	}
+	items, err = svc.Subscribers(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Subscribers (после возврата): %v", err)
+	}
+	got = find(items)
+	if got.Manual || got.Subscribers != 2500 {
+		t.Errorf("после возврата manual=%v число=%d, ожидалось снятое 2500",
+			got.Manual, got.Subscribers)
+	}
+
+	// А вписанный ноль — это объявленное «роста не было», и он остаётся
+	// ручным: иначе расчёт молча вернул бы снятое и заплатил за то, от
+	// чего менеджер отказался.
+	if _, err := svc.SaveSubscribers(ctx, pid, creators[0], p.StartsOn, 0, creators[0]); err != nil {
+		t.Fatalf("SaveSubscribers(0): %v", err)
+	}
+	items, err = svc.Subscribers(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Subscribers (после нуля): %v", err)
+	}
+	got = find(items)
+	if !got.Manual || got.Subscribers != 0 {
+		t.Errorf("вписанный ноль: manual=%v число=%d — ноль подменён снятым",
+			got.Manual, got.Subscribers)
+	}
+}

@@ -626,7 +626,7 @@ func (h *Handler) ManagerSubscribers(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	items, err := h.svc.Subscribers(r.Context(), projectID, p.StartsOn)
+	items, err := h.svc.Subscribers(r.Context(), projectID, p)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -679,6 +679,71 @@ func (h *Handler) ManagerSaveSubscribers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, c)
+}
+
+// ManagerDropSubscribers godoc
+// @Summary  Вернуть снятое обходом число подписчиков (менеджер)
+// @Description Убирает ручную правку: доплата снова считается по снимкам
+// @Description аудитории — срез на входе в период, срез в конце, разница.
+// @Description Отдельным действием, а не «впишите ноль»: ноль это
+// @Description объявленное «роста не было», и платить по нему — тоже
+// @Description решение. В ответе — число, которое теперь считается.
+// @Tags     manager-billing
+// @Produce  json
+// @Security BearerAuth
+// @Param    id         path  string true  "project id"
+// @Param    creator_id path  string true  "creator id"
+// @Param    period     query int    false "номер периода; по умолчанию текущий"
+// @Success  200 {object} CreatorSubscribers
+// @Failure  400 {object} errorResponse "bad_id; bad_period"
+// @Failure  401 {object} errorResponse "no_user — сессия истекла"
+// @Failure  404 {object} errorResponse "not_found — проект не найден, ведёт другой менеджер или периодов ещё нет"
+// @Router   /manager/projects/{id}/creators/{creator_id}/subscribers [delete]
+func (h *Handler) ManagerDropSubscribers(w http.ResponseWriter, r *http.Request) {
+	projectID, _, ok := h.managerProject(w, r)
+	if !ok {
+		return
+	}
+	if !h.requireBilling(w, r, projectID) {
+		return
+	}
+	creatorID, err := uuid.Parse(chi.URLParam(r, "creator_id"))
+	if err != nil {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id креатора.")
+		return
+	}
+	seq, ok := periodParam(r)
+	if !ok {
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_period",
+			"Номер периода должен быть целым числом.")
+		return
+	}
+	p, err := h.svc.Period(r.Context(), projectID, seq, time.Now())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := h.svc.DropSubscribers(r.Context(), projectID, creatorID, p.StartsOn); err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Отдаём то, что теперь считается: иначе кабинету пришлось бы
+	// перезапрашивать список, чтобы узнать, к какому числу он вернулся.
+	items, err := h.svc.Subscribers(r.Context(), projectID, p)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	for _, c := range items {
+		if c.CreatorUserID == creatorID {
+			httpx.WriteJSON(w, http.StatusOK, c)
+			return
+		}
+	}
+	// Креатора в составе уже нет — правку убрали, показывать нечего.
+	httpx.WriteJSON(w, http.StatusOK, CreatorSubscribers{
+		ProjectID: projectID, CreatorUserID: creatorID, PeriodStart: p.StartsOn,
+	})
 }
 
 // ---- заказчик ----

@@ -777,14 +777,32 @@ type UTMLink struct {
 // автоматического источника нет ни у тех, ни у других, и число вписывает
 // менеджер руками.
 type CreatorSubscribers struct {
+	ProjectID     uuid.UUID `json:"project_id"`
 	CreatorUserID uuid.UUID `json:"creator_user_id"`
 	CreatorName   string    `json:"creator_name,omitempty"`
 	// PeriodStart — за какой период записано. Периоды катятся от первой
 	// публикации проекта, а не по календарю.
 	PeriodStart time.Time `json:"period_start"`
-	// Subscribers — сколько подписчиков прибавилось за период.
-	Subscribers int64     `json:"subscribers"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// Subscribers — сколько подписчиков прибавилось за период. Именно по
+	// этому числу считается доплата: вписанное рукой, если оно есть,
+	// иначе снятое обходом.
+	Subscribers int64 `json:"subscribers"`
+	// Measured — что намерил обход: разница крайних снимков аудитории за
+	// период по всем аккаунтам человека, прикреплённым к проекту.
+	//
+	// Отдаётся ВСЕГДА, даже когда сверху лежит ручная правка: менеджеру
+	// надо видеть, от чего он отступил, иначе «вписать своё» — это
+	// выстрел в темноте.
+	Measured int64 `json:"measured"`
+	// Manual — число перебито рукой. Тогда Subscribers равно вписанному,
+	// а Measured показывает, что было намерено.
+	//
+	// Отдельным полем, а не сравнением Subscribers с Measured: они
+	// совпадают и когда менеджер вписал ровно намеренное число, и это
+	// разные состояния — у второго есть автор и время правки.
+	Manual bool `json:"manual"`
+	// UpdatedAt — когда правили руками. Пусто у снятого обходом.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 // ProjectBilling — всё про деньги проекта одним ответом: по частям это

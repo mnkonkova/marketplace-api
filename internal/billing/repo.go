@@ -476,39 +476,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN creator_period_subscribers subs
        ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
       AND subs.period_start = $6
--- Прирост подписчиков по снимкам аккаунтов — на случай, когда менеджер
--- число НЕ вписал. Вписанное сильнее: это его решение по спорному
--- случаю (аккаунт отдали поздно, часть роста не от проекта), и
--- перезаписывать его расчётом значит отменять решение человека.
-LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(x.last_in - COALESCE(x.before_period, x.first_in)), 0) AS gained
-    FROM project_accounts a
-    JOIN LATERAL (
-        SELECT
-            -- Снимок ДО периода — «сколько было на входе».
-            (SELECT d.followers FROM account_follower_daily d
-              WHERE d.account_id = a.id AND d.stat_date < $6
-              ORDER BY d.stat_date DESC LIMIT 1) AS before_period,
-            -- Нет такого — аккаунт прикрепили посреди периода, и считаем
-            -- от первого его снимка. Решение владельца: «снимать с этого
-            -- момента, виноваты оба» — задним числом не добираем и из
-            -- расчёта не выкидываем.
-            (SELECT d.followers FROM account_follower_daily d
-              WHERE d.account_id = a.id AND d.stat_date >= $6 AND d.stat_date <= $4
-              ORDER BY d.stat_date LIMIT 1) AS first_in,
-            (SELECT d.followers FROM account_follower_daily d
-              WHERE d.account_id = a.id AND d.stat_date >= $6 AND d.stat_date <= $4
-              ORDER BY d.stat_date DESC LIMIT 1) AS last_in
-    ) x ON TRUE
-    WHERE a.project_id = pc.project_id
-      AND a.creator_user_id = pc.creator_user_id
-      -- Ни одного снимка внутри периода — аккаунт в расчёт не входит
-      -- вовсе: ноль здесь означал бы «не вырос», а правда — «не
-      -- измеряли». Так же ведут себя периоды, закрытые до появления
-      -- снимков: у них прирост остаётся нулём, и задним числом счёт не
-      -- переписывается.
-      AND x.last_in IS NOT NULL
-) snap ON TRUE
+`+followerGainSQL("$6", "$4")+`
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
 -- $3 — левая граница отбора выкладок: у первого периода её нет (см.
 -- periodFrom). $6 — начало периода как таковое: подписчиков менеджер
@@ -588,39 +556,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN creator_period_subscribers subs
        ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
       AND subs.period_start = $4
--- Прирост подписчиков по снимкам аккаунтов — на случай, когда менеджер
--- число НЕ вписал. Вписанное сильнее: это его решение по спорному
--- случаю (аккаунт отдали поздно, часть роста не от проекта), и
--- перезаписывать его расчётом значит отменять решение человека.
-LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(x.last_in - COALESCE(x.before_period, x.first_in)), 0) AS gained
-    FROM project_accounts a
-    JOIN LATERAL (
-        SELECT
-            -- Снимок ДО периода — «сколько было на входе».
-            (SELECT d.followers FROM account_follower_daily d
-              WHERE d.account_id = a.id AND d.stat_date < $4
-              ORDER BY d.stat_date DESC LIMIT 1) AS before_period,
-            -- Нет такого — аккаунт прикрепили посреди периода, и считаем
-            -- от первого его снимка. Решение владельца: «снимать с этого
-            -- момента, виноваты оба» — задним числом не добираем и из
-            -- расчёта не выкидываем.
-            (SELECT d.followers FROM account_follower_daily d
-              WHERE d.account_id = a.id AND d.stat_date >= $4 AND d.stat_date <= $5
-              ORDER BY d.stat_date LIMIT 1) AS first_in,
-            (SELECT d.followers FROM account_follower_daily d
-              WHERE d.account_id = a.id AND d.stat_date >= $4 AND d.stat_date <= $5
-              ORDER BY d.stat_date DESC LIMIT 1) AS last_in
-    ) x ON TRUE
-    WHERE a.project_id = pc.project_id
-      AND a.creator_user_id = pc.creator_user_id
-      -- Ни одного снимка внутри периода — аккаунт в расчёт не входит
-      -- вовсе: ноль здесь означал бы «не вырос», а правда — «не
-      -- измеряли». Так же ведут себя периоды, закрытые до появления
-      -- снимков: у них прирост остаётся нулём, и задним числом счёт не
-      -- переписывается.
-      AND x.last_in IS NOT NULL
-) snap ON TRUE
+`+followerGainSQL("$4", "$5")+`
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
 GROUP BY pc.creator_user_id`, projectID, p.ID, threshold, p.StartsOn, p.EndsOn)
 	if err != nil {
@@ -914,39 +850,122 @@ func replaceLadders(ctx context.Context, q querier, owner string, id uuid.UUID, 
 	return replaceSteps(ctx, q, owner, StepKindSubscribers, id, t.SubscriberSteps)
 }
 
+// followerGainSQL — прирост подписчиков креатора за период по снимкам
+// аккаунтов, одним LATERAL'ом.
+//
+// Один текст на три запроса (два факта периода и список для кабинета), и
+// это не экономия строк: «прирост за период» — определение, по которому
+// платят. Три копии разошлись бы на первой правке, и счёт перестал бы
+// совпадать с тем, что показано менеджеру.
+//
+// Опирается на pc (project_creators) снаружи: LATERAL считает по
+// аккаунтам ОДНОГО человека, а не по проекту. Пороги ступеней и доплата
+// считаются по человеку, и прирост обязан считаться так же.
+//
+// start/end — плейсхолдеры границ периода у вызывающего: номера
+// параметров у запросов разные, а текст один.
+func followerGainSQL(start, end string) string {
+	return `
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(x.last_in - COALESCE(x.before_period, x.first_in)), 0) AS gained
+    FROM project_accounts a
+    JOIN LATERAL (
+        SELECT
+            -- Снимок ДО периода — «сколько было на входе».
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date < ` + start + `
+              ORDER BY d.stat_date DESC LIMIT 1) AS before_period,
+            -- Нет такого — аккаунт прикрепили посреди периода, и считаем
+            -- от первого его снимка. Решение владельца: «снимать с этого
+            -- момента, виноваты оба» — задним числом не добираем и из
+            -- расчёта не выкидываем.
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date >= ` + start + ` AND d.stat_date <= ` + end + `
+              ORDER BY d.stat_date LIMIT 1) AS first_in,
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date >= ` + start + ` AND d.stat_date <= ` + end + `
+              ORDER BY d.stat_date DESC LIMIT 1) AS last_in
+    ) x ON TRUE
+    WHERE a.project_id = pc.project_id
+      AND a.creator_user_id = pc.creator_user_id
+      -- Ни одного снимка внутри периода — аккаунт в расчёт не входит
+      -- вовсе: ноль здесь означал бы «не вырос», а правда — «не
+      -- измеряли». Так же ведут себя периоды, закрытые до появления
+      -- снимков: у них прирост остаётся нулём, и задним числом счёт не
+      -- переписывается.
+      AND x.last_in IS NOT NULL
+) snap ON TRUE`
+}
+
 // ---- подписчики ----
 //
-// Подписчиков никто не собирает: сборщика по ним нет, и выдумывать его
-// под объявленную ставку нельзя. Число вписывает менеджер — ровно так же,
-// как заведены переходы по UTM. Держим по периоду: KPI считается за
-// период, и одно поле «сколько всего» пришлось бы каждый месяц
-// перезаписывать, теряя то, за что уже заплатили.
+// Прирост снимает обход аккаунтов: срез аудитории на входе в период, срез
+// в конце, разница (account_follower_daily). Ручная правка остаётся
+// сверху — это решение менеджера по спорному случаю: аккаунт отдали
+// поздно, часть роста пришла не от проекта, площадка соврала. Отменять
+// его расчётом нельзя.
+//
+// Держим по периоду: доплата считается за период, и одно поле «сколько
+// всего» пришлось бы каждый месяц перезаписывать, теряя то, за что уже
+// заплатили.
 
-// PeriodSubscribers — сколько подписчиков записано креатору за период.
+// PeriodSubscribers — прирост подписчиков по каждому креатору периода.
+//
+// Строка на КАЖДОГО в составе, а не только на тех, кого правили руками.
+// Раньше список приходил из creator_period_subscribers, то есть
+// показывал ровно ручные правки, — и до появления снимков это было
+// честно. Теперь у человека без правки есть намеренное число, и не
+// показать его значит спрятать то, по чему ему платят.
 func (r *Repo) PeriodSubscribers(
-	ctx context.Context, projectID uuid.UUID, periodStart time.Time,
+	ctx context.Context, projectID uuid.UUID, p ProjectPeriod,
 ) ([]CreatorSubscribers, error) {
 	rows, err := r.db.Query(ctx, `
-SELECT s.creator_user_id, `+nameExpr+`, s.subscribers, s.updated_at
-FROM creator_period_subscribers s
-LEFT JOIN users u                ON u.id = s.creator_user_id
-LEFT JOIN specialist_profiles sp ON sp.user_id = s.creator_user_id
-LEFT JOIN client_profiles cp     ON cp.user_id = s.creator_user_id
-WHERE s.project_id = $1 AND s.period_start = $2
-ORDER BY 2`, projectID, periodStart)
+SELECT pc.creator_user_id, `+nameExpr+`,
+       COALESCE(s.subscribers, snap.gained, 0),
+       COALESCE(snap.gained, 0),
+       s.creator_user_id IS NOT NULL,
+       s.updated_at
+FROM project_creators pc
+LEFT JOIN creator_period_subscribers s
+       ON s.project_id = pc.project_id AND s.creator_user_id = pc.creator_user_id
+      AND s.period_start = $2
+LEFT JOIN users u                ON u.id = pc.creator_user_id
+LEFT JOIN specialist_profiles sp ON sp.user_id = pc.creator_user_id
+LEFT JOIN client_profiles cp     ON cp.user_id = pc.creator_user_id
+`+followerGainSQL("$2", "$3")+`
+WHERE pc.project_id = $1 AND pc.removed_at IS NULL
+ORDER BY 2`, projectID, p.StartsOn, p.EndsOn)
 	if err != nil {
 		return nil, fmt.Errorf("list period subscribers: %w", err)
 	}
 	defer rows.Close()
 	out := make([]CreatorSubscribers, 0)
 	for rows.Next() {
-		var c CreatorSubscribers
-		if err := rows.Scan(&c.CreatorUserID, &c.CreatorName, &c.Subscribers, &c.UpdatedAt); err != nil {
+		c := CreatorSubscribers{ProjectID: projectID, PeriodStart: p.StartsOn}
+		if err := rows.Scan(&c.CreatorUserID, &c.CreatorName,
+			&c.Subscribers, &c.Measured, &c.Manual, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan period subscribers: %w", err)
 		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// DropSubscribers — убрать ручную правку, вернувшись к снятому обходом.
+//
+// Отдельным действием, а не «впишите ноль»: ноль — это объявленное «роста
+// не было», и платить по нему тоже решение. «Вернуть снятое» и «считать
+// ноль» — разные ответы, и различать их обязан интерфейс, а не догадка.
+func (r *Repo) DropSubscribers(
+	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time,
+) error {
+	if _, err := r.db.Exec(ctx, `
+DELETE FROM creator_period_subscribers
+WHERE project_id = $1 AND creator_user_id = $2 AND period_start = $3`,
+		projectID, creatorID, periodStart); err != nil {
+		return fmt.Errorf("drop period subscribers: %w", err)
+	}
+	return nil
 }
 
 // SaveSubscribers — записать число подписчиков за период.

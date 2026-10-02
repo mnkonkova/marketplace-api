@@ -410,9 +410,17 @@ func (s *Service) UTM(ctx context.Context, projectID uuid.UUID, creatorID *uuid.
 
 // Subscribers — сколько подписчиков записано креаторам за период.
 func (s *Service) Subscribers(
-	ctx context.Context, projectID uuid.UUID, periodStart time.Time,
+	ctx context.Context, projectID uuid.UUID, p ProjectPeriod,
 ) ([]CreatorSubscribers, error) {
-	return s.repo.PeriodSubscribers(ctx, projectID, periodStart)
+	return s.repo.PeriodSubscribers(ctx, projectID, p)
+}
+
+// DropSubscribers — убрать ручную правку: доплата снова считается по
+// снятому обходом.
+func (s *Service) DropSubscribers(
+	ctx context.Context, projectID, creatorID uuid.UUID, periodStart time.Time,
+) error {
+	return s.repo.DropSubscribers(ctx, projectID, creatorID, periodStart)
 }
 
 // SaveSubscribers — число подписчиков за период вписывает менеджер.
