@@ -123,11 +123,11 @@ ORDER BY v.version DESC`)
 	// Ступени — вторым проходом: курсор первого запроса ещё открыт, и
 	// вложенный запрос по тому же соединению его бы и занял.
 	for i := range out {
-		steps, err := loadSteps(ctx, r.db, stepsOwnerVersion, *out[i].TermsVersionID)
-		if err != nil {
+		if err := loadLadders(
+			ctx, r.db, stepsOwnerVersion, *out[i].TermsVersionID, &out[i].Terms,
+		); err != nil {
 			return nil, err
 		}
-		out[i].Steps = steps
 		out[i].Margin = out[i].Terms.PlatformMargin()
 	}
 	return out, nil
@@ -215,7 +215,7 @@ RETURNING id, version, published_at`,
 	// Ступени — в той же транзакции, что и сама версия: версия без своих
 	// ступеней посчиталась бы по прежней модели, и это увидели бы не
 	// сразу, а на первом счёте.
-	if err := replaceSteps(ctx, tx, stepsOwnerVersion, *v.TermsVersionID, v.Steps); err != nil {
+	if err := replaceLadders(ctx, tx, stepsOwnerVersion, *v.TermsVersionID, v.Terms); err != nil {
 		return TermsPublishResult{}, err
 	}
 	v.IsCurrent = true
@@ -244,7 +244,7 @@ RETURNING id, version, published_at`,
 	//
 	// Граница — первая выкладка, то есть первая сданная ссылка: от неё
 	// же отсчитываются периоды. С этого момента снимок замораживается.
-	refreshed, err := refreshNotStartedProjects(ctx, tx, *v.TermsVersionID, v.Steps)
+	refreshed, err := refreshNotStartedProjects(ctx, tx, *v.TermsVersionID, v.Terms)
 	if err != nil {
 		return TermsPublishResult{}, err
 	}
@@ -276,7 +276,7 @@ RETURNING id, version, published_at`,
 // Возвращает, сколько проектов переехало: это число видит админ в ответе
 // на выпуск версии и оно же уходит в журнал.
 func refreshNotStartedProjects(
-	ctx context.Context, tx pgx.Tx, versionID uuid.UUID, steps []TermsStep,
+	ctx context.Context, tx pgx.Tx, versionID uuid.UUID, t Terms,
 ) (int, error) {
 	rows, err := tx.Query(ctx, `
 SELECT p.id
@@ -350,9 +350,10 @@ WHERE v.id = $1 AND b.project_id = ANY($2)`, versionID, ids); err != nil {
 		return 0, fmt.Errorf("refresh project billing: %w", err)
 	}
 
-	// Ступени лежат своей таблицей и одним UPDATE не переносятся.
+	// Ступени лежат своей таблицей и одним UPDATE не переносятся — обе
+	// лесенки, и просмотров, и подписчиков.
 	for _, id := range ids {
-		if err := replaceSteps(ctx, tx, stepsOwnerProject, id, steps); err != nil {
+		if err := replaceLadders(ctx, tx, stepsOwnerProject, id, t); err != nil {
 			return 0, err
 		}
 	}
@@ -392,7 +393,7 @@ LIMIT 1`).Scan(&v.TermsVersionID, &v.Version, &v.Body, &v.PublishedAt,
 	if err != nil {
 		return TermsVersion{}, false, fmt.Errorf("current terms version: %w", err)
 	}
-	if v.Steps, err = loadSteps(ctx, tx, stepsOwnerVersion, *v.TermsVersionID); err != nil {
+	if err := loadLadders(ctx, tx, stepsOwnerVersion, *v.TermsVersionID, &v.Terms); err != nil {
 		return TermsVersion{}, false, err
 	}
 	return v, true, nil
@@ -461,7 +462,12 @@ func diffTerms(from, to Terms) []TermsChange {
 	// Ступени сравниваем по порогам, а не по индексу в списке: ступень
 	// вставляют в середину, и сравнение «первая с первой» показало бы
 	// изменившимся весь хвост лесенки.
-	out = append(out, diffSteps(from.Steps, to.Steps)...)
+	out = append(out, diffSteps(from.Steps, to.Steps, "просмотров", "step")...)
+	// Лесенка подписчиков — теми же правилами и своей подписью. Без неё
+	// версия, в которой поменяли ТОЛЬКО ступени подписчиков, выходила бы
+	// «без изменений»: и в журнале админа, и в вопросе «кому надо
+	// согласиться заново» — а платить по ней клиенту уже по-другому.
+	out = append(out, diffSteps(from.SubscriberSteps, to.SubscriberSteps, "подписчиков", "sub_step")...)
 	return out
 }
 
@@ -471,7 +477,7 @@ func diffTerms(from, to Terms) []TermsChange {
 // от 300 тыс.». Исчезнувшая ступень показывается переходом цены в
 // пустоту, появившаяся — из пустоты: у обоих случаев на экране разный
 // смысл, и «стало 0» вместо «ступени больше нет» соврало бы.
-func diffSteps(from, to []TermsStep) []TermsChange {
+func diffSteps(from, to []TermsStep, unit, field string) []TermsChange {
 	out := []TermsChange{}
 	byFrom := func(steps []TermsStep) map[int64]TermsStep {
 		m := make(map[int64]TermsStep, len(steps))
@@ -493,7 +499,7 @@ func diffSteps(from, to []TermsStep) []TermsChange {
 	}
 	sort.Slice(thresholds, func(i, j int) bool { return thresholds[i] < thresholds[j] })
 	for _, th := range thresholds {
-		label := fmt.Sprintf("Ступень от %d просмотров", th)
+		label := fmt.Sprintf("Ступень от %d %s", th, unit)
 		var was, now *int64
 		if s, ok := a[th]; ok {
 			v := s.ClientFee
@@ -505,7 +511,7 @@ func diffSteps(from, to []TermsStep) []TermsChange {
 		}
 		if was == nil || now == nil || *was != *now {
 			out = append(out, TermsChange{
-				Field: fmt.Sprintf("step_%d", th), Label: label, From: was, To: now,
+				Field: fmt.Sprintf("%s_%d", field, th), Label: label, From: was, To: now,
 			})
 		}
 		// Креаторская цена той же ступени — отдельной строкой: это другие
@@ -519,7 +525,7 @@ func diffSteps(from, to []TermsStep) []TermsChange {
 		}
 		if (cwas == nil) != (cnow == nil) || (cwas != nil && cnow != nil && *cwas != *cnow) {
 			out = append(out, TermsChange{
-				Field: fmt.Sprintf("step_%d_creator", th),
+				Field: fmt.Sprintf("%s_%d_creator", field, th),
 				Label: label + " — креатору", From: cwas, To: cnow,
 			})
 		}

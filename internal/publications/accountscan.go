@@ -321,6 +321,15 @@ func (s *Service) RunAccountScan(ctx context.Context, now time.Time, batchSize i
 			if err := s.repo.MarkScanned(ctx, acc.AccountID, now); err != nil {
 				return st, err
 			}
+			// Подписчики — ДО проверки на пустой список постов: у личной
+			// страницы VK посты собираются, а аудитория скрыта, и
+			// наоборот тоже бывает. Снимок и находки — разные ответы на
+			// разные вопросы, и терять первый из-за второго незачем.
+			if res.Followers != nil {
+				if err := s.repo.SaveFollowers(ctx, acc.AccountID, now, *res.Followers); err != nil {
+					return st, err
+				}
+			}
 			if len(posts) == 0 {
 				st.NoData++
 				ObserveAccountScan(acc.Platform, "no_data")
@@ -433,4 +442,24 @@ func (s *Service) suggestFromPosts(ctx context.Context, acc AccountToScan, handl
 		found++
 	}
 	return found, skipped, nil
+}
+
+// SaveFollowers — снимок подписчиков аккаунта за день.
+//
+// Накопительное число, а не прибавка: площадка отдаёт «сколько сейчас»,
+// и прирост за период считается разницей крайних снимков. Второй заход в
+// тот же день перезаписывает снимок — обход ходит раз в сутки, но
+// рестарт воркера и ручной прогон бывают, и тогда свежее число вернее.
+func (r *Repo) SaveFollowers(
+	ctx context.Context, accountID uuid.UUID, day time.Time, followers int64,
+) error {
+	_, err := r.db.Exec(ctx, `
+INSERT INTO account_follower_daily (account_id, stat_date, followers, taken_at)
+VALUES ($1, $2::date, $3, now())
+ON CONFLICT (account_id, stat_date) DO UPDATE
+SET followers = EXCLUDED.followers, taken_at = now()`, accountID, day, followers)
+	if err != nil {
+		return fmt.Errorf("save account followers: %w", err)
+	}
+	return nil
 }

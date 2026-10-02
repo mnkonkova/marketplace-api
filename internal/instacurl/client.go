@@ -78,6 +78,14 @@ type Result struct {
 	CacheAge  float64       `json:"cache_age_seconds,omitempty"`
 	Posts     []PostMetrics `json:"posts"`
 	Notes     []string      `json:"notes,omitempty"`
+	// Followers — сколько подписчиков у аккаунта СЕЙЧАС. Приходит у
+	// kind="profile"; nil означает «площадка не отдала» — приватный
+	// профиль, VK со скрытой аудиторией, неподдержанный источник. Ноль и
+	// nil здесь разные вещи: ноль бывает у нового аккаунта.
+	//
+	// Приходит и тогда, когда списка постов нет: у личной страницы VK
+	// посты собираются, а подписчики скрыты, и наоборот тоже бывает.
+	Followers *int64 `json:"followers,omitempty"`
 }
 
 // Metrics — метрики ролика из ответа. Второе значение false, если сервис

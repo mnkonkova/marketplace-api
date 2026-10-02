@@ -356,3 +356,72 @@ func TestAccountScanSkipsStoppedProject(t *testing.T) {
 		t.Errorf("в instacurl сходили %d раз по остановленному проекту", fake.calls)
 	}
 }
+
+// Обход снимает число подписчиков — даже когда роликов не нашёл.
+//
+// Доплата за подписчиков считается с прироста за период, а площадка
+// отдаёт только «сколько сейчас». Без истории прирост не отличить от
+// того, что человек набрал до проекта: менеджер вписывал число руками, и
+// проверить его было нечем.
+//
+// Снимок кладётся ДО проверки на пустой список постов: у личной страницы
+// VK посты собираются, а аудитория скрыта, и наоборот тоже бывает.
+func TestAccountScanSnapshotsFollowers(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	const url = "https://www.tiktok.com/@subs.scan"
+	_, _, svc, cleanup := setupScannedAccount(t, pool, url)
+	defer cleanup()
+
+	followers := int64(12_300)
+	res := profileResult(url, "subs.scan") // роликов нет вовсе
+	res.Followers = &followers
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: res}}
+	if _, err := svc.WithAccountScanner(fake).
+		RunAccountScan(ctx, time.Now().UTC(), 10); err != nil {
+		t.Fatalf("RunAccountScan: %v", err)
+	}
+
+	var got int64
+	if err := pool.QueryRow(ctx, `
+SELECT d.followers FROM account_follower_daily d
+JOIN project_accounts a ON a.id = d.account_id
+WHERE a.url = $1`, url).Scan(&got); err != nil {
+		t.Fatalf("снимок не записан: %v", err)
+	}
+	if got != followers {
+		t.Errorf("подписчиков в снимке %d, ожидалось %d", got, followers)
+	}
+}
+
+// Площадка не отдала подписчиков — снимка нет, а не ноль.
+//
+// Ноль бывает у нового аккаунта, и писать его на месте «не измерили»
+// значило бы считать прирост от выдуманного нуля: следующий снимок дал
+// бы прирост размером во всю аудиторию человека.
+func TestAccountScanSkipsUnknownFollowers(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	const url = "https://www.tiktok.com/@subs.hidden"
+	_, _, svc, cleanup := setupScannedAccount(t, pool, url)
+	defer cleanup()
+
+	res := profileResult(url, "subs.hidden", post("p1", url+"/video/1", time.Now()))
+	res.Followers = nil
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{url: res}}
+	if _, err := svc.WithAccountScanner(fake).
+		RunAccountScan(ctx, time.Now().UTC(), 10); err != nil {
+		t.Fatalf("RunAccountScan: %v", err)
+	}
+
+	var rows int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM account_follower_daily d
+JOIN project_accounts a ON a.id = d.account_id
+WHERE a.url = $1`, url).Scan(&rows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("записано %d снимков — «не измерили» превратилось в число", rows)
+	}
+}

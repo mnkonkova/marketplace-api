@@ -230,25 +230,24 @@ func checkRates(t Terms) (Terms, error) {
 	// неоднозначность: какую цену брать, решал бы порядок строк. То же
 	// самое проверяет уникальный индекс в базе, но отказ оттуда приходит
 	// кодом 23505, а человеку нужно предложение.
-	seen := make(map[int64]bool, len(t.Steps))
-	for _, st := range t.Steps {
-		if st.FromViews < 0 || st.ClientFee < 0 || (st.CreatorFee != nil && *st.CreatorFee < 0) {
-			return Terms{}, fmt.Errorf("%w: ступени тарифа не бывают отрицательными", ErrInvalidInput)
-		}
-		if seen[st.FromViews] {
-			return Terms{}, fmt.Errorf(
-				"%w: две ступени с одним порогом — непонятно, по какой считать", ErrInvalidInput)
-		}
-		seen[st.FromViews] = true
-		// Креатору нельзя обещать больше, чем берём с клиента: это не
-		// тариф, а убыток на каждом периоде, и почти всегда — опечатка.
-		if st.CreatorFee != nil && *st.CreatorFee > st.ClientFee {
-			return Terms{}, fmt.Errorf(
-				"%w: оклад креатора на ступени больше, чем платит заказчик", ErrInvalidInput)
-		}
+	if err := checkLadder(t.Steps, "просмотрам"); err != nil {
+		return Terms{}, err
+	}
+	// Лесенка подписчиков проверяется теми же правилами и своим
+	// сообщением: «две ступени с одним порогом» на экране, где рядом
+	// стоят две лесенки, не отвечает, которую править.
+	if err := checkLadder(t.SubscriberSteps, "подписчикам"); err != nil {
+		return Terms{}, err
 	}
 	if t.SubscriberRate != nil && *t.SubscriberRate < 0 {
 		return Terms{}, fmt.Errorf("%w: ставка за подписчика не бывает отрицательной", ErrInvalidInput)
+	}
+	// Ставка «за одного» вместе с лесенкой — два правила счёта на один
+	// KPI. Расчёт выбрал бы лесенку (она сильнее), но менеджер, вписавший
+	// оба, имел в виду что-то одно, и угадывать за него нельзя.
+	if len(t.SubscriberSteps) > 0 && t.SubscriberRate != nil && *t.SubscriberRate > 0 {
+		return Terms{}, fmt.Errorf(
+			"%w: по подписчикам задана и цена за одного, и ступени — оставьте одно", ErrInvalidInput)
 	}
 	if t.CreatorSubscriberRate != nil {
 		if *t.CreatorSubscriberRate < 0 {
@@ -933,4 +932,34 @@ func (s *Service) nextStepForecast(
 		CarryInIncluded: period.CarryInCreator,
 		ForecastPayout:  gain,
 	}, nil
+}
+
+// checkLadder — общие правила обеих лесенок тарифа.
+//
+// Правила у ступеней просмотров и подписчиков одни: порог неотрицателен,
+// порог уникален, креатору не обещано больше, чем берём с клиента. Вид
+// попадает в текст ошибки, потому что на экране лесенки две, и
+// «две ступени с одним порогом» без вида не отвечает, которую править.
+//
+// Уникальность проверяет и индекс в базе, но оттуда отказ приходит кодом
+// 23505, а человеку нужно предложение.
+func checkLadder(steps []TermsStep, what string) error {
+	seen := make(map[int64]bool, len(steps))
+	for _, st := range steps {
+		if st.FromViews < 0 || st.ClientFee < 0 || (st.CreatorFee != nil && *st.CreatorFee < 0) {
+			return fmt.Errorf("%w: ступени по %s не бывают отрицательными", ErrInvalidInput, what)
+		}
+		if seen[st.FromViews] {
+			return fmt.Errorf("%w: две ступени по %s с одним порогом — непонятно, по какой считать",
+				ErrInvalidInput, what)
+		}
+		seen[st.FromViews] = true
+		// Креатору нельзя обещать больше, чем берём с клиента: это не
+		// тариф, а убыток на каждом периоде, и почти всегда — опечатка.
+		if st.CreatorFee != nil && *st.CreatorFee > st.ClientFee {
+			return fmt.Errorf("%w: креатору на ступени по %s больше, чем платит заказчик",
+				ErrInvalidInput, what)
+		}
+	}
+	return nil
 }

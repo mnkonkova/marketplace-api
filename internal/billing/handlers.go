@@ -94,6 +94,15 @@ type termsReq struct {
 	// другое правило счёта, и смешивать их в одном периоде нельзя.
 	Steps []TermsStep `json:"steps"`
 
+	// SubscriberSteps — лесенка по ПОДПИСЧИКАМ: порог прироста за период
+	// и цена периода на нём. Приходит и заменяется целиком, как и
+	// лесенка просмотров.
+	//
+	// Непустая отменяет subscriber_rate: «за одного» и «ступенями» —
+	// две формы одной цены, и вписанные вместе они не уточняют друг
+	// друга, а спорят. Пороги считаются по ЧЕЛОВЕКУ.
+	SubscriberSteps []TermsStep `json:"subscriber_steps"`
+
 	// SubscriberRate — сколько платит заказчик за подписчика за период.
 	// null = KPI по подписчикам не считаем вовсе (в отличие от нуля,
 	// который значил бы объявленную нулевую ставку). Само число
@@ -146,6 +155,7 @@ func (req termsReq) terms() Terms {
 		CreatorStepFeeOver:    req.CreatorStepFeeOver,
 
 		Steps:                 req.Steps,
+		SubscriberSteps:       req.SubscriberSteps,
 		SubscriberRate:        req.SubscriberRate,
 		CreatorSubscriberRate: req.CreatorSubscriberRate,
 

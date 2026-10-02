@@ -543,3 +543,107 @@ func TestPeriodFromIsOpenOnTheFirstPeriod(t *testing.T) {
 		t.Errorf("у второго периода граница %v, ожидалось %v", got, start)
 	}
 }
+
+// Подписчики: «за одного» и «ступенями» — две формы, лесенка сильнее.
+//
+// Поштучная цена на росте в сотню тысяч даёт сумму, которую никто не
+// закладывал, — отсюда вторая форма. Смешивать их нельзя: это третье
+// правило, которого никто не называл, и расчёт обязан выбрать одно.
+func TestSubscriberPriceTwoForms(t *testing.T) {
+	perOne := StepLadder{SubscriberRate: 300}
+	if got := perOne.Subscribers(1200); got != 360_000 {
+		t.Errorf("за одного: %d, ожидалось 1200×300", got)
+	}
+	if perOne.SubscribersStepped() {
+		t.Error("ставка за одного принята за лесенку")
+	}
+
+	stepped := StepLadder{
+		SubscriberRate: 300, // задана и она — лесенка всё равно сильнее
+		SubscriberSteps: []LadderStep{
+			{FromViews: 1000, Fee: 500_000},
+			{FromViews: 5000, Fee: 1_500_000},
+		},
+	}
+	if !stepped.SubscribersStepped() {
+		t.Fatal("лесенка не опознана")
+	}
+	cases := []struct {
+		gained int64
+		want   int64
+		why    string
+	}{
+		{0, 0, "не прибавилось — платить не за что"},
+		{-700, 0, "убыль: отнимать за отписки владелец не просил"},
+		{999, 0, "не дотянул до нижнего порога"},
+		{1000, 500_000, "взял первую ступень ровно"},
+		{4999, 500_000, "до второй не дотянул — цена первой"},
+		{5000, 1_500_000, "взял вторую"},
+		{50_000, 1_500_000, "выше верхней ступени тариф не растёт"},
+	}
+	for _, c := range cases {
+		if got := stepped.Subscribers(c.gained); got != c.want {
+			t.Errorf("прирост %d: %d, ожидалось %d (%s)", c.gained, got, c.want, c.why)
+		}
+	}
+}
+
+// Лесенка подписчиков сводится к стороне сделки так же, как лесенка
+// просмотров: пустая креаторская цена значит «как у заказчика».
+func TestSubscriberLadderHasTwoSides(t *testing.T) {
+	creatorFee := int64(200_000)
+	terms := Terms{
+		SubscriberSteps: []TermsStep{
+			{FromViews: 5000, ClientFee: 1_000_000, CreatorFee: &creatorFee},
+			{FromViews: 1000, ClientFee: 400_000},
+		},
+	}
+	client := terms.ClientLadder()
+	// Сортировка по порогу обязательна: расчёт ищет последнюю взятую
+	// ступень, и перепутанный порядок молча дал бы не ту цену.
+	if len(client.SubscriberSteps) != 2 || client.SubscriberSteps[0].FromViews != 1000 {
+		t.Fatalf("клиентская лесенка не отсортирована: %+v", client.SubscriberSteps)
+	}
+	if got := client.Subscribers(6000); got != 1_000_000 {
+		t.Errorf("клиент за 6000 подписчиков: %d", got)
+	}
+	creator := terms.CreatorLadder()
+	if got := creator.Subscribers(6000); got != creatorFee {
+		t.Errorf("креатор за 6000 подписчиков: %d, ожидалось %d", got, creatorFee)
+	}
+	// Нижняя ступень креаторской цены не называет — значит столько же.
+	if got := creator.Subscribers(1200); got != 400_000 {
+		t.Errorf("креатор на нижней ступени: %d, ожидалось «как у клиента»", got)
+	}
+
+	// Сведённый к креатору тариф отдаёт ЕГО цену под тем же полем:
+	// иначе кабинет покажет цену клиента и назовёт её заработком.
+	side := terms.CreatorSide()
+	if len(side.SubscriberSteps) != 2 {
+		t.Fatalf("сведённая лесенка: %+v", side.SubscriberSteps)
+	}
+	for _, st := range side.SubscriberSteps {
+		if st.FromViews == 5000 && st.ClientFee != creatorFee {
+			t.Errorf("в кабинете креатора под его ступенью стоит %d", st.ClientFee)
+		}
+	}
+}
+
+// Лесенка — объявленная цена наравне со ставкой.
+//
+// Иначе проект, где KPI задан только ступенями, считался бы «подписчиков
+// не считаем»: кабинет не спросил бы число, а расчёт не заплатил бы по
+// заданной лесенке.
+func TestSubscriberKPIEnabledBySteps(t *testing.T) {
+	if (Terms{}).SubscriberKPIEnabled() {
+		t.Error("без цены KPI по подписчикам включён")
+	}
+	steps := Terms{SubscriberSteps: []TermsStep{{FromViews: 1000, ClientFee: 1}}}
+	if !steps.SubscriberKPIEnabled() {
+		t.Error("лесенка задана, а KPI выключен")
+	}
+	rate := int64(300)
+	if !(Terms{SubscriberRate: &rate}).SubscriberKPIEnabled() {
+		t.Error("ставка задана, а KPI выключен")
+	}
+}

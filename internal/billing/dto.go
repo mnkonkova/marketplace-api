@@ -145,6 +145,17 @@ type Terms struct {
 	// смешивать два правила в одном расчёте нельзя.
 	Steps []TermsStep `json:"steps,omitempty"`
 
+	// SubscriberSteps — лесенка ПО ПОДПИСЧИКАМ: пороги прироста за
+	// период и цена периода на каждом. Непустая отменяет SubscriberRate
+	// («за одного»), ровно как Steps отменяет ставку за тысячу
+	// просмотров: это другое правило счёта, и смешивать их в одном
+	// периоде нельзя.
+	//
+	// Пороги считаются ПО ЧЕЛОВЕКУ, а не по проекту: платим человеку, и
+	// у восьми креаторов «набрать 10 000» — восемь разных работ, а не
+	// одна общая. То же правило, что у просмотров.
+	SubscriberSteps []TermsStep `json:"subscriber_steps,omitempty"`
+
 	// SubscriberRate — сколько платит заказчик за подписчика, набранного
 	// за период, копейки. nil = KPI по подписчикам не считается.
 	//
@@ -227,8 +238,11 @@ type StepLadder struct {
 	// другое правило счёта, и смешивать их в одном периоде нельзя.
 	Steps []LadderStep
 	// SubscriberRate — сколько стоит один подписчик, набранный за период.
-	// Число подписчиков сборщиком не добывается: его вводит менеджер.
+	// Отменяется непустой SubscriberSteps.
 	SubscriberRate int64
+	// SubscriberSteps — лесенка подписчиков этой стороны, по возрастанию
+	// порога. Непустая отменяет SubscriberRate.
+	SubscriberSteps []LadderStep
 	// FeePerVideo — цена одного ролика. Когда задана, она занимает
 	// место нижней ступени: раньше там стоял фикс за период.
 	FeePerVideo int64
@@ -279,16 +293,37 @@ func (l StepLadder) HasSteps() bool { return len(l.Steps) > 0 }
 
 // Subscribers — сколько стоит KPI по подписчикам за период.
 //
-// Умножение, а не лесенка: подписчики считаются поштучно, ступеней по
-// ним владелец продукта не называл, и выдумывать их незачем. Ноль — это
-// и «ставка не объявлена», и «подписчиков не прибавилось»: платить не за
-// что в обоих случаях.
+// Две формы, и обе объявляет владелец: «за одного» — умножение, или
+// лесенка порогов, как у просмотров. Вторая появилась потому, что
+// поштучная цена на росте в сотню тысяч даёт сумму, которую никто не
+// закладывал: ступени ограничивают её сверху и заодно объясняют
+// клиенту, за что он платит.
+//
+// Лесенка СИЛЬНЕЕ ставки: заданы обе — считаем по ступеням. Смешивать
+// их («ступени плюс по рублю за остаток») нельзя, это третье правило,
+// которого никто не называл.
+//
+// Ноль — это и «цена не объявлена», и «подписчиков не прибавилось», и
+// «не дотянул до нижнего порога»: платить не за что во всех трёх
+// случаях. Убыль — тоже ноль: отнимать у человека за то, что от него
+// отписались, владелец не просил.
 func (l StepLadder) Subscribers(n int64) int64 {
-	if n <= 0 || l.SubscriberRate <= 0 {
+	if n <= 0 {
+		return 0
+	}
+	if len(l.SubscriberSteps) > 0 {
+		return stepFeeOf(l.SubscriberSteps, n)
+	}
+	if l.SubscriberRate <= 0 {
 		return 0
 	}
 	return n * l.SubscriberRate
 }
+
+// SubscribersStepped — KPI по подписчикам задан лесенкой, а не ставкой.
+// Нужно кабинету: два режима показываются разными строками, и признак
+// должен быть один на весь код.
+func (l StepLadder) SubscribersStepped() bool { return len(l.SubscriberSteps) > 0 }
 
 // Tail — сколько стоит виральный хвост периода.
 //
@@ -321,7 +356,10 @@ func (t Terms) ClientLadder() StepLadder {
 		TailRate:       t.RatePer1000ViewsOver,
 		Steps:          clientSteps(t.Steps),
 		SubscriberRate: derefOr(t.SubscriberRate, 0),
-		FeePerVideo:    derefOr(t.FeePerVideo, 0),
+		// Лесенка подписчиков той же парой функций: правило «пустая
+		// креаторская цена = как у заказчика» у обеих лесенок одно.
+		SubscriberSteps: clientSteps(t.SubscriberSteps),
+		FeePerVideo:     derefOr(t.FeePerVideo, 0),
 	}
 }
 
@@ -385,6 +423,7 @@ func (t Terms) CreatorLadder() StepLadder {
 	}
 	l.TailRate = t.creatorTailRate(l.StepViews, l.StepFee)
 	l.Steps = creatorSteps(t.Steps)
+	l.SubscriberSteps = creatorSteps(t.SubscriberSteps)
 	if t.CreatorSubscriberRate != nil {
 		l.SubscriberRate = *t.CreatorSubscriberRate
 	}
@@ -520,9 +559,19 @@ func (l StepLadder) stepFeeOrPerVideo(views, perVideo int64) int64 {
 }
 
 func (l StepLadder) stepFee(views int64) int64 {
+	return stepFeeOf(l.Steps, views)
+}
+
+// stepFeeOf — цена последней взятой ступени любой лесенки.
+//
+// Общая для просмотров и подписчиков: правило «берётся последняя
+// ступень, порог которой набран» у них одно, и вторая копия разъехалась
+// бы с первой на первой же правке. Лесенка отсортирована по порогу —
+// так её и читают из базы, и так же сводят к стороне сделки.
+func stepFeeOf(steps []LadderStep, n int64) int64 {
 	fee := int64(0)
-	for _, s := range l.Steps {
-		if views < s.FromViews {
+	for _, s := range steps {
+		if n < s.FromViews {
 			break
 		}
 		fee = s.Fee
@@ -558,29 +607,47 @@ func (t Terms) CreatorSide() Terms {
 	if t.CreatorFeePerVideo != nil {
 		c.FeePerVideo = t.CreatorFeePerVideo
 	}
-	// Лесенку тоже сводим к его стороне: после CreatorSide в Steps должна
-	// лежать ЕГО цена под тем же именем поля — иначе всякий, кто возьмёт
-	// у сведённого тарифа лесенку, получит цену клиента и назовёт её
-	// заработком креатора. Пустая креаторская цена по-прежнему значит
-	// «как у клиента», и подстановка делается здесь один раз.
-	if len(t.Steps) > 0 {
-		steps := make([]TermsStep, len(t.Steps))
-		for i, st := range t.Steps {
-			fee := st.ClientFee
-			if st.CreatorFee != nil {
-				fee = *st.CreatorFee
-			}
-			steps[i] = TermsStep{FromViews: st.FromViews, ClientFee: fee}
-		}
-		c.Steps = steps
-	}
+	// Лесенки тоже сводим к его стороне: после CreatorSide в Steps и
+	// SubscriberSteps должна лежать ЕГО цена под тем же именем поля —
+	// иначе всякий, кто возьмёт у сведённого тарифа лесенку, получит
+	// цену клиента и назовёт её заработком креатора. Пустая креаторская
+	// цена по-прежнему значит «как у клиента», и подстановка делается
+	// здесь один раз.
+	c.Steps = creatorTermsSteps(t.Steps)
+	c.SubscriberSteps = creatorTermsSteps(t.SubscriberSteps)
 	return c
 }
 
-// SubscriberKPIEnabled — считается ли KPI по подписчикам. Ставка не
-// объявлена — числа подписчиков не спрашиваем и строки не рисуем: поле
-// «впишите подписчиков», за которое никто не платит, только сбивает.
+// creatorTermsSteps — лесенка условий, сведённая к ставкам креатора.
+//
+// Отдельно от creatorSteps: та отдаёт LadderStep для расчёта, а здесь
+// нужен тот же TermsStep — тариф, который уедет в кабинет креатора.
+// Пустая креаторская цена значит «как у клиента».
+func creatorTermsSteps(steps []TermsStep) []TermsStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]TermsStep, len(steps))
+	for i, st := range steps {
+		fee := st.ClientFee
+		if st.CreatorFee != nil {
+			fee = *st.CreatorFee
+		}
+		out[i] = TermsStep{FromViews: st.FromViews, ClientFee: fee}
+	}
+	return out
+}
+
+// SubscriberKPIEnabled — считается ли KPI по подписчикам.
+//
+// Цена не объявлена ни одной из двух форм — числа подписчиков не
+// спрашиваем и строки не рисуем: поле «впишите подписчиков», за которое
+// никто не платит, только сбивает. Лесенка считается объявленной ценой
+// наравне со ставкой: именно по ней и платят, когда она задана.
 func (t Terms) SubscriberKPIEnabled() bool {
+	if len(t.SubscriberSteps) > 0 {
+		return true
+	}
 	return t.SubscriberRate != nil && *t.SubscriberRate > 0
 }
 

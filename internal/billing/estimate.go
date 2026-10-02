@@ -105,7 +105,7 @@ WHERE o.id = $1 AND o.client_user_id = $2`, orderID, clientID).
 	// клиенту в terms.steps, и заказ без неё показывал бы ступенчатый
 	// тариф плоским.
 	if t.TermsVersionID != nil {
-		if t.Steps, err = loadSteps(ctx, r.db, stepsOwnerVersion, *t.TermsVersionID); err != nil {
+		if err := loadLadders(ctx, r.db, stepsOwnerVersion, *t.TermsVersionID, &t); err != nil {
 			return 0, 0, Terms{}, err
 		}
 	}

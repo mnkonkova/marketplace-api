@@ -74,8 +74,9 @@ FROM project_billing WHERE project_id = $1`, projectID).
 		return Terms{}, fmt.Errorf("load project billing: %w", err)
 	}
 	// Ступени — своим запросом: их произвольное число, и в строку
-	// project_billing они не влезают по устройству.
-	if t.Steps, err = loadSteps(ctx, r.db, stepsOwnerProject, projectID); err != nil {
+	// project_billing они не влезают по устройству. Обе лесенки: по
+	// просмотрам и по подписчикам.
+	if err := loadLadders(ctx, r.db, stepsOwnerProject, projectID, &t); err != nil {
 		return Terms{}, err
 	}
 	return t, nil
@@ -152,7 +153,7 @@ RETURNING updated_at`,
 	// Снимок ступеней переписывается целиком: ступень удаляют не реже,
 	// чем добавляют, и «обновить пришедшее» оставило бы удалённую жить в
 	// расчёте проекта.
-	if err := replaceSteps(ctx, r.db, stepsOwnerProject, t.ProjectID, t.Steps); err != nil {
+	if err := replaceLadders(ctx, r.db, stepsOwnerProject, t.ProjectID, t); err != nil {
 		return Terms{}, err
 	}
 	return t, nil
@@ -190,7 +191,7 @@ FROM terms_versions ORDER BY version DESC LIMIT 1`).
 	// Ступени едут в снимок проекта вместе с остальными числами: иначе
 	// проект снял бы с прайса всё, кроме того, по чему и считается.
 	if t.TermsVersionID != nil {
-		if t.Steps, err = loadSteps(ctx, r.db, stepsOwnerVersion, *t.TermsVersionID); err != nil {
+		if err := loadLadders(ctx, r.db, stepsOwnerVersion, *t.TermsVersionID, &t); err != nil {
 			return Terms{}, err
 		}
 	}
@@ -454,7 +455,7 @@ SELECT pc.creator_user_id,
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $5)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $5, 0)), 0),
        GREATEST(COALESCE(MAX(utm.clicks), 0) - COALESCE(MAX(prevclicks.counted), 0), 0),
-       COALESCE(MAX(subs.subscribers), 0)
+       COALESCE(MAX(subs.subscribers), MAX(snap.gained), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
@@ -475,6 +476,39 @@ LEFT JOIN LATERAL (
 LEFT JOIN creator_period_subscribers subs
        ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
       AND subs.period_start = $6
+-- Прирост подписчиков по снимкам аккаунтов — на случай, когда менеджер
+-- число НЕ вписал. Вписанное сильнее: это его решение по спорному
+-- случаю (аккаунт отдали поздно, часть роста не от проекта), и
+-- перезаписывать его расчётом значит отменять решение человека.
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(x.last_in - COALESCE(x.before_period, x.first_in)), 0) AS gained
+    FROM project_accounts a
+    JOIN LATERAL (
+        SELECT
+            -- Снимок ДО периода — «сколько было на входе».
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date < $6
+              ORDER BY d.stat_date DESC LIMIT 1) AS before_period,
+            -- Нет такого — аккаунт прикрепили посреди периода, и считаем
+            -- от первого его снимка. Решение владельца: «снимать с этого
+            -- момента, виноваты оба» — задним числом не добираем и из
+            -- расчёта не выкидываем.
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date >= $6 AND d.stat_date <= $4
+              ORDER BY d.stat_date LIMIT 1) AS first_in,
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date >= $6 AND d.stat_date <= $4
+              ORDER BY d.stat_date DESC LIMIT 1) AS last_in
+    ) x ON TRUE
+    WHERE a.project_id = pc.project_id
+      AND a.creator_user_id = pc.creator_user_id
+      -- Ни одного снимка внутри периода — аккаунт в расчёт не входит
+      -- вовсе: ноль здесь означал бы «не вырос», а правда — «не
+      -- измеряли». Так же ведут себя периоды, закрытые до появления
+      -- снимков: у них прирост остаётся нулём, и задним числом счёт не
+      -- переписывается.
+      AND x.last_in IS NOT NULL
+) snap ON TRUE
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
 -- $3 — левая граница отбора выкладок: у первого периода её нет (см.
 -- periodFrom). $6 — начало периода как таковое: подписчиков менеджер
@@ -533,7 +567,7 @@ SELECT pc.creator_user_id,
        COALESCE(SUM(LEAST(COALESCE(pub.views, 0), $3)), 0),
        COALESCE(SUM(GREATEST(COALESCE(pub.views, 0) - $3, 0)), 0),
        GREATEST(COALESCE(MAX(utm.clicks), 0) - COALESCE(MAX(prevclicks.counted), 0), 0),
-       COALESCE(MAX(subs.subscribers), 0)
+       COALESCE(MAX(subs.subscribers), MAX(snap.gained), 0)
 FROM project_creators pc
 LEFT JOIN pub ON pub.creator_user_id = pc.creator_user_id
 LEFT JOIN creator_utm_links utm
@@ -554,8 +588,41 @@ LEFT JOIN LATERAL (
 LEFT JOIN creator_period_subscribers subs
        ON subs.project_id = pc.project_id AND subs.creator_user_id = pc.creator_user_id
       AND subs.period_start = $4
+-- Прирост подписчиков по снимкам аккаунтов — на случай, когда менеджер
+-- число НЕ вписал. Вписанное сильнее: это его решение по спорному
+-- случаю (аккаунт отдали поздно, часть роста не от проекта), и
+-- перезаписывать его расчётом значит отменять решение человека.
+LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(x.last_in - COALESCE(x.before_period, x.first_in)), 0) AS gained
+    FROM project_accounts a
+    JOIN LATERAL (
+        SELECT
+            -- Снимок ДО периода — «сколько было на входе».
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date < $4
+              ORDER BY d.stat_date DESC LIMIT 1) AS before_period,
+            -- Нет такого — аккаунт прикрепили посреди периода, и считаем
+            -- от первого его снимка. Решение владельца: «снимать с этого
+            -- момента, виноваты оба» — задним числом не добираем и из
+            -- расчёта не выкидываем.
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date >= $4 AND d.stat_date <= $5
+              ORDER BY d.stat_date LIMIT 1) AS first_in,
+            (SELECT d.followers FROM account_follower_daily d
+              WHERE d.account_id = a.id AND d.stat_date >= $4 AND d.stat_date <= $5
+              ORDER BY d.stat_date DESC LIMIT 1) AS last_in
+    ) x ON TRUE
+    WHERE a.project_id = pc.project_id
+      AND a.creator_user_id = pc.creator_user_id
+      -- Ни одного снимка внутри периода — аккаунт в расчёт не входит
+      -- вовсе: ноль здесь означал бы «не вырос», а правда — «не
+      -- измеряли». Так же ведут себя периоды, закрытые до появления
+      -- снимков: у них прирост остаётся нулём, и задним числом счёт не
+      -- переписывается.
+      AND x.last_in IS NOT NULL
+) snap ON TRUE
 WHERE pc.project_id = $1 AND pc.removed_at IS NULL
-GROUP BY pc.creator_user_id`, projectID, p.ID, threshold, p.StartsOn)
+GROUP BY pc.creator_user_id`, projectID, p.ID, threshold, p.StartsOn, p.EndsOn)
 	if err != nil {
 		return nil, fmt.Errorf("locked period facts: %w", err)
 	}
@@ -773,16 +840,17 @@ const (
 	StepKindSubscribers = "subscribers"
 )
 
-// loadSteps — лесенка ПРОСМОТРОВ владельца.
+// loadSteps — лесенка владельца одного вида.
 //
-// Вид указываем явно: в той же таблице живёт лесенка подписчиков, и
-// прочитанная не тем видом ступень молча станет ценой периода. Второго
-// читателя пока нет, поэтому и обобщать нечего — появится, тогда и
-// параметр появится.
-func loadSteps(ctx context.Context, q querier, owner string, id uuid.UUID) ([]TermsStep, error) {
+// Вид указываем всегда: в одной таблице живут обе лесенки, и
+// прочитанная не тем видом ступень молча станет ценой периода — порог
+// «10 000» у просмотров и у подписчиков означает совсем разные деньги.
+func loadSteps(
+	ctx context.Context, q querier, owner, kind string, id uuid.UUID,
+) ([]TermsStep, error) {
 	rows, err := q.Query(ctx,
 		`SELECT from_views, client_fee, creator_fee FROM terms_steps
-WHERE `+owner+` = $1 AND kind = $2 ORDER BY from_views`, id, StepKindViews)
+WHERE `+owner+` = $1 AND kind = $2 ORDER BY from_views`, id, kind)
 	if err != nil {
 		return nil, fmt.Errorf("load terms steps: %w", err)
 	}
@@ -804,22 +872,46 @@ WHERE `+owner+` = $1 AND kind = $2 ORDER BY from_views`, id, StepKindViews)
 // и «обнови то, что пришло» оставило бы удалённую ступень жить в
 // расчёте. Для версии прайса это вставка в свежесозданную строку, для
 // снимка проекта — замена прежнего снимка.
-func replaceSteps(ctx context.Context, q querier, owner string, id uuid.UUID, steps []TermsStep) error {
+func replaceSteps(
+	ctx context.Context, q querier, owner, kind string, id uuid.UUID, steps []TermsStep,
+) error {
 	// Чужой вид не трогаем ни на удалении, ни на вставке: иначе
 	// сохранение лесенки просмотров стирало бы лесенку подписчиков
 	// целиком.
 	if _, err := q.Exec(ctx,
-		`DELETE FROM terms_steps WHERE `+owner+` = $1 AND kind = $2`, id, StepKindViews); err != nil {
+		`DELETE FROM terms_steps WHERE `+owner+` = $1 AND kind = $2`, id, kind); err != nil {
 		return fmt.Errorf("clear terms steps: %w", err)
 	}
 	for _, s := range steps {
 		if _, err := q.Exec(ctx,
 			`INSERT INTO terms_steps (`+owner+`, kind, from_views, client_fee, creator_fee)
-VALUES ($1, $2, $3, $4, $5)`, id, StepKindViews, s.FromViews, s.ClientFee, s.CreatorFee); err != nil {
+VALUES ($1, $2, $3, $4, $5)`, id, kind, s.FromViews, s.ClientFee, s.CreatorFee); err != nil {
 			return fmt.Errorf("insert terms step: %w", err)
 		}
 	}
 	return nil
+}
+
+// loadLadders / replaceLadders — обе лесенки владельца за раз.
+//
+// Парой, а не двумя вызовами у каждого читателя: лесенки две, а мест,
+// где условия читают и пишут, шесть. Забытый второй вызов выглядел бы не
+// как ошибка, а как «у этого проекта подписчики не настроены» — и
+// обнаружился бы на счёте.
+func loadLadders(ctx context.Context, q querier, owner string, id uuid.UUID, t *Terms) error {
+	var err error
+	if t.Steps, err = loadSteps(ctx, q, owner, StepKindViews, id); err != nil {
+		return err
+	}
+	t.SubscriberSteps, err = loadSteps(ctx, q, owner, StepKindSubscribers, id)
+	return err
+}
+
+func replaceLadders(ctx context.Context, q querier, owner string, id uuid.UUID, t Terms) error {
+	if err := replaceSteps(ctx, q, owner, StepKindViews, id, t.Steps); err != nil {
+		return err
+	}
+	return replaceSteps(ctx, q, owner, StepKindSubscribers, id, t.SubscriberSteps)
 }
 
 // ---- подписчики ----

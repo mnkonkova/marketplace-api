@@ -1806,45 +1806,263 @@ func TestStepKindsDoNotLeakIntoEachOther(t *testing.T) {
 	defer cleanup()
 
 	svc := billing.NewService(billing.NewRepo(pool))
-	if _, err := svc.SaveTerms(ctx, billing.Terms{
-		ProjectID: projectID,
-		Steps:     []billing.TermsStep{{FromViews: 1000, ClientFee: 500000}},
-	}, creators[0]); err != nil {
+	// Обе лесенки одним сохранением — так их и присылает кабинет.
+	// Пороги намеренно одинаковые: 1000 просмотров и 1000 подписчиков —
+	// разные деньги, и если виды перепутаются, перепутаются именно цены.
+	saved, err := svc.SaveTerms(ctx, billing.Terms{
+		ProjectID:       projectID,
+		Steps:           []billing.TermsStep{{FromViews: 1000, ClientFee: 500000}},
+		SubscriberSteps: []billing.TermsStep{{FromViews: 1000, ClientFee: 999999}},
+	}, creators[0])
+	if err != nil {
 		t.Fatalf("SaveTerms: %v", err)
 	}
-	// Ступень подписчиков кладём мимо сервиса: Go-части у неё ещё нет,
-	// а проверяем мы именно изоляцию чтения и перезаписи.
-	if _, err := pool.Exec(ctx, `
-INSERT INTO terms_steps (project_id, kind, from_views, client_fee)
-VALUES ($1, 'subscribers', 1000, 999999)`, projectID); err != nil {
-		t.Fatalf("посеять ступень подписчиков: %v", err)
+	if len(saved.Steps) != 1 || len(saved.SubscriberSteps) != 1 {
+		t.Fatalf("сохранено %d/%d ступеней, ожидалось по одной",
+			len(saved.Steps), len(saved.SubscriberSteps))
 	}
 
 	got, err := svc.Terms(ctx, projectID)
 	if err != nil {
 		t.Fatalf("Terms: %v", err)
 	}
-	if len(got.Steps) != 1 {
-		t.Fatalf("ступеней просмотров %d, ожидалась одна — чужой вид утёк в лесенку", len(got.Steps))
+	if len(got.Steps) != 1 || got.Steps[0].ClientFee != 500000 {
+		t.Fatalf("лесенка просмотров %+v — в неё утёк чужой вид", got.Steps)
 	}
-	if got.Steps[0].ClientFee != 500000 {
-		t.Errorf("цена ступени %d, ожидалось 500000", got.Steps[0].ClientFee)
+	if len(got.SubscriberSteps) != 1 || got.SubscriberSteps[0].ClientFee != 999999 {
+		t.Fatalf("лесенка подписчиков %+v", got.SubscriberSteps)
 	}
 
-	// Перезапись лесенки просмотров не стирает подписчиков.
+	// И в базе они лежат порознь, каждая под своим видом.
+	for _, c := range []struct {
+		kind string
+		fee  int64
+	}{{"views", 500000}, {"subscribers", 999999}} {
+		var fee int64
+		if err := pool.QueryRow(ctx, `
+SELECT client_fee FROM terms_steps WHERE project_id = $1 AND kind = $2`,
+			projectID, c.kind).Scan(&fee); err != nil {
+			t.Fatalf("read %s: %v", c.kind, err)
+		}
+		if fee != c.fee {
+			t.Errorf("kind=%s: цена %d, ожидалось %d", c.kind, fee, c.fee)
+		}
+	}
+
+	// Перезапись одной лесенки не задевает другую: присылают обе, и
+	// меняется та, которую правили.
 	if _, err := svc.SaveTerms(ctx, billing.Terms{
-		ProjectID: projectID,
-		Steps:     []billing.TermsStep{{FromViews: 2000, ClientFee: 700000}},
+		ProjectID:       projectID,
+		Steps:           []billing.TermsStep{{FromViews: 2000, ClientFee: 700000}},
+		SubscriberSteps: []billing.TermsStep{{FromViews: 1000, ClientFee: 999999}},
 	}, creators[0]); err != nil {
 		t.Fatalf("SaveTerms (повтор): %v", err)
 	}
-	var subs int
-	if err := pool.QueryRow(ctx,
-		`SELECT count(*) FROM terms_steps WHERE project_id = $1 AND kind = 'subscribers'`,
-		projectID).Scan(&subs); err != nil {
-		t.Fatalf("count: %v", err)
+	got, err = svc.Terms(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Terms (повтор): %v", err)
 	}
-	if subs != 1 {
-		t.Errorf("ступеней подписчиков осталось %d — сохранение просмотров стёрло соседний вид", subs)
+	if len(got.Steps) != 1 || got.Steps[0].FromViews != 2000 {
+		t.Errorf("лесенка просмотров не переписалась: %+v", got.Steps)
 	}
+	if len(got.SubscriberSteps) != 1 || got.SubscriberSteps[0].ClientFee != 999999 {
+		t.Errorf("лесенка подписчиков поехала вместе с чужой правкой: %+v", got.SubscriberSteps)
+	}
+}
+
+// seedFollowers — снимок подписчиков аккаунта на день.
+func seedFollowers(t *testing.T, accountID uuid.UUID, day time.Time, followers int64) {
+	t.Helper()
+	if _, err := integration.Pool(t).Exec(context.Background(), `
+INSERT INTO account_follower_daily (account_id, stat_date, followers)
+VALUES ($1, $2::date, $3)
+ON CONFLICT (account_id, stat_date) DO UPDATE SET followers = EXCLUDED.followers`,
+		accountID, day, followers); err != nil {
+		t.Fatalf("снимок подписчиков: %v", err)
+	}
+}
+
+// addCreatorAccount — соцсеть креатора, прикреплённая к проекту.
+func addCreatorAccount(
+	t *testing.T, projectID, creator uuid.UUID, platform, url string,
+) uuid.UUID {
+	t.Helper()
+	acc, err := publications.NewService(publications.NewRepo(integration.Pool(t))).
+		CreatorAddAccount(context.Background(), projectID, creator, publications.AccountInput{
+			Platform: platform, URL: url,
+		})
+	if err != nil {
+		t.Fatalf("CreatorAddAccount: %v", err)
+	}
+	return acc.ID
+}
+
+// Прирост подписчиков берётся из снимков, а вписанное руками его
+// перебивает.
+//
+// «Каждый месяц в 0 снимать кол-во подписчиков и в конце снова снимать»
+// — решение владельца. Прирост считается разницей крайних снимков
+// периода, а не суммой дневных дельт: пропущенный день тогда ничего не
+// теряет. Число менеджера сильнее расчёта: это его решение по спорному
+// случаю, и перезаписывать его значит отменять решение человека.
+func TestSubscriberGrowthFromSnapshots(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	terms := demoTerms(pid)
+	rate := int64(300) // 3 ₽ за подписчика
+	terms.SubscriberRate = &rate
+	if _, err := svc.SaveTerms(ctx, terms, creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+
+	// Ролик нужен, чтобы период вообще начался: он отсчитывается от
+	// первой выкладки.
+	seedPublicationViews(t, pid, creators[0], pubDay(0), "subs-growth-1", 1000, true)
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Period: %v", err)
+	}
+
+	acc := addCreatorAccount(t, pid, creators[0], "tiktok", "https://www.tiktok.com/@growth")
+	// Срез ДО периода — «сколько было на входе», и два внутри.
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, -1), 10_000)
+	seedFollowers(t, acc, p.StartsOn, 10_200)
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, 3), 12_500)
+
+	items, err := svc.Recalculate(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	got := accrualOf(t, items, creators[0])
+	// 12 500 − 10 000 = 2 500 подписчиков, и это НЕ последняя дневная
+	// дельта (2 300) и не их сумма.
+	if got.Subscribers != 2500 {
+		t.Errorf("прирост %d, ожидалось 2500 (разница крайних снимков)", got.Subscribers)
+	}
+	if got.SubscriberBonus != 2500*rate {
+		t.Errorf("доплата %d, ожидалось %d", got.SubscriberBonus, 2500*rate)
+	}
+
+	// Менеджер вписал своё число — оно и считается.
+	if _, err := svc.SaveSubscribers(ctx, pid, creators[0], p.StartsOn, 1000, creators[0]); err != nil {
+		t.Fatalf("SaveSubscribers: %v", err)
+	}
+	items, err = svc.Recalculate(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Recalculate (после правки): %v", err)
+	}
+	if got := accrualOf(t, items, creators[0]); got.Subscribers != 1000 {
+		t.Errorf("после правки руками %d, ожидалось 1000 — расчёт отменил решение человека",
+			got.Subscribers)
+	}
+}
+
+// Аккаунт, прикреплённый посреди периода, считается с момента
+// прикрепления.
+//
+// Решение владельца: «снимать снимок аков с этого момента — виноваты
+// оба». Задним числом не добираем (срез до прикрепления взять негде) и
+// из расчёта не выкидываем: короткое окно измерения — общее последствие
+// того, что аккаунт отдали поздно.
+func TestSubscriberGrowthForAccountAttachedMidPeriod(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	terms := demoTerms(pid)
+	rate := int64(100)
+	terms.SubscriberRate = &rate
+	if _, err := svc.SaveTerms(ctx, terms, creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], pubDay(0), "subs-mid-1", 1000, true)
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Period: %v", err)
+	}
+
+	// Первый аккаунт был с начала: 5 000 → 6 000, прирост 1 000.
+	early := addCreatorAccount(t, pid, creators[0], "tiktok", "https://www.tiktok.com/@early")
+	seedFollowers(t, early, p.StartsOn.AddDate(0, 0, -2), 5_000)
+	seedFollowers(t, early, p.StartsOn.AddDate(0, 0, 5), 6_000)
+
+	// Второй прикрепили на третий день, и у него уже 40 000 аудитории.
+	// В прирост идут только 500, набранные ПОСЛЕ прикрепления: сорок
+	// тысяч, пришедшие до проекта, — не его работа в этом периоде.
+	late := addCreatorAccount(t, pid, creators[0], "instagram", "https://instagram.com/late")
+	seedFollowers(t, late, p.StartsOn.AddDate(0, 0, 3), 40_000)
+	seedFollowers(t, late, p.StartsOn.AddDate(0, 0, 5), 40_500)
+
+	items, err := svc.Recalculate(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	if got := accrualOf(t, items, creators[0]); got.Subscribers != 1500 {
+		t.Errorf("прирост %d, ожидалось 1500 (1000 + 500), а не вся аудитория позднего аккаунта",
+			got.Subscribers)
+	}
+}
+
+// Аккаунт без снимков внутри периода в расчёт не входит вовсе.
+//
+// Ноль по нему означал бы «не вырос», а правда — «не измеряли»: обход
+// выключен, площадка скрывает аудиторию, аккаунт прикрепили позже конца
+// периода. То же свойство бережёт периоды, закрытые до появления
+// снимков: у них прирост остаётся нулём, и счёт задним числом не
+// переписывается.
+func TestSubscriberGrowthIgnoresUnmeasuredAccounts(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	pid, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	terms := demoTerms(pid)
+	rate := int64(100)
+	terms.SubscriberRate = &rate
+	if _, err := svc.SaveTerms(ctx, terms, creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+	seedPublicationViews(t, pid, creators[0], pubDay(0), "subs-blind-1", 1000, true)
+	p, err := svc.Period(ctx, pid, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Period: %v", err)
+	}
+
+	// Снимки есть, но все — ДО периода: внутри не измеряли ни дня.
+	acc := addCreatorAccount(t, pid, creators[0], "tiktok", "https://www.tiktok.com/@blind")
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, -10), 7_000)
+	seedFollowers(t, acc, p.StartsOn.AddDate(0, 0, -1), 7_400)
+
+	items, err := svc.Recalculate(ctx, pid, p)
+	if err != nil {
+		t.Fatalf("Recalculate: %v", err)
+	}
+	got := accrualOf(t, items, creators[0])
+	if got.Subscribers != 0 {
+		t.Errorf("прирост %d, ожидался ноль: внутри периода не измеряли", got.Subscribers)
+	}
+	if got.SubscriberBonus != 0 {
+		t.Errorf("доплата %d по неизмеренному аккаунту", got.SubscriberBonus)
+	}
+}
+
+// accrualOf — начисление одного человека из пачки. Пачка приходит
+// списком по всем креаторам проекта, и искать в ней руками в каждом
+// тесте значит повторять один и тот же цикл.
+func accrualOf(t *testing.T, items []billing.Accrual, creator uuid.UUID) billing.Accrual {
+	t.Helper()
+	for i := range items {
+		if items[i].CreatorUserID == creator {
+			return items[i]
+		}
+	}
+	t.Fatalf("начисления креатора %s нет в пачке из %d", creator, len(items))
+	return billing.Accrual{}
 }
