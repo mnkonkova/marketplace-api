@@ -18,7 +18,10 @@ import * as api from './api.js';
 import { config, botNames } from './config.js';
 import * as texts from './texts.js';
 import { managerMessageFor } from './texts.js';
-import { isBlockedError, sendMessage } from './telegram.js';
+import { answerCallbackQuery, isBlockedError, sendMessage } from './telegram.js';
+import { createCommentHandlers } from './comments.js';
+import { createDeliveryMemory, deliverToPeople } from './delivery.js';
+import { classifyUpdate } from './updates.js';
 
 const log = (level, msg, extra = {}) => {
   // Ни токенов, ни секретов, ни сырого init_data: лог сервиса, который
@@ -36,89 +39,89 @@ const log = (level, msg, extra = {}) => {
 // Память процессная и ограниченная: сервис перезапускается редко, а
 // окно повторов — минуты. Вечная память здесь не нужна, а внешнее
 // хранилище — ещё одна зависимость ради защиты от дубля.
-const seen = new Map();
-const SEEN_TTL_MS = 6 * 60 * 60 * 1000;
-const SEEN_MAX = 5000;
-
-function alreadyDone(eventID) {
-  const now = Date.now();
-  for (const [k, at] of seen) {
-    if (now - at > SEEN_TTL_MS) seen.delete(k);
-  }
-  if (seen.has(eventID)) return true;
-  if (seen.size >= SEEN_MAX) seen.delete(seen.keys().next().value);
-  seen.set(eventID, now);
-  return false;
-}
+//
+// Помним не «событие сделано», а «в какой чат какого события ушло и под
+// каким message_id» — подробности и почему так в delivery.js.
+const delivery = createDeliveryMemory();
 
 // ── вебхук Telegram ────────────────────────────────────────────────
 
 async function onUpdate(bot, update) {
-  // Человек заблокировал бота (или разблокировал). Говорим API: иначе
-  // мы будем слать ему в пустоту и тратить его дневной лимит.
-  if (update.my_chat_member) {
-    const status = update.my_chat_member.new_chat_member?.status;
-    const from = update.my_chat_member.from;
-    if (status === 'kicked' || status === 'left') {
-      const res = await api.blocked(bot, from.id);
+  // Что это за апдейт, решает чистая функция (updates.js): её можно
+  // проверить скриптом, а ошибка в ней — команда, записанная в проект
+  // комментарием, — тихая и дорогая.
+  const u = classifyUpdate(update);
+  switch (u.kind) {
+    case 'blocked': {
+      // Человек заблокировал бота. Говорим API: иначе мы будем слать
+      // ему в пустоту и тратить его дневной лимит.
+      const res = await api.blocked(bot, u.tgUserID);
       log('info', 'bot blocked by user', { bot, status: res.status });
+      return;
     }
-    return;
-  }
-
-  const msg = update.message;
-  if (!msg || !msg.text) return;
-  const from = msg.from || {};
-  const chatID = msg.chat?.id ?? from.id;
-  const chatType = msg.chat?.type || 'private';
-  const text = msg.text.trim();
-
-  // Группы. Бот живёт в общем чате менеджеров и разговаривать там не
-  // должен: он туда пишет, а не отвечает. Единственное исключение —
-  // /chatid: идентификатор группы иначе неоткуда взять, а без него
-  // сообщения менеджерам отправлять некуда.
-  if (chatType !== 'private') {
-    if (text.startsWith('/chatid')) {
-      const thread = msg.message_thread_id;
+    case 'chatid':
+      // Группы. Бот живёт в общем чате менеджеров и разговаривать там
+      // не должен: он туда пишет, а не отвечает. Единственное
+      // исключение — /chatid: идентификатор группы иначе неоткуда
+      // взять, а без него сообщения менеджерам отправлять некуда.
       await sendMessage(
         bot,
-        chatID,
-        `TELEGRAM_MANAGERS_CHAT_ID=${chatID}` +
-          (thread ? `\nTELEGRAM_MANAGERS_THREAD_ID=${thread}` : ''),
-        thread ? { message_thread_id: thread } : {},
+        u.chatID,
+        `TELEGRAM_MANAGERS_CHAT_ID=${u.chatID}` +
+          (u.thread ? `\nTELEGRAM_MANAGERS_THREAD_ID=${u.thread}` : ''),
+        u.thread ? { message_thread_id: u.thread } : {},
       );
-      log('info', 'chatid asked', { bot, chat_type: chatType });
-    }
-    return;
-  }
-
-  if (text.startsWith('/start')) {
-    const code = text.slice('/start'.length).trim();
-    if (!code) {
-      // /start без кода: рассказываем, что это, и ведём в кабинет.
-      // Заводить аккаунт по одному нажатию нельзя — у человека уже
-      // может быть наш, и второй пустой оставит его без проектов.
-      await sendMessage(bot, chatID, `${texts.help[bot]}\n\n${texts.notLinked}`);
+      log('info', 'chatid asked', { bot, chat_type: u.chatType });
+      return;
+    case 'start':
+      await onStart(bot, u);
+      return;
+    case 'command': {
+      // Бот не ведёт переписку командами: справка, и всё.
+      const who = await api.whoIs(bot, u.tgUserID);
+      const known = who.status === 200;
+      await sendMessage(bot, u.chatID, known ? texts.help[bot] : `${texts.help[bot]}\n\n${texts.notLinked}`);
       return;
     }
-    const res = await api.link(bot, code, { id: from.id, chatID, username: from.username });
-    if (res.status === 200) {
-      await sendMessage(bot, chatID, texts.linked);
-      log('info', 'linked', { bot });
+    case 'comment':
+      await comments.onComment(bot, u);
       return;
-    }
-    const reason = res.data?.error || 'not_found';
-    await sendMessage(bot, chatID, texts.linkFailed[reason] || texts.linkFailed.not_found);
-    log('warn', 'link failed', { bot, status: res.status, reason });
-    return;
+    case 'plain':
+      // Не ответ ни на что: в проект не пишем, подсказываем как.
+      await comments.onPlain(bot, u);
+      return;
+    case 'write':
+      await comments.onWriteButton(bot, u);
+      return;
+    case 'callback':
+      await answerCallbackQuery(bot, u.callbackID).catch(() => {});
+      return;
+    default:
   }
-
-  // Любое другое сообщение. Бот не ведёт переписку: работа живёт в
-  // кабинете, и делать вид, что здесь можно что-то решить, нечестно.
-  const who = await api.whoIs(bot, from.id);
-  const known = who.status === 200;
-  await sendMessage(bot, chatID, known ? texts.help[bot] : `${texts.help[bot]}\n\n${texts.notLinked}`);
 }
+
+async function onStart(bot, u) {
+  if (!u.code) {
+    // /start без кода: рассказываем, что это, и ведём в кабинет.
+    // Заводить аккаунт по одному нажатию нельзя — у человека уже
+    // может быть наш, и второй пустой оставит его без проектов.
+    await sendMessage(bot, u.chatID, `${texts.help[bot]}\n\n${texts.notLinked}`);
+    return;
+  }
+  const res = await api.link(bot, u.code, { id: u.tgUserID, chatID: u.chatID, username: u.username });
+  if (res.status === 200) {
+    await sendMessage(bot, u.chatID, texts.linked);
+    log('info', 'linked', { bot });
+    return;
+  }
+  const reason = res.data?.error || 'not_found';
+  await sendMessage(bot, u.chatID, texts.linkFailed[reason] || texts.linkFailed.not_found);
+  log('warn', 'link failed', { bot, status: res.status, reason });
+}
+
+// Ответ боту → комментарий в проект; кнопка «Написать в проект».
+// Логика — в comments.js: там же и обработка сбоев сети.
+const comments = createCommentHandlers({ api, sendMessage, answerCallbackQuery, log });
 
 // ── уведомления от API ─────────────────────────────────────────────
 
@@ -145,10 +148,10 @@ async function onNotify(envelope) {
     log('warn', 'notify for unconfigured bot', { bot, event: eventType });
     return { ok: true, sent: 0 };
   }
-  if (eventID && alreadyDone(eventID)) {
-    log('info', 'notify duplicate ignored', { event: eventType, event_id: eventID });
-    return { ok: true, sent: 0, duplicate: true };
-  }
+  // Куда это событие уже ушло (пусто — впервые). Помечаем чат ПОСЛЕ
+  // успешной отправки, а не событие до неё: упавшая отправка должна
+  // повториться, а не потеряться как «дубль».
+  const done = delivery.done(eventID);
 
   const app = envelope.app_base_url || config.appBaseURL;
 
@@ -168,45 +171,56 @@ async function onNotify(envelope) {
       log('warn', 'no manager text for event', { event: eventType });
       return { ok: true, sent: 0 };
     }
+    if (done.has('managers')) {
+      log('info', 'notify duplicate ignored', { event: eventType, event_id: eventID });
+      return { ok: true, sent: 0, duplicate: true };
+    }
     const extra = config.managers.threadID
       ? { message_thread_id: Number(config.managers.threadID) }
       : {};
     await sendMessage(config.managers.bot, config.managers.chatID, text, extra);
+    done.set('managers', 0);
     log('info', 'notify managers', { event: eventType, sent: 1 });
     return { ok: true, sent: 1 };
   }
 
-  let sent = 0;
-  let blocked = 0;
-  for (const r of recipients) {
-    const text = texts.messageFor(eventType, data, app, r);
-    if (!text) {
-      // Неизвестный тип: писать человеку «project.foo» нельзя, а
-      // ретраить нечего — текста не появится.
-      log('warn', 'no text for event', { event: eventType });
-      break;
-    }
-    try {
+  // Под какими message_id ушли сообщения: API по ним узнает, к какому
+  // проекту относится ответ человека. Сами мы этого не храним (память
+  // доставки — только на окно повторов). Отправка кому-то упала —
+  // deliverToPeople бросит PartialDeliveryError с message_id успешных,
+  // и pollOnce отдаст их API вместе с failed.
+  const markup = texts.notifyMarkup(app, eventType, data);
+  const res = await deliverToPeople({
+    recipients,
+    done,
+    send: (r) => {
+      const text = texts.messageFor(eventType, data, app, r);
+      if (!text) {
+        // Неизвестный тип: писать человеку «project.foo» нельзя, а
+        // ретраить нечего — текста не появится.
+        log('warn', 'no text for event', { event: eventType });
+        return null;
+      }
       // Кнопка «Открыть» ведёт в мини-апп: обычная ссылка открыла бы
       // сайт во внешнем браузере, где сессии нет и человек упирается
       // в форму входа — ради собственной же выкладки.
-      const target = texts.targetFor(eventType, data);
-      const markup = target ? texts.openButton(app, target.bot, target.path) : undefined;
-      await sendMessage(bot, r.tg_chat_id, text, markup ? { reply_markup: markup } : {});
-      sent += 1;
-    } catch (err) {
-      if (isBlockedError(err)) {
-        // Заблокировал — сообщаем API и идём дальше: остальные
-        // получатели не виноваты.
-        await api.blocked(bot, r.tg_chat_id).catch(() => {});
-        blocked += 1;
-        continue;
-      }
-      throw err;
-    }
-  }
-  log('info', 'notify', { event: eventType, bot, sent, blocked });
-  return { ok: true, sent, blocked };
+      // Рядом — «Написать в проект»: ответить на пинг можно и просто
+      // ответом на сообщение, но кнопку видно, а свайп — нет.
+      return sendMessage(bot, r.tg_chat_id, text, markup ? { reply_markup: markup } : {});
+    },
+    isBlocked: isBlockedError,
+    // Заблокировал — сообщаем API и идём дальше: остальные получатели
+    // не виноваты.
+    onBlocked: (r) => api.blocked(bot, r.tg_chat_id),
+  });
+  const duplicate = recipients.length > 0 && res.skipped === recipients.length;
+  log('info', duplicate ? 'notify duplicate ignored' : 'notify', {
+    event: eventType, event_id: eventID, bot, sent: res.sent, blocked: res.blocked, skipped: res.skipped,
+  });
+  return {
+    ok: true, sent: res.sent, blocked: res.blocked, messages: res.messages,
+    ...(duplicate ? { duplicate: true } : {}),
+  };
 }
 
 // ── http ───────────────────────────────────────────────────────────
@@ -350,18 +364,25 @@ async function pollOnce() {
 
     const delivered = [];
     const failed = [];
+    const sent = [];
     for (const m of items) {
       try {
-        await onNotify(m.envelope || {});
+        const res = await onNotify(m.envelope || {});
         delivered.push(m.id);
+        for (const x of res?.messages || []) sent.push({ id: m.id, ...x });
       } catch (err) {
         // Не доставили — возвращаем в очередь с причиной. Следующий
         // опрос возьмёт его снова; телеграм падает редко, но когда
         // падает, терять сообщение нельзя.
         failed.push({ id: m.id, error: String(err?.message || err).slice(0, 400) });
+        // Но кому-то из адресатов оно, может быть, уже ушло: их
+        // message_id отдаём API и при failed — он запомнит, к какому
+        // проекту ответ на них. Повтор этим адресатам не пошлёт (память
+        // доставки), зато снова сообщит их номера — API это не смутит.
+        for (const x of err?.messages || []) sent.push({ id: m.id, ...x });
       }
     }
-    await api.ackMessages(delivered, failed);
+    await api.ackMessages(delivered, failed, sent);
     log('info', 'pulled', { got: items.length, sent: delivered.length, failed: failed.length });
   } catch (err) {
     // Сеть моргнула — следующий тик попробует снова. Шуметь в лог на

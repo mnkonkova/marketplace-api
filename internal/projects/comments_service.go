@@ -16,6 +16,20 @@ import (
 // чем видит автор, и лимит срабатывал бы на глаз произвольно.
 const commentMaxLen = 5000
 
+// ErrCommentTooLong — текст длиннее commentMaxLen (или разметка больше
+// предела richtext). Отдельная причина нужна боту: «слишком длинно» он
+// объясняет человеку иначе, чем прочий некорректный ввод.
+//
+// Это по-прежнему ErrInvalidInput (errors.Is сработает на оба), и текст
+// ошибки тот же, что был, — кабинетные ручки отвечают как раньше.
+var ErrCommentTooLong error = commentTooLongError{}
+
+type commentTooLongError struct{}
+
+func (commentTooLongError) Error() string { return ErrInvalidInput.Error() + ": body too long" }
+
+func (commentTooLongError) Is(target error) bool { return target == ErrInvalidInput }
+
 // ListThread — одна ветка переписки. Право читать проверяется в handler:
 // клиент — через GetClientProject, менеджер — через AssertManagerHasAccess,
 // креатор — через ResolveCreatorThread.
@@ -101,7 +115,7 @@ func (s *Service) CreateComment(ctx context.Context, in CommentRequest) (Comment
 		case errors.Is(err, richtext.ErrEmpty):
 			return Comment{}, ErrCommentEmpty
 		case errors.Is(err, richtext.ErrTooLarge):
-			return Comment{}, fmt.Errorf("%w: body too long", ErrInvalidInput)
+			return Comment{}, ErrCommentTooLong
 		case err != nil:
 			return Comment{}, fmt.Errorf("%w: cannot parse markup", ErrInvalidInput)
 		}
@@ -117,7 +131,7 @@ func (s *Service) CreateComment(ctx context.Context, in CommentRequest) (Comment
 	// в байтах кириллица вдвое длиннее, и лимит для русского текста
 	// оказался бы вдвое меньше заявленного.
 	if n := len([]rune(out.BodyText)); n > commentMaxLen {
-		return Comment{}, fmt.Errorf("%w: body too long (%d > %d)", ErrInvalidInput, n, commentMaxLen)
+		return Comment{}, fmt.Errorf("%w (%d > %d)", ErrCommentTooLong, n, commentMaxLen)
 	}
 
 	return s.repo.CreateComment(ctx, out)

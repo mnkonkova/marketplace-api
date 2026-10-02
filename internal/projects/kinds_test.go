@@ -171,6 +171,8 @@ func TestKindIsComparedThroughFeatures(t *testing.T) {
 		"internal/projects/dto.go":     "объявление констант",
 		"internal/projects/repo.go":    "умолчание вида при создании проекта",
 		"internal/projects/service.go": "умолчание вида при создании проекта",
+		"internal/projects/comments_bot.go": "кто читает ветку заказчика: у общего проекта " +
+			"менеджера нет, её читают заказчик и исполнитель",
 	}
 
 	root := filepath.Join("..", "..")

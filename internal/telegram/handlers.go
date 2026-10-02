@@ -56,6 +56,27 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrTaken):
 		httpx.WriteErrMsg(w, http.StatusConflict, "telegram_taken",
 			"Этот телеграм уже привязан к другому аккаунту.")
+	case errors.Is(err, ErrNoProject):
+		httpx.WriteErrMsg(w, http.StatusNotFound, "no_project",
+			"Не понятно, к какому проекту это сообщение.")
+	case errors.Is(err, ErrNotReply):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "not_reply",
+			"Чтобы написать в проект, ответьте на сообщение о нём.")
+	case errors.Is(err, ErrNotMember):
+		httpx.WriteErrMsg(w, http.StatusForbidden, "not_member",
+			"Вы больше не участвуете в этом проекте.")
+	case errors.Is(err, ErrCommentEmpty):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "empty_comment",
+			"Пустое сообщение.")
+	case errors.Is(err, ErrCommentTooLong):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "too_long",
+			"Слишком длинное сообщение — сократите или разбейте на несколько.")
+	case errors.Is(err, ErrCommentInvalid):
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "invalid_comment",
+			"Такое сообщение в проект не записать.")
+	case errors.Is(err, ErrCommentsDisabled):
+		httpx.WriteErrMsg(w, http.StatusServiceUnavailable, "comments_disabled",
+			"Комментарии из бота сейчас не принимаются.")
 	default:
 		slog.Error("telegram handler", "err", err)
 		httpx.WriteErr(w, http.StatusInternalServerError, "internal")
@@ -365,6 +386,11 @@ type botAckReq struct {
 		ID    int64  `json:"id"`
 		Error string `json:"error"`
 	} `json:"failed"`
+	// Sent — под каким message_id и в какой чат ушло каждое
+	// доставленное личное сообщение. По нему ответ человека на пинг
+	// становится комментарием в проекте (см. comments.go).
+	// Необязательно: бот старой версии его не присылает.
+	Sent []SentMessage `json:"sent,omitempty"`
 }
 
 // BotMessagesAck godoc
@@ -387,7 +413,7 @@ func (h *Handler) BotMessagesAck(w http.ResponseWriter, r *http.Request) {
 	for _, f := range in.Failed {
 		failed[f.ID] = f.Error
 	}
-	if err := h.svc.AckMessages(r.Context(), in.Delivered, failed); err != nil {
+	if err := h.svc.AckMessages(r.Context(), in.Delivered, failed, in.Sent); err != nil {
 		writeErr(w, err)
 		return
 	}

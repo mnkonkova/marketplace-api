@@ -999,13 +999,25 @@ func runBotQueueTicker(ctx context.Context, repo *telegram.Repo, logger *slog.Lo
 				logger.Warn("bot queue metrics", "err", err)
 			}
 		case <-cleanup.C:
-			n, err := repo.CleanupDelivered(ctx, keep)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				logger.Warn("bot queue cleanup", "err", err)
-				continue
-			}
-			if n > 0 {
+			// Две чистки независимы: сбой одной не повод пропускать
+			// другую — иначе одна битая таблица копила бы обе.
+			if n, err := repo.CleanupDelivered(ctx, keep); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					logger.Warn("bot queue cleanup", "err", err)
+				}
+			} else if n > 0 {
 				logger.Info("bot queue cleanup", "removed", n)
+			}
+			// Соответствия «сообщение бота → проект» живут дольше
+			// очереди: на пинг отвечают и через неделю-другую. Два
+			// месяца — с запасом; ответ на более старое сообщение
+			// получит вежливый отказ «не поняла, к какому проекту».
+			if m, err := repo.CleanupSent(ctx, 60*24*time.Hour); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					logger.Warn("bot sent messages cleanup", "err", err)
+				}
+			} else if m > 0 {
+				logger.Info("bot sent messages cleanup", "removed", m)
 			}
 		}
 	}

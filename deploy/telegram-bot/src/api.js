@@ -57,7 +57,42 @@ export function pullMessages(limit = 20) {
   return request('GET', `/api/v1/bot/messages?limit=${limit}`);
 }
 
-/** Что с пачкой: доставлено / не доставлено и почему. */
-export function ackMessages(delivered, failed) {
-  return request('POST', '/api/v1/bot/messages/ack', { delivered, failed });
+/**
+ * Что с пачкой: доставлено / не доставлено и почему.
+ *
+ * sent — [{ id, chat_id, message_id }]: под каким номером ушло каждое
+ * личное сообщение. Сами мы его не храним — запоминает API, и по нему
+ * ответ человека на пинг становится комментарием в проекте.
+ */
+export function ackMessages(delivered, failed, sent = []) {
+  return request('POST', '/api/v1/bot/messages/ack', { delivered, failed, sent });
+}
+
+/**
+ * Человек написал боту — записать в проект. Какой проект и можно ли,
+ * решает API: по reply_to_message_id или по последнему пингу.
+ */
+export function comment(bot, { tgUserID, chatID, replyTo, text }) {
+  return request('POST', '/api/v1/bot/comments', {
+    bot,
+    tg_user_id: tgUserID,
+    chat_id: chatID,
+    reply_to_message_id: replyTo || 0,
+    text,
+  });
+}
+
+/**
+ * Кнопка «Написать в проект». Без messageID — только проверить доступ
+ * и узнать название; с messageID — ещё и запомнить это сообщение бота:
+ * ответ на него уйдёт в этот проект.
+ */
+export function commentAnchor(bot, { tgUserID, chatID, projectID, messageID }) {
+  return request('POST', '/api/v1/bot/comments/anchor', {
+    bot,
+    tg_user_id: tgUserID,
+    chat_id: chatID,
+    project_id: projectID,
+    message_id: messageID || 0,
+  });
 }

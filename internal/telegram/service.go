@@ -28,6 +28,10 @@ type Service struct {
 	sharedSecret string
 	// dailyCap — потолок сообщений в сутки на человека.
 	dailyCap int
+	// comments — переписка проектов: ответ боту становится
+	// комментарием (см. comments.go). nil — ручки комментариев
+	// отвечают 503, остальное работает.
+	comments ProjectComments
 }
 
 // DailyCap — сколько сообщений в сутки допустимо одному человеку.
@@ -197,6 +201,16 @@ func (s *Service) LeaseMessages(ctx context.Context, limit int) ([]Message, erro
 }
 
 // AckMessages — что бот с пачкой сделал.
-func (s *Service) AckMessages(ctx context.Context, delivered []int64, failed map[int64]string) error {
-	return s.repo.Ack(ctx, delivered, failed)
+//
+// sent — под какими message_id ушли доставленные. Старый бот его не
+// присылает, и это законно: ответ на такой пинг комментарием не
+// станет — бот предложит кнопку «Написать в проект».
+func (s *Service) AckMessages(
+	ctx context.Context, delivered []int64, failed map[int64]string, sent []SentMessage,
+) error {
+	if err := s.repo.Ack(ctx, delivered, failed); err != nil {
+		return err
+	}
+	s.rememberSentQuietly(ctx, sent)
+	return nil
 }

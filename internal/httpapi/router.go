@@ -499,6 +499,11 @@ func NewRouter(d Deps) http.Handler {
 				// internal/telegram/queue.go.
 				r.Get("/bot/messages", d.Telegram.BotMessages)
 				r.Post("/bot/messages/ack", d.Telegram.BotMessagesAck)
+				// Ответ боту — комментарий в проекте. Проект и право
+				// писать решаем мы; бот только пересказывает, кто и
+				// на что ответил. См. internal/telegram/comments.go.
+				r.Post("/bot/comments", d.Telegram.BotComment)
+				r.Post("/bot/comments/anchor", d.Telegram.BotCommentAnchor)
 			})
 		}
 

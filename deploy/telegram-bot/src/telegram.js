@@ -43,6 +43,17 @@ export function sendMessage(bot, chatID, text, extra = {}) {
   });
 }
 
+/**
+ * Ответить на нажатие inline-кнопки. Без этого Telegram полминуты
+ * крутит на кнопке «часики», и человек жмёт её снова.
+ */
+export function answerCallbackQuery(bot, callbackID, text = '', showAlert = false) {
+  return call(bot, 'answerCallbackQuery', {
+    callback_query_id: callbackID,
+    ...(text ? { text, show_alert: showAlert } : {}),
+  });
+}
+
 export function setWebhook(bot, url) {
   return call(bot, 'setWebhook', {
     url,

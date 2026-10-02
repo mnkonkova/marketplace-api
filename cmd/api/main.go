@@ -294,6 +294,10 @@ func main() {
 		// нём вспоминали в момент первой сдачи — когда ролик уже снят.
 		WithChecklistAttacher(publicationsSvc)
 	projectsHandler := projects.NewHandler(projectsSvc)
+	// Ответ боту на пинг — комментарий в проекте, тем же CreateComment,
+	// что из кабинета. Подключаем здесь, а не при сборке telegramSvc:
+	// переписка проектов появляется позже, а сервис — указатель.
+	telegramSvc.WithComments(projectsSvc.BotComments())
 
 	// Самостоятельный подбор креаторов клиентом. Заявка заводит проект
 	// сразу — заказчику есть куда прийти и где написать, пока менеджер
