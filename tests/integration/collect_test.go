@@ -209,11 +209,13 @@ func TestCollectSchedules(t *testing.T) {
 		{2 * min, 5 * min}, {6 * min, 5 * min},
 		{7 * min, 10 * min}, {16 * min, 10 * min},
 		{17 * min, 30 * min}, {76 * min, 30 * min},
-		{2 * hour, hour}, {196 * min, hour},
-		{4 * hour, 6 * hour}, {10 * hour, 6 * hour},
-		// За первыми сутками частить незачем: суточный ролик за время,
-		// пока на него смотрят, не меняется — дальше фоновый шаг.
-		{25 * hour, day}, {6 * day, 2 * day},
+		// Остаток первого дня и весь второй — раз в час: площадка
+		// доносит ролик до ленты не сразу, и цифра за сутки меняется
+		// заметно.
+		{2 * hour, hour}, {10 * hour, hour}, {25 * hour, hour}, {2 * day, hour},
+		// Дальше — шесть часов. Не фоновый шаг: тот про расход на
+		// архиве и считается днями, а здесь на цифры смотрит человек.
+		{49 * hour, 6 * hour}, {6 * day, 6 * hour}, {90 * day, 6 * hour},
 	}
 	for _, c := range onOpen {
 		if got := publications.RefreshEvery(c.age); got != c.want {
