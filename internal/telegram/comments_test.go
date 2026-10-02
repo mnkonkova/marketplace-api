@@ -79,6 +79,24 @@ func TestSentTarget(t *testing.T) {
 			t.Error("рассылка заявки записана как сообщение проекта")
 		}
 	})
+	t.Run("конверт до флага — по типу события", func(t *testing.T) {
+		// Пинг лёг в очередь до выкатки и ушёл после: ответ на него
+		// должен попасть в проект, а ответ на старую заявку — нет.
+		legacy := func(eventType string) []byte {
+			b, _ := json.Marshal(map[string]any{
+				"audience": "person", "event_type": eventType,
+				"data":       map[string]any{"project_id": pid.String()},
+				"recipients": []map[string]any{{"user_id": alice, "tg_chat_id": 100}},
+			})
+			return b
+		}
+		if _, _, ok := sentTarget(legacy("project.publication_due_today"), 100); !ok {
+			t.Error("старый пинг проекта не запомнен")
+		}
+		if _, _, ok := sentTarget(legacy("order.broadcast_sent"), 100); ok {
+			t.Error("старая рассылка заявки запомнена")
+		}
+	})
 	t.Run("без проекта нечего запоминать", func(t *testing.T) {
 		if _, _, ok := sentTarget(env("person", ""), 100); ok {
 			t.Error("заявка без проекта записана")

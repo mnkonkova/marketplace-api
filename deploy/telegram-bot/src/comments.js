@@ -65,6 +65,35 @@ export function createCommentHandlers({ api, sendMessage, answerCallbackQuery, l
    * недоступен — подсказка всё равно уместнее справки.
    */
   async function onPlain(bot, u) {
+    await hintOrLink(bot, u, texts.writeHint);
+  }
+
+  /**
+   * Файл или фото: в проект через бота доходит только текст. Не
+   * подключённому подсказка про «ответьте на сообщение о проекте» —
+   * мимо: таких сообщений у него нет, ему сначала подключиться.
+   */
+  async function onMedia(bot, u) {
+    if (u.group) {
+      const key = `${bot}:${u.chatID}:${u.group}`;
+      if (seenGroups.has(key)) return;
+      seenGroups.set(key, Date.now());
+      forgetOldGroups();
+    }
+    await hintOrLink(bot, u, texts.mediaHint);
+  }
+
+  // Альбомы, на которые уже ответили. Снимки альбома приходят подряд за
+  // секунды, поэтому помнить достаточно минуту; память процесса — не
+  // состояние бота: после перезапуска худшее, что будет, — вторая
+  // подсказка на тот же альбом.
+  const seenGroups = new Map();
+  function forgetOldGroups() {
+    const old = Date.now() - 60_000;
+    for (const [k, at] of seenGroups) if (at < old) seenGroups.delete(k);
+  }
+
+  async function hintOrLink(bot, u, hint) {
     let linked = true;
     try {
       const who = await api.whoIs(bot, u.tgUserID);
@@ -72,7 +101,7 @@ export function createCommentHandlers({ api, sendMessage, answerCallbackQuery, l
     } catch (err) {
       log('warn', 'whois failed', { bot, err: errText(err) });
     }
-    await sendMessage(bot, u.chatID, linked ? texts.writeHint : notLinkedText(bot));
+    await sendMessage(bot, u.chatID, linked ? hint : notLinkedText(bot));
   }
 
   /**
@@ -131,5 +160,5 @@ export function createCommentHandlers({ api, sendMessage, answerCallbackQuery, l
     }
   }
 
-  return { onComment, onPlain, onWriteButton };
+  return { onComment, onPlain, onMedia, onWriteButton };
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -112,11 +113,28 @@ type SentMessage struct {
 // привязывается к проекту и человеку.
 type sentEnvelope struct {
 	Audience  string `json:"audience"`
-	Replyable bool   `json:"replyable"`
+	EventType string `json:"event_type"`
+	// Replyable — nil у конвертов, положенных в очередь до появления
+	// флага (см. replyable).
+	Replyable *bool `json:"replyable"`
 	Data      struct {
 		ProjectID string `json:"project_id"`
 	} `json:"data"`
 	Recipients []Recipient `json:"recipients"`
+}
+
+// replyable — можно ли ответить на это сообщение в проект.
+//
+// Решает флаг из конверта. Его нет у сообщений, положенных в очередь до
+// выкатки флага: они доходят и после неё (очередь, повторы), и ответ на
+// утренний пинг не должен пропасть из-за того, что API обновился днём.
+// Для них — прежнее правило: события проекта (project.*) отвечаемы,
+// заявки (order.*) — нет.
+func replyable(env sentEnvelope) bool {
+	if env.Replyable != nil {
+		return *env.Replyable
+	}
+	return strings.HasPrefix(env.EventType, "project.")
 }
 
 // sentTarget — к какому проекту и человеку относится сообщение,
@@ -140,7 +158,7 @@ func sentTarget(envelope []byte, chatID int64) (projectID, userID uuid.UUID, ok 
 	// Можно ли на это ответить в проект, решает таблица маршрутов
 	// (eventroute.botRouting, флаг replyable): рассылка заявки тоже
 	// несёт project_id, но получают её те, кто в проекте ещё не состоит.
-	if !env.Replyable {
+	if !replyable(env) {
 		return uuid.Nil, uuid.Nil, false
 	}
 	pid, err := uuid.Parse(env.Data.ProjectID)

@@ -90,6 +90,9 @@ async function onUpdate(bot, update) {
       // Не ответ ни на что: в проект не пишем, подсказываем как.
       await comments.onPlain(bot, u);
       return;
+    case 'media':
+      await comments.onMedia(bot, u);
+      return;
     case 'write':
       await comments.onWriteButton(bot, u);
       return;
@@ -141,6 +144,7 @@ async function onNotify(envelope) {
     audience = 'person',
     recipients = [],
     data = {},
+    replyable,
   } = envelope;
   if (!bot || !config.bots[bot]) {
     // Бот не настроен — это НЕ ошибка доставки: второй бот может быть
@@ -189,7 +193,10 @@ async function onNotify(envelope) {
   // доставки — только на окно повторов). Отправка кому-то упала —
   // deliverToPeople бросит PartialDeliveryError с message_id успешных,
   // и pollOnce отдаст их API вместе с failed.
-  const markup = texts.notifyMarkup(app, eventType, data);
+  // Флага нет у конвертов от API без него (очередь до выкатки, или
+  // бот выкачен раньше API) — тогда прежнее правило, по типу события.
+  const canReply = typeof replyable === 'boolean' ? replyable : eventType.startsWith('project.');
+  const markup = texts.notifyMarkup(app, eventType, data, canReply);
   const res = await deliverToPeople({
     recipients,
     done,

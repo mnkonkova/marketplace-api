@@ -73,8 +73,11 @@ export function targetFor(eventType, d = {}) {
     case 'project.project_creator_briefed':
     case 'project.project_materials_updated':
     case 'project.project_checklist_updated':
-    case 'project.document_delivered':
       return project ? { bot: 'creator', path: `/me/creator/projects/${project}` } : null;
+    // ?focus=documents — «откройся на документах»: в какой это раздел,
+    // решает страница. Бот устройство страниц не знает.
+    case 'project.document_delivered':
+      return project ? { bot: 'creator', path: `/me/creator/projects/${project}?focus=documents` } : null;
     case 'order.invitation_sent':
     case 'order.broadcast_sent':
       return { bot: 'creator', path: '/me/creator/invitations' };
@@ -82,8 +85,11 @@ export function targetFor(eventType, d = {}) {
     case 'project.client_views_threshold':
     case 'project.client_date_shift':
     case 'project.client_weekly_digest':
-    case 'project.client_document_delivered':
       return project ? { bot: 'client', path: `/me/projects/${project}` } : null;
+    // ?focus=documents — см. выше. Обычный проект его не читает:
+    // документы у него и так на странице.
+    case 'project.client_document_delivered':
+      return project ? { bot: 'client', path: `/me/projects/${project}?focus=documents` } : null;
     default:
       return null;
   }
@@ -93,16 +99,18 @@ export function targetFor(eventType, d = {}) {
  * Кнопки под личным уведомлением: «Открыть» (мини-апп) и рядом —
  * «Написать в проект».
  *
- * Вторая есть только там, где у события есть проект: на заявку
- * отвечают в кабинете откликом, и комментарию там лечь некуда. Сама
+ * Вторая — только если API пометил конверт replyable: решает таблица
+ * маршрутов (eventroute.botRouting), а не бот. Рассылка заявки тоже
+ * несёт project_id, но получатели в проекте ещё не состоят — на заявку
+ * отвечают в кабинете откликом. Сама
  * кнопка ничего не решает — по нажатию бот спрашивает API, можно ли
  * этому человеку писать в этот проект.
  */
-export function notifyMarkup(app, eventType, d = {}) {
+export function notifyMarkup(app, eventType, d = {}, replyable = false) {
   const target = targetFor(eventType, d);
   const open = target ? openButton(app, target.bot, target.path) : undefined;
   const row = open ? [...open.inline_keyboard[0]] : [];
-  if (d.project_id) {
+  if (replyable && d.project_id) {
     row.push({ text: 'Написать в проект', callback_data: writeCallbackData(d.project_id) });
   }
   return row.length ? { inline_keyboard: [row] } : undefined;
@@ -197,7 +205,7 @@ export function messageFor(eventType, d = {}, app, recipient = null) {
     case 'project.project_checklist_updated':
       return `Чек-лист сдачи изменился · ${project}\n${projectLink}`;
     case 'project.document_delivered':
-      return documentText(d, project, projectLink);
+      return documentText(d, project, `${projectLink}?focus=documents`);
 
     case 'order.invitation_sent':
       return `Вас зовут в проект\n` +
@@ -216,7 +224,7 @@ export function messageFor(eventType, d = {}, app, recipient = null) {
 
     // ---- заказчик ----
     case 'project.client_document_delivered':
-      return documentText(d, project, clientLink);
+      return documentText(d, project, `${clientLink}?focus=documents`);
     case 'project.client_new_video':
       return `Вышел новый ролик · ${project}\n${clientLink}`;
     case 'project.client_views_threshold':
@@ -424,6 +432,11 @@ export function commentSaved(title, reader) {
 export const writeHint =
   'Чтобы написать в проект, ответьте на сообщение о нём или нажмите „Написать в проект“ под уведомлением.';
 
+/** Прислали файл или фото: в проект через бота доходит только текст. */
+export const mediaHint =
+  'Файлы через бота в проект не попадают. Загрузите файл на диск и пришлите ссылку ' +
+  'ответом на сообщение о проекте.';
+
 /** Приглашение отправили, а API его не запомнил — ответ на него не примут. */
 export const writePromptLost =
   'Не получилось подготовить ответ — нажмите «Написать в проект» ещё раз чуть позже.';
@@ -438,9 +451,12 @@ export function writePrompt(title) {
  * хотел написать менеджеру, а не читать объяснения бота.
  */
 export const commentRefused = {
+  // Сюда же попадает ответ на заявку: проекта у неё для человека ещё
+  // нет. Поэтому без «нажмите под ним» — под заявкой этой кнопки нет.
   no_project:
-    'Не поняла, к какому проекту это. Ответьте на уведомление из проекта ' +
-    '(смахните его влево) или нажмите под ним «Написать в проект».',
+    'Не поняла, к какому проекту это. Написать в проект можно ответом на уведомление ' +
+    'из него или кнопкой «Написать в проект» под таким уведомлением. ' +
+    'На заявку отвечают откликом в кабинете.',
   not_member: 'Вы больше не участвуете в этом проекте — написать в него не получится.',
   empty_comment: 'Пустое сообщение — нечего записывать.',
   not_reply: writeHint,

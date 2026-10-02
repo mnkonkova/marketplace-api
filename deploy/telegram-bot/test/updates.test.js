@@ -46,8 +46,20 @@ test('группа менеджеров: ответы не комментари�
   assert.deepEqual(chatid, { kind: 'chatid', chatID: -100123, chatType: 'supergroup', thread: 7 });
 });
 
+test('файл или фото — не молчим, а подсказываем', () => {
+  // Скан подписанного договора ответом на пинг: без ответа бота человек
+  // решит, что его записали.
+  const scan = classifyUpdate({
+    message: { from: me, chat: privateChat, photo: [{}], caption: 'подписала', reply_to_message: { message_id: 5 } },
+  });
+  assert.deepEqual(scan, { kind: 'media', tgUserID: 4825, chatID: privateChat.id, group: '' });
+  assert.equal(classifyUpdate({ message: { from: me, chat: privateChat, document: {} } }).kind, 'media');
+  // В группе по-прежнему молчим.
+  assert.equal(classifyUpdate({ message: { from: me, chat: group, photo: [{}] } }).kind, 'ignore');
+});
+
 test('не текст и пустое — пропускаем', () => {
-  assert.equal(classifyUpdate({ message: { from: me, chat: privateChat, photo: [{}] } }).kind, 'ignore');
+  assert.equal(classifyUpdate({ message: { from: me, chat: privateChat, sticker: {} } }).kind, 'ignore');
   assert.equal(classifyUpdate({ message: { from: me, chat: privateChat, text: '   ' } }).kind, 'ignore');
   assert.equal(classifyUpdate({}).kind, 'ignore');
 });
@@ -82,14 +94,14 @@ test('кнопка «Написать в проект»', () => {
 });
 
 test('под пингом проекта — «Открыть» и «Написать в проект»', () => {
-  const m = notifyMarkup('https://app', 'project.publication_due_today', { project_id: PID });
+  const m = notifyMarkup('https://app', 'project.publication_due_today', { project_id: PID }, true);
   assert.equal(m.inline_keyboard.length, 1);
   const [open, write] = m.inline_keyboard[0];
   assert.equal(open.text, 'Открыть');
   assert.ok(open.web_app.url.startsWith('https://app/tg/creator?to='));
   assert.deepEqual(write, { text: 'Написать в проект', callback_data: writeCallbackData(PID) });
 
-  const client = notifyMarkup('https://app', 'project.client_new_video', { project_id: PID });
+  const client = notifyMarkup('https://app', 'project.client_new_video', { project_id: PID }, true);
   assert.equal(client.inline_keyboard[0][1].callback_data, writeCallbackData(PID));
 });
 
@@ -98,6 +110,16 @@ test('у заявки без проекта — только «Открыть»'
   assert.equal(m.inline_keyboard[0].length, 1);
   assert.equal(m.inline_keyboard[0][0].text, 'Открыть');
   assert.equal(notifyMarkup('https://app', 'project.unknown', {}), undefined);
+});
+
+test('API не пометил конверт отвечаемым — без «Написать в проект»', () => {
+  // Рассылка заявки: project_id есть, но получатели в проекте ещё не
+  // состоят — на заявку отвечают откликом. Решает API, не бот.
+  const m = notifyMarkup('https://app', 'order.broadcast_sent', { project_id: PID }, false);
+  assert.deepEqual(
+    m.inline_keyboard[0].map((b) => b.text),
+    ['Открыть'],
+  );
 });
 
 test('подтверждение называет проект и читателя — того, кого назвал API', () => {

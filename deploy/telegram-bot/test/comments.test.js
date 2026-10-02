@@ -99,6 +99,29 @@ test('простой текст — подсказка, в API как комме
   assert.equal(down.sent[0].text, texts.writeHint);
 });
 
+test('файл или фото: подключённому — про ссылку, не подключённому — подключиться', async () => {
+  const linked = stand({ whoIs: async () => ({ status: 200, data: {} }) });
+  await linked.h.onMedia('creator', { tgUserID: 7, chatID: 7 });
+  assert.equal(linked.sent[0].text, texts.mediaHint);
+
+  // Сообщений о проектах у него нет — «ответьте на сообщение» мимо.
+  const other = stand({ whoIs: async () => ({ status: 404 }) });
+  await other.h.onMedia('creator', { tgUserID: 8, chatID: 8 });
+  assert.match(other.sent[0].text, /Аккаунт не привязан/);
+});
+
+test('альбом — одна подсказка, а не по одной на снимок', async () => {
+  const { h, sent } = stand({ whoIs: async () => ({ status: 200, data: {} }) });
+  for (let i = 0; i < 6; i++) {
+    await h.onMedia('creator', { tgUserID: 7, chatID: 7, group: 'g1' });
+  }
+  assert.equal(sent.length, 1);
+  // Другой альбом и одиночное фото — уже отдельные сообщения.
+  await h.onMedia('creator', { tgUserID: 7, chatID: 7, group: 'g2' });
+  await h.onMedia('creator', { tgUserID: 7, chatID: 7, group: '' });
+  assert.equal(sent.length, 3);
+});
+
 test('кнопка: сеть упала — отвечаем на нажатие «не получилось»', async () => {
   const { h, sent, answers } = stand({ commentAnchor: boom });
   await h.onWriteButton('creator', button);

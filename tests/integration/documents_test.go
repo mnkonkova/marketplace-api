@@ -373,9 +373,9 @@ func TestMaterialSoftDelete(t *testing.T) {
 // «Мои документы» по одному проекту и после ухода из проекта.
 //
 // project_id сужает список на сервере: карточке проекта незачем тянуть
-// документы всех проектов человека. Ушедшему из состава личные
-// документы проекта не показываются и открытыми не отмечаются — как и
-// договоры из материалов.
+// документы всех проектов человека. Ушедшему из состава выданное лично
+// остаётся (акт за закрытый период ему нужен), а договор состава из
+// материалов — нет.
 func TestMyDocumentsByProjectAndAfterLeaving(t *testing.T) {
 	pool := integration.Pool(t)
 	h := newAPIHarness(t, pool)
@@ -437,11 +437,16 @@ UPDATE project_creators SET removed_at = now()
 WHERE project_id = $1 AND creator_user_id = $2`, projectID, creators[0]); err != nil {
 		t.Fatalf("убрать из состава: %v", err)
 	}
+	// Выданное лично остаётся у адресата и после ухода — забирают его
+	// отзывом. Договор из материалов общий для состава и уходит с ним.
 	_, mine = h.Do(t, http.MethodGet, "/api/v1/me/documents", tok, nil)
-	if hasTitle(docItems(t, mine), "NDA проекта") {
-		t.Error("ушедший из проекта по-прежнему видит его документ")
+	if !hasTitle(docItems(t, mine), "NDA проекта") {
+		t.Error("ушедший из проекта потерял выданный ему документ")
 	}
-	if code, _ := h.Do(t, http.MethodPost, "/api/v1/me/documents/"+docID+"/open", tok, nil); code != http.StatusNotFound {
-		t.Errorf("ушедший отметил документ открытым: код %d, ожидался 404", code)
+	if hasTitle(docItems(t, mine), "Договор проекта") {
+		t.Error("ушедшему по-прежнему виден договор состава из материалов")
+	}
+	if code, _ := h.Do(t, http.MethodPost, "/api/v1/me/documents/"+docID+"/open", tok, nil); code != http.StatusOK {
+		t.Errorf("ушедший не может открыть свой документ: код %d", code)
 	}
 }
