@@ -2308,6 +2308,20 @@ definitions:
           вводит менеджер руками — как переходы по UTM.
         type: integer
         x-nullable: true
+      subscriber_steps:
+        description: |-
+          SubscriberSteps — лесенка ПО ПОДПИСЧИКАМ: пороги прироста за
+          период и цена периода на каждом. Непустая отменяет SubscriberRate
+          («за одного»), ровно как Steps отменяет ставку за тысячу
+          просмотров: это другое правило счёта, и смешивать их в одном
+          периоде нельзя.
+
+          Пороги считаются ПО ЧЕЛОВЕКУ, а не по проекту: платим человеку, и
+          у восьми креаторов «набрать 10 000» — восемь разных работ, а не
+          одна общая. То же правило, что у просмотров.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
       terms_version_id:
         description: TermsVersionID — с какой версии сняты числа. Только для истории.
         type: string
@@ -2566,6 +2580,20 @@ definitions:
           вводит менеджер руками — как переходы по UTM.
         type: integer
         x-nullable: true
+      subscriber_steps:
+        description: |-
+          SubscriberSteps — лесенка ПО ПОДПИСЧИКАМ: пороги прироста за
+          период и цена периода на каждом. Непустая отменяет SubscriberRate
+          («за одного»), ровно как Steps отменяет ставку за тысячу
+          просмотров: это другое правило счёта, и смешивать их в одном
+          периоде нельзя.
+
+          Пороги считаются ПО ЧЕЛОВЕКУ, а не по проекту: платим человеку, и
+          у восьми креаторов «набрать 10 000» — восемь разных работ, а не
+          одна общая. То же правило, что у просмотров.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
       terms_version_id:
         description: TermsVersionID — с какой версии сняты числа. Только для истории.
         type: string
@@ -2792,6 +2820,20 @@ definitions:
           вводит менеджер руками — как переходы по UTM.
         type: integer
         x-nullable: true
+      subscriber_steps:
+        description: |-
+          SubscriberSteps — лесенка ПО ПОДПИСЧИКАМ: пороги прироста за
+          период и цена периода на каждом. Непустая отменяет SubscriberRate
+          («за одного»), ровно как Steps отменяет ставку за тысячу
+          просмотров: это другое правило счёта, и смешивать их в одном
+          периоде нельзя.
+
+          Пороги считаются ПО ЧЕЛОВЕКУ, а не по проекту: платим человеку, и
+          у восьми креаторов «набрать 10 000» — восемь разных работ, а не
+          одна общая. То же правило, что у просмотров.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
       terms_version_id:
         description: TermsVersionID — с какой версии сняты числа. Только для истории.
         type: string
@@ -3025,6 +3067,18 @@ definitions:
           подписчиков вписывает менеджер: сборщика по ним нет.
         type: integer
         x-nullable: true
+      subscriber_steps:
+        description: |-
+          SubscriberSteps — лесенка по ПОДПИСЧИКАМ: порог прироста за период
+          и цена периода на нём. Приходит и заменяется целиком, как и
+          лесенка просмотров.
+
+          Непустая отменяет subscriber_rate: «за одного» и «ступенями» —
+          две формы одной цены, и вписанные вместе они не уточняют друг
+          друга, а спорят. Пороги считаются по ЧЕЛОВЕКУ.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
       videos_first_month:
         description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
         type: integer
@@ -3180,6 +3234,18 @@ definitions:
           подписчиков вписывает менеджер: сборщика по ним нет.
         type: integer
         x-nullable: true
+      subscriber_steps:
+        description: |-
+          SubscriberSteps — лесенка по ПОДПИСЧИКАМ: порог прироста за период
+          и цена периода на нём. Приходит и заменяется целиком, как и
+          лесенка просмотров.
+
+          Непустая отменяет subscriber_rate: «за одного» и «ступенями» —
+          две формы одной цены, и вписанные вместе они не уточняют друг
+          друга, а спорят. Пороги считаются по ЧЕЛОВЕКУ.
+        items:
+          $ref: '#/definitions/internal_billing.TermsStep'
+        type: array
       videos_first_month:
         description: 'За какой объём назван оклад: «30 видео первый месяц, 60 со второго».'
         type: integer
