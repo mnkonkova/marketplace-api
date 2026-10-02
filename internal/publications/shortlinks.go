@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -97,6 +98,32 @@ func (e *httpExpander) Expand(ctx context.Context, raw string) (string, error) {
 		return "", err
 	}
 	return abs.String(), nil
+}
+
+// expandAll — развернуть набор ссылок разом.
+//
+// По одной это пять последовательных походов в сеть по пять секунд
+// таймаута каждый; человек в это время смотрит на крутящуюся кнопку
+// «Сдать». Параллельно он ждёт самый долгий ответ, а не их сумму.
+//
+// Порядок сохраняется: результат кладётся в тот же индекс, что и вход,
+// — дальше по нему же определяется площадка.
+func (s *Service) expandAll(ctx context.Context, urls []string) []string {
+	out := make([]string, len(urls))
+	var wg sync.WaitGroup
+	for i, raw := range urls {
+		out[i] = raw
+		if s.expander == nil || !isShortLink(raw) {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, raw string) {
+			defer wg.Done()
+			out[i] = s.expandShort(ctx, raw)
+		}(i, raw)
+	}
+	wg.Wait()
+	return out
 }
 
 // WithURLExpander — включить разворачивание коротких ссылок. Без него

@@ -91,6 +91,11 @@ type Deps struct {
 	AuthWindows      []ratelimit.Window
 	SummarizeWindows []ratelimit.Window
 	CRMWindows       []ratelimit.Window
+	// RefreshWindows — на обновление просмотров по заходу в карточку.
+	// Второе место, где залогиненный человек тратит наши деньги, и
+	// дороже первого: запрос уходит в сторонний сборщик пачкой, каждая
+	// ссылка в ней стоит кредит.
+	RefreshWindows []ratelimit.Window
 }
 
 // maxRequestBody — потолок тела запроса.
@@ -369,7 +374,11 @@ func NewRouter(d Deps) http.Handler {
 				// Обновление цифр по заходу в карточку. POST, а не GET:
 				// запрос ходит к стороннему сборщику и тратит кредиты —
 				// такое не должно случаться от предзагрузки ссылки.
-				r.Post("/me/creator/projects/{id}/report/refresh", d.Publications.CreatorRefreshStats)
+				r.Group(func(r chi.Router) {
+					r.Use(RateLimit(d.Limiter, "refresh", d.RefreshWindows))
+					r.Post("/me/creator/projects/{id}/report/refresh",
+						d.Publications.CreatorRefreshStats)
+				})
 				// «В каких проектах я креатор» — до этого ответить было
 				// нечем, и на страницу выкладок можно было попасть только
 				// по прямой ссылке.
@@ -381,6 +390,11 @@ func NewRouter(d Deps) http.Handler {
 				// как снимать, а этот список — про то, на каких
 				// условиях.
 				r.Get("/me/creator/documents", d.Publications.CreatorDocuments)
+				// «Мои документы» любого человека — креатора и заказчика:
+				// выданное лично и договоры из проектов. Выдача
+				// фильтруется по самому человеку, роль не нужна.
+				r.Get("/me/documents", d.Publications.MyDocuments)
+				r.Post("/me/documents/{id}/open", d.Publications.OpenMyDocument)
 				// «Мои аккаунты» — аккаунты ЭТОГО проекта, которые креатор
 				// заводит и правит сам. Чужие и брендовые сюда не входят.
 				r.Get("/me/creator/projects/{id}/accounts", d.Publications.CreatorAccounts)
@@ -557,7 +571,14 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/manager/projects/{id}/accounts/{account_id}/secret", d.Publications.ManagerAccountSecret)
 					r.Post("/manager/publications/{pub_id}/remind", d.Publications.ManagerRemindNow)
 					r.Get("/manager/projects/{id}/report", d.Publications.ManagerReport)
-					r.Post("/manager/projects/{id}/report/refresh", d.Publications.ManagerRefreshStats)
+					// Своим лимитом поверх общего crm: 120 в минуту по
+					// двадцать пять ссылок — три тысячи платных обращений
+					// в минуту с одного аккаунта.
+					r.Group(func(r chi.Router) {
+						r.Use(RateLimit(d.Limiter, "refresh", d.RefreshWindows))
+						r.Post("/manager/projects/{id}/report/refresh",
+							d.Publications.ManagerRefreshStats)
+					})
 					r.Get("/manager/projects/{id}/report.csv", d.Publications.ManagerReportCSV)
 
 					// Состав проекта. Раньше был только POST и DELETE:
@@ -581,6 +602,15 @@ func NewRouter(d Deps) http.Handler {
 					r.Get("/manager/projects/{id}/materials", d.Publications.ManagerListMaterials)
 					r.Post("/manager/projects/{id}/materials", d.Publications.ManagerAddMaterial)
 					r.Delete("/manager/projects/{id}/materials/{material_id}", d.Publications.ManagerDeleteMaterial)
+					// Документы конкретному человеку: креатору проекта или
+					// заказчику. Ничего не удаляется — отзыв и возврат.
+					r.Get("/manager/document_templates", d.Publications.ManagerDocumentTemplates)
+					r.Get("/manager/projects/{id}/documents", d.Publications.ManagerProjectDocuments)
+					r.Post("/manager/projects/{id}/documents", d.Publications.ManagerDeliverDocument)
+					r.Post("/manager/projects/{id}/documents/{doc_id}/revoke",
+						d.Publications.ManagerRevokeDocument)
+					r.Post("/manager/projects/{id}/documents/{doc_id}/unrevoke",
+						d.Publications.ManagerUnrevokeDocument)
 
 					// Чеклист: снимок проекта и библиотека, из которой его берут.
 					r.Get("/manager/projects/{id}/checklist", d.Publications.ManagerChecklist)
@@ -748,6 +778,16 @@ func NewRouter(d Deps) http.Handler {
 					r.Post("/admin/checklist_templates", d.Publications.AdminSaveChecklistTemplate)
 					r.Get("/admin/checklist_templates/{id}", d.Publications.AdminGetChecklistTemplate)
 					r.Delete("/admin/checklist_templates/{id}", d.Publications.AdminDeleteChecklistTemplate)
+					// Шаблоны документов — рядом с прайсом и так же: версии
+					// не правятся, шаблон уходит в архив, а не удаляется.
+					r.Get("/admin/document_templates", d.Publications.AdminListDocumentTemplates)
+					r.Post("/admin/document_templates", d.Publications.AdminCreateDocumentTemplate)
+					r.Post("/admin/document_templates/{id}/versions",
+						d.Publications.AdminPublishTemplateVersion)
+					r.Post("/admin/document_templates/{id}/archive",
+						d.Publications.AdminArchiveDocumentTemplate)
+					r.Post("/admin/document_templates/{id}/restore",
+						d.Publications.AdminRestoreDocumentTemplate)
 				}
 
 				// Прайс площадки: сколько платит клиент за креатора и

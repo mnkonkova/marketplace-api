@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -138,7 +140,7 @@ func TestCollectionFollowsSchedule(t *testing.T) {
 	// миллисекунд между посевом ссылки и взятием now — возраст уезжал
 	// на следующую ступень, и «пора» превращалось в «ещё рано».
 	fake.byURL[url] = okResult(url, 1500, 60, 9)
-	st, err = svc.RefreshProject(ctx, projectID, now.Add(12*time.Minute), 25)
+	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(12*time.Minute), 25)
 	if err != nil {
 		t.Fatalf("RefreshProject: %v", err)
 	}
@@ -1109,7 +1111,7 @@ func TestRefreshProjectRespectsItsOwnSchedule(t *testing.T) {
 	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
 
 	now := time.Now().UTC()
-	st, err := svc.RefreshProject(ctx, projectID, now, 25)
+	st, err := svc.RefreshProject(ctx, projectID, nil, now, 25)
 	if err != nil {
 		t.Fatalf("RefreshProject: %v", err)
 	}
@@ -1119,7 +1121,7 @@ func TestRefreshProjectRespectsItsOwnSchedule(t *testing.T) {
 
 	// Через полминуты — ничего: ролику меньше минуты, шаг для такого
 	// возраста ровно минута.
-	st, err = svc.RefreshProject(ctx, projectID, now.Add(30*time.Second), 25)
+	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(30*time.Second), 25)
 	if err != nil {
 		t.Fatalf("RefreshProject (повтор): %v", err)
 	}
@@ -1145,7 +1147,7 @@ func TestRefreshProjectWithoutCollectorSaysSo(t *testing.T) {
 	defer cleanup()
 
 	svc := publications.NewService(publications.NewRepo(pool))
-	_, err := svc.RefreshProject(ctx, projectID, time.Now().UTC(), 25)
+	_, err := svc.RefreshProject(ctx, projectID, nil, time.Now().UTC(), 25)
 	if !errors.Is(err, publications.ErrCollectorNotSet) {
 		t.Errorf("%v, ожидалось ErrCollectorNotSet", err)
 	}
@@ -1304,7 +1306,7 @@ func TestCollectFailureKeepsReason(t *testing.T) {
 	fake.byURL[url] = okResult(url, 1200, 40, 3)
 	// Своим расписанием ссылка уедет на сутки вперёд, поэтому зовём тот
 	// путь, которым ходит открытая карточка.
-	if _, err := svc.RefreshProject(ctx, projectID, time.Now().UTC().Add(12*time.Minute), 25); err != nil {
+	if _, err := svc.RefreshProject(ctx, projectID, nil, time.Now().UTC().Add(12*time.Minute), 25); err != nil {
 		t.Fatalf("RefreshProject: %v", err)
 	}
 	rep, err = repo.Report(ctx, projectID, publications.ReportFilter{})
@@ -1316,5 +1318,197 @@ func TestCollectFailureKeepsReason(t *testing.T) {
 	}
 	if rep.VideoRows[0].Views != 1200 {
 		t.Errorf("просмотры %d, ожидалось 1200", rep.VideoRows[0].Views)
+	}
+}
+
+// Ссылка, по которой сбор НЕ УДАЁТСЯ, не ходит в сборщик без конца.
+//
+// Самая дорогая находка ревью. Свежесть считалась по last_collected_at,
+// а его пишет только успех: у ссылки, которую сборщик не умеет (VK,
+// Likee, удалённый ролик), он оставался NULL навсегда. Значит, при
+// КАЖДОМ открытии карточки и каждом F5 такая ссылка снова уезжала в
+// платный обход — и дороже всех обходились ровно те, которые заведомо
+// ничего не вернут.
+func TestRefreshCountsFailedAttemptAsFreshness(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://vk.com/clip-7_7"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: {Platform: "vk", URL: url, Kind: "media", OK: false,
+			Error: "Метрики отдельных постов для 'vk' пока не поддержаны"},
+	}}
+	svc := publications.NewService(publications.NewRepo(pool)).WithCollector(fake)
+
+	now := time.Now().UTC()
+	st, err := svc.RefreshProject(ctx, projectID, nil, now, 25)
+	if err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	if st.NoData != 1 {
+		t.Fatalf("первый проход: %+v, ожидался отказ сборщика", st)
+	}
+
+	// Полминуты спустя — шаг ещё не прошёл, и платить второй раз не за
+	// что. Раньше здесь был второй поход, и так до бесконечности.
+	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(30*time.Second), 25)
+	if err != nil {
+		t.Fatalf("RefreshProject (повтор): %v", err)
+	}
+	if st.Considered != 0 {
+		t.Errorf("повтор взял %d ссылок, ожидалось 0", st.Considered)
+	}
+	if fake.calls != 1 {
+		t.Errorf("в instacurl сходили %d раза, ожидался один — отказ не считается за свежесть",
+			fake.calls)
+	}
+
+	// А когда шаг прошёл — идём снова: отказ мог быть временным.
+	st, err = svc.RefreshProject(ctx, projectID, nil, now.Add(12*time.Minute), 25)
+	if err != nil {
+		t.Fatalf("RefreshProject (по сроку): %v", err)
+	}
+	if st.Considered != 1 {
+		t.Errorf("по сроку взято %d, ожидалась одна ссылка", st.Considered)
+	}
+}
+
+// Креатор обновляет СВОИ ролики, а не весь проект.
+//
+// Чужие стоят кредитов, которых он не тратил, и сдвигают чужое
+// расписание сбора. Доступ к ручке при этом у него законный — он
+// участник проекта, — поэтому отказом тут не обойтись: нужна выборка.
+func TestRefreshByCreatorTouchesOnlyOwnLinks(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:2],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil || res.Created != 2 {
+		t.Fatalf("CreateBatch: created=%d err=%v", res.Created, err)
+	}
+	urls := map[uuid.UUID]string{
+		creators[0]: "https://www.tiktok.com/@a/video/1001",
+		creators[1]: "https://www.tiktok.com/@b/video/1002",
+	}
+	for _, p := range res.Items {
+		if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+			PublicationID: p.ID, ActorUserID: *p.CreatorUserID,
+			URLs: []string{urls[*p.CreatorUserID]},
+		}); err != nil {
+			t.Fatalf("SubmitLinks: %v", err)
+		}
+	}
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		urls[creators[0]]: okResult(urls[creators[0]], 10, 1, 0),
+		urls[creators[1]]: okResult(urls[creators[1]], 20, 2, 0),
+	}}
+	svc = svc.WithCollector(fake)
+
+	st, err := svc.RefreshProject(ctx, projectID, &creators[0], time.Now().UTC(), 25)
+	if err != nil {
+		t.Fatalf("RefreshProject: %v", err)
+	}
+	if st.Considered != 1 || st.Saved != 1 {
+		t.Fatalf("%+v, ожидалась ровно одна своя ссылка", st)
+	}
+	if len(fake.urlsSeen) != 1 || fake.urlsSeen[0] != urls[creators[0]] {
+		t.Errorf("в сборщик ушло %v, ожидалась только своя ссылка", fake.urlsSeen)
+	}
+}
+
+// Причина отказа сборщика заказчику не показывается.
+//
+// Это текст СТОРОННЕГО сервиса, написанный для нас: «ScrapeCreators
+// 404», «кончились кредиты». Заказчику он говорит не про его ролики, а
+// про то, чем и на какие деньги мы их считаем. Чистим в модели, а не
+// прячем на фронте: тот же JSON уходит в выгрузку и чужому клиенту.
+func TestClientReportHidesCollectError(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://vk.com/clip-8_8"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: {Platform: "vk", URL: url, Kind: "media", OK: false,
+			Error: "ScrapeCreators 404: Account doesn't exist"},
+	}}
+	repo := publications.NewRepo(pool)
+	if _, err := publications.NewService(repo).WithCollector(fake).
+		RunCollection(ctx, time.Now().UTC(), 50); err != nil {
+		t.Fatalf("RunCollection: %v", err)
+	}
+
+	rep, err := repo.Report(ctx, projectID, publications.ReportFilter{})
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if len(rep.VideoRows) == 0 || rep.VideoRows[0].CollectError == "" {
+		t.Fatalf("менеджер должен видеть причину: %+v", rep.VideoRows)
+	}
+
+	forClient := rep.ForClient()
+	for _, v := range forClient.VideoRows {
+		if v.CollectError != "" || v.CollectTriedAt != nil {
+			t.Errorf("заказчику уехала наша кухня: %q", v.CollectError)
+		}
+	}
+	// И менеджерский отчёт при этом не испорчен: ForClient возвращает
+	// копию, а не правит исходный.
+	if rep.VideoRows[0].CollectError == "" {
+		t.Error("ForClient затёр причину в исходном отчёте")
+	}
+}
+
+// Длинную причину режем по буквам, а не по байтам.
+//
+// Кириллица двухбайтовая: срез по байту разрубает букву пополам,
+// Postgres такую строку не принимает, MarkFailed возвращает ошибку — и
+// сбор обрывает ВСЮ пачку. Остальные ссылки остаются без снимков и
+// через десять минут оплачиваются заново.
+func TestCollectErrorIsCutByRunes(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+
+	const url = "https://likee.video/@u/video/9"
+	projectID, _, cleanup := setupSubmittedLinks(t, url)
+	defer cleanup()
+
+	long := strings.Repeat("ошибка сборщика ", 60) // заведомо длиннее потолка
+	fake := &fakeCollector{byURL: map[string]instacurl.Result{
+		url: {Platform: "likee", URL: url, Kind: "media", OK: false, Error: long},
+	}}
+	repo := publications.NewRepo(pool)
+	if _, err := publications.NewService(repo).WithCollector(fake).
+		RunCollection(ctx, time.Now().UTC(), 50); err != nil {
+		t.Fatalf("RunCollection: %v", err)
+	}
+
+	rep, err := repo.Report(ctx, projectID, publications.ReportFilter{})
+	if err != nil {
+		t.Fatalf("Report: %v", err)
+	}
+	if len(rep.VideoRows) != 1 {
+		t.Fatalf("строк в отчёте %d", len(rep.VideoRows))
+	}
+	got := rep.VideoRows[0].CollectError
+	if got == "" {
+		t.Fatal("причина не сохранилась вовсе")
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("битый UTF-8 в причине: %q", got)
 	}
 }

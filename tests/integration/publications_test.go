@@ -970,3 +970,123 @@ func TestVideoTitleLengthIsChecked(t *testing.T) {
 		t.Errorf("ожидали отказ по длине названия, получили %v", err)
 	}
 }
+
+// Чужую выкладку проверяем ДО похода в сеть.
+//
+// Разворачивание коротких ссылок ходит по адресу, который прислал
+// человек. Пока проверка владельца жила в репозитории, она случалась
+// ПОСЛЕ: ответ приходил 404, а запросы с нашего адреса уже уходили —
+// любой залогиненный получал «слепой» исходящий GET чужими руками.
+func TestSubmitLinksChecksOwnerBeforeNetwork(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	spy := &countingExpander{}
+	svc = svc.WithURLExpander(spy)
+
+	// Сдаёт НЕ владелец и присылает короткую ссылку — ту самую, ради
+	// которой мы ходим в сеть.
+	_, err = svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+		PublicationID: res.Items[0].ID,
+		ActorUserID:   creators[1],
+		URLs:          []string{"https://vt.tiktok.com/ZSbyuhrDf"},
+	})
+	if !errors.Is(err, publications.ErrForbidden) {
+		t.Fatalf("чужая сдача: %v, ожидалось ErrForbidden", err)
+	}
+	if spy.calls != 0 {
+		t.Errorf("в сеть сходили %d раз по чужому запросу — проверка прав опоздала", spy.calls)
+	}
+}
+
+// countingExpander — считает походы в сеть, сам никуда не ходит.
+type countingExpander struct{ calls int }
+
+func (c *countingExpander) Expand(_ context.Context, raw string) (string, error) {
+	c.calls++
+	return raw, nil
+}
+
+// Пересдача ДРУГОГО адреса на ту же площадку обнуляет замеры.
+//
+// Строка ссылки при пересдаче остаётся та же (upsert по паре «выкладка
+// и площадка»), а с ней оставался и весь ряд просмотров старого видео:
+// накопительные цифры двух роликов склеивались в одну линию. Менеджер
+// этот случай чистил, а сдача через окно — нет, и одно действие давало
+// разный результат в зависимости от того, какой кнопкой сделано.
+func TestResubmitWithNewURLResetsStats(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	res, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(0)},
+		CreatedBy:      creators[0],
+	})
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	pubID := res.Items[0].ID
+
+	submit := func(url string) {
+		t.Helper()
+		if _, err := svc.SubmitLinks(ctx, publications.SubmitLinksInput{
+			PublicationID: pubID, ActorUserID: creators[0], URLs: []string{url},
+		}); err != nil {
+			t.Fatalf("SubmitLinks %s: %v", url, err)
+		}
+	}
+	countStats := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM video_stat_daily d
+JOIN publication_links l ON l.id = d.link_id
+WHERE l.publication_id = $1`, pubID).Scan(&n); err != nil {
+			t.Fatalf("count stats: %v", err)
+		}
+		return n
+	}
+
+	submit("https://www.tiktok.com/@u/video/111")
+	var linkID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM publication_links WHERE publication_id = $1`, pubID).Scan(&linkID); err != nil {
+		t.Fatalf("read link: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO video_stat_daily (link_id, stat_date, views, likes, comments)
+VALUES ($1, CURRENT_DATE, 500000, 100, 10)`, linkID); err != nil {
+		t.Fatalf("посеять замер: %v", err)
+	}
+
+	// Тот же адрес — замеры на месте: ролик тот же, его и правили.
+	submit("https://www.tiktok.com/@u/video/111")
+	if n := countStats(); n != 1 {
+		t.Fatalf("после пересдачи того же адреса замеров %d, ожидался один", n)
+	}
+
+	// Другой адрес — другой ролик, прежние цифры к нему не относятся.
+	submit("https://www.tiktok.com/@u/video/222")
+	if n := countStats(); n != 0 {
+		t.Errorf("после смены адреса осталось %d замеров — цифры старого ролика "+
+			"приклеились к новому", n)
+	}
+}

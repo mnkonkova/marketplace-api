@@ -147,9 +147,10 @@ type GaugeSnapshot struct {
 
 // neverCollectedGrace — сколько ссылке дозволено прожить без цифр.
 //
-// Два часа, а не десять минут: тик сбора по умолчанию часовой, и ссылка,
-// сданная за минуту до прохода, законно ждёт следующего. Две форы
-// подряд уже означают, что сбор не работает.
+// Два часа, а не десять минут: ссылка, сданная за минуту до прохода,
+// законно ждёт следующего тика, а сам сбор может быть занят очередью.
+// Два часа молчания по ссылке, которую НИ РАЗУ не пробовали собрать,
+// означают, что сбор не поднялся вовсе.
 const neverCollectedGrace = 2 * time.Hour
 
 // RefreshGauges — пересчитать бизнес-gauge'и. Дешёвые запросы по узким
@@ -180,6 +181,11 @@ FROM publication_links l
 JOIN project_publications p ON p.id = l.publication_id
 JOIN projects pr ON pr.id = p.project_id
 WHERE l.last_collected_at IS NULL
+  -- И попытки не было: ссылка, по которой сбор ХОДИЛ и получил отказ,
+  -- сюда не относится — про неё говорит причина в отчёте, а алерт
+  -- тревожит о том, что сбор не поднялся вовсе. Иначе один
+  -- неподдержанный VK держал бы алерт горящим вечно.
+  AND l.last_collect_try_at IS NULL
   AND l.next_collect_at <> `+ParkedAt+`
   AND l.submitted_at < $1::timestamptz - $2::interval
   AND p.status <> 'cancelled'

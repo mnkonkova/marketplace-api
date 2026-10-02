@@ -1789,3 +1789,62 @@ func TestSaveTermsKeepsFeePerVideoOverHTTP(t *testing.T) {
 	}
 	_ = creators
 }
+
+// Лесенки просмотров и подписчиков живут в одной таблице и не мешают
+// друг другу.
+//
+// Таблица общая намеренно: правило «ступень — это порог и две цены»
+// одно на оба вида. Но цену они задают РАЗНУЮ: ступень просмотров —
+// это цена периода, ступень подписчиков — доплата сверху. Прочитанная
+// не тем видом, одна молча становится другой, и период на тысяче
+// просмотров начинает стоить столько, сколько объявлено за тысячу
+// подписчиков.
+func TestStepKindsDoNotLeakIntoEachOther(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	svc := billing.NewService(billing.NewRepo(pool))
+	if _, err := svc.SaveTerms(ctx, billing.Terms{
+		ProjectID: projectID,
+		Steps:     []billing.TermsStep{{FromViews: 1000, ClientFee: 500000}},
+	}, creators[0]); err != nil {
+		t.Fatalf("SaveTerms: %v", err)
+	}
+	// Ступень подписчиков кладём мимо сервиса: Go-части у неё ещё нет,
+	// а проверяем мы именно изоляцию чтения и перезаписи.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO terms_steps (project_id, kind, from_views, client_fee)
+VALUES ($1, 'subscribers', 1000, 999999)`, projectID); err != nil {
+		t.Fatalf("посеять ступень подписчиков: %v", err)
+	}
+
+	got, err := svc.Terms(ctx, projectID)
+	if err != nil {
+		t.Fatalf("Terms: %v", err)
+	}
+	if len(got.Steps) != 1 {
+		t.Fatalf("ступеней просмотров %d, ожидалась одна — чужой вид утёк в лесенку", len(got.Steps))
+	}
+	if got.Steps[0].ClientFee != 500000 {
+		t.Errorf("цена ступени %d, ожидалось 500000", got.Steps[0].ClientFee)
+	}
+
+	// Перезапись лесенки просмотров не стирает подписчиков.
+	if _, err := svc.SaveTerms(ctx, billing.Terms{
+		ProjectID: projectID,
+		Steps:     []billing.TermsStep{{FromViews: 2000, ClientFee: 700000}},
+	}, creators[0]); err != nil {
+		t.Fatalf("SaveTerms (повтор): %v", err)
+	}
+	var subs int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM terms_steps WHERE project_id = $1 AND kind = 'subscribers'`,
+		projectID).Scan(&subs); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if subs != 1 {
+		t.Errorf("ступеней подписчиков осталось %d — сохранение просмотров стёрло соседний вид", subs)
+	}
+}

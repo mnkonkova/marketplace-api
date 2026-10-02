@@ -102,6 +102,9 @@ var chatRouting = map[string]Delivery{
 	"project.project_materials_updated": CRMOnly,
 	"project.project_checklist_updated": CRMOnly,
 	"project.project_creator_briefed":   CRMOnly,
+	// Документ выдан лично — разговор с адресатом в его боте, а не с
+	// командой: менеджер сам его только что выдал.
+	"project.document_delivered": CRMOnly,
 
 	// Правка ссылки менеджером — CRMOnly: это внутренняя починка
 	// данных, а не повод отвечать человеком. В карточке выкладки она
@@ -155,10 +158,11 @@ var chatRouting = map[string]Delivery{
 	// Порог просмотров эмитился и до этого, но строки здесь не было:
 	// событие уходило в вебхук и терялось в ветке «неизвестное», то
 	// есть считалось отправленным и не доходило никуда.
-	"project.client_views_threshold": CRMOnly,
-	"project.client_new_video":       CRMOnly,
-	"project.client_date_shift":      CRMOnly,
-	"project.client_weekly_digest":   CRMOnly,
+	"project.client_views_threshold":    CRMOnly,
+	"project.client_new_video":          CRMOnly,
+	"project.client_date_shift":         CRMOnly,
+	"project.client_weekly_digest":      CRMOnly,
+	"project.client_document_delivered": CRMOnly,
 	// А это — наоборот, в чат: заказчик ПРОСИТ следующий месяц, и
 	// ответить на просьбу может только человек. В CRM заявка видна
 	// плашкой в проекте, но проект открывают, когда в нём что-то

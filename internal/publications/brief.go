@@ -75,7 +75,7 @@ SELECT p.title,
        -- проекте материалов.
        (SELECT count(*) FROM project_materials m
          WHERE m.project_id = p.id AND m.delivery_id IS NULL
-           AND m.audience = 'creators'),
+           AND m.deleted_at IS NULL AND m.audience = 'creators'),
        (SELECT count(*) FROM project_checklist_items c
          WHERE c.project_id = p.id)
 FROM projects p WHERE p.id = $1`, projectID).Scan(&title, &materials, &checklist); err != nil {
@@ -148,7 +148,7 @@ func notifyNewCreator(
 	if err := tx.QueryRow(ctx, `
 SELECT EXISTS (SELECT 1 FROM project_materials m
                 WHERE m.project_id = $1 AND m.delivery_id IS NULL
-                  AND m.audience = 'creators')
+                  AND m.deleted_at IS NULL AND m.audience = 'creators')
     OR EXISTS (SELECT 1 FROM project_checklist_items c WHERE c.project_id = $1)`,
 		projectID).Scan(&has); err != nil {
 		return fmt.Errorf("brief exists: %w", err)

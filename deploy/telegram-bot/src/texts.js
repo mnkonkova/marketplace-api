@@ -60,7 +60,8 @@ export function targetFor(eventType, d = {}) {
   switch (eventType) {
     case 'project.publication_due_tomorrow':
     case 'project.publication_due_today':
-    case 'project.publication_no_views':
+    case 'project.publication_weak':
+    case 'project.publication_dead_link':
     case 'project.publication_incomplete':
     case 'project.publication_manual':
     case 'project.publication_returned':
@@ -70,6 +71,7 @@ export function targetFor(eventType, d = {}) {
     case 'project.project_creator_briefed':
     case 'project.project_materials_updated':
     case 'project.project_checklist_updated':
+    case 'project.document_delivered':
       return project ? { bot: 'creator', path: `/me/creator/projects/${project}` } : null;
     case 'order.invitation_sent':
     case 'order.broadcast_sent':
@@ -78,10 +80,28 @@ export function targetFor(eventType, d = {}) {
     case 'project.client_views_threshold':
     case 'project.client_date_shift':
     case 'project.client_weekly_digest':
+    case 'project.client_document_delivered':
       return project ? { bot: 'client', path: `/me/projects/${project}` } : null;
     default:
       return null;
   }
+}
+
+const DOC_KIND = { contract: 'Договор', act: 'Акт', nda: 'NDA', other: 'Документ' };
+
+/**
+ * Документ выдали лично. Что это, к какому проекту и что с ним сделать —
+ * пояснение менеджера («подпишите и пришлите в комментарии») идёт
+ * отдельной строкой, если есть. Ссылку на сам документ в сообщение не
+ * кладём: документ открывают в кабинете, и там же отмечается, что он
+ * дошёл.
+ */
+function documentText(d, project, link) {
+  const kind = DOC_KIND[d.kind] || 'Документ';
+  const title = d.document_title ? `: ${String(d.document_title).slice(0, 200)}` : '';
+  return `${kind}${title} · ${project}\n` +
+    (d.note ? `${String(d.note).slice(0, 400)}\n` : '') +
+    `Открыть: ${link}`;
 }
 
 /**
@@ -114,17 +134,28 @@ export function messageFor(eventType, d = {}, app, recipient = null) {
     // это не тот адрес, теневой бан или закрытый аккаунт. Поэтому текст
     // не обвиняет и не хвалит, а зовёт проверить — и говорит, что
     // именно проверять.
-    case 'project.publication_no_views': {
+    // Ролик вышел и не пошёл. Два разных события и два разных текста:
+    // «мало просмотров» — про сам ролик, «ссылка ничего не отдаёт» —
+    // про то, что его там нет вовсе, и качество тут ни при чём.
+    //
+    // Текстов у этих событий не было вовсе: сервер клал их в очередь,
+    // а бот молча выбрасывал — messageFor возвращал null. Снаружи это
+    // выглядело как «пинга на нулевые просмотры у нас нет».
+    case 'project.publication_weak': {
       const views = Number(d.views || 0);
-      // Склонение руками: «41 просмотров» выдаёт машину, а письмо
-      // должно читаться как от человека.
       const tail = views % 10 === 1 && views % 100 !== 11 ? 'просмотр'
         : [2, 3, 4].includes(views % 10) && ![12, 13, 14].includes(views % 100) ? 'просмотра'
           : 'просмотров';
-      const head = views > 0
-        ? `Ролик почти не смотрят · ${project}\nЗа двое суток ${views} ${tail}.`
-        : `У ролика нет просмотров · ${project}\nЗа двое суток ноль.`;
-      return `${head}\nПроверьте, открывается ли ссылка и виден ли ролик чужому аккаунту.\n${projectLink}`;
+      const what = d.title ? `«${String(d.title).slice(0, 80)}»` : 'Ролик';
+      return `${what} почти не смотрят · ${project}\n` +
+        `За двое суток ${views} ${tail}.\n` +
+        `Посмотрите, что с обложкой и первыми тремя секундами — ещё можно перезалить.\n${projectLink}`;
+    }
+    case 'project.publication_dead_link': {
+      const what = d.title ? `«${String(d.title).slice(0, 80)}»` : 'Ролик';
+      return `${what} не открывается · ${project}\n` +
+        `По ссылке площадка ничего не отдаёт: ролик удалён, закрыт или адрес неверный.\n` +
+        `Пришлите новый адрес — счётчики начнутся заново.\n${projectLink}`;
     }
     case 'project.publication_returned':
       return `Ролик вернули с замечанием · ${project}\n` +
@@ -144,6 +175,8 @@ export function messageFor(eventType, d = {}, app, recipient = null) {
         `Перед съёмкой загляните: снимать по вчерашнему заданию — это пересъёмка.\n${projectLink}`;
     case 'project.project_checklist_updated':
       return `Чек-лист сдачи изменился · ${project}\n${projectLink}`;
+    case 'project.document_delivered':
+      return documentText(d, project, projectLink);
 
     case 'order.invitation_sent':
       return `Вас зовут в проект\n` +
@@ -161,6 +194,8 @@ export function messageFor(eventType, d = {}, app, recipient = null) {
     }
 
     // ---- заказчик ----
+    case 'project.client_document_delivered':
+      return documentText(d, project, clientLink);
     case 'project.client_new_video':
       return `Вышел новый ролик · ${project}\n${clientLink}`;
     case 'project.client_views_threshold':

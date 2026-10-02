@@ -265,10 +265,10 @@ func TestDeleteMaterialScopedToProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if err := svc.DeleteMaterial(ctx, otherPID, m.ID); !errors.Is(err, publications.ErrNotFound) {
+	if err := svc.DeleteMaterial(ctx, otherPID, m.ID, creators[0]); !errors.Is(err, publications.ErrNotFound) {
 		t.Errorf("удаление из чужого проекта: want ErrNotFound, got %v", err)
 	}
-	if err := svc.DeleteMaterial(ctx, pid, m.ID); err != nil {
+	if err := svc.DeleteMaterial(ctx, pid, m.ID, creators[0]); err != nil {
 		t.Errorf("удаление из своего проекта: %v", err)
 	}
 }

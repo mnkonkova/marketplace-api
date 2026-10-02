@@ -214,6 +214,38 @@ func (r *Repo) CreateBatch(ctx context.Context, in CreateBatchInput) (BatchResul
 		}
 	}
 
+	// В подытоженный период пачкой не дописывают.
+	//
+	// Раньше от этого защищала сама идемпотентность: на прошедших датах
+	// выкладка уже стояла, и повтор гасился уникальным индексом. С
+	// «роликов в день» защита исчезла — окно простановки открывается со
+	// ВСЕМИ уже отмеченными датами, и одно нажатие «2» дописывает второй
+	// слот на каждый прошедший день проекта. Попади такой день в
+	// замороженный период — и мы поменяли то, по чему уже выставлен счёт.
+	//
+	// Проверяем одним запросом на всю пачку: дат бывает шестьдесят, и
+	// шестьдесят round-trip'ов внутри транзакции ради одного правила ни
+	// к чему. Правило то же, что у одиночной постановки (assertPeriodOpen).
+	days := make([]time.Time, 0, len(in.Dates))
+	for _, d := range in.Dates {
+		days = append(days, truncateDay(d))
+	}
+	var lockedDay *time.Time
+	if err := tx.QueryRow(ctx, `
+SELECT d::date FROM unnest($2::date[]) AS d
+WHERE EXISTS (
+    SELECT 1 FROM project_periods pp
+    WHERE pp.project_id = $1 AND pp.status = 'locked'
+      AND d::date BETWEEN pp.starts_on AND pp.ends_on
+)
+LIMIT 1`, in.ProjectID, days).Scan(&lockedDay); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return BatchResult{}, fmt.Errorf("check locked periods: %w", err)
+	}
+	if lockedDay != nil {
+		return BatchResult{}, fmt.Errorf("%w: %s", ErrPeriodLocked,
+			lockedDay.Format("2006-01-02"))
+	}
+
 	batchID := uuid.New()
 
 	// Один INSERT на всю пачку вместо запроса на каждую пару
@@ -1051,6 +1083,25 @@ SET url = EXCLUDED.url,
     next_collect_at = ` + keepParked("publication_links.next_collect_at", "now()")
 
 	for _, l := range parsed {
+		// Сменился адрес — значит это ДРУГОЙ ролик, и прежние замеры к
+		// нему не относятся.
+		//
+		// Строка ссылки при пересдаче остаётся та же (upsert по паре
+		// «выкладка и площадка»), а с ней оставался и весь ряд
+		// просмотров старого видео: накопительные цифры двух роликов
+		// склеивались в одну линию. Менеджерская правка этот случай
+		// чистила, а сдача через окно — нет, и одно и то же действие
+		// давало разный результат в зависимости от кнопки.
+		//
+		// Порядок тот же, что в сборе: сперва замеры, потом ссылка —
+		// иначе кольцо блокировок и 40P01 (см. ManagerRemoveLink).
+		if _, err := tx.Exec(ctx, `
+DELETE FROM video_stat_daily WHERE link_id IN (
+    SELECT id FROM publication_links
+    WHERE publication_id = $1 AND platform = $2 AND url_canonical <> $3
+)`, in.PublicationID, l.Platform, l.Canonical); err != nil {
+			return Publication{}, fmt.Errorf("reset stats %s: %w", l.Platform, err)
+		}
 		if _, err := tx.Exec(ctx, upsert, in.PublicationID, l.Platform, l.Raw, l.Canonical, l.MediaID); err != nil {
 			return Publication{}, fmt.Errorf("upsert link %s: %w", l.Platform, err)
 		}
@@ -1248,6 +1299,22 @@ func (r *Repo) ManagerRemoveLink(ctx context.Context, in ManagerEditLinkInput) (
 	projectID, err := lockPublicationForEdit(ctx, tx, in.PublicationID)
 	if err != nil {
 		return Publication{}, err
+	}
+
+	// Замеры сносим ЯВНО и ПЕРВЫМИ, хотя их и так утащил бы каскад.
+	//
+	// Дело в порядке блокировок. Сбор берёт сперва video_stat_daily
+	// (upsert замера), потом publication_links (перенос расписания).
+	// Каскадное удаление идёт наоборот — сперва ссылка, потом её
+	// замеры, — и две транзакции замыкаются в кольцо: Postgres ловит
+	// 40P01 и убивает одну. Либо пятисотка у менеджера, либо оборванная
+	// пачка сбора. Окно раньше было узким (часовой тик), а теперь тик
+	// минутный и сбор идёт ещё и из API по заходу в карточку.
+	if _, err := tx.Exec(ctx, `
+DELETE FROM video_stat_daily WHERE link_id IN (
+    SELECT id FROM publication_links WHERE publication_id = $1 AND platform = $2
+)`, in.PublicationID, in.Platform); err != nil {
+		return Publication{}, fmt.Errorf("delete link stats: %w", err)
 	}
 
 	tag, err := tx.Exec(ctx,

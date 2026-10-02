@@ -405,6 +405,10 @@ func main() {
 			{Limit: cfg.RateCRMPerMin, Period: time.Minute},
 			{Limit: cfg.RateCRMPerHour, Period: time.Hour},
 		},
+		RefreshWindows: []ratelimit.Window{
+			{Limit: cfg.RateRefreshPerMin, Period: time.Minute},
+			{Limit: cfg.RateRefreshPerHour, Period: time.Hour},
+		},
 	})
 
 	srv := &http.Server{

@@ -273,16 +273,43 @@ func (s *Service) SubmitLinks(ctx context.Context, in SubmitLinksInput) (Publica
 	if utf8.RuneCountInString(in.Title) > 120 {
 		return Publication{}, fmt.Errorf("%w: название ролика длиннее 120 символов", ErrInvalidInput)
 	}
+	// Чья это выкладка — выясняем ДО единственного исходящего запроса.
+	//
+	// Разворачивание коротких ссылок ходит в сеть по адресу, который
+	// прислал человек. Пока проверка владельца жила ниже, в репозитории,
+	// любой залогиненный мог прислать чужой id выкладки и пять коротких
+	// адресов: ответ он получал 404, а пять запросов с нашего адреса
+	// уже уходили. Белый список хостов это ограничивает, но платить
+	// чужой нагрузкой за чужой запрос всё равно незачем.
+	mine, err := s.repo.PublicationBelongsTo(ctx, in.PublicationID, in.ActorUserID)
+	if err != nil {
+		return Publication{}, err
+	}
+	if !mine {
+		// Тот же исход, что и раньше давал репозиторий: ErrForbidden,
+		// который хендлер отдаёт как 404. Менять сентинел нельзя —
+		// по нему же отличается «ролик проекта без креаторов», где
+		// креаторской сдачи не бывает вовсе.
+		return Publication{}, ErrForbidden
+	}
+
+	// Короткие ссылки разворачиваем ПАРАЛЛЕЛЬНО, а не по очереди.
+	//
+	// В vt.tiktok.com/ZSbyuhrDf нет ни автора, ни id ролика, и сборщик
+	// принимает её хвост за имя аккаунта (см. shortlinks.go), поэтому
+	// разворачиваем сами. Но это поход в сеть на каждую: пять площадок,
+	// две из них короткие и обе молчат — и форма сдачи висит десять
+	// секунд вместо пяти. Ждём их разом: человек на том конце ждёт
+	// самый долгий ответ, а не их сумму.
+	expanded := s.expandAll(ctx, in.URLs)
+
 	parsed := make([]Link, 0, len(in.URLs))
 	seen := make(map[string]bool, len(in.URLs))
-	for _, raw := range in.URLs {
+	for i, raw := range in.URLs {
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
-		// Короткую ссылку из приложения разворачиваем ДО разбора: в
-		// vt.tiktok.com/ZSbyuhrDf нет ни автора, ни id ролика, и
-		// сборщик принимает её хвост за имя аккаунта (см. shortlinks.go).
-		l, err := ParseLink(s.expandShort(ctx, raw))
+		l, err := ParseLink(expanded[i])
 		if err != nil {
 			return Publication{}, fmt.Errorf("%q: %w", raw, err)
 		}

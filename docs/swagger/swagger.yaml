@@ -6464,6 +6464,30 @@ definitions:
       views:
         type: integer
     type: object
+  internal_publications.DocumentTemplate:
+    properties:
+      archived_at:
+        type: string
+      audience:
+        type: string
+      created_at:
+        type: string
+      current:
+        allOf:
+        - $ref: '#/definitions/internal_publications.TemplateVersion'
+        description: 'Current — действующая версия: последняя по номеру.'
+      id:
+        type: string
+      kind:
+        type: string
+      title:
+        type: string
+      versions:
+        description: Versions — история, свежие сверху. Только в выдаче админу.
+        items:
+          $ref: '#/definitions/internal_publications.TemplateVersion'
+        type: array
+    type: object
   internal_publications.LinkSuggestion:
     properties:
       author_handle:
@@ -6549,6 +6573,32 @@ definitions:
       videos:
         type: integer
     type: object
+  internal_publications.MyDocument:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      note:
+        type: string
+      opened_at:
+        type: string
+      project_id:
+        type: string
+      project_title:
+        type: string
+      sent_at:
+        type: string
+      source:
+        description: |-
+          Source — personal (выдан лично, можно отметить открытым) или
+          project (договор из материалов проекта, общий для состава).
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
   internal_publications.NotificationPrefs:
     properties:
       on_date_shift:
@@ -6579,6 +6629,16 @@ definitions:
         type: object
       added_at:
         description: AddedAt — когда включён в состав проекта.
+        type: string
+      avatar_url:
+        description: |-
+          AvatarURL — портрет из профиля специалиста. Пусто у тех, кто его
+          не ставил: буквы имени нарисует фронт.
+
+          Состав проекта читают глазами и по лицам — в плане, в ссылках, в
+          проверке ролика один и тот же человек встречается трижды. Пока
+          портрета не было, везде стояли буквы, и строки не связывались в
+          одного человека.
         type: string
       display_name:
         type: string
@@ -6656,6 +6716,13 @@ definitions:
           подставной владелец тут же полез бы в состав, в отчёт по людям и
           в начисления как настоящий участник.
         type: string
+      day_slot:
+        description: |-
+          DaySlot — какой это ролик внутри дня, начиная с единицы. В дне
+          их может быть несколько, и номер нужен, чтобы отличать их друг
+          от друга: по нему стоит уникальность и по нему же план понимает,
+          что день занят не целиком.
+        type: integer
       draft_due_date:
         type: string
       due_date:
@@ -6794,6 +6861,12 @@ definitions:
         type: boolean
       incomplete:
         description: Incomplete — ролик вышел, но собраны не все пять ссылок.
+        type: boolean
+      low_views:
+        description: |-
+          LowViews — ролик вышел, а просмотров почти нет (и его напарник
+          «ссылка ничего не отдаёт»). Включён по умолчанию: срабатывает
+          редко и по делу, в отличие от DayBefore.
         type: boolean
       manager_digest:
         description: ManagerDigest — сводка в общий чат менеджеров. Креаторы её не
@@ -6942,8 +7015,79 @@ definitions:
       url_canonical:
         type: string
     type: object
+  internal_publications.TemplateVersion:
+    properties:
+      id:
+        type: string
+      note:
+        type: string
+      published_at:
+        type: string
+      template_id:
+        type: string
+      url:
+        type: string
+      version:
+        type: integer
+    type: object
+  internal_publications.UserDocument:
+    properties:
+      audience:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      note:
+        type: string
+      opened_at:
+        type: string
+      project_id:
+        type: string
+      project_title:
+        type: string
+      recipient_name:
+        type: string
+      recipient_user_id:
+        type: string
+      revoked_at:
+        type: string
+      sent_at:
+        type: string
+      sent_by:
+        type: string
+      sent_by_name:
+        type: string
+      template_id:
+        type: string
+      template_version:
+        description: |-
+          TemplateVersion — номер версии шаблона, по которой выдан. Пусто —
+          менеджер приложил свою ссылку.
+        type: integer
+      title:
+        type: string
+      url:
+        type: string
+    type: object
   internal_publications.VideoRow:
     properties:
+      collect_error:
+        description: |-
+          CollectError — почему по этой ссылке нет цифр, словами сборщика.
+
+          Пусто — цифры есть либо обход ещё не доходил. Непусто вместе с
+          нулём означает «мы спросили, и нам отказали»: площадка не
+          собирается, ролик удалён, кончились кредиты. Без этого поля три
+          разных положения выглядели в кабинете одинаково — пустой цифрой,
+          — и «никто не посмотрел» оказывалось неотличимо от «мы не умеем
+          это считать».
+        type: string
+      collect_tried_at:
+        description: |-
+          CollectTriedAt — когда ходили в последний раз, удачно или нет.
+          Вместе с CollectedAt отвечает на вопрос «сбор идёт вообще?».
+        type: string
       collected_at:
         type: string
       comments:
@@ -7089,6 +7233,13 @@ definitions:
         type: integer
       from:
         type: string
+      per_day:
+        description: |-
+          PerDay — сколько роликов ставить на каждый день, по умолчанию
+          один. Это цель, а не прибавка: план приводится к заданному числу,
+          и повторная отправка той же формы не добавляет ничего (см.
+          ON CONFLICT DO NOTHING в CreateBatch).
+        type: integer
       scheme:
         $ref: '#/definitions/internal_publications.Scheme'
       to:
@@ -7156,6 +7307,19 @@ definitions:
       reason:
         type: string
     type: object
+  internal_publications.createDocumentTemplateReq:
+    properties:
+      audience:
+        type: string
+      kind:
+        type: string
+      note:
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
   internal_publications.creatorDocumentsResp:
     properties:
       items:
@@ -7191,6 +7355,37 @@ definitions:
     properties:
       approve:
         type: boolean
+    type: object
+  internal_publications.deliverDocumentReq:
+    properties:
+      audience:
+        description: Audience — creators или client.
+        type: string
+      kind:
+        type: string
+      note:
+        type: string
+      recipient_ids:
+        description: RecipientIDs — кому. Пусто — всему составу или заказчику проекта.
+        items:
+          type: string
+        type: array
+      template_id:
+        description: |-
+          TemplateID — выдать действующую версию шаблона. Пусто — своя
+          ссылка: тогда нужны kind, title и url.
+        type: string
+      title:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_publications.documentTemplatesResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.DocumentTemplate'
+        type: array
     type: object
   internal_publications.dueDateReq:
     properties:
@@ -7284,6 +7479,18 @@ definitions:
       request:
         $ref: '#/definitions/internal_publications.MonthRequest'
     type: object
+  internal_publications.myDocumentsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.MyDocument'
+        type: array
+    type: object
+  internal_publications.openedResp:
+    properties:
+      opened_at:
+        type: string
+    type: object
   internal_publications.personsResp:
     properties:
       items:
@@ -7309,6 +7516,26 @@ definitions:
           type: string
         type: array
       total:
+        type: integer
+    type: object
+  internal_publications.publishTemplateVersionReq:
+    properties:
+      note:
+        type: string
+      url:
+        type: string
+    type: object
+  internal_publications.refreshStatsResp:
+    properties:
+      refreshed:
+        description: |-
+          Refreshed — сколько ссылок обошли прямо сейчас. Ноль — цифры и так
+          свежие по расписанию, и это нормальный ответ, а не отказ.
+        type: integer
+      saved:
+        description: |-
+          Saved — по скольким пришли цифры. Меньше Refreshed — часть
+          площадок сборщик не умеет либо ролик ещё не проиндексирован.
         type: integer
     type: object
   internal_publications.remindResp:
@@ -7391,6 +7618,13 @@ definitions:
       items:
         items:
           $ref: '#/definitions/internal_publications.ChecklistTemplate'
+        type: array
+    type: object
+  internal_publications.userDocumentsResp:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/internal_publications.UserDocument'
         type: array
     type: object
   internal_ratings.Levels:
@@ -8507,6 +8741,141 @@ paths:
       summary: Шаблон чеклиста целиком (админ)
       tags:
       - admin-publications
+  /admin/document_templates:
+    get:
+      description: |-
+        Библиотека шаблонов с историей версий. archived=1 — вместе с
+        архивом: он не удаляется, а уходит из выбора у менеджера.
+      parameters:
+      - description: 1 — показать и архивные
+        in: query
+        name: archived
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.documentTemplatesResp'
+      security:
+      - BearerAuth: []
+      summary: Шаблоны документов (админ)
+      tags:
+      - admin-documents
+    post:
+      consumes:
+      - application/json
+      description: Шаблон и его первая версия. Документы — только ссылки.
+      parameters:
+      - description: шаблон
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.createDocumentTemplateReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.DocumentTemplate'
+        "400":
+          description: invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Завести шаблон документа (админ)
+      tags:
+      - admin-documents
+  /admin/document_templates/{id}/archive:
+    post:
+      description: |-
+        Не удаление: из выбора у менеджера уходит, история и выданные
+        по нему документы остаются. Вернуть — /restore.
+      parameters:
+      - description: template id
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Шаблон в архив (админ)
+      tags:
+      - admin-documents
+  /admin/document_templates/{id}/restore:
+    post:
+      parameters:
+      - description: template id
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вернуть шаблон из архива (админ)
+      tags:
+      - admin-documents
+  /admin/document_templates/{id}/versions:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Версии не правятся: выданные документы ссылаются на свою
+        версию, и новая их не трогает. Как у прайса.
+      parameters:
+      - description: template id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: версия
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.publishTemplateVersionReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.TemplateVersion'
+        "400":
+          description: invalid_input
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: template_archived
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Новая версия шаблона (админ)
+      tags:
+      - admin-documents
   /admin/managers:
     get:
       parameters:
@@ -10852,6 +11221,26 @@ paths:
       summary: Библиотека чеклистов (менеджер)
       tags:
       - manager-publications
+  /manager/document_templates:
+    get:
+      description: Только действующие, с текущей версией. audience — для кого.
+      parameters:
+      - description: creators | client
+        in: query
+        name: audience
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.documentTemplatesResp'
+      security:
+      - BearerAuth: []
+      summary: Шаблоны документов для выдачи (менеджер)
+      tags:
+      - manager-documents
   /manager/orders:
     get:
       description: |-
@@ -12557,6 +12946,129 @@ paths:
       summary: Поставить UTM-метку креатору (менеджер)
       tags:
       - manager-billing
+  /manager/projects/{id}/documents:
+    get:
+      description: |-
+        Кому что и когда выдали, открыли ли; отозванные тоже — с
+        отметкой.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.userDocumentsResp'
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Выданные документы проекта (менеджер)
+      tags:
+      - manager-documents
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Одному человеку, нескольким или всем по стороне проекта.
+        Адресат получает сообщение в бот; документ появляется в
+        «Моих документах».
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: что и кому
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_publications.deliverDocumentReq'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_publications.userDocumentsResp'
+        "400":
+          description: invalid_input — адресат не в проекте, нет ссылки и т.п.
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проекта или шаблона нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: template_archived
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Выдать документ (менеджер)
+      tags:
+      - manager-documents
+  /manager/projects/{id}/documents/{doc_id}/revoke:
+    post:
+      description: |-
+        У адресата пропадает, в истории выдачи остаётся. Вернуть —
+        /unrevoke.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: document id
+        in: path
+        name: doc_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отозвать документ (менеджер)
+      tags:
+      - manager-documents
+  /manager/projects/{id}/documents/{doc_id}/unrevoke:
+    post:
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: document id
+        in: path
+        name: doc_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: not_found
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Вернуть отозванный документ (менеджер)
+      tags:
+      - manager-documents
   /manager/projects/{id}/events:
     get:
       parameters:
@@ -13325,6 +13837,45 @@ paths:
       security:
       - BearerAuth: []
       summary: Выгрузка отчёта в CSV (менеджер)
+      tags:
+      - manager-publications
+  /manager/projects/{id}/report/refresh:
+    post:
+      description: |-
+        Обходит ссылки проекта, которым пора обновиться, и ждёт ответа
+        сборщика. Что считается «пора» — затухающее расписание: минута,
+        пять, десять, полчаса в первые полтора часа, дальше раз в час
+        до конца вторых суток и раз в шесть часов на всём остальном.
+        Свежее своего шага не трогаем, поэтому перезагрузка страницы
+        кредитов у поставщика не стоит.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.refreshStatsResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — проект не найден или назначен другому менеджеру
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "503":
+          description: collector_not_set — сбор статистики не настроен
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Обновить просмотры по проекту (менеджер)
       tags:
       - manager-publications
   /manager/projects/{id}/settings:
@@ -14672,6 +15223,41 @@ paths:
       summary: Отчёт по своим роликам (креатор)
       tags:
       - creator-publications
+  /me/creator/projects/{id}/report/refresh:
+    post:
+      description: |-
+        То же, что у менеджера: креатор смотрит на свои цифры теми же
+        глазами, и ноль у вышедшего ролика объясняется ему так же плохо.
+      parameters:
+      - description: project id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.refreshStatsResp'
+        "401":
+          description: no_user — сессия истекла
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — вы не участник этого проекта
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "503":
+          description: collector_not_set — сбор статистики не настроен
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Обновить просмотры по проекту (креатор)
+      tags:
+      - creator-publications
   /me/creator/publications/{pub_id}/date_request:
     post:
       consumes:
@@ -14832,6 +15418,44 @@ paths:
       summary: Переслать свою ссылку (креатор)
       tags:
       - creator-publications
+  /me/creator/publications/{pub_id}/resubmit:
+    post:
+      description: |-
+        Ссылки и статистика остаются как есть: ролик тот же, изменилось
+        то, что в нём исправили. Нужна там, где правка идёт НА ПЛОЩАДКЕ
+        и адрес ролика не меняется — добавить «новую ссылку» в таком
+        случае нечего, а сказать «готово» надо.
+      parameters:
+      - description: publication id
+        in: path
+        name: pub_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.Publication'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "404":
+          description: not_found — выкладка не найдена или заведена на другого креатора
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+        "409":
+          description: nothing_to_resubmit — ролик уже на проверке; publication_closed;
+            nothing_to_review — ссылок нет
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отправить возвращённый ролик на проверку заново (креатор)
+      tags:
+      - creator-publications
   /me/creator/suggestions:
     get:
       description: |-
@@ -14983,6 +15607,54 @@ paths:
       summary: Presigned PUT URL для пробы работы к заявке
       tags:
       - creator-orders
+  /me/documents:
+    get:
+      description: |-
+        Выданное лично и договоры из материалов проектов, где человек
+        сейчас работает или заказчик. Отозванное не показывается.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.myDocumentsResp'
+        "401":
+          description: no_user
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Мои документы
+      tags:
+      - me-documents
+  /me/documents/{id}/open:
+    post:
+      description: |-
+        Ставится один раз — менеджер видит, что документ дошёл.
+        Только для выданных лично (source=personal).
+      parameters:
+      - description: document id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_publications.openedResp'
+        "404":
+          description: not_found — чужой или отозванный
+          schema:
+            $ref: '#/definitions/internal_publications.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Отметить документ открытым
+      tags:
+      - me-documents
   /me/general-projects:
     get:
       produces:

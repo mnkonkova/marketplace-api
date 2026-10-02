@@ -12,8 +12,9 @@
 // возвращает RowsAffected=0). Дубли outbox-событий безвредны.
 //
 // Запуск (на проде):
-//   docker compose -f docker-compose.prod.yml --env-file .env.prod \
-//       run --rm worker backfill-previews
+//
+//	docker compose -f docker-compose.prod.yml --env-file .env.prod \
+//	    run --rm worker backfill-previews
 package main
 
 import (
@@ -58,13 +59,13 @@ func main() {
 	// Нужен только PublicURL → KeyFromURL для резолва ключа из video_url.
 	// Транскод запускает worker сам, через outbox.
 	s3Client, err := s3.New(s3.Config{
-		Endpoint:  cfg.S3Endpoint,
-		AccessKey: cfg.S3AccessKey,
-		SecretKey: cfg.S3SecretKey,
-		Bucket:    cfg.S3Bucket,
-		Region:    cfg.S3Region,
-		UseSSL:    cfg.S3UseSSL,
-		PublicURL: cfg.S3PublicURL,
+		Endpoint:   cfg.S3Endpoint,
+		AccessKey:  cfg.S3AccessKey,
+		SecretKey:  cfg.S3SecretKey,
+		Bucket:     cfg.S3Bucket,
+		Region:     cfg.S3Region,
+		UseSSL:     cfg.S3UseSSL,
+		PublicURL:  cfg.S3PublicURL,
 		CDNBaseURL: cfg.CDNBaseURL,
 	})
 	if err != nil {

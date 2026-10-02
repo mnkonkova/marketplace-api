@@ -82,7 +82,10 @@ LEFT JOIN users mu ON mu.id = pr.assigned_to_user_id
 LEFT JOIN specialist_profiles sp ON sp.user_id = pr.assigned_to_user_id
 LEFT JOIN LATERAL (
     SELECT count(*)::int AS cnt, MIN(client_fee) AS min_fee, MAX(client_fee) AS max_fee
-    FROM terms_steps WHERE project_id = pr.id
+    -- Только лесенка просмотров: в списке проектов колонка «модель»
+    -- говорит, по чему считается ПЕРИОД. Ступени подписчиков — доплата
+    -- сверху, и, попав сюда, они назвали бы модель чужим числом.
+    FROM terms_steps WHERE project_id = pr.id AND kind = 'views'
 ) s ON TRUE
 WHERE pr.kind = 'creators_turnkey'
   AND pr.status <> 'cancelled'

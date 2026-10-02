@@ -267,6 +267,213 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/document_templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Библиотека шаблонов с историей версий. archived=1 — вместе с\nархивом: он не удаляется, а уходит из выбора у менеджера.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-documents"
+                ],
+                "summary": "Шаблоны документов (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "1 — показать и архивные",
+                        "name": "archived",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.documentTemplatesResp"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Шаблон и его первая версия. Документы — только ссылки.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-documents"
+                ],
+                "summary": "Завести шаблон документа (админ)",
+                "parameters": [
+                    {
+                        "description": "шаблон",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.createDocumentTemplateReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.DocumentTemplate"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/document_templates/{id}/archive": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Не удаление: из выбора у менеджера уходит, история и выданные\nпо нему документы остаются. Вернуть — /restore.",
+                "tags": [
+                    "admin-documents"
+                ],
+                "summary": "Шаблон в архив (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "template id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/document_templates/{id}/restore": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "admin-documents"
+                ],
+                "summary": "Вернуть шаблон из архива (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "template id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/document_templates/{id}/versions": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Версии не правятся: выданные документы ссылаются на свою\nверсию, и новая их не трогает. Как у прайса.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-documents"
+                ],
+                "summary": "Новая версия шаблона (админ)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "template id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "версия",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.publishTemplateVersionReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.TemplateVersion"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "template_archived",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/managers": {
             "get": {
                 "security": [
@@ -3770,6 +3977,39 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/document_templates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Только действующие, с текущей версией. audience — для кого.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-documents"
+                ],
+                "summary": "Шаблоны документов для выдачи (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "creators | client",
+                        "name": "audience",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.documentTemplatesResp"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/orders": {
             "get": {
                 "security": [
@@ -6287,6 +6527,189 @@ const docTemplate = `{
                 }
             }
         },
+        "/manager/projects/{id}/documents": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Кому что и когда выдали, открыли ли; отозванные тоже — с\nотметкой.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-documents"
+                ],
+                "summary": "Выданные документы проекта (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.userDocumentsResp"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Одному человеку, нескольким или всем по стороне проекта.\nАдресат получает сообщение в бот; документ появляется в\n«Моих документах».",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-documents"
+                ],
+                "summary": "Выдать документ (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "что и кому",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.deliverDocumentReq"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.userDocumentsResp"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid_input — адресат не в проекте, нет ссылки и т.п.",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проекта или шаблона нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "template_archived",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/documents/{doc_id}/revoke": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "У адресата пропадает, в истории выдачи остаётся. Вернуть —\n/unrevoke.",
+                "tags": [
+                    "manager-documents"
+                ],
+                "summary": "Отозвать документ (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "document id",
+                        "name": "doc_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/documents/{doc_id}/unrevoke": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "manager-documents"
+                ],
+                "summary": "Вернуть отозванный документ (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "document id",
+                        "name": "doc_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "not_found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/manager/projects/{id}/events": {
             "get": {
                 "security": [
@@ -7426,6 +7849,58 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "not_found — проект не найден или чужой",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/manager/projects/{id}/report/refresh": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Обходит ссылки проекта, которым пора обновиться, и ждёт ответа\nсборщика. Что считается «пора» — затухающее расписание: минута,\nпять, десять, полчаса в первые полтора часа, дальше раз в час\nдо конца вторых суток и раз в шесть часов на всём остальном.\nСвежее своего шага не трогаем, поэтому перезагрузка страницы\nкредитов у поставщика не стоит.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "manager-publications"
+                ],
+                "summary": "Обновить просмотры по проекту (менеджер)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.refreshStatsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — проект не найден или назначен другому менеджеру",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "collector_not_set — сбор статистики не настроен",
                         "schema": {
                             "$ref": "#/definitions/internal_publications.errorResponse"
                         }
@@ -9413,6 +9888,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/creator/projects/{id}/report/refresh": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "То же, что у менеджера: креатор смотрит на свои цифры теми же\nглазами, и ноль у вышедшего ролика объясняется ему так же плохо.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Обновить просмотры по проекту (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "project id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.refreshStatsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user — сессия истекла",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — вы не участник этого проекта",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "collector_not_set — сбор статистики не настроен",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/creator/publications/{pub_id}/date_request": {
             "post": {
                 "security": [
@@ -9636,6 +10163,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/me/creator/publications/{pub_id}/resubmit": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ссылки и статистика остаются как есть: ролик тот же, изменилось\nто, что в нём исправили. Нужна там, где правка идёт НА ПЛОЩАДКЕ\nи адрес ролика не меняется — добавить «новую ссылку» в таком\nслучае нечего, а сказать «готово» надо.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "creator-publications"
+                ],
+                "summary": "Отправить возвращённый ролик на проверку заново (креатор)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "publication id",
+                        "name": "pub_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.Publication"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — выкладка не найдена или заведена на другого креатора",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "nothing_to_resubmit — ролик уже на проверке; publication_closed; nothing_to_review — ссылок нет",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/me/creator/suggestions": {
             "get": {
                 "security": [
@@ -9849,6 +10428,77 @@ const docTemplate = `{
                         "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/internal_profiles.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/documents": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Выданное лично и договоры из материалов проектов, где человек\nсейчас работает или заказчик. Отозванное не показывается.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-documents"
+                ],
+                "summary": "Мои документы",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.myDocumentsResp"
+                        }
+                    },
+                    "401": {
+                        "description": "no_user",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/me/documents/{id}/open": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Ставится один раз — менеджер видит, что документ дошёл.\nТолько для выданных лично (source=personal).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "me-documents"
+                ],
+                "summary": "Отметить документ открытым",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "document id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.openedResp"
+                        }
+                    },
+                    "404": {
+                        "description": "not_found — чужой или отозванный",
+                        "schema": {
+                            "$ref": "#/definitions/internal_publications.errorResponse"
                         }
                     }
                 }
@@ -21815,6 +22465,44 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.DocumentTemplate": {
+            "type": "object",
+            "properties": {
+                "archived_at": {
+                    "type": "string"
+                },
+                "audience": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "current": {
+                    "description": "Current — действующая версия: последняя по номеру.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_publications.TemplateVersion"
+                        }
+                    ]
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "versions": {
+                    "description": "Versions — история, свежие сверху. Только в выдаче админу.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.TemplateVersion"
+                    }
+                }
+            }
+        },
         "internal_publications.LinkSuggestion": {
             "type": "object",
             "properties": {
@@ -21931,6 +22619,42 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.MyDocument": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "opened_at": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source — personal (выдан лично, можно отметить открытым) или\nproject (договор из материалов проекта, общий для состава).",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.NotificationPrefs": {
             "type": "object",
             "properties": {
@@ -21967,6 +22691,10 @@ const docTemplate = `{
                 },
                 "added_at": {
                     "description": "AddedAt — когда включён в состав проекта.",
+                    "type": "string"
+                },
+                "avatar_url": {
+                    "description": "AvatarURL — портрет из профиля специалиста. Пусто у тех, кто его\nне ставил: буквы имени нарисует фронт.\n\nСостав проекта читают глазами и по лицам — в плане, в ссылках, в\nпроверке ролика один и тот же человек встречается трижды. Пока\nпортрета не было, везде стояли буквы, и строки не связывались в\nодного человека.",
                     "type": "string"
                 },
                 "display_name": {
@@ -22058,6 +22786,10 @@ const docTemplate = `{
                 "creator_user_id": {
                     "description": "CreatorUserID — кому поручен ролик. nil означает «это ролик\nпроекта, а не чей-то»: у проекта без креаторов поручать некому, и\nподставной владелец тут же полез бы в состав, в отчёт по людям и\nв начисления как настоящий участник.",
                     "type": "string"
+                },
+                "day_slot": {
+                    "description": "DaySlot — какой это ролик внутри дня, начиная с единицы. В дне\nих может быть несколько, и номер нужен, чтобы отличать их друг\nот друга: по нему стоит уникальность и по нему же план понимает,\nчто день занят не целиком.",
+                    "type": "integer"
                 },
                 "draft_due_date": {
                     "type": "string"
@@ -22186,6 +22918,10 @@ const docTemplate = `{
                 },
                 "incomplete": {
                     "description": "Incomplete — ролик вышел, но собраны не все пять ссылок.",
+                    "type": "boolean"
+                },
+                "low_views": {
+                    "description": "LowViews — ролик вышел, а просмотров почти нет (и его напарник\n«ссылка ничего не отдаёт»). Включён по умолчанию: срабатывает\nредко и по делу, в отличие от DayBefore.",
                     "type": "boolean"
                 },
                 "manager_digest": {
@@ -22365,9 +23101,97 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.TemplateVersion": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.UserDocument": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "opened_at": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "project_title": {
+                    "type": "string"
+                },
+                "recipient_name": {
+                    "type": "string"
+                },
+                "recipient_user_id": {
+                    "type": "string"
+                },
+                "revoked_at": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "sent_by": {
+                    "type": "string"
+                },
+                "sent_by_name": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
+                },
+                "template_version": {
+                    "description": "TemplateVersion — номер версии шаблона, по которой выдан. Пусто —\nменеджер приложил свою ссылку.",
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.VideoRow": {
             "type": "object",
             "properties": {
+                "collect_error": {
+                    "description": "CollectError — почему по этой ссылке нет цифр, словами сборщика.\n\nПусто — цифры есть либо обход ещё не доходил. Непусто вместе с\nнулём означает «мы спросили, и нам отказали»: площадка не\nсобирается, ролик удалён, кончились кредиты. Без этого поля три\nразных положения выглядели в кабинете одинаково — пустой цифрой,\n— и «никто не посмотрел» оказывалось неотличимо от «мы не умеем\nэто считать».",
+                    "type": "string"
+                },
+                "collect_tried_at": {
+                    "description": "CollectTriedAt — когда ходили в последний раз, удачно или нет.\nВместе с CollectedAt отвечает на вопрос «сбор идёт вообще?».",
+                    "type": "string"
+                },
                 "collected_at": {
                     "type": "string"
                 },
@@ -22549,6 +23373,10 @@ const docTemplate = `{
                 "from": {
                     "type": "string"
                 },
+                "per_day": {
+                    "description": "PerDay — сколько роликов ставить на каждый день, по умолчанию\nодин. Это цель, а не прибавка: план приводится к заданному числу,\nи повторная отправка той же формы не добавляет ничего (см.\nON CONFLICT DO NOTHING в CreateBatch).",
+                    "type": "integer"
+                },
                 "scheme": {
                     "$ref": "#/definitions/internal_publications.Scheme"
                 },
@@ -22647,6 +23475,26 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.createDocumentTemplateReq": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.creatorDocumentsResp": {
             "type": "object",
             "properties": {
@@ -22701,6 +23549,49 @@ const docTemplate = `{
             "properties": {
                 "approve": {
                     "type": "boolean"
+                }
+            }
+        },
+        "internal_publications.deliverDocumentReq": {
+            "type": "object",
+            "properties": {
+                "audience": {
+                    "description": "Audience — creators или client.",
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "recipient_ids": {
+                    "description": "RecipientIDs — кому. Пусто — всему составу или заказчику проекта.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "template_id": {
+                    "description": "TemplateID — выдать действующую версию шаблона. Пусто — своя\nссылка: тогда нужны kind, title и url.",
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.documentTemplatesResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.DocumentTemplate"
+                    }
                 }
             }
         },
@@ -22830,6 +23721,25 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_publications.myDocumentsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.MyDocument"
+                    }
+                }
+            }
+        },
+        "internal_publications.openedResp": {
+            "type": "object",
+            "properties": {
+                "opened_at": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_publications.personsResp": {
             "type": "object",
             "properties": {
@@ -22868,6 +23778,30 @@ const docTemplate = `{
                     }
                 },
                 "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_publications.publishTemplateVersionReq": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_publications.refreshStatsResp": {
+            "type": "object",
+            "properties": {
+                "refreshed": {
+                    "description": "Refreshed — сколько ссылок обошли прямо сейчас. Ноль — цифры и так\nсвежие по расписанию, и это нормальный ответ, а не отказ.",
+                    "type": "integer"
+                },
+                "saved": {
+                    "description": "Saved — по скольким пришли цифры. Меньше Refreshed — часть\nплощадок сборщик не умеет либо ролик ещё не проиндексирован.",
                     "type": "integer"
                 }
             }
@@ -22984,6 +23918,17 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/internal_publications.ChecklistTemplate"
+                    }
+                }
+            }
+        },
+        "internal_publications.userDocumentsResp": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_publications.UserDocument"
                     }
                 }
             }

@@ -31,14 +31,6 @@ const (
 	ReminderIncomplete = "publication_incomplete"
 	// ReminderManual — менеджер напомнил руками, не дожидаясь расписания.
 	ReminderManual = "publication_manual"
-	// ReminderNoViews — ролик вышел, а просмотров нет.
-	//
-	// Единственный вид, который говорит не про сроки, а про результат.
-	// Ноль на третий день почти никогда не означает «никто не
-	// посмотрел»: чаще это не тот адрес, теневой бан, удалённое видео
-	// или аккаунт, с которого площадка не раздаёт. Всё это чинится,
-	// пока свежо, и молчать об этом — значит узнать в конце периода.
-	ReminderNoViews = "publication_no_views"
 	// ReminderManagerDigest — сводка в общий чат менеджеров. Получателя-
 	// человека нет, поэтому в журнале user_id = NULL.
 	ReminderManagerDigest = "manager_digest"
@@ -46,10 +38,7 @@ const (
 
 // Reminder — одно напоминание, готовое к отправке.
 type Reminder struct {
-	Kind string `json:"kind"`
-	// Views — сколько просмотров набрал ролик. Заполняется только у
-	// ReminderNoViews: остальные виды про сроки, и цифра там ни при чём.
-	Views         int64     `json:"views,omitempty"`
+	Kind          string    `json:"kind"`
 	ProjectID     uuid.UUID `json:"project_id"`
 	PublicationID uuid.UUID `json:"publication_id"`
 	// CreatorUserID — кому поручена выкладка. nil у проекта без
@@ -418,41 +407,6 @@ func (s *Service) RunReminders(ctx context.Context, now time.Time) (RunStats, er
 		}
 	}
 
-	// Ролики, которые вышли и не пошли. Отдельным проходом, не из
-	// DueReminders: та выбирает ОТКРЫТЫЕ выкладки по срокам, а здесь
-	// речь про уже вышедшие и про результат, а не про дату.
-	lowViews, err := s.repo.LowViewsReminders(ctx, now)
-	if err != nil {
-		return st, err
-	}
-	st.Considered += len(lowViews)
-	for _, rem := range lowViews {
-		if !rem.autoping.enabled(rem.Kind) {
-			remindersSuppressedTotal.Inc()
-			st.Skipped++
-			continue
-		}
-		// Поштучное письмо без адресата не бывает — то же правило, что
-		// у остальных видов. У проекта без креаторов такой ролик
-		// принадлежит проекту, и сказать о нём некому лично.
-		if rem.CreatorUserID == nil {
-			st.Skipped++
-			continue
-		}
-		sent, err := s.repo.Send(ctx, rem, rem.CreatorUserID, now)
-		if err != nil {
-			st.Failures++
-			continue
-		}
-		if sent {
-			remindersSentTotal.WithLabelValues(rem.Kind).Inc()
-			st.Sent++
-		} else {
-			remindersSuppressedTotal.Inc()
-			st.Skipped++
-		}
-	}
-
 	// План выкладок кончается — отдельным проходом, не из reminders:
 	// там выборка идёт по выкладкам, а здесь предмет — проект, и он
 	// попадает в неё как раз тогда, когда выкладок не осталось.
@@ -544,105 +498,3 @@ func ReminderWindowOpen(now time.Time, afterHour int) bool {
 // напоминания. Если за месяц никто не отреагировал, ещё одно сообщение
 // ничего не изменит — это уже вопрос к менеджеру, а не к рассылке.
 const OverdueHorizonDays = 30
-
-// ---- «ролик вышел, а просмотров нет» ----
-
-// LowViewsAfterDays — через сколько дней после выхода спрашиваем про
-// просмотры.
-//
-// Двое суток: за первые часы площадка часто ещё не раздала, и ноль там
-// ничего не значит. К исходу вторых — уже значит: живой ролик к этому
-// времени набирает хоть что-то, а пустой столбик говорит не про
-// качество, а про то, что до ленты он не дошёл. Раньше спрашивать —
-// дёргать людей по роликам, которые просто не успели разойтись.
-const LowViewsAfterDays = 2
-
-// LowViewsThreshold — ниже скольки просмотров считаем, что не пошло.
-//
-// Сто: это не планка качества, а граница «что-то не так». Ролик, который
-// за двое суток не набрал и сотни, почти всегда не дошёл до ленты — не
-// тот адрес, теневой бан, закрытый аккаунт.
-const LowViewsThreshold = 100
-
-// LowViewsReminders — вышедшие ролики, по которым просмотров почти нет.
-//
-// Главное правило здесь — НЕ ПУТАТЬ «никто не посмотрел» с «мы не
-// измерили». Первое — повод написать человеку, второе — наша поломка, и
-// пинг по ней был бы ложной тревогой с обвинением невиновного. Поэтому
-// в выборку попадают только ссылки, по которым снимок РЕАЛЬНО есть; у
-// кого цифр нет вовсе, тот отсюда исключён целиком (его отдельно видно
-// по crm_links_never_collected и подписи в отчёте).
-//
-// Шлётся один раз на выкладку: дедуп в notification_log идёт по дате, а
-// здесь нужен «когда-либо» — иначе каждое утро приходило бы «у тебя всё
-// ещё ноль», а это не новость, это нытьё.
-func (r *Repo) LowViewsReminders(ctx context.Context, today time.Time) ([]Reminder, error) {
-	day := truncateDay(today)
-	const q = `
-WITH measured AS (
-    -- Последний снимок каждой ссылки. Итог — по последнему, а не сумма
-    -- по дням: просмотры накопительные, и сумма завысила бы кратно.
-    SELECT DISTINCT ON (d.link_id) d.link_id, d.views
-    FROM video_stat_daily d
-    ORDER BY d.link_id, d.stat_date DESC
-),
-pubs AS (
-    SELECT p.id, p.project_id, p.creator_user_id, p.due_date, pr.title,
-           MIN(l.submitted_at) AS first_submitted,
-           COUNT(*) FILTER (WHERE m.link_id IS NOT NULL) AS measured_links,
-           COALESCE(SUM(m.views), 0) AS views,
-           COALESCE(rp.low_views, TRUE) AS pref_low_views,
-           COALESCE(rp.manager_digest, TRUE) AS pref_digest,
-           COALESCE(rp.due_today, TRUE) AS pref_due_today,
-           COALESCE(rp.overdue, TRUE) AS pref_overdue,
-           COALESCE(rp.incomplete, TRUE) AS pref_incomplete,
-           COALESCE(cp.day_before, rp.day_before, FALSE) AS pref_day_before
-    FROM project_publications p
-    JOIN projects pr ON pr.id = p.project_id
-    JOIN publication_links l ON l.publication_id = p.id
-    LEFT JOIN measured m ON m.link_id = l.id
-    LEFT JOIN project_reminder_prefs rp ON rp.project_id = p.project_id
-    LEFT JOIN project_creator_reminder_prefs cp
-           ON cp.project_id = p.project_id AND cp.creator_user_id = p.creator_user_id
-    WHERE p.status <> 'cancelled'
-      AND pr.kind IN ('creators_turnkey', 'brand_turnkey')
-    GROUP BY p.id, p.project_id, p.creator_user_id, p.due_date, pr.title,
-             rp.low_views, rp.manager_digest, rp.due_today, rp.overdue,
-             rp.incomplete, cp.day_before, rp.day_before
-)
-SELECT id, project_id, creator_user_id, due_date, title, views,
-       pref_due_today, pref_overdue, pref_incomplete, pref_digest,
-       pref_day_before, pref_low_views
-FROM pubs
-WHERE measured_links > 0
-  AND views < $2
-  AND first_submitted <= $1::timestamptz - make_interval(days => $3)
-  -- Один раз на выкладку, а не каждое утро: «у тебя всё ещё ноль» —
-  -- это не новость.
-  AND NOT EXISTS (
-      SELECT 1 FROM notification_log n
-      WHERE n.kind = $4 AND n.subject_id = pubs.id
-  )
-ORDER BY first_submitted`
-	rows, err := r.db.Query(ctx, q, day, LowViewsThreshold, LowViewsAfterDays, ReminderNoViews)
-	if err != nil {
-		return nil, fmt.Errorf("list low views reminders: %w", err)
-	}
-	defer rows.Close()
-
-	out := make([]Reminder, 0, 8)
-	for rows.Next() {
-		var rem Reminder
-		if err := rows.Scan(&rem.PublicationID, &rem.ProjectID, &rem.CreatorUserID,
-			&rem.DueDate, &rem.ProjectTitle, &rem.Views,
-			&rem.autoping.DueToday, &rem.autoping.Overdue, &rem.autoping.Incomplete,
-			&rem.autoping.ManagerDigest, &rem.autoping.DayBefore,
-			&rem.autoping.LowViews); err != nil {
-			return nil, fmt.Errorf("scan low views reminder: %w", err)
-		}
-		rem.autoping.ProjectID = rem.ProjectID
-		rem.Kind = ReminderNoViews
-		out = append(out, rem)
-	}
-	return out, rows.Err()
-}

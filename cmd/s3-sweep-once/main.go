@@ -4,8 +4,9 @@
 // перекрывая S3_ORPHAN_MIN_AGE из env.
 //
 // Пример:
-//   s3-sweep-once                 # nominal: minAge=24h
-//   s3-sweep-once -min-age 10000h # dry-run: никого не удалит, покажет kept
+//
+//	s3-sweep-once                 # nominal: minAge=24h
+//	s3-sweep-once -min-age 10000h # dry-run: никого не удалит, покажет kept
 package main
 
 import (

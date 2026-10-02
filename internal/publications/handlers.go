@@ -1269,6 +1269,9 @@ func writeErr(w http.ResponseWriter, err error) {
 			"Ссылка не с одной из пяти площадок: TikTok, Instagram, YouTube, VK, Likee.")
 	case errors.Is(err, ErrUnknownScheme), errors.Is(err, ErrRangeTooLong):
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_schedule", err.Error())
+	case errors.Is(err, ErrTemplateArchived):
+		httpx.WriteErrMsg(w, http.StatusConflict, "template_archived",
+			"Шаблон в архиве — сначала верните его.")
 	case errors.Is(err, ErrNothingToResubmit):
 		httpx.WriteErrMsg(w, http.StatusConflict, "nothing_to_resubmit",
 			"Ролик уже на проверке у менеджера — отправлять его заново не нужно.")
@@ -1397,8 +1400,10 @@ const refreshLimit = 25
 // Фоновая задача с опросом была бы честнее по времени ответа, но она же
 // означала бы «цифры приедут когда-нибудь» — а человек открыл карточку
 // именно затем, чтобы посмотреть на них сейчас.
-func (h *Handler) refreshStats(w http.ResponseWriter, r *http.Request, projectID uuid.UUID) {
-	st, err := h.svc.RefreshProject(r.Context(), projectID, time.Now(), refreshLimit)
+func (h *Handler) refreshStats(
+	w http.ResponseWriter, r *http.Request, projectID uuid.UUID, creatorID *uuid.UUID,
+) {
+	st, err := h.svc.RefreshProject(r.Context(), projectID, creatorID, time.Now(), refreshLimit)
 	if errors.Is(err, ErrCollectorNotSet) {
 		// Не пятисотка: сбор может быть не настроен, и это состояние
 		// стенда, а не поломка. Но и не тихий успех — иначе «сбор
@@ -1436,7 +1441,8 @@ func (h *Handler) ManagerRefreshStats(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	h.refreshStats(w, r, projectID)
+	// Менеджер обновляет проект целиком: он за него и отвечает.
+	h.refreshStats(w, r, projectID, nil)
 }
 
 // CreatorRefreshStats godoc
@@ -1472,7 +1478,9 @@ func (h *Handler) CreatorRefreshStats(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrMsg(w, http.StatusNotFound, "not_found", "Проект не найден.")
 		return
 	}
-	h.refreshStats(w, r, projectID)
+	// Только свои ролики: чужие стоят кредитов, которых креатор не
+	// тратил, и сдвигают чужое расписание сбора.
+	h.refreshStats(w, r, projectID, &uid)
 }
 
 // ManagerReportCSV godoc
@@ -1592,7 +1600,7 @@ func (h *Handler) ClientReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, rep)
+	httpx.WriteJSON(w, http.StatusOK, rep.ForClient())
 }
 
 // ClientReportCSV godoc
@@ -1634,7 +1642,7 @@ func (h *Handler) ClientReportCSV(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeReportCSV(w, projectID, rep)
+	writeReportCSV(w, projectID, rep.ForClient())
 }
 
 // CreatorReport godoc

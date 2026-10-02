@@ -107,6 +107,30 @@ type VideoRow struct {
 	CollectTriedAt *time.Time `json:"collect_tried_at,omitempty"`
 }
 
+// ForClient — тот же отчёт, но без нашей внутренней кухни.
+//
+// Причина отказа сборщика — текст СТОРОННЕГО сервиса, и написан он для
+// нас: «ScrapeCreators 404: Account doesn't exist», «метрики отдельных
+// постов для vk пока не поддержаны», «кончились кредиты». Заказчику он
+// говорит не про его ролики, а про то, чем и на какие деньги мы их
+// считаем, — то есть про наши отношения с поставщиком и про наши
+// поломки.
+//
+// Чистим в модели, а не прячем на фронте: фронт — это одна из выдач, а
+// JSON отдают ещё и выгрузка, и чужой клиент. Правило «что видит
+// заказчик» должно жить там, где его нельзя обойти, забыв про вторую
+// кнопку.
+func (r Report) ForClient() Report {
+	rows := make([]VideoRow, len(r.VideoRows))
+	copy(rows, r.VideoRows)
+	for i := range rows {
+		rows[i].CollectError = ""
+		rows[i].CollectTriedAt = nil
+	}
+	r.VideoRows = rows
+	return r
+}
+
 // Report — всё, что показывает страница отчёта.
 type Report struct {
 	ProjectID uuid.UUID `json:"project_id"`

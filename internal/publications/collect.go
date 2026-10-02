@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -161,9 +162,10 @@ const claimLease = 10 * time.Minute
 // бы одни и те же сорок ссылок и слали их в instacurl дважды. Запись
 // идемпотентна и данные бы не пострадали — страдал бы счёт за кредиты.
 //
-// Здесь же держится жёсткое правило «один ролик — не чаще раза в сутки»:
-// условие по last_collected_at проверяется ДО похода в instacurl, а не
-// только уникальным ключом при записи.
+// Частоту при этом задаёт ТОЛЬКО next_collect_at: жёсткое правило «один
+// ролик — не чаще раза в календарный день» снято (см. тело запроса),
+// потому что при нём любой шаг меньше суток был невыразим. От двойного
+// учёта защищает первичный ключ video_stat_daily, а не оно.
 //
 // SKIP LOCKED — тот же приём, что в outbox-воркере: две транзакции не
 // столкнутся на одной строке, а просто разберут разные.
@@ -233,33 +235,55 @@ JOIN project_publications p ON p.id = t.publication_id`
 // Взятые ссылки арендуются ровно так же, как в фоновом обходе: их
 // next_collect_at уезжает на claimLease вперёд, и воркер, проснувшийся
 // в эту секунду, их не возьмёт.
-func (r *Repo) ClaimProjectLinks(ctx context.Context, projectID uuid.UUID, now time.Time, limit int) ([]LinkToCollect, error) {
+func (r *Repo) ClaimProjectLinks(
+	ctx context.Context, projectID uuid.UUID, creatorID *uuid.UUID, now time.Time, limit int,
+) ([]LinkToCollect, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := r.db.Query(ctx, `
-SELECT l.id, l.publication_id, l.platform, l.url_canonical, l.submitted_at, l.last_collected_at
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// FOR UPDATE ... SKIP LOCKED и аренда в ОДНОЙ транзакции с выборкой.
+	//
+	// Было: SELECT без блокировки, отбор в Go, отдельный UPDATE. Два
+	// одновременных открытия карточки (менеджер и креатор, двойной клик,
+	// просто F5 подряд) видели один и тот же набор и оба уходили в
+	// сборщик — по 25 платных обращений каждый. Комментарий утверждал,
+	// что от этого защищает аренда; он врал: аренда записывалась, но
+	// нигде не читалась.
+	rows, err := tx.Query(ctx, `
+SELECT l.id, l.publication_id, l.platform, l.url_canonical, l.submitted_at,
+       l.last_collected_at, l.last_collect_try_at
 FROM publication_links l
 JOIN project_publications p ON p.id = l.publication_id
 JOIN projects pr ON pr.id = p.project_id
 WHERE p.project_id = $1
+  -- Креатор обновляет СВОИ ролики, а не весь проект: чужие стоят
+  -- кредитов, которых он не тратил, и сдвигают чужое расписание.
+  AND ($4::uuid IS NULL OR p.creator_user_id = $4)
   AND p.status <> 'cancelled'
   AND l.next_collect_at <> `+ParkedAt+`
   AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $2)
 ORDER BY l.submitted_at DESC
-LIMIT $3`, projectID, now, limit)
+LIMIT $3
+FOR UPDATE OF l SKIP LOCKED`, projectID, now, limit, creatorID)
 	if err != nil {
 		return nil, fmt.Errorf("list project links: %w", err)
 	}
 	type candidate struct {
-		link LinkToCollect
-		last *time.Time
+		link      LinkToCollect
+		collected *time.Time
+		tried     *time.Time
 	}
 	cands := make([]candidate, 0, limit)
 	for rows.Next() {
 		var c candidate
 		if err := rows.Scan(&c.link.LinkID, &c.link.PublicationID, &c.link.Platform,
-			&c.link.URL, &c.link.SubmittedAt, &c.last); err != nil {
+			&c.link.URL, &c.link.SubmittedAt, &c.collected, &c.tried); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan project link: %w", err)
 		}
@@ -274,25 +298,56 @@ LIMIT $3`, projectID, now, limit)
 	stale := make([]LinkToCollect, 0, len(cands))
 	ids := make([]uuid.UUID, 0, len(cands))
 	for _, c := range cands {
-		// Ни разу не собранную берём всегда: ноль в отчёте — это не
-		// «никто не смотрит», а «мы не спросили».
-		if c.last != nil && now.Sub(*c.last) < RefreshEvery(now.Sub(c.link.SubmittedAt)) {
+		// Свежесть — по ПОСЛЕДНЕЙ ПОПЫТКЕ, а не по последней удаче.
+		//
+		// Раньше смотрели только на last_collected_at, который пишется
+		// исключительно при успехе. Ссылка, по которой сбор не удаётся
+		// никогда — VK, Likee, удалённый ролик, — выглядела «ни разу не
+		// собранной» вечно и улетала в сборщик при каждом открытии
+		// карточки и каждом F5. То есть дороже всего обходились ровно
+		// те ссылки, которые заведомо ничего не вернут.
+		if last := latest(c.collected, c.tried); last != nil &&
+			now.Sub(*last) < RefreshEvery(now.Sub(c.link.SubmittedAt)) {
 			continue
 		}
 		stale = append(stale, c.link)
 		ids = append(ids, c.link.LinkID)
 	}
 	if len(stale) == 0 {
-		return nil, nil
+		return nil, tx.Commit(ctx)
 	}
 
-	if _, err := r.db.Exec(ctx, `
+	// Отметку попытки ставим СРАЗУ, до похода в сборщик: она и есть
+	// защита от повтора. Расписание при этом двигаем только вперёд —
+	// GREATEST: у ссылки, которой по фону идти через восемь дней, оно
+	// иначе сбрасывалось бы на десять минут, и открытие карточки
+	// старого проекта затаскивало бы весь архив в ближайшую очередь.
+	if _, err := tx.Exec(ctx, `
 UPDATE publication_links
-SET next_collect_at = `+keepParked("next_collect_at", "$2::timestamptz + $3::interval")+`
+SET last_collect_try_at = $2::timestamptz,
+    next_collect_at = `+keepParked("next_collect_at",
+		"GREATEST(next_collect_at, $2::timestamptz + $3::interval)")+`
 WHERE id = ANY($1)`, ids, now, claimLease); err != nil {
 		return nil, fmt.Errorf("lease project links: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
 	return stale, nil
+}
+
+// latest — позднейшая из двух отметок; nil, если нет ни одной.
+func latest(a, b *time.Time) *time.Time {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case b.After(*a):
+		return b
+	default:
+		return a
+	}
 }
 
 // SaveStats — снимок метрик на дату плюс перенос ссылки на следующий обход.
@@ -422,8 +477,13 @@ func (r *Repo) MarkFailed(ctx context.Context, link LinkToCollect, now time.Time
 	if reason == "" {
 		reason = "сборщик не ответил по этой ссылке"
 	}
-	if len(reason) > maxCollectError {
-		reason = reason[:maxCollectError]
+	// По РУНАМ, а не по байтам: кириллица двухбайтовая, и срез по байту
+	// разрубает букву пополам. Postgres такую строку не принимает
+	// («invalid byte sequence for encoding UTF8»), MarkFailed возвращает
+	// ошибку, а сбор на ней обрывает всю пачку — остальные ссылки
+	// остаются без снимков и через десять минут оплачиваются заново.
+	if utf8.RuneCountInString(reason) > maxCollectError {
+		reason = string([]rune(reason)[:maxCollectError])
 	}
 	_, err := r.db.Exec(ctx, `
 UPDATE publication_links
@@ -720,15 +780,20 @@ func (s *Service) RunCollection(ctx context.Context, now time.Time, batchSize in
 // ролика; всё, что свежее своего шага, не трогаем, поэтому перезагрузка
 // страницы кредитов не стоит.
 //
-// Фоновый обход при этом идёт своим чередом и о нас не знает: от
-// двойной работы защищает та же аренда, что и между двумя воркерами, —
-// взятая ссылка уезжает на десять минут вперёд.
-func (s *Service) RefreshProject(ctx context.Context, projectID uuid.UUID, now time.Time, limit int) (CollectStats, error) {
+// creatorID — чьи ролики обновляем. nil означает «весь проект» и
+// годится только менеджеру: креатор не должен тратить кредиты на чужие
+// ролики и двигать чужое расписание.
+//
+// Фоновый обход при этом идёт своим чередом: от двойной работы защищает
+// отметка попытки, которая ставится в момент взятия, и SKIP LOCKED.
+func (s *Service) RefreshProject(
+	ctx context.Context, projectID uuid.UUID, creatorID *uuid.UUID, now time.Time, limit int,
+) (CollectStats, error) {
 	var st CollectStats
 	if s.collector == nil {
 		return st, ErrCollectorNotSet
 	}
-	links, err := s.repo.ClaimProjectLinks(ctx, projectID, now, limit)
+	links, err := s.repo.ClaimProjectLinks(ctx, projectID, creatorID, now, limit)
 	if err != nil {
 		return st, err
 	}

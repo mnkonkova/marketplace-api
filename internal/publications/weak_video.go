@@ -37,6 +37,15 @@ const (
 
 	// WeakViewsBelow — ниже этого числа считаем, что ролик не пошёл.
 	WeakViewsBelow = 100
+
+	// WeakVideoHorizonDays — насколько старые ролики ещё окликаем.
+	//
+	// Неделя. Пинг смотрит в окно, а не в один день (см. запрос), и без
+	// верхней границы первый же проход на живом проекте разослал бы
+	// письма по всей истории: сорок роликов «у тебя ноль» за одно утро,
+	// часть — полугодовой давности. Старше недели переснимать уже
+	// некому: следующая выкладка давно прошла.
+	WeakVideoHorizonDays = 7
 )
 
 // WeakVideo — ролик, о котором говорим креатору.
@@ -97,11 +106,17 @@ WITH pub AS (
     FROM project_publications p
     JOIN projects pr ON pr.id = p.project_id
     JOIN publication_links l ON l.publication_id = p.id
+    -- Выключатель автопинга проекта. Нет строки — пингуем (см. 00036).
+    LEFT JOIN project_reminder_prefs rp ON rp.project_id = p.project_id
     LEFT JOIN LATERAL (
         SELECT d.views FROM video_stat_daily d
         WHERE d.link_id = l.id ORDER BY d.stat_date DESC LIMIT 1
     ) cur ON TRUE
-    WHERE p.status = 'done'
+    -- И 'partial' тоже: ролик ВЫШЕЛ, просто сдан не на всех пяти
+    -- площадках. Пока здесь стоял один 'done', пинг молчал почти
+    -- всегда — полных сдач меньшинство, и «ролик не пошёл» узнавали
+    -- из отчёта в конце периода.
+    WHERE p.status IN ('done', 'partial')
       -- Оба вида с выкладками: «ролик не пошёл» и «битая ссылка» —
       -- это про ролик, а не про человека, и у проекта без креаторов
       -- они такие же настоящие. Иначе метрика молчит там, где ссылки
@@ -110,12 +125,21 @@ WITH pub AS (
       AND pr.status = 'active'
       AND pr.is_test = FALSE
       AND (pr.collection_stops_at IS NULL OR pr.collection_stops_at > $1)
+      AND COALESCE(rp.low_views, TRUE)
     GROUP BY p.id, p.project_id, p.creator_user_id, p.title, pr.title
 )
 SELECT id, project_id, project_title, creator_user_id, title,
        published_on, views, measured, measured = 0
 FROM pub
-WHERE published_on = $1::date - $2::int
+-- Окно, а не ровно вторые сутки.
+--
+-- День в день ловил только идеальный случай: ролик вышел, площадка
+-- отдала дату публикации, сбор прошёл — и всё это к утру третьего дня.
+-- Стоило чему-нибудь из этого съехать на сутки, и ролик не получал
+-- пинга никогда. Неделя сверху — чтобы первый запуск на старом проекте
+-- не разослал письма по всей истории: больше недели назад переснимать
+-- уже некому и незачем.
+WHERE published_on BETWEEN $1::date - $7::int AND $1::date - $2::int
   AND collected > 0
   AND views < $3
   AND NOT EXISTS (
@@ -123,7 +147,8 @@ WHERE published_on = $1::date - $2::int
       WHERE n.subject_id = pub.id AND n.kind IN ($4, $5))
 ORDER BY views, published_on
 LIMIT $6`,
-		day, WeakVideoAfterDays, WeakViewsBelow, ReminderWeakVideo, ReminderDeadLink, limit)
+		day, WeakVideoAfterDays, WeakViewsBelow, ReminderWeakVideo, ReminderDeadLink, limit,
+		WeakVideoHorizonDays)
 	if err != nil {
 		return nil, fmt.Errorf("list weak videos: %w", err)
 	}

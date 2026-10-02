@@ -393,3 +393,59 @@ func TestMoveDueDateOntoOccupiedDay(t *testing.T) {
 		t.Errorf("перенесённый ролик: day_slot=%d, ожидался 2", got.DaySlot)
 	}
 }
+
+// Пачка не дописывает ролики в подытоженный период.
+//
+// Раньше от этого защищала сама идемпотентность: на прошедших датах
+// выкладка уже стояла, и повтор гасился уникальным индексом. С
+// «роликов в день» защита исчезла — окно простановки открывается со
+// ВСЕМИ уже отмеченными датами, и одно нажатие «2» дописывает второй
+// слот на каждый прошедший день проекта. Попади такой день в
+// замороженный период — и мы поменяли то, по чему уже выставлен счёт.
+func TestCreateBatchRefusesLockedPeriod(t *testing.T) {
+	pool := integration.Pool(t)
+	ctx := context.Background()
+	projectID, creators, cleanup := setupCreatorsProject(t, pool)
+	defer cleanup()
+
+	day := pubDay(-10)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO project_periods (project_id, seq, starts_on, ends_on, status, locked_at)
+VALUES ($1, 1, $2::date - 5, $2::date + 5, 'locked', now())`, projectID, day); err != nil {
+		t.Fatalf("подытожить период: %v", err)
+	}
+
+	svc := publications.NewService(publications.NewRepo(pool))
+	_, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{day},
+		PerDay:         2,
+		CreatedBy:      creators[0],
+	})
+	if !errors.Is(err, publications.ErrPeriodLocked) {
+		t.Fatalf("пачка в подытог: %v, ожидалось ErrPeriodLocked", err)
+	}
+
+	// И ничего не завелось: отказ до записи, а не после половины.
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM project_publications WHERE project_id = $1`, projectID).
+		Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("в проекте %d выкладок, ожидалась пустота", n)
+	}
+
+	// А за пределами замороженного периода пачка проходит как обычно.
+	if _, err := svc.CreateBatch(ctx, publications.CreateBatchInput{
+		ProjectID:      projectID,
+		CreatorUserIDs: creators[:1],
+		Dates:          []time.Time{pubDay(3)},
+		PerDay:         2,
+		CreatedBy:      creators[0],
+	}); err != nil {
+		t.Fatalf("пачка вне подытога: %v", err)
+	}
+}

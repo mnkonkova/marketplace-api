@@ -28,8 +28,9 @@ type ReminderPrefs struct {
 	Incomplete bool `json:"incomplete"`
 	// ManagerDigest — сводка в общий чат менеджеров. Креаторы её не видят.
 	ManagerDigest bool `json:"manager_digest"`
-	// LowViews — ролик вышел, а просмотров почти нет. Включён по
-	// умолчанию: срабатывает редко и по делу, в отличие от DayBefore.
+	// LowViews — ролик вышел, а просмотров почти нет (и его напарник
+	// «ссылка ничего не отдаёт»). Включён по умолчанию: срабатывает
+	// редко и по делу, в отличие от DayBefore.
 	LowViews bool `json:"low_views"`
 	// DayBefore — креатору в бот НАКАНУНЕ срока. Единственный из видов,
 	// выключенный по умолчанию: он появился позже остальных, и включать
@@ -62,7 +63,7 @@ func (p ReminderPrefs) enabled(kind string) bool {
 		return p.Overdue
 	case ReminderIncomplete:
 		return p.Incomplete
-	case ReminderNoViews:
+	case ReminderWeakVideo, ReminderDeadLink:
 		return p.LowViews
 	case ReminderManagerDigest:
 		return p.ManagerDigest

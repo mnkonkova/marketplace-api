@@ -68,6 +68,9 @@ var botRouting = map[string]botRoute{
 	// известным креаторам.
 	"order.invitation_sent": {telegram.BotCreator, []string{"creator_id"}},
 	"order.broadcast_sent":  {telegram.BotCreator, []string{"recipient_ids"}},
+	// Документ выдали лично: договор, акт, NDA. Адресно — только тем,
+	// кому выдан.
+	"project.document_delivered": {telegram.BotCreator, []string{"recipient_ids"}},
 
 	// ---- разговор с ЗАКАЗЧИКОМ ----
 	// Его собственные выключатели: порог просмотров, новый ролик,
@@ -77,6 +80,8 @@ var botRouting = map[string]botRoute{
 	"project.client_new_video":       {telegram.BotClient, []string{"client_user_id"}},
 	"project.client_date_shift":      {telegram.BotClient, []string{"client_user_id"}},
 	"project.client_weekly_digest":   {telegram.BotClient, []string{"client_user_id"}},
+	// Документ заказчику: договор, акт, счёт.
+	"project.client_document_delivered": {telegram.BotClient, []string{"recipient_ids"}},
 }
 
 // BotRoutes — типы, которые едут в ботов. Для охранного теста: новый

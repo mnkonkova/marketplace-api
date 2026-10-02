@@ -95,6 +95,7 @@ WHERE project_id = $1
   -- Материалы конкретной сдачи живут в карточке сдачи, а не в общем
   -- списке материалов проекта.
   AND delivery_id IS NULL
+  AND deleted_at IS NULL
 -- Договор — первым, каким бы ни был его порядковый номер. Это первое,
 -- что человек ищет, когда его добавили в проект, и последнее, что он
 -- хочет искать глазами в списке из тридцати референсов.
@@ -128,7 +129,7 @@ func (r *Repo) AddMaterial(ctx context.Context, in AddMaterialInput) (Material, 
 	// придётся.
 	var next, total int
 	if err := tx.QueryRow(ctx, `
-SELECT COALESCE(MAX(sort_order), -1) + 1, COUNT(*)
+SELECT COALESCE(MAX(sort_order), -1) + 1, COUNT(*) FILTER (WHERE deleted_at IS NULL)
 FROM project_materials WHERE project_id = $1 AND delivery_id IS NULL`,
 		in.ProjectID).Scan(&next, &total); err != nil {
 		return Material{}, fmt.Errorf("next sort order: %w", err)
@@ -172,7 +173,11 @@ RETURNING id, created_by, created_at`,
 
 // DeleteMaterial — убрать материал. Возвращает ErrNotFound, если он не из
 // этого проекта: id материала сам по себе не даёт права его удалить.
-func (r *Repo) DeleteMaterial(ctx context.Context, projectID, materialID uuid.UUID) error {
+//
+// Мягко: строка остаётся с отметкой, кто и когда убрал. Раньше удаление
+// стирало материал бесследно, и про убранный договор потом нельзя было
+// узнать, что он вообще был.
+func (r *Repo) DeleteMaterial(ctx context.Context, projectID, materialID, actor uuid.UUID) error {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -184,9 +189,9 @@ func (r *Repo) DeleteMaterial(ctx context.Context, projectID, materialID uuid.UU
 	// ровно так же, как добавленный.
 	var audience string
 	err = tx.QueryRow(ctx, `
-DELETE FROM project_materials
-WHERE id = $1 AND project_id = $2 AND delivery_id IS NULL
-RETURNING audience`, materialID, projectID).Scan(&audience)
+UPDATE project_materials SET deleted_at = now(), deleted_by = $3
+WHERE id = $1 AND project_id = $2 AND delivery_id IS NULL AND deleted_at IS NULL
+RETURNING audience`, materialID, projectID, actor).Scan(&audience)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -249,8 +254,8 @@ func (s *Service) AddMaterial(ctx context.Context, in AddMaterialInput) (Materia
 }
 
 // DeleteMaterial — убрать материал из проекта.
-func (s *Service) DeleteMaterial(ctx context.Context, projectID, materialID uuid.UUID) error {
-	return s.repo.DeleteMaterial(ctx, projectID, materialID)
+func (s *Service) DeleteMaterial(ctx context.Context, projectID, materialID, actor uuid.UUID) error {
+	return s.repo.DeleteMaterial(ctx, projectID, materialID, actor)
 }
 
 // ---- мои документы (креатор) ----
@@ -292,6 +297,7 @@ JOIN project_creators pc
 JOIN projects pr ON pr.id = m.project_id
 WHERE m.audience = $2
   AND m.delivery_id IS NULL
+  AND m.deleted_at IS NULL
   AND m.kind = ANY($3)
 ORDER BY (m.kind <> 'contract'), pc.added_at DESC, m.sort_order, m.created_at`,
 		creatorID, AudienceCreators, DocumentKinds)

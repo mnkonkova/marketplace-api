@@ -13,14 +13,16 @@
 // existing thumbnail).
 //
 // Локальный запуск:
-//   go run ./cmd/regen-thumbs --dry-run              # покажет план
-//   go run ./cmd/regen-thumbs                        # прогонит всё
-//   go run ./cmd/regen-thumbs --user-id=<uuid>       # только одного спеца
-//   go run ./cmd/regen-thumbs --limit=5              # первые N
+//
+//	go run ./cmd/regen-thumbs --dry-run              # покажет план
+//	go run ./cmd/regen-thumbs                        # прогонит всё
+//	go run ./cmd/regen-thumbs --user-id=<uuid>       # только одного спеца
+//	go run ./cmd/regen-thumbs --limit=5              # первые N
 //
 // На VDS:
-//   docker compose -f docker-compose.prod.yml --env-file .env.prod \
-//       run --rm worker regen-thumbs
+//
+//	docker compose -f docker-compose.prod.yml --env-file .env.prod \
+//	    run --rm worker regen-thumbs
 package main
 
 import (
@@ -249,9 +251,9 @@ UPDATE portfolio_items SET thumbnail_url = $2 WHERE id = $1`, itemID, url)
 
 // thumbKeyFor — ключ нового thumbnail'а. Кладём рядом с видео с суффиксом
 // _thumb.jpg, чтобы:
-//   • sweep оркестрован автоматически: удаление видео → удалит и thumb
+//   - sweep оркестрован автоматически: удаление видео → удалит и thumb
 //     (см. cmd/s3-sweep-once, prefix группировка по user_id/item);
-//   • старые thumbnail'ы (если были залиты фронтом отдельным ключом)
+//   - старые thumbnail'ы (если были залиты фронтом отдельным ключом)
 //     остаются orphan-объектами, sweep их подберёт в следующем проходе.
 func thumbKeyFor(videoKey string) string {
 	ext := filepath.Ext(videoKey)

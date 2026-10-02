@@ -207,7 +207,7 @@ func (h *Handler) ManagerAddMaterial(w http.ResponseWriter, r *http.Request) {
 // @Failure  404 {object} errorResponse "not_found — материал не найден или он из другого проекта"
 // @Router   /manager/projects/{id}/materials/{material_id} [delete]
 func (h *Handler) ManagerDeleteMaterial(w http.ResponseWriter, r *http.Request) {
-	projectID, _, ok := h.managerProject(w, r)
+	projectID, uid, ok := h.managerProject(w, r)
 	if !ok {
 		return
 	}
@@ -216,7 +216,7 @@ func (h *Handler) ManagerDeleteMaterial(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "bad_id", "Неверный id материала.")
 		return
 	}
-	if err := h.svc.DeleteMaterial(r.Context(), projectID, materialID); err != nil {
+	if err := h.svc.DeleteMaterial(r.Context(), projectID, materialID, uid); err != nil {
 		writeErr(w, err)
 		return
 	}

@@ -146,7 +146,7 @@ func TestMaterialRemovedForCreatorsNotifiesThem(t *testing.T) {
 	// день — поэтому смотрим не на журнал, а на то, что удаление вообще
 	// дошло до notifyBrief: событие об изменении задания одно, и после
 	// удаления материалов в нём ноль.
-	if err := svc.DeleteMaterial(ctx, pid, m.ID); err != nil {
+	if err := svc.DeleteMaterial(ctx, pid, m.ID, creators[0]); err != nil {
 		t.Fatalf("delete material: %v", err)
 	}
 
